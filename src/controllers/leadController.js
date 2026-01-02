@@ -1,3 +1,4 @@
+const { sendWhatsAppMessage } = require('../services/whatsappService');
 const Lead = require('../models/Lead');
 const Stage = require('../models/Stage');
 const axios = require('axios');
@@ -60,7 +61,7 @@ exports.createStage = async (req, res) => {
         const newStage = await Stage.create({ 
             name: req.body.name, 
             order: Date.now(),
-            userId: req.user.id 
+            userId: req.user.id
         });
         res.json(newStage);
     } catch (err) { res.status(500).json({ error: err.message }); }
