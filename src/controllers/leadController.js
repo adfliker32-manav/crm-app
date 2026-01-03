@@ -2,6 +2,7 @@ const Lead = require('../models/Lead');
 const Stage = require('../models/Stage');
 const axios = require('axios');
 const Papa = require('papaparse');
+const { sendWhatsAppMessage } = require('../services/whatsappService');
 
 // 1. GET LEADS
 exports.getLeads = async (req, res) => {
@@ -55,32 +56,7 @@ exports.createStage = async (req, res) => {
     }
 };
 
-// 3b. DELETE STAGE
-exports.deleteStage = async (req, res) => {
-    try {
-        // Find the stage belonging to this user
-        const stage = await Stage.findOne({ _id: req.params.id, userId: req.user.id });
-        if (!stage) return res.status(404).json({ message: 'Stage not found' });
 
-        // Protect the default 'New' stage from deletion
-        if (stage.name === 'New') {
-            return res.status(400).json({ message: "Cannot delete the default 'New' stage" });
-        }
-
-        // Delete the stage
-        await Stage.deleteOne({ _id: stage._id });
-
-        // Reassign any leads that had this stage name back to 'New'
-        const updateResult = await Lead.updateMany(
-            { userId: req.user.id, status: stage.name },
-            { $set: { status: 'New' } }
-        );
-
-        return res.json({ success: true, reassignCount: updateResult.modifiedCount ?? updateResult.nModified ?? 0 });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};
 
 // 4. UPDATE LEAD
 exports.updateLead = async (req, res) => {
@@ -209,8 +185,12 @@ exports.createLead = async (req, res) => {
         // ... (Upar save wala code) ...
         await newLead.save();
 
-        // WhatsApp automation removed
-        // ...
+        // WhatsApp: send welcome message (non-blocking)
+        try {
+            sendWhatsAppMessage(phone, name).catch(err => console.warn('WhatsApp send failed:', err.message));
+        } catch (err) {
+            console.warn('WhatsApp error:', err.message);
+        }
 
         res.json(newLead);
     } catch (err) {
@@ -218,17 +198,4 @@ exports.createLead = async (req, res) => {
     }
 };
 
-// 9b. BULK DELETE LEADS
-exports.deleteLeadsBulk = async (req, res) => {
-    try {
-        const { ids } = req.body;
-        if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ message: 'No lead IDs provided' });
 
-        // Only delete leads owned by this user
-        const result = await Lead.deleteMany({ _id: { $in: ids }, userId: req.user.id });
-
-        return res.json({ success: true, deletedCount: result.deletedCount ?? result.n ?? 0 });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};

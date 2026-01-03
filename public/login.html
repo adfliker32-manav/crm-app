@@ -43,30 +43,10 @@
         </p>
     </div>
 
-    <!-- Toast Container -->
-    <div id="toastContainer" class="fixed top-6 right-6 z-50 flex flex-col gap-2"></div>
+
 
     <script>
-        // Simple Toast Utility (login page)
-        function showToast(message, type = 'success', timeout = 3500) {
-            const container = document.getElementById('toastContainer');
-            const id = 'toast_' + Date.now();
-            const colors = {
-                success: 'bg-green-600',
-                error: 'bg-red-600',
-                info: 'bg-blue-600'
-            };
-            const toast = document.createElement('div');
-            toast.id = id;
-            toast.className = `${colors[type] || colors.info} text-white px-4 py-2 rounded shadow-md animate-fade-in-up max-w-xs`;
-            toast.innerText = message;
-            container.appendChild(toast);
 
-            setTimeout(() => {
-                toast.classList.add('opacity-0');
-                setTimeout(() => { try { container.removeChild(toast); } catch (e) {} }, 300);
-            }, timeout);
-        }
 
         // Login Logic
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
@@ -88,11 +68,11 @@
                     localStorage.setItem('user', JSON.stringify(data.user)); // User Data Save
                     window.location.href = 'index.html';
                 } else {
-                    showToast(data.message || 'Login Failed', 'error');
+                    alert(data.message || 'Login Failed');
                 }
             } catch (err) {
                 console.error(err);
-                showToast('Server Error', 'error');
+                alert('Server Error');
             }
         });
     </script>

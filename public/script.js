@@ -16,7 +16,7 @@ function logout() {
 async function authFetch(url, options = {}) {
     options.headers = { ...options.headers, 'Authorization': token, 'Content-Type': 'application/json' };
     const res = await fetch(url, options);
-    if(res.status === 401) { showToast("Session Expired", 'error'); logout(); }
+    if(res.status === 401) { alert("Session Expired"); logout(); }
     return res;
 }
 
@@ -36,6 +36,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     fetchData();
     setInterval(() => syncSheet(true), 5 * 60 * 1000); // Auto sync
+
+    // Debug: check for any visible full-screen overlays that may block clicks
+    setTimeout(() => {
+        try {
+            const overlays = Array.from(document.querySelectorAll('.fixed.inset-0'));
+            const blocking = overlays.filter(el => {
+                if (el.classList.contains('hidden')) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden' && window.getComputedStyle(el).display !== 'none';
+            });
+            if (blocking.length > 0) {
+                console.warn('Blocking overlays detected:', blocking.map(b => b.id || b.className));
+                console.warn(`UI blocked by ${blocking.length} overlay(s). Check console.`);
+                blocking.forEach(b => console.log(b));
+            }
+        } catch (e) {
+            console.error('Overlay check failed', e);
+        }
+    }, 500);
 });
 
 async function fetchData() {
@@ -56,7 +75,6 @@ async function fetchData() {
 }
 
 // 🔥 RENDER CARDS (TABLE VIEW REPLACEMENT)
-let bulkSelected = new Set();
 
 function renderTable(leads) {
     const container = document.getElementById('leadsTableBody');
@@ -83,12 +101,9 @@ function renderTable(leads) {
         };
         const badgeClass = statusColors[lead.status] || 'bg-gray-100 text-gray-800';
 
-        const isChecked = bulkSelected.has(lead._id) ? 'checked' : '';
-
         const card = `
         <div class="bg-white rounded-xl p-5 shadow-sm hover:shadow-md transition border-l-4 border-blue-500 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div class="flex items-start md:items-center gap-4">
-                <input data-id="${lead._id}" type="checkbox" onchange="toggleBulkSelect('${lead._id}', this.checked)" ${isChecked} class="mt-2 md:mt-0">
                 <div class="flex-1 cursor-pointer" onclick="openModal('${lead._id}')">
                     <div class="flex items-center gap-3">
                         <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold">
@@ -134,7 +149,7 @@ function renderTable(leads) {
         container.innerHTML += card;
     });
 
-    updateBulkUI();
+
 }
 
 // 🔥 KANBAN WITH TAILWIND
@@ -154,7 +169,7 @@ function renderKanban(stages, leads) {
                             ${count}
                         </span>
                     </div>
-                    ${stage.name !== 'New' ? `<button onclick="showConfirmModal({ title: 'Delete Stage', message: 'Delete "${stage.name}" and reassign its leads to New? This cannot be undone.', confirmText: 'Delete Stage', onConfirm: async (btn) => { try { btn.disabled=true; btn.innerText='Deleting...'; const res=await authFetch('/api/stages/${stage._id}', { method: 'DELETE' }); const data = await res.json(); if(res.ok){ showToast(`Stage "${stage.name}" deleted. ${data.reassignCount ?? 0} lead(s) reassigned.`, 'success'); fetchData(); hideConfirmModal(); } else { showToast(data.message || 'Error deleting stage', 'error'); } } catch(err){ console.error(err); showToast('Server error while deleting stage', 'error'); } finally { btn.disabled=false; btn.innerText='Delete Stage'; } } })" class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-500 text-white text-sm" title="Delete stage"><i class="fa-solid fa-trash"></i></button>` : `<button disabled class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-gray-500 text-white text-sm opacity-50" title="Can't delete default stage"><i class="fa-solid fa-trash"></i></button>`}
+
                 </div>
                 <div class="column-body flex-1 bg-gray-200 p-3 rounded-b-xl overflow-y-auto space-y-3" id="${stage.name}"></div>
             </div>`;
@@ -207,120 +222,29 @@ async function updateStatus(id, status) {
     await authFetch(`/api/leads/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
 }
 async function deleteLead(id) {
-    showConfirmModal({
-        title: 'Delete Lead',
-        message: 'Are you sure you want to delete this lead? This action is irreversible.',
-        confirmText: 'Delete Lead',
-        onConfirm: async (btn) => {
-            try {
-                btn.disabled = true; btn.innerText = 'Deleting...';
-                const res = await authFetch(`/api/leads/${id}`, { method: 'DELETE' });
-                if (res.ok) {
-                    showToast('Lead deleted', 'success');
-                    fetchData();
-                    hideConfirmModal();
-                } else {
-                    const data = await res.json();
-                    showToast(data.message || 'Error deleting lead', 'error');
-                }
-            } catch (err) {
-                console.error(err);
-                showToast('Server error while deleting lead', 'error');
-            } finally {
-                btn.disabled = false; btn.innerText = 'Delete Lead';
-            }
+    if (!confirm('Are you sure you want to delete this lead? This action is irreversible.')) return;
+    try {
+        const res = await authFetch(`/api/leads/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+            alert('Lead deleted');
+            fetchData();
+        } else {
+            const data = await res.json();
+            alert(data.message || 'Error deleting lead');
         }
-    });
+    } catch (err) {
+        console.error(err);
+        alert('Server error while deleting lead');
+    }
 }
 async function editLead(id, oldName, oldPhone) {
     const newName = prompt("Name:", oldName); const newPhone = prompt("Phone:", oldPhone);
     if (newName) { await authFetch(`/api/leads/${id}`, { method: 'PUT', body: JSON.stringify({ name: newName, phone: newPhone }) }); fetchData(); }
 }
 
-// Delete Stage (frontend handler)
-async function deleteStage(stageId, stageName) {
-    // Show custom modal instead of browser confirm
-    if (stageName === 'New') {
-        showToast("Cannot delete the default 'New' stage", 'error');
-        return;
-    }
-    showConfirmModal(stageId, stageName);
-}
 
-function showConfirmModal({ title = 'Confirm', message = 'Are you sure?', confirmText = 'Confirm', onConfirm = null }) {
-    const modal = document.getElementById('confirmModal');
-    document.getElementById('confirmTitle').innerText = title;
-    document.getElementById('confirmMessage').innerText = message;
 
-    modal.classList.remove('hidden');
-    modal.classList.add('flex');
 
-    const btn = document.getElementById('confirmActionBtn');
-    btn.innerText = confirmText;
-
-    const wrappedHandler = async () => {
-        if (typeof onConfirm === 'function') await onConfirm(btn);
-    };
-
-    // store handler so we can remove it on hide
-    btn._handler = wrappedHandler;
-    btn.onclick = wrappedHandler;
-}
-
-function hideConfirmModal() {
-    const modal = document.getElementById('confirmModal');
-    modal.classList.add('hidden');
-    modal.classList.remove('flex');
-    const btn = document.getElementById('confirmActionBtn');
-    if (btn && btn._handler) {
-        btn.onclick = null;
-        delete btn._handler;
-    }
-}
-
-async function performDeleteStage(stageId, stageName) {
-    try {
-        const btn = document.getElementById('confirmActionBtn');
-        btn.disabled = true; btn.innerText = 'Deleting...';
-
-        const res = await authFetch(`/api/stages/${stageId}`, { method: 'DELETE' });
-        const data = await res.json();
-        if (res.ok) {
-            hideConfirmModal();
-            showToast(`Stage "${stageName}" deleted. ${data.reassignCount ?? 0} lead(s) reassigned.`, 'success');
-            fetchData();
-        } else {
-            showToast(data.message || 'Error deleting stage', 'error');
-        }
-    } catch (err) {
-        console.error(err);
-        showToast('Server error while deleting stage', 'error');
-    } finally {
-        const btn = document.getElementById('confirmActionBtn');
-        btn.disabled = false; btn.innerText = 'Confirm';
-    }
-}
-
-// Simple Toast Utility
-function showToast(message, type = 'success', timeout = 3500) {
-    const container = document.getElementById('toastContainer');
-    const id = 'toast_' + Date.now();
-    const colors = {
-        success: 'bg-green-600',
-        error: 'bg-red-600',
-        info: 'bg-blue-600'
-    };
-    const toast = document.createElement('div');
-    toast.id = id;
-    toast.className = `${colors[type] || colors.info} text-white px-4 py-2 rounded shadow-md animate-fade-in-up max-w-xs`;
-    toast.innerText = message;
-    container.appendChild(toast);
-
-    setTimeout(() => {
-        toast.classList.add('opacity-0');
-        setTimeout(() => { try { container.removeChild(toast); } catch (e) {} }, 300);
-    }, timeout);
-}
 
 // SETTINGS MODAL (For Sheet Sync)
 function toggleSettingsModal() {
@@ -333,7 +257,7 @@ function toggleSettingsModal() {
 async function syncSheet(isAuto = false) {
     const link = document.getElementById('sheetLink').value;
     const currentUser = JSON.parse(localStorage.getItem('user'));
-    if(!link) return !isAuto && showToast("Link required!", 'error');
+    if(!link) return !isAuto && alert("Link required!");
     if (currentUser?.id) localStorage.setItem(`sheetLink_${currentUser.id}`, link);
 
     if(!isAuto) {
@@ -344,7 +268,7 @@ async function syncSheet(isAuto = false) {
     try {
         const res = await authFetch('/api/sync-sheet', { method: 'POST', body: JSON.stringify({ sheetUrl: link }) });
         const data = await res.json();
-        if(!isAuto) { showToast(data.success ? data.message : "Error: " + data.message, data.success ? 'success' : 'error'); fetchData(); toggleSettingsModal(); }
+        if(!isAuto) { alert(data.success ? data.message : "Error: " + data.message); fetchData(); toggleSettingsModal(); }
     } catch (err) { console.error(err); }
 
     if(!isAuto) {
@@ -353,74 +277,7 @@ async function syncSheet(isAuto = false) {
     }
 }
 
-// Bulk select helpers
-function toggleBulkSelect(id, checked) {
-    if (checked) bulkSelected.add(id);
-    else bulkSelected.delete(id);
-    updateBulkUI();
-}
 
-function updateBulkUI() {
-    const count = bulkSelected.size;
-    const container = document.getElementById('bulkActions');
-    const countSpan = document.getElementById('bulkSelectedCount');
-    const deleteBtn = document.getElementById('bulkDeleteBtn');
-    const selectAllBtn = document.getElementById('bulkSelectAllBtn');
-
-    countSpan.innerText = count > 0 ? `${count} selected` : '';
-    // hide actions if no leads exist
-    const totalLeads = document.querySelectorAll('#leadsTableBody > *').length;
-    container.classList.toggle('hidden', totalLeads === 0);
-
-    deleteBtn.disabled = count === 0;
-    selectAllBtn.innerText = (count === 0) ? 'Select All' : 'Clear Selection';
-}
-
-// Bulk action handlers
-document.addEventListener('DOMContentLoaded', () => {
-    const bulkDelBtn = document.getElementById('bulkDeleteBtn');
-    const selectAllBtn = document.getElementById('bulkSelectAllBtn');
-
-    bulkDelBtn.addEventListener('click', () => {
-        if (bulkSelected.size === 0) return showToast('No leads selected', 'info');
-        showConfirmModal({
-            title: 'Delete Leads',
-            message: `Delete ${bulkSelected.size} selected lead(s)? This cannot be undone.`,
-            confirmText: 'Delete Leads',
-            onConfirm: async (btn) => {
-                try {
-                    btn.disabled = true; btn.innerText = 'Deleting...';
-                    const ids = Array.from(bulkSelected);
-                    const res = await authFetch('/api/leads/delete-bulk', { method: 'POST', body: JSON.stringify({ ids }) });
-                    const data = await res.json();
-                    if (res.ok) {
-                        showToast(`${data.deletedCount ?? 0} lead(s) deleted`, 'success');
-                        bulkSelected.clear();
-                        fetchData();
-                        hideConfirmModal();
-                    } else {
-                        showToast(data.message || 'Error deleting leads', 'error');
-                    }
-                } catch (err) {
-                    console.error(err);
-                    showToast('Server error while deleting leads', 'error');
-                } finally {
-                    btn.disabled = false; btn.innerText = 'Delete Leads';
-                }
-            }
-        });
-    });
-
-    selectAllBtn.addEventListener('click', () => {
-        const cards = document.querySelectorAll('#leadsTableBody input[type="checkbox"]');
-        if (selectAllBtn.innerText === 'Select All') {
-            cards.forEach(c => { c.checked = true; const id = c.dataset.id; if (id) bulkSelected.add(id); });
-        } else {
-            cards.forEach(c => { c.checked = false; const id = c.dataset.id; if (id) bulkSelected.delete(id); });
-        }
-        updateBulkUI();
-    });
-});
 
 // VIEW SWITCH
 function switchView(view) {
@@ -471,7 +328,7 @@ async function saveNote() {
         allLeadsCache[index] = updatedLead;
         renderNotes(updatedLead.notes);
         input.value = '';
-    } catch (err) { showToast("Error saving note", 'error'); }
+    } catch (err) { alert("Error saving note"); }
 }
 // 🔥 STAGE MANAGEMENT FIX
 
@@ -493,7 +350,7 @@ async function addNewStage() {
     const nameInput = document.getElementById('newStageNameInput');
     const name = nameInput.value;
     
-    if(!name) return showToast("Please enter a stage name", 'error');
+    if(!name) return alert("Please enter a stage name");
 
     try {
         await authFetch('/api/stages', {
@@ -505,7 +362,7 @@ async function addNewStage() {
         toggleStageModal(); // Close popup
         fetchData(); // Refresh board
     } catch (err) {
-        showToast("Error adding stage", 'error');
+        alert("Error adding stage");
     }
 }
 // 🔥 MANUAL LEAD ENTRY LOGIC
@@ -537,12 +394,12 @@ async function saveNewLead(event) {
             
             toggleAddLeadModal(); // Close Modal
             fetchData(); // Table refresh karo
-            showToast("Lead Added Successfully! 🎉", 'success');
+            alert("Lead Added Successfully! 🎉");
         } else {
-            showToast("Error adding lead.", 'error');
+            alert("Error adding lead.");
         }
     } catch (err) {
         console.error(err);
-        showToast("Server Error", 'error');
+        alert("Server Error");
     }
 }
