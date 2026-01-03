@@ -36,25 +36,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     fetchData();
     setInterval(() => syncSheet(true), 5 * 60 * 1000); // Auto sync
-
-    // Debug: check for any visible full-screen overlays that may block clicks
-    setTimeout(() => {
-        try {
-            const overlays = Array.from(document.querySelectorAll('.fixed.inset-0'));
-            const blocking = overlays.filter(el => {
-                if (el.classList.contains('hidden')) return false;
-                const rect = el.getBoundingClientRect();
-                return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden' && window.getComputedStyle(el).display !== 'none';
-            });
-            if (blocking.length > 0) {
-                console.warn('Blocking overlays detected:', blocking.map(b => b.id || b.className));
-                console.warn(`UI blocked by ${blocking.length} overlay(s). Check console.`);
-                blocking.forEach(b => console.log(b));
-            }
-        } catch (e) {
-            console.error('Overlay check failed', e);
-        }
-    }, 500);
 });
 
 async function fetchData() {
@@ -75,14 +56,10 @@ async function fetchData() {
 }
 
 // 🔥 RENDER CARDS (TABLE VIEW REPLACEMENT)
-
 function renderTable(leads) {
     const container = document.getElementById('leadsTableBody');
     document.getElementById('totalCount').innerText = leads.length;
     container.innerHTML = '';
-
-    // Update bulk UI
-    document.getElementById('bulkActions').classList.toggle('hidden', leads.length === 0);
 
     leads.forEach(lead => {
         // Date Fix logic
@@ -103,20 +80,19 @@ function renderTable(leads) {
 
         const card = `
         <div class="bg-white rounded-xl p-5 shadow-sm hover:shadow-md transition border-l-4 border-blue-500 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            <div class="flex items-start md:items-center gap-4">
-                <div class="flex-1 cursor-pointer" onclick="openModal('${lead._id}')">
-                    <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold">
-                            ${lead.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                            <h3 class="font-bold text-gray-800 text-lg hover:text-blue-600 transition">${lead.name}</h3>
-                            <p class="text-sm text-gray-500 flex items-center gap-3">
-                                <span><i class="fa-solid fa-phone text-xs mr-1"></i> ${lead.phone || 'N/A'}</span>
-                                <span class="hidden md:inline">|</span>
-                                <span class="hidden md:inline"><i class="fa-solid fa-envelope text-xs mr-1"></i> ${lead.email || '-'}</span>
-                            </p>
-                        </div>
+            
+            <div class="flex-1 cursor-pointer" onclick="openModal('${lead._id}')">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold">
+                        ${lead.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-gray-800 text-lg hover:text-blue-600 transition">${lead.name}</h3>
+                        <p class="text-sm text-gray-500 flex items-center gap-3">
+                            <span><i class="fa-solid fa-phone text-xs mr-1"></i> ${lead.phone || 'N/A'}</span>
+                            <span class="hidden md:inline">|</span>
+                            <span class="hidden md:inline"><i class="fa-solid fa-envelope text-xs mr-1"></i> ${lead.email || '-'}</span>
+                        </p>
                     </div>
                 </div>
             </div>
@@ -148,8 +124,6 @@ function renderTable(leads) {
         </div>`;
         container.innerHTML += card;
     });
-
-
 }
 
 // 🔥 KANBAN WITH TAILWIND
@@ -159,17 +133,13 @@ function renderKanban(stages, leads) {
     const dragContainers = []; 
 
     stages.forEach(stage => {
-        const count = leads.filter(l => (l.status || 'New') === stage.name).length;
         board.innerHTML += `
             <div class="kanban-column w-72 flex-shrink-0 flex flex-col h-full">
                 <div class="bg-slate-800 text-white p-3 rounded-t-xl font-bold flex justify-between items-center shadow-md">
-                    <div class="flex items-center gap-3">
-                        <span class="truncate">${stage.name}</span>
-                        <span class="bg-slate-600 text-xs px-2 py-1 rounded-full">
-                            ${count}
-                        </span>
-                    </div>
-
+                    ${stage.name}
+                    <span class="bg-slate-600 text-xs px-2 py-1 rounded-full">
+                        ${leads.filter(l => (l.status || 'New') === stage.name).length}
+                    </span>
                 </div>
                 <div class="column-body flex-1 bg-gray-200 p-3 rounded-b-xl overflow-y-auto space-y-3" id="${stage.name}"></div>
             </div>`;
@@ -222,29 +192,12 @@ async function updateStatus(id, status) {
     await authFetch(`/api/leads/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
 }
 async function deleteLead(id) {
-    if (!confirm('Are you sure you want to delete this lead? This action is irreversible.')) return;
-    try {
-        const res = await authFetch(`/api/leads/${id}`, { method: 'DELETE' });
-        if (res.ok) {
-            alert('Lead deleted');
-            fetchData();
-        } else {
-            const data = await res.json();
-            alert(data.message || 'Error deleting lead');
-        }
-    } catch (err) {
-        console.error(err);
-        alert('Server error while deleting lead');
-    }
+    if(confirm("Delete lead?")) { await authFetch(`/api/leads/${id}`, { method: 'DELETE' }); fetchData(); }
 }
 async function editLead(id, oldName, oldPhone) {
     const newName = prompt("Name:", oldName); const newPhone = prompt("Phone:", oldPhone);
     if (newName) { await authFetch(`/api/leads/${id}`, { method: 'PUT', body: JSON.stringify({ name: newName, phone: newPhone }) }); fetchData(); }
 }
-
-
-
-
 
 // SETTINGS MODAL (For Sheet Sync)
 function toggleSettingsModal() {
@@ -276,8 +229,6 @@ async function syncSheet(isAuto = false) {
         btn.innerText = "Sync Now"; btn.disabled = false;
     }
 }
-
-
 
 // VIEW SWITCH
 function switchView(view) {

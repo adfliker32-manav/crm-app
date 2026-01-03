@@ -1,4 +1,3 @@
-require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose'); // 👈 Mongoose Import kiya
 const cors = require('cors');

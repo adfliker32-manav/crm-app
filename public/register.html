@@ -52,11 +52,7 @@
         </p>
     </div>
 
-
-
     <script>
-
-
         document.getElementById('registerForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const name = document.getElementById('name').value;
@@ -75,7 +71,7 @@
                 
                 if (res.ok) {
                     alert('Registration Successful! Please Login.');
-                    setTimeout(() => window.location.href = 'login.html', 800);
+                    window.location.href = 'login.html';
                 } else {
                     alert(data.message || 'Registration Failed');
                 }
