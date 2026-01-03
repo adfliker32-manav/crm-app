@@ -143,7 +143,7 @@ function renderKanban(stages, leads) {
                             ${count}
                         </span>
                     </div>
-                    ${stage.name !== 'New' ? `<button onclick="deleteStage('${stage._id}','${stage.name}')" class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-500 text-white text-sm" title="Delete stage"><i class="fa-solid fa-trash"></i></button>` : `<button disabled class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-gray-500 text-white text-sm opacity-50" title="Can't delete default stage"><i class="fa-solid fa-trash"></i></button>`}
+                    ${stage.name !== 'New' ? `<button onclick="showConfirmModal({ title: 'Delete Stage', message: 'Delete "${stage.name}" and reassign its leads to New? This cannot be undone.', confirmText: 'Delete Stage', onConfirm: async (btn) => { try { btn.disabled=true; btn.innerText='Deleting...'; const res=await authFetch('/api/stages/${stage._id}', { method: 'DELETE' }); const data = await res.json(); if(res.ok){ showToast(`Stage "${stage.name}" deleted. ${data.reassignCount ?? 0} lead(s) reassigned.`, 'success'); fetchData(); hideConfirmModal(); } else { showToast(data.message || 'Error deleting stage', 'error'); } } catch(err){ console.error(err); showToast('Server error while deleting stage', 'error'); } finally { btn.disabled=false; btn.innerText='Delete Stage'; } } })" class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-500 text-white text-sm" title="Delete stage"><i class="fa-solid fa-trash"></i></button>` : `<button disabled class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-gray-500 text-white text-sm opacity-50" title="Can't delete default stage"><i class="fa-solid fa-trash"></i></button>`}
                 </div>
                 <div class="column-body flex-1 bg-gray-200 p-3 rounded-b-xl overflow-y-auto space-y-3" id="${stage.name}"></div>
             </div>`;
@@ -196,7 +196,30 @@ async function updateStatus(id, status) {
     await authFetch(`/api/leads/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
 }
 async function deleteLead(id) {
-    if(confirm("Delete lead?")) { await authFetch(`/api/leads/${id}`, { method: 'DELETE' }); fetchData(); }
+    showConfirmModal({
+        title: 'Delete Lead',
+        message: 'Are you sure you want to delete this lead? This action is irreversible.',
+        confirmText: 'Delete Lead',
+        onConfirm: async (btn) => {
+            try {
+                btn.disabled = true; btn.innerText = 'Deleting...';
+                const res = await authFetch(`/api/leads/${id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Lead deleted', 'success');
+                    fetchData();
+                    hideConfirmModal();
+                } else {
+                    const data = await res.json();
+                    showToast(data.message || 'Error deleting lead', 'error');
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('Server error while deleting lead', 'error');
+            } finally {
+                btn.disabled = false; btn.innerText = 'Delete Lead';
+            }
+        }
+    });
 }
 async function editLead(id, oldName, oldPhone) {
     const newName = prompt("Name:", oldName); const newPhone = prompt("Phone:", oldPhone);
@@ -213,29 +236,40 @@ async function deleteStage(stageId, stageName) {
     showConfirmModal(stageId, stageName);
 }
 
-function showConfirmModal(stageId, stageName) {
+function showConfirmModal({ title = 'Confirm', message = 'Are you sure?', confirmText = 'Confirm', onConfirm = null }) {
     const modal = document.getElementById('confirmModal');
-    document.getElementById('confirmStageName').innerText = stageName;
-    modal.dataset.stageId = stageId;
+    document.getElementById('confirmTitle').innerText = title;
+    document.getElementById('confirmMessage').innerText = message;
+
     modal.classList.remove('hidden');
     modal.classList.add('flex');
 
-    const btn = document.getElementById('confirmDeleteBtn');
-    btn.onclick = () => performDeleteStage(stageId, stageName);
+    const btn = document.getElementById('confirmActionBtn');
+    btn.innerText = confirmText;
+
+    const wrappedHandler = async () => {
+        if (typeof onConfirm === 'function') await onConfirm(btn);
+    };
+
+    // store handler so we can remove it on hide
+    btn._handler = wrappedHandler;
+    btn.onclick = wrappedHandler;
 }
 
 function hideConfirmModal() {
     const modal = document.getElementById('confirmModal');
     modal.classList.add('hidden');
     modal.classList.remove('flex');
-    delete modal.dataset.stageId;
-    const btn = document.getElementById('confirmDeleteBtn');
-    btn.onclick = null;
+    const btn = document.getElementById('confirmActionBtn');
+    if (btn && btn._handler) {
+        btn.onclick = null;
+        delete btn._handler;
+    }
 }
 
 async function performDeleteStage(stageId, stageName) {
     try {
-        const btn = document.getElementById('confirmDeleteBtn');
+        const btn = document.getElementById('confirmActionBtn');
         btn.disabled = true; btn.innerText = 'Deleting...';
 
         const res = await authFetch(`/api/stages/${stageId}`, { method: 'DELETE' });
@@ -251,8 +285,8 @@ async function performDeleteStage(stageId, stageName) {
         console.error(err);
         showToast('Server error while deleting stage', 'error');
     } finally {
-        const btn = document.getElementById('confirmDeleteBtn');
-        btn.disabled = false; btn.innerText = 'Delete Stage';
+        const btn = document.getElementById('confirmActionBtn');
+        btn.disabled = false; btn.innerText = 'Confirm';
     }
 }
 
