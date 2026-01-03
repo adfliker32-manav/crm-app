@@ -23,6 +23,13 @@ const userSchema = new mongoose.Schema({
         type: String, 
         default: 'Admin' // Admin, Manager, Agent etc.
     },
+    
+    // 👇 NEW: Ye field hamein batayegi ki ye WhatsApp number kiska hai
+    waBusinessId: { 
+        type: String, 
+        default: null // Shuru mein khali rahega jab tak user connect na kare
+    },
+
     createdAt: {
         type: Date,
         default: Date.now

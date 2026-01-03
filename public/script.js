@@ -3,7 +3,10 @@ const token = localStorage.getItem('token');
 const user = JSON.parse(localStorage.getItem('user'));
 
 if (!token) window.location.href = 'login.html';
-else if(user) document.getElementById('userNameDisplay').innerText = user.name;
+else if(user) {
+    const nameDisplay = document.getElementById('userNameDisplay');
+    if(nameDisplay) nameDisplay.innerText = user.name;
+}
 
 function logout() {
     if(confirm("Logout?")) {
@@ -14,6 +17,7 @@ function logout() {
 
 // 🔥 AUTH FETCH
 async function authFetch(url, options = {}) {
+    // Bearer removed so backend accepts it
     options.headers = { ...options.headers, 'Authorization': token, 'Content-Type': 'application/json' };
     const res = await fetch(url, options);
     if(res.status === 401) { alert("Session Expired"); logout(); }
@@ -23,8 +27,25 @@ async function authFetch(url, options = {}) {
 // --- VARIABLES ---
 let drake, currentLeadId = null, allLeadsCache = [];
 
-// 🔥 PAGE LOAD
+// 🔥 PAGE LOAD CONTROLLER
 document.addEventListener('DOMContentLoaded', () => {
+    
+    // Check which page we are on
+    const isDashboard = document.getElementById('kanbanBoard');
+    const isWhatsApp = document.getElementById('wa-contacts-list');
+
+    if (isDashboard) {
+        initDashboard();
+    } else if (isWhatsApp) {
+        initWhatsApp();
+    }
+});
+
+// ==========================================
+// 📊 DASHBOARD LOGIC (Original Code)
+// ==========================================
+
+async function initDashboard() {
     // Load Saved Sheet Link
     const currentUser = JSON.parse(localStorage.getItem('user'));
     if (currentUser?.id) {
@@ -36,7 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     fetchData();
     setInterval(() => syncSheet(true), 5 * 60 * 1000); // Auto sync
-});
+}
 
 async function fetchData() {
     try {
@@ -55,32 +76,27 @@ async function fetchData() {
     } catch (e) { console.error(e); }
 }
 
-// 🔥 RENDER CARDS (TABLE VIEW REPLACEMENT)
 function renderTable(leads) {
     const container = document.getElementById('leadsTableBody');
+    if(!container) return; // Safety check
     document.getElementById('totalCount').innerText = leads.length;
     container.innerHTML = '';
 
     leads.forEach(lead => {
-        // Date Fix logic
         let dateDisplay = '-';
         if(lead.date) {
             const d = new Date(lead.date);
             if(!isNaN(d.getTime())) dateDisplay = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         }
 
-        // Color badge logic
         const statusColors = {
-            'New': 'bg-blue-100 text-blue-800',
-            'Contacted': 'bg-yellow-100 text-yellow-800',
-            'Won': 'bg-green-100 text-green-800',
-            'Lost': 'bg-red-100 text-red-800'
+            'New': 'bg-blue-100 text-blue-800', 'Contacted': 'bg-yellow-100 text-yellow-800',
+            'Won': 'bg-green-100 text-green-800', 'Lost': 'bg-red-100 text-red-800'
         };
         const badgeClass = statusColors[lead.status] || 'bg-gray-100 text-gray-800';
 
         const card = `
         <div class="bg-white rounded-xl p-5 shadow-sm hover:shadow-md transition border-l-4 border-blue-500 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            
             <div class="flex-1 cursor-pointer" onclick="openModal('${lead._id}')">
                 <div class="flex items-center gap-3">
                     <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold">
@@ -96,39 +112,23 @@ function renderTable(leads) {
                     </div>
                 </div>
             </div>
-
             <div class="flex items-center gap-4">
-                <span class="${badgeClass} px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide shadow-sm">
-                    ${lead.status}
-                </span>
-                <span class="text-xs text-gray-400 font-medium">
-                    <i class="fa-regular fa-calendar mr-1"></i> ${dateDisplay}
-                </span>
+                <span class="${badgeClass} px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide shadow-sm">${lead.status}</span>
+                <span class="text-xs text-gray-400 font-medium"><i class="fa-regular fa-calendar mr-1"></i> ${dateDisplay}</span>
             </div>
-
             <div class="flex items-center gap-2">
-                
-                <button onclick="openModal('${lead._id}')" class="flex items-center gap-1 bg-orange-50 hover:bg-orange-100 text-orange-600 px-3 py-2 rounded-lg text-sm font-medium transition border border-orange-200">
-                    <i class="fa-regular fa-note-sticky"></i> Note
-                </button>
-
-                <button onclick="editLead('${lead._id}', '${lead.name}', '${lead.phone}')" class="w-9 h-9 flex items-center justify-center rounded-full bg-gray-100 hover:bg-blue-100 hover:text-blue-600 transition text-gray-500">
-                    <i class="fa-solid fa-pen"></i>
-                </button>
-                
-                <button onclick="deleteLead('${lead._id}')" class="w-9 h-9 flex items-center justify-center rounded-full bg-gray-100 hover:bg-red-100 hover:text-red-600 transition text-gray-500">
-                    <i class="fa-solid fa-trash"></i>
-                </button>
+                <button onclick="openModal('${lead._id}')" class="flex items-center gap-1 bg-orange-50 hover:bg-orange-100 text-orange-600 px-3 py-2 rounded-lg text-sm font-medium transition border border-orange-200"><i class="fa-regular fa-note-sticky"></i> Note</button>
+                <button onclick="editLead('${lead._id}', '${lead.name}', '${lead.phone}')" class="w-9 h-9 flex items-center justify-center rounded-full bg-gray-100 hover:bg-blue-100 hover:text-blue-600 transition text-gray-500"><i class="fa-solid fa-pen"></i></button>
+                <button onclick="deleteLead('${lead._id}')" class="w-9 h-9 flex items-center justify-center rounded-full bg-gray-100 hover:bg-red-100 hover:text-red-600 transition text-gray-500"><i class="fa-solid fa-trash"></i></button>
             </div>
-
         </div>`;
         container.innerHTML += card;
     });
 }
 
-// 🔥 KANBAN WITH TAILWIND
 function renderKanban(stages, leads) {
     const board = document.getElementById('kanbanBoard');
+    if(!board) return;
     board.innerHTML = ''; 
     const dragContainers = []; 
 
@@ -139,11 +139,9 @@ function renderKanban(stages, leads) {
                 <div class="bg-slate-800 text-white p-3 rounded-t-xl font-bold flex justify-between items-center shadow-md">
                     <div class="flex items-center gap-3">
                         <span class="truncate">${stage.name}</span>
-                        <span class="bg-slate-600 text-xs px-2 py-1 rounded-full">
-                            ${count}
-                        </span>
+                        <span class="bg-slate-600 text-xs px-2 py-1 rounded-full">${count}</span>
                     </div>
-                    ${stage.name !== 'New' ? `<button onclick="deleteStage('${stage._id}','${stage.name}')" class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-500 text-white text-sm" title="Delete stage"><i class="fa-solid fa-trash"></i></button>` : `<button disabled class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-gray-500 text-white text-sm opacity-50" title="Can't delete default stage"><i class="fa-solid fa-trash"></i></button>`}
+                    ${stage.name !== 'New' ? `<button onclick="deleteStage('${stage._id}','${stage.name}')" class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-500 text-white text-sm"><i class="fa-solid fa-trash"></i></button>` : ``}
                 </div>
                 <div class="column-body flex-1 bg-gray-200 p-3 rounded-b-xl overflow-y-auto space-y-3" id="${stage.name}"></div>
             </div>`;
@@ -159,29 +157,26 @@ function renderKanban(stages, leads) {
                 const card = document.createElement('div');
                 card.className = 'lead-card bg-white p-4 rounded-lg shadow-sm border-l-4 border-blue-400 cursor-grab hover:shadow-md transition';
                 card.id = lead._id;
-                card.innerHTML = `
-                    <h4 class="font-bold text-gray-800">${lead.name}</h4>
-                    <p class="text-xs text-gray-500 mt-1"><i class="fa-solid fa-phone"></i> ${lead.phone || '-'}</p>
-                `;
+                card.innerHTML = `<h4 class="font-bold text-gray-800">${lead.name}</h4><p class="text-xs text-gray-500 mt-1"><i class="fa-solid fa-phone"></i> ${lead.phone || '-'}</p>`;
                 container.appendChild(card);
             });
         });
 
         if (drake) drake.destroy();
-        drake = dragula(dragContainers);
-        drake.on('drop', (el, target) => updateStatus(el.id, target.id));
+        if(window.dragula) {
+            drake = dragula(dragContainers);
+            drake.on('drop', (el, target) => updateStatus(el.id, target.id));
+        }
     }, 100);
 }
 
-// ... (Baki Functions: Chart, Status Update, Delete, Edit, Sync, Modal same as before) ...
-// Copy paste the rest of the utility functions below:
-
-// CHART
+// Chart Logic
 let myChart;
 function renderChart(stats) {
-    const ctx = document.getElementById('myChart').getContext('2d');
+    const ctx = document.getElementById('myChart');
+    if(!ctx) return;
     if (myChart) myChart.destroy();
-    myChart = new Chart(ctx, {
+    myChart = new Chart(ctx.getContext('2d'), {
         type: 'doughnut',
         data: {
             labels: Object.keys(stats),
@@ -191,7 +186,126 @@ function renderChart(stats) {
     });
 }
 
-// ACTIONS
+// ==========================================
+// 🟢 WHATSAPP LOGIC (UPDATED WITH REAL CHAT)
+// ==========================================
+
+async function initWhatsApp() {
+    await fetchWhatsAppLeads();
+}
+
+async function fetchWhatsAppLeads() {
+    const listContainer = document.getElementById('wa-contacts-list');
+    listContainer.innerHTML = '<p class="text-center text-gray-500 mt-10">Syncing...</p>';
+
+    try {
+        const res = await authFetch('/api/whatsapp/leads');
+        const leads = await res.json();
+        
+        listContainer.innerHTML = '';
+
+        if(leads.length === 0) {
+            listContainer.innerHTML = '<p class="text-center text-gray-400 mt-10 text-sm">No WhatsApp chats yet.</p>';
+            return;
+        }
+
+        leads.forEach(lead => {
+            const div = document.createElement('div');
+            div.className = "flex items-center gap-3 p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition";
+            div.onclick = () => openChat(lead);
+            
+            div.innerHTML = `
+                <div class="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-bold text-lg flex-shrink-0">
+                    ${lead.name.charAt(0).toUpperCase()}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="flex justify-between items-start">
+                        <h4 class="font-semibold text-gray-800 truncate">${lead.name}</h4>
+                        <span class="text-xs text-gray-400 whitespace-nowrap">Today</span>
+                    </div>
+                    <p class="text-sm text-gray-500 truncate flex items-center gap-1">
+                        <i class="fa-solid fa-check-double text-blue-400 text-xs"></i> 
+                        ${lead.phone}
+                    </p>
+                </div>
+            `;
+            listContainer.appendChild(div);
+        });
+
+    } catch (err) {
+        console.error(err);
+        listContainer.innerHTML = '<p class="text-center text-red-400 mt-10">Failed to load chats.</p>';
+    }
+}
+
+// 👇 UPDATED OPEN CHAT FUNCTION (REAL DB MESSAGES)
+function openChat(lead) {
+    // 1. UI Elements Show
+    document.getElementById('empty-state').classList.add('hidden');
+    document.getElementById('chat-header').classList.remove('hidden');
+    document.getElementById('chat-input-area').classList.remove('hidden');
+
+    // 2. Header Info Set
+    document.getElementById('chat-name').innerText = lead.name;
+    document.getElementById('chat-phone').innerText = lead.phone;
+    document.getElementById('chat-avatar').innerText = lead.name.charAt(0).toUpperCase();
+
+    // 3. Render Messages
+    const msgContainer = document.getElementById('chat-messages');
+    msgContainer.innerHTML = ''; 
+
+    // Handle Empty Chat
+    if (!lead.messages || lead.messages.length === 0) {
+        msgContainer.innerHTML = '<p class="text-center text-gray-400 text-xs mt-4">No conversation yet.</p>';
+        return;
+    }
+
+    // Loop through REAL messages from DB
+    lead.messages.forEach(msg => {
+        // Time Format
+        const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        // Determine Sender
+        const isCustomer = msg.from === 'lead';
+
+        // Create HTML
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `flex ${isCustomer ? 'justify-start' : 'justify-end'} mb-2`;
+
+        msgDiv.innerHTML = `
+            <div class="${isCustomer ? 'bg-white text-gray-800' : 'bg-[#d9fdd3] text-gray-800'} p-2 px-3 rounded-lg shadow-sm max-w-xs text-sm ${isCustomer ? 'rounded-tl-none' : 'rounded-tr-none'}">
+                <p>${msg.text}</p>
+                <span class="text-[10px] ${isCustomer ? 'text-gray-400' : 'text-gray-500'} block text-right mt-1">
+                    ${time}
+                </span>
+            </div>
+        `;
+        msgContainer.appendChild(msgDiv);
+    });
+
+    // 4. Scroll to Bottom
+    msgContainer.scrollTop = msgContainer.scrollHeight;
+}
+
+function filterWhatsAppLeads() {
+    const filter = document.getElementById('waSearch').value.toLowerCase();
+    const list = document.getElementById('wa-contacts-list');
+    const items = list.getElementsByTagName('div');
+    
+    // Simple filter logic for parent divs that have onclick (Lead cards)
+    Array.from(items).forEach(div => {
+        if(div.onclick) { 
+            const text = div.innerText.toLowerCase();
+            div.style.display = text.includes(filter) ? "flex" : "none";
+        }
+    });
+}
+
+
+// ==========================================
+// 🛠️ SHARED UTILITIES
+// ==========================================
+
 async function updateStatus(id, status) {
     await authFetch(`/api/leads/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
 }
@@ -202,74 +316,55 @@ async function editLead(id, oldName, oldPhone) {
     const newName = prompt("Name:", oldName); const newPhone = prompt("Phone:", oldPhone);
     if (newName) { await authFetch(`/api/leads/${id}`, { method: 'PUT', body: JSON.stringify({ name: newName, phone: newPhone }) }); fetchData(); }
 }
-
-// Delete Stage (frontend handler)
 async function deleteStage(stageId, stageName) {
     if (stageName === 'New') return alert("Cannot delete the default 'New' stage");
-    if (!confirm(`Delete stage "${stageName}"? Leads in this stage will be reassigned to 'New'. Continue?`)) return;
-
-    try {
-        const res = await authFetch(`/api/stages/${stageId}`, { method: 'DELETE' });
-        const data = await res.json();
-        if (res.ok) {
-            alert(`Stage deleted. ${data.reassignCount ?? 0} lead(s) reassigned.`);
-            fetchData();
-        } else {
-            alert(data.message || 'Error deleting stage');
-        }
-    } catch (err) {
-        console.error(err);
-        alert('Server error while deleting stage');
-    }
+    if (!confirm(`Delete stage "${stageName}"?`)) return;
+    await authFetch(`/api/stages/${stageId}`, { method: 'DELETE' });
+    fetchData();
 }
 
-// SETTINGS MODAL (For Sheet Sync)
+// SETTINGS & MODALS
 function toggleSettingsModal() {
     const m = document.getElementById('settingsModal');
-    m.classList.toggle('hidden');
-    m.classList.toggle('flex');
+    if(m) { m.classList.toggle('hidden'); m.classList.toggle('flex'); }
 }
-
-// SYNC
 async function syncSheet(isAuto = false) {
     const link = document.getElementById('sheetLink').value;
     const currentUser = JSON.parse(localStorage.getItem('user'));
     if(!link) return !isAuto && alert("Link required!");
     if (currentUser?.id) localStorage.setItem(`sheetLink_${currentUser.id}`, link);
-
-    if(!isAuto) {
-        const btn = document.querySelector('#settingsModal button');
-        btn.innerText = "Syncing..."; btn.disabled = true;
-    }
-
     try {
         const res = await authFetch('/api/sync-sheet', { method: 'POST', body: JSON.stringify({ sheetUrl: link }) });
         const data = await res.json();
         if(!isAuto) { alert(data.success ? data.message : "Error: " + data.message); fetchData(); toggleSettingsModal(); }
     } catch (err) { console.error(err); }
-
-    if(!isAuto) {
-        const btn = document.querySelector('#settingsModal button');
-        btn.innerText = "Sync Now"; btn.disabled = false;
-    }
 }
 
-// VIEW SWITCH
 function switchView(view) {
     document.getElementById('tableView').classList.toggle('hidden', view !== 'table');
     document.getElementById('kanbanView').classList.toggle('hidden', view !== 'kanban');
 }
-
-// SEARCH
 function filterLeads() {
     const filter = document.getElementById('searchBox').value.toLowerCase();
     const cards = document.getElementById('leadsTableBody').children;
-    Array.from(cards).forEach(card => {
-        card.style.display = card.innerText.toLowerCase().includes(filter) ? "" : "none";
-    });
+    Array.from(cards).forEach(card => card.style.display = card.innerText.toLowerCase().includes(filter) ? "" : "none");
+}
+function toggleAddLeadModal() {
+    const m = document.getElementById('addLeadModal');
+    m.classList.toggle('hidden'); m.classList.toggle('flex');
+}
+async function saveNewLead(event) {
+    event.preventDefault();
+    const name = document.getElementById('manualName').value;
+    const phone = document.getElementById('manualPhone').value;
+    const email = document.getElementById('manualEmail').value;
+    try {
+        const res = await authFetch('/api/leads', { method: 'POST', body: JSON.stringify({ name, phone, email }) });
+        if (res.ok) { toggleAddLeadModal(); fetchData(); alert("Lead Added Successfully! 🎉"); }
+    } catch (err) { alert("Server Error"); }
 }
 
-// MODAL & NOTES
+// Note Modal
 function openModal(id) {
     const lead = allLeadsCache.find(l => l._id === id);
     if (!lead) return;
@@ -305,76 +400,18 @@ async function saveNote() {
         input.value = '';
     } catch (err) { alert("Error saving note"); }
 }
-// 🔥 STAGE MANAGEMENT FIX
-
-// 1. Modal Open/Close
 function addNewStageModal() {
     const m = document.getElementById('stageModal');
-    m.classList.remove('hidden');
-    m.classList.add('flex');
+    m.classList.remove('hidden'); m.classList.add('flex');
 }
-
 function toggleStageModal() {
     const m = document.getElementById('stageModal');
-    m.classList.toggle('hidden');
-    m.classList.toggle('flex');
+    m.classList.toggle('hidden'); m.classList.toggle('flex');
 }
-
-// 2. API Call to Add Stage
 async function addNewStage() {
-    const nameInput = document.getElementById('newStageNameInput');
-    const name = nameInput.value;
-    
+    const name = document.getElementById('newStageNameInput').value;
     if(!name) return alert("Please enter a stage name");
-
-    try {
-        await authFetch('/api/stages', {
-            method: 'POST',
-            body: JSON.stringify({ name })
-        });
-        
-        nameInput.value = ''; // Clear input
-        toggleStageModal(); // Close popup
-        fetchData(); // Refresh board
-    } catch (err) {
-        alert("Error adding stage");
-    }
-}
-// 🔥 MANUAL LEAD ENTRY LOGIC
-
-function toggleAddLeadModal() {
-    const m = document.getElementById('addLeadModal');
-    m.classList.toggle('hidden');
-    m.classList.toggle('flex');
-}
-
-async function saveNewLead(event) {
-    event.preventDefault(); // Form refresh hone se roko
-
-    const name = document.getElementById('manualName').value;
-    const phone = document.getElementById('manualPhone').value;
-    const email = document.getElementById('manualEmail').value;
-
-    try {
-        const res = await authFetch('/api/leads', {
-            method: 'POST',
-            body: JSON.stringify({ name, phone, email })
-        });
-
-        if (res.ok) {
-            // Success
-            document.getElementById('manualName').value = '';
-            document.getElementById('manualPhone').value = '';
-            document.getElementById('manualEmail').value = '';
-            
-            toggleAddLeadModal(); // Close Modal
-            fetchData(); // Table refresh karo
-            alert("Lead Added Successfully! 🎉");
-        } else {
-            alert("Error adding lead.");
-        }
-    } catch (err) {
-        console.error(err);
-        alert("Server Error");
-    }
+    await authFetch('/api/stages', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('newStageNameInput').value = ''; 
+    toggleStageModal(); fetchData();
 }
