@@ -133,13 +133,17 @@ function renderKanban(stages, leads) {
     const dragContainers = []; 
 
     stages.forEach(stage => {
+        const count = leads.filter(l => (l.status || 'New') === stage.name).length;
         board.innerHTML += `
             <div class="kanban-column w-72 flex-shrink-0 flex flex-col h-full">
                 <div class="bg-slate-800 text-white p-3 rounded-t-xl font-bold flex justify-between items-center shadow-md">
-                    ${stage.name}
-                    <span class="bg-slate-600 text-xs px-2 py-1 rounded-full">
-                        ${leads.filter(l => (l.status || 'New') === stage.name).length}
-                    </span>
+                    <div class="flex items-center gap-3">
+                        <span class="truncate">${stage.name}</span>
+                        <span class="bg-slate-600 text-xs px-2 py-1 rounded-full">
+                            ${count}
+                        </span>
+                    </div>
+                    ${stage.name !== 'New' ? `<button onclick="deleteStage('${stage._id}','${stage.name}')" class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-500 text-white text-sm" title="Delete stage"><i class="fa-solid fa-trash"></i></button>` : `<button disabled class="ml-2 w-8 h-8 flex items-center justify-center rounded-full bg-gray-500 text-white text-sm opacity-50" title="Can't delete default stage"><i class="fa-solid fa-trash"></i></button>`}
                 </div>
                 <div class="column-body flex-1 bg-gray-200 p-3 rounded-b-xl overflow-y-auto space-y-3" id="${stage.name}"></div>
             </div>`;
@@ -197,6 +201,26 @@ async function deleteLead(id) {
 async function editLead(id, oldName, oldPhone) {
     const newName = prompt("Name:", oldName); const newPhone = prompt("Phone:", oldPhone);
     if (newName) { await authFetch(`/api/leads/${id}`, { method: 'PUT', body: JSON.stringify({ name: newName, phone: newPhone }) }); fetchData(); }
+}
+
+// Delete Stage (frontend handler)
+async function deleteStage(stageId, stageName) {
+    if (stageName === 'New') return alert("Cannot delete the default 'New' stage");
+    if (!confirm(`Delete stage "${stageName}"? Leads in this stage will be reassigned to 'New'. Continue?`)) return;
+
+    try {
+        const res = await authFetch(`/api/stages/${stageId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+            alert(`Stage deleted. ${data.reassignCount ?? 0} lead(s) reassigned.`);
+            fetchData();
+        } else {
+            alert(data.message || 'Error deleting stage');
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Server error while deleting stage');
+    }
 }
 
 // SETTINGS MODAL (For Sheet Sync)
