@@ -205,22 +205,76 @@ async function editLead(id, oldName, oldPhone) {
 
 // Delete Stage (frontend handler)
 async function deleteStage(stageId, stageName) {
-    if (stageName === 'New') return alert("Cannot delete the default 'New' stage");
-    if (!confirm(`Delete stage "${stageName}"? Leads in this stage will be reassigned to 'New'. Continue?`)) return;
+    // Show custom modal instead of browser confirm
+    if (stageName === 'New') {
+        showToast("Cannot delete the default 'New' stage", 'error');
+        return;
+    }
+    showConfirmModal(stageId, stageName);
+}
 
+function showConfirmModal(stageId, stageName) {
+    const modal = document.getElementById('confirmModal');
+    document.getElementById('confirmStageName').innerText = stageName;
+    modal.dataset.stageId = stageId;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+
+    const btn = document.getElementById('confirmDeleteBtn');
+    btn.onclick = () => performDeleteStage(stageId, stageName);
+}
+
+function hideConfirmModal() {
+    const modal = document.getElementById('confirmModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    delete modal.dataset.stageId;
+    const btn = document.getElementById('confirmDeleteBtn');
+    btn.onclick = null;
+}
+
+async function performDeleteStage(stageId, stageName) {
     try {
+        const btn = document.getElementById('confirmDeleteBtn');
+        btn.disabled = true; btn.innerText = 'Deleting...';
+
         const res = await authFetch(`/api/stages/${stageId}`, { method: 'DELETE' });
         const data = await res.json();
         if (res.ok) {
-            alert(`Stage deleted. ${data.reassignCount ?? 0} lead(s) reassigned.`);
+            hideConfirmModal();
+            showToast(`Stage "${stageName}" deleted. ${data.reassignCount ?? 0} lead(s) reassigned.`, 'success');
             fetchData();
         } else {
-            alert(data.message || 'Error deleting stage');
+            showToast(data.message || 'Error deleting stage', 'error');
         }
     } catch (err) {
         console.error(err);
-        alert('Server error while deleting stage');
+        showToast('Server error while deleting stage', 'error');
+    } finally {
+        const btn = document.getElementById('confirmDeleteBtn');
+        btn.disabled = false; btn.innerText = 'Delete Stage';
     }
+}
+
+// Simple Toast Utility
+function showToast(message, type = 'success', timeout = 3500) {
+    const container = document.getElementById('toastContainer');
+    const id = 'toast_' + Date.now();
+    const colors = {
+        success: 'bg-green-600',
+        error: 'bg-red-600',
+        info: 'bg-blue-600'
+    };
+    const toast = document.createElement('div');
+    toast.id = id;
+    toast.className = `${colors[type] || colors.info} text-white px-4 py-2 rounded shadow-md animate-fade-in-up max-w-xs`;
+    toast.innerText = message;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add('opacity-0');
+        setTimeout(() => { try { container.removeChild(toast); } catch (e) {} }, 300);
+    }, timeout);
 }
 
 // SETTINGS MODAL (For Sheet Sync)
