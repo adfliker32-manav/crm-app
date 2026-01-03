@@ -56,10 +56,15 @@ async function fetchData() {
 }
 
 // 🔥 RENDER CARDS (TABLE VIEW REPLACEMENT)
+let bulkSelected = new Set();
+
 function renderTable(leads) {
     const container = document.getElementById('leadsTableBody');
     document.getElementById('totalCount').innerText = leads.length;
     container.innerHTML = '';
+
+    // Update bulk UI
+    document.getElementById('bulkActions').classList.toggle('hidden', leads.length === 0);
 
     leads.forEach(lead => {
         // Date Fix logic
@@ -78,21 +83,25 @@ function renderTable(leads) {
         };
         const badgeClass = statusColors[lead.status] || 'bg-gray-100 text-gray-800';
 
+        const isChecked = bulkSelected.has(lead._id) ? 'checked' : '';
+
         const card = `
         <div class="bg-white rounded-xl p-5 shadow-sm hover:shadow-md transition border-l-4 border-blue-500 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            
-            <div class="flex-1 cursor-pointer" onclick="openModal('${lead._id}')">
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold">
-                        ${lead.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                        <h3 class="font-bold text-gray-800 text-lg hover:text-blue-600 transition">${lead.name}</h3>
-                        <p class="text-sm text-gray-500 flex items-center gap-3">
-                            <span><i class="fa-solid fa-phone text-xs mr-1"></i> ${lead.phone || 'N/A'}</span>
-                            <span class="hidden md:inline">|</span>
-                            <span class="hidden md:inline"><i class="fa-solid fa-envelope text-xs mr-1"></i> ${lead.email || '-'}</span>
-                        </p>
+            <div class="flex items-start md:items-center gap-4">
+                <input data-id="${lead._id}" type="checkbox" onchange="toggleBulkSelect('${lead._id}', this.checked)" ${isChecked} class="mt-2 md:mt-0">
+                <div class="flex-1 cursor-pointer" onclick="openModal('${lead._id}')">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold">
+                            ${lead.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-gray-800 text-lg hover:text-blue-600 transition">${lead.name}</h3>
+                            <p class="text-sm text-gray-500 flex items-center gap-3">
+                                <span><i class="fa-solid fa-phone text-xs mr-1"></i> ${lead.phone || 'N/A'}</span>
+                                <span class="hidden md:inline">|</span>
+                                <span class="hidden md:inline"><i class="fa-solid fa-envelope text-xs mr-1"></i> ${lead.email || '-'}</span>
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -124,6 +133,8 @@ function renderTable(leads) {
         </div>`;
         container.innerHTML += card;
     });
+
+    updateBulkUI();
 }
 
 // 🔥 KANBAN WITH TAILWIND
@@ -341,6 +352,75 @@ async function syncSheet(isAuto = false) {
         btn.innerText = "Sync Now"; btn.disabled = false;
     }
 }
+
+// Bulk select helpers
+function toggleBulkSelect(id, checked) {
+    if (checked) bulkSelected.add(id);
+    else bulkSelected.delete(id);
+    updateBulkUI();
+}
+
+function updateBulkUI() {
+    const count = bulkSelected.size;
+    const container = document.getElementById('bulkActions');
+    const countSpan = document.getElementById('bulkSelectedCount');
+    const deleteBtn = document.getElementById('bulkDeleteBtn');
+    const selectAllBtn = document.getElementById('bulkSelectAllBtn');
+
+    countSpan.innerText = count > 0 ? `${count} selected` : '';
+    // hide actions if no leads exist
+    const totalLeads = document.querySelectorAll('#leadsTableBody > *').length;
+    container.classList.toggle('hidden', totalLeads === 0);
+
+    deleteBtn.disabled = count === 0;
+    selectAllBtn.innerText = (count === 0) ? 'Select All' : 'Clear Selection';
+}
+
+// Bulk action handlers
+document.addEventListener('DOMContentLoaded', () => {
+    const bulkDelBtn = document.getElementById('bulkDeleteBtn');
+    const selectAllBtn = document.getElementById('bulkSelectAllBtn');
+
+    bulkDelBtn.addEventListener('click', () => {
+        if (bulkSelected.size === 0) return showToast('No leads selected', 'info');
+        showConfirmModal({
+            title: 'Delete Leads',
+            message: `Delete ${bulkSelected.size} selected lead(s)? This cannot be undone.`,
+            confirmText: 'Delete Leads',
+            onConfirm: async (btn) => {
+                try {
+                    btn.disabled = true; btn.innerText = 'Deleting...';
+                    const ids = Array.from(bulkSelected);
+                    const res = await authFetch('/api/leads/delete-bulk', { method: 'POST', body: JSON.stringify({ ids }) });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showToast(`${data.deletedCount ?? 0} lead(s) deleted`, 'success');
+                        bulkSelected.clear();
+                        fetchData();
+                        hideConfirmModal();
+                    } else {
+                        showToast(data.message || 'Error deleting leads', 'error');
+                    }
+                } catch (err) {
+                    console.error(err);
+                    showToast('Server error while deleting leads', 'error');
+                } finally {
+                    btn.disabled = false; btn.innerText = 'Delete Leads';
+                }
+            }
+        });
+    });
+
+    selectAllBtn.addEventListener('click', () => {
+        const cards = document.querySelectorAll('#leadsTableBody input[type="checkbox"]');
+        if (selectAllBtn.innerText === 'Select All') {
+            cards.forEach(c => { c.checked = true; const id = c.dataset.id; if (id) bulkSelected.add(id); });
+        } else {
+            cards.forEach(c => { c.checked = false; const id = c.dataset.id; if (id) bulkSelected.delete(id); });
+        }
+        updateBulkUI();
+    });
+});
 
 // VIEW SWITCH
 function switchView(view) {

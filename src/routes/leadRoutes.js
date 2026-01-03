@@ -10,6 +10,7 @@ router.get('/leads', auth, leadController.getLeads);
 
 router.put('/leads/:id', auth, leadController.updateLead);
 router.delete('/leads/:id', auth, leadController.deleteLead);
+router.post('/leads/delete-bulk', auth, leadController.deleteLeadsBulk);
 
 router.get('/stages', auth, leadController.getStages);
 router.post('/stages', auth, leadController.createStage);

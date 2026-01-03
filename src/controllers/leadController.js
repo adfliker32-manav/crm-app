@@ -217,3 +217,18 @@ exports.createLead = async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 };
+
+// 9b. BULK DELETE LEADS
+exports.deleteLeadsBulk = async (req, res) => {
+    try {
+        const { ids } = req.body;
+        if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ message: 'No lead IDs provided' });
+
+        // Only delete leads owned by this user
+        const result = await Lead.deleteMany({ _id: { $in: ids }, userId: req.user.id });
+
+        return res.json({ success: true, deletedCount: result.deletedCount ?? result.n ?? 0 });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
