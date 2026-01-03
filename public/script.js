@@ -16,7 +16,7 @@ function logout() {
 async function authFetch(url, options = {}) {
     options.headers = { ...options.headers, 'Authorization': token, 'Content-Type': 'application/json' };
     const res = await fetch(url, options);
-    if(res.status === 401) { alert("Session Expired"); logout(); }
+    if(res.status === 401) { showToast("Session Expired", 'error'); logout(); }
     return res;
 }
 
@@ -288,7 +288,7 @@ function toggleSettingsModal() {
 async function syncSheet(isAuto = false) {
     const link = document.getElementById('sheetLink').value;
     const currentUser = JSON.parse(localStorage.getItem('user'));
-    if(!link) return !isAuto && alert("Link required!");
+    if(!link) return !isAuto && showToast("Link required!", 'error');
     if (currentUser?.id) localStorage.setItem(`sheetLink_${currentUser.id}`, link);
 
     if(!isAuto) {
@@ -299,7 +299,7 @@ async function syncSheet(isAuto = false) {
     try {
         const res = await authFetch('/api/sync-sheet', { method: 'POST', body: JSON.stringify({ sheetUrl: link }) });
         const data = await res.json();
-        if(!isAuto) { alert(data.success ? data.message : "Error: " + data.message); fetchData(); toggleSettingsModal(); }
+        if(!isAuto) { showToast(data.success ? data.message : "Error: " + data.message, data.success ? 'success' : 'error'); fetchData(); toggleSettingsModal(); }
     } catch (err) { console.error(err); }
 
     if(!isAuto) {
@@ -357,7 +357,7 @@ async function saveNote() {
         allLeadsCache[index] = updatedLead;
         renderNotes(updatedLead.notes);
         input.value = '';
-    } catch (err) { alert("Error saving note"); }
+    } catch (err) { showToast("Error saving note", 'error'); }
 }
 // 🔥 STAGE MANAGEMENT FIX
 
@@ -379,7 +379,7 @@ async function addNewStage() {
     const nameInput = document.getElementById('newStageNameInput');
     const name = nameInput.value;
     
-    if(!name) return alert("Please enter a stage name");
+    if(!name) return showToast("Please enter a stage name", 'error');
 
     try {
         await authFetch('/api/stages', {
@@ -391,7 +391,7 @@ async function addNewStage() {
         toggleStageModal(); // Close popup
         fetchData(); // Refresh board
     } catch (err) {
-        alert("Error adding stage");
+        showToast("Error adding stage", 'error');
     }
 }
 // 🔥 MANUAL LEAD ENTRY LOGIC
@@ -423,12 +423,12 @@ async function saveNewLead(event) {
             
             toggleAddLeadModal(); // Close Modal
             fetchData(); // Table refresh karo
-            alert("Lead Added Successfully! 🎉");
+            showToast("Lead Added Successfully! 🎉", 'success');
         } else {
-            alert("Error adding lead.");
+            showToast("Error adding lead.", 'error');
         }
     } catch (err) {
         console.error(err);
-        alert("Server Error");
+        showToast("Server Error", 'error');
     }
 }
