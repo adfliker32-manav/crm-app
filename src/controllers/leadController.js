@@ -55,6 +55,33 @@ exports.createStage = async (req, res) => {
     }
 };
 
+// 3b. DELETE STAGE
+exports.deleteStage = async (req, res) => {
+    try {
+        // Find the stage belonging to this user
+        const stage = await Stage.findOne({ _id: req.params.id, userId: req.user.id });
+        if (!stage) return res.status(404).json({ message: 'Stage not found' });
+
+        // Protect the default 'New' stage from deletion
+        if (stage.name === 'New') {
+            return res.status(400).json({ message: "Cannot delete the default 'New' stage" });
+        }
+
+        // Delete the stage
+        await Stage.deleteOne({ _id: stage._id });
+
+        // Reassign any leads that had this stage name back to 'New'
+        const updateResult = await Lead.updateMany(
+            { userId: req.user.id, status: stage.name },
+            { $set: { status: 'New' } }
+        );
+
+        return res.json({ success: true, reassignCount: updateResult.modifiedCount ?? updateResult.nModified ?? 0 });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
 // 4. UPDATE LEAD
 exports.updateLead = async (req, res) => {
     try {

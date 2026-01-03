@@ -13,6 +13,7 @@ router.delete('/leads/:id', auth, leadController.deleteLead);
 
 router.get('/stages', auth, leadController.getStages);
 router.post('/stages', auth, leadController.createStage);
+router.delete('/stages/:id', auth, leadController.deleteStage);
 router.get('/analytics', auth, leadController.getAnalytics);
 
 router.post('/sync-sheet', auth, leadController.syncLeads);
