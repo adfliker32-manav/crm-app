@@ -9,7 +9,7 @@ const userSchema = new mongoose.Schema({
     email: {
         type: String,
         required: true,
-        unique: true, // Ek email se ek hi account banega
+        unique: true,
         lowercase: true,
         trim: true
     },
@@ -17,17 +17,77 @@ const userSchema = new mongoose.Schema({
         type: String,
         required: true
     },
-    // SaaS ke liye jaruri fields
-    companyName: { type: String },
+
+    companyName: { 
+        type: String 
+    },
+
+    // 👇 3-LAYER ROLE SYSTEM
     role: { 
         type: String, 
-        default: 'Admin' // Admin, Manager, Agent etc.
+        enum: ['superadmin', 'manager', 'agent'], 
+        default: 'manager'
     },
-    
-    // 👇 NEW: Ye field hamein batayegi ki ye WhatsApp number kiska hai
+    parentId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'User', 
+        default: null 
+    },
+
+    // WhatsApp Info
     waBusinessId: { 
         type: String, 
-        default: null // Shuru mein khali rahega jab tak user connect na kare
+        default: null 
+    },
+    waPhoneNumberId: { 
+        type: String, 
+        default: null 
+    },
+    waAccessToken: { 
+        type: String, 
+        default: null 
+    },
+
+    // Email Configuration (for SaaS - per user email settings)
+    emailUser: {
+        type: String,
+        default: null // Gmail/Email address
+    },
+    emailPassword: {
+        type: String,
+        default: null // Encrypted email password/app password
+    },
+    emailFromName: {
+        type: String,
+        default: null // Display name for sent emails
+    },
+
+    // Billing & Subscription Info (for managers/companies)
+    subscriptionPlan: {
+        type: String,
+        enum: ['free', 'basic', 'premium', 'enterprise'],
+        default: 'free'
+    },
+    subscriptionStatus: {
+        type: String,
+        enum: ['active', 'expired', 'cancelled', 'trial'],
+        default: 'trial'
+    },
+    planExpiryDate: {
+        type: Date,
+        default: null
+    },
+    lastPaymentDate: {
+        type: Date,
+        default: null
+    },
+    monthlyRevenue: {
+        type: Number,
+        default: 0
+    },
+    agentLimit: {
+        type: Number,
+        default: 5 // Default limit for free plan
     },
 
     createdAt: {

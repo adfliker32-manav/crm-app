@@ -42,6 +42,14 @@
                 </div>
             </div>
 
+            <div>
+                <label class="block text-gray-600 text-sm font-medium mb-1">Company Name <span class="text-gray-400 text-xs">(Optional)</span></label>
+                <div class="relative">
+                    <i class="fa-solid fa-building absolute left-3 top-3 text-gray-400"></i>
+                    <input type="text" id="companyName" class="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 bg-gray-50" placeholder="Your Company Name">
+                </div>
+            </div>
+
             <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded-lg transition shadow-md">
                 Register Now
             </button>
@@ -58,13 +66,14 @@
             const name = document.getElementById('name').value;
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
+            const companyName = document.getElementById('companyName').value || undefined;
 
             try {
                 // Backend Route Check kar lena (Shayad /api/auth/register hai)
                 const res = await fetch('/api/auth/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, email, password })
+                    body: JSON.stringify({ name, email, password, companyName })
                 });
 
                 const data = await res.json();

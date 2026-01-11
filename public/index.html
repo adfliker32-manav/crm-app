@@ -24,6 +24,61 @@
             to { opacity: 1; transform: translateY(0); }
         }
         .animate-fade-in-up { animation: fadeInUp 0.3s ease-out forwards; }
+        
+        /* Custom Notification Styles */
+        @keyframes slideInRight {
+            from { transform: translateX(400px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOutRight {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(400px); opacity: 0; }
+        }
+        .notification-enter {
+            animation: slideInRight 0.3s ease-out forwards;
+        }
+        .notification-exit {
+            animation: slideOutRight 0.3s ease-in forwards;
+        }
+        .notification-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            max-width: 400px;
+            pointer-events: none;
+        }
+        .notification-item {
+            pointer-events: auto;
+            padding: 16px 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            min-width: 320px;
+            max-width: 400px;
+        }
+        .notification-success {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+        .notification-error {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+        }
+        .notification-warning {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+        }
+        .notification-info {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+        }
     </style>
 </head>
 <body class="bg-gray-100 font-sans antialiased text-gray-800">
@@ -41,13 +96,19 @@
     <a href="#" onclick="switchView('table')" class="flex items-center px-4 py-3 bg-slate-800 text-blue-400 rounded-lg transition hover:bg-slate-700 shadow-md">
         <i class="fa-solid fa-list w-6"></i> List View
     </a>
-    <a href="#" onclick="switchView('kanban')" class="flex items-center px-4 py-3 text-gray-400 hover:text-white hover:bg-slate-700 rounded-lg transition">
+    <a href="#" id="pipelineBtn" class="flex items-center px-4 py-3 text-gray-400 hover:text-white hover:bg-slate-700 rounded-lg transition">
         <i class="fa-solid fa-columns w-6"></i> Pipeline
     </a>
     
+    <a href="email-management.html" class="flex items-center px-4 py-3 text-gray-400 hover:text-red-400 hover:bg-slate-700 rounded-lg transition">
+        <i class="fa-solid fa-envelope w-6"></i> Email Management
+    </a>
     <a href="whatsapp.html" class="flex items-center px-4 py-3 text-gray-400 hover:text-green-400 hover:bg-slate-700 rounded-lg transition">
         <i class="fa-brands fa-whatsapp w-6"></i> WhatsApp
     </a>
+    <button id="teamManagementBtn" class="flex items-center w-full px-4 py-3 text-gray-400 hover:text-blue-400 hover:bg-slate-700 rounded-lg transition">
+        <i class="fa-solid fa-users w-6"></i> Team Management
+    </button>
 </nav>
 
             <div class="p-4 border-t border-slate-700">
@@ -81,6 +142,10 @@
                         <i class="fa-solid fa-plus"></i> New Lead
                     </button>
 
+                    <button onclick="toggleStageModal()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-full text-sm font-medium transition shadow-md flex items-center gap-2">
+                        <i class="fa-solid fa-layer-group"></i> New Stage
+                    </button>
+
                     <button onclick="toggleSettingsModal()" class="bg-gray-100 hover:bg-gray-200 text-gray-600 p-2 rounded-full w-10 h-10 transition" title="Google Sheet Settings">
                         <i class="fa-solid fa-gear"></i>
                     </button>
@@ -88,30 +153,33 @@
             </header>
 
             <div class="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100 p-6">
-                
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                    <div class="bg-white p-4 rounded-xl shadow-md flex items-center justify-center h-48 col-span-1 md:col-span-1">
-                        <canvas id="myChart" style="max-height: 100%;"></canvas>
-                    </div>
-                    <div class="col-span-2 grid grid-cols-2 gap-4">
-                        <div class="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-xl shadow-lg flex flex-col justify-between">
-                            <h3 class="text-lg opacity-80">Total Leads</h3>
-                            <p class="text-4xl font-bold" id="totalCount">0</p>
-                        </div>
-                        <div class="bg-white p-6 rounded-xl shadow-md border-l-4 border-green-500 flex flex-col justify-center items-center cursor-pointer hover:bg-green-50 transition" onclick="addNewStageModal()">
-                            <i class="fa-solid fa-plus text-3xl text-green-500 mb-2"></i>
-                            <span class="text-gray-600 font-medium">Add Pipeline Stage</span>
-                        </div>
-                    </div>
-                </div>
 
-                <div id="tableView" class="space-y-4">
-                    <div id="leadsTableBody" class="grid grid-cols-1 gap-4"></div>
+                <div id="dashboardViews">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8" id="dashboardStats">
+                        <div class="bg-white p-4 rounded-xl shadow-md flex items-center justify-center h-48 col-span-1 md:col-span-1">
+                            <canvas id="myChart" style="max-height: 100%;"></canvas>
+                        </div>
+                        <div class="col-span-2 grid grid-cols-2 gap-4">
+                            <div class="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-xl shadow-lg flex flex-col justify-between">
+                                <h3 class="text-lg opacity-80">Total Leads</h3>
+                                <p class="text-4xl font-bold" id="totalCount">0</p>
+                            </div>
+                            <div class="bg-gradient-to-br from-orange-500 to-orange-600 text-white p-6 rounded-xl shadow-lg flex flex-col justify-between cursor-pointer hover:shadow-xl transition" onclick="openFollowUpModal()">
+                                <h3 class="text-lg opacity-80 flex items-center gap-2">
+                                    <i class="fa-solid fa-bell"></i> Follow-up Today
+                                </h3>
+                                <p class="text-4xl font-bold" id="followUpTodayCount">0</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="tableView" class="space-y-4">
+                        <div id="leadsTableBody" class="grid grid-cols-1 gap-4"></div>
+                    </div>
+                    <div id="kanbanView" class="hidden h-full overflow-x-auto pb-4">
+                        <div class="flex gap-6 h-full" id="kanbanBoard" style="min-width: 1000px;"></div>
+                    </div>
                 </div>
-
-                <div id="kanbanView" class="hidden h-full overflow-x-auto pb-4">
-                    <div class="flex gap-6 h-full" id="kanbanBoard" style="min-width: 1000px;"></div>
-                </div>
+                <div id="teamManagementView" class="hidden"></div>
 
             </div>
         </main>
@@ -133,9 +201,9 @@
         </div>
     </div>
 
-    <div id="leadModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50 backdrop-blur-sm">
-        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-fade-in-up">
-            <div class="bg-slate-900 p-6 text-white flex justify-between items-start">
+    <div id="leadModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50 backdrop-blur-sm overflow-y-auto">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg my-8 overflow-hidden animate-fade-in-up max-h-[90vh] overflow-y-auto">
+            <div class="bg-slate-900 p-6 text-white flex justify-between items-start sticky top-0 z-10">
                 <div>
                     <h2 class="text-2xl font-bold" id="modalName">Lead Name</h2>
                     <p class="text-slate-400 text-sm mt-1" id="modalPhone">Details...</p>
@@ -143,17 +211,81 @@
                 <button onclick="closeModal()" class="text-white hover:text-red-400 text-2xl">&times;</button>
             </div>
 
-            <div class="p-6 bg-gray-50">
-                <h4 class="font-bold text-gray-700 mb-3 flex items-center"><i class="fa-solid fa-clock-rotate-left mr-2 text-blue-500"></i> History & Notes</h4>
-                
-                <div id="notesList" class="h-48 overflow-y-auto bg-white border rounded-lg p-4 mb-4 shadow-inner space-y-3">
+            <div class="p-6 bg-gray-50 space-y-6">
+                <!-- Follow-up Reminder Section -->
+                <div>
+                    <h4 class="font-bold text-gray-700 mb-3 flex items-center gap-2">
+                        <i class="fa-solid fa-calendar-check text-orange-500"></i> Follow-up Reminder
+                    </h4>
+                    <div class="bg-white border rounded-lg p-4 space-y-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 mb-1">Created Date</label>
+                            <p id="modalCreatedDate" class="text-sm text-gray-700 font-medium">-</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 mb-1">Last Follow-up Date</label>
+                            <p id="modalLastFollowUpDate" class="text-sm text-gray-700 font-medium">-</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 mb-2">Next Follow-up Date</label>
+                            <div class="flex gap-2">
+                                <input type="date" id="nextFollowUpDateInput" class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:outline-none text-sm">
+                                <button onclick="updateFollowUpDate()" class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-medium transition shadow-md text-sm">
+                                    <i class="fa-solid fa-save mr-1"></i> Set
+                                </button>
+                            </div>
+                            <p id="modalNextFollowUpDate" class="text-xs text-gray-500 mt-1"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Email Section -->
+                <div>
+                    <h4 class="font-bold text-gray-700 mb-3 flex items-center justify-between">
+                        <span><i class="fa-solid fa-envelope mr-2 text-red-500"></i> Send Email</span>
+                        <button onclick="toggleEmailSection()" class="text-xs text-gray-500 hover:text-blue-600 transition">
+                            <i class="fa-solid fa-chevron-down" id="emailToggleIcon"></i>
+                        </button>
+                    </h4>
+                    <div id="emailSection" class="bg-white border rounded-lg p-4 space-y-3 hidden">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 mb-1">To Email</label>
+                            <input type="email" id="emailToInput" placeholder="recipient@example.com" 
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none text-sm">
+                            <p class="text-xs text-gray-400 mt-1" id="emailToHint">Lead email will be auto-filled if available</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 mb-1">Subject</label>
+                            <input type="text" id="emailSubjectInput" placeholder="Email subject" 
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 mb-1">Message</label>
+                            <textarea id="emailMessageInput" rows="4" placeholder="Type your message here..." 
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none text-sm resize-none"></textarea>
+                        </div>
+                        <button onclick="sendEmailToLead()" id="sendEmailBtn" 
+                            class="w-full bg-red-600 hover:bg-red-700 text-white px-4 py-2.5 rounded-lg font-medium transition shadow-md flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-paper-plane"></i>
+                            <span>Send Email</span>
+                        </button>
+                        <div id="emailStatusMessage" class="hidden text-xs text-center py-2 rounded"></div>
+                    </div>
+                </div>
+
+                <!-- Notes Section -->
+                <div>
+                    <h4 class="font-bold text-gray-700 mb-3 flex items-center"><i class="fa-solid fa-clock-rotate-left mr-2 text-blue-500"></i> History & Notes</h4>
+                    
+                    <div id="notesList" class="h-48 overflow-y-auto bg-white border rounded-lg p-4 mb-4 shadow-inner space-y-3">
                     </div>
 
-                <div class="flex gap-2">
-                    <input type="text" id="newNoteInput" placeholder="Type a note..." class="flex-1 p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none shadow-sm">
-                    <button onclick="saveNote()" class="bg-slate-800 hover:bg-slate-900 text-white px-6 rounded-lg font-medium transition shadow-md">
-                        Add
-                    </button>
+                    <div class="flex gap-2">
+                        <input type="text" id="newNoteInput" placeholder="Type a note..." class="flex-1 p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none shadow-sm">
+                        <button onclick="saveNote()" class="bg-slate-800 hover:bg-slate-900 text-white px-6 rounded-lg font-medium transition shadow-md">
+                            Add
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -199,6 +331,244 @@
                     Save Lead
                 </button>
             </form>
+        </div>
+    </div>
+
+    <!-- Edit Lead Modal -->
+    <div id="editLeadModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50 backdrop-blur-sm overflow-y-auto">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl my-8 overflow-hidden animate-fade-in-up max-h-[90vh] overflow-y-auto">
+            <div class="bg-gradient-to-r from-blue-500 to-blue-600 p-6 text-white flex justify-between items-start sticky top-0 z-10">
+                <div>
+                    <h2 class="text-2xl font-bold flex items-center gap-2">
+                        <i class="fa-solid fa-edit"></i> Edit Lead Details
+                    </h2>
+                    <p class="text-blue-100 text-sm mt-1">Update lead information</p>
+                </div>
+                <button onclick="closeEditLeadModal()" class="text-white hover:text-red-300 text-2xl">&times;</button>
+            </div>
+
+            <div class="p-6 bg-gray-50">
+                <form onsubmit="saveEditedLead(event)" class="space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-2">
+                                Name <span class="text-red-500">*</span>
+                            </label>
+                            <input type="text" id="editLeadName" required 
+                                class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm bg-white">
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-2">
+                                Phone <span class="text-red-500">*</span>
+                            </label>
+                            <input type="text" id="editLeadPhone" required 
+                                class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm bg-white">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-2">
+                            Email
+                        </label>
+                        <input type="email" id="editLeadEmail" 
+                            class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm bg-white">
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-2">
+                                Status / Stage
+                            </label>
+                            <select id="editLeadStatus" 
+                                class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm bg-white">
+                                <!-- Stages will be populated dynamically -->
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-2">
+                                Source
+                            </label>
+                            <select id="editLeadSource" 
+                                class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm bg-white">
+                                <option value="Web">Web</option>
+                                <option value="Manual Entry">Manual Entry</option>
+                                <option value="WhatsApp">WhatsApp</option>
+                                <option value="Google Sheet">Google Sheet</option>
+                                <option value="Referral">Referral</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-2">
+                            Next Follow-up Date
+                        </label>
+                        <input type="date" id="editLeadNextFollowUp" 
+                            class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm bg-white">
+                        <p class="text-xs text-gray-500 mt-1">Leave empty to remove follow-up date</p>
+                    </div>
+
+                    <div class="flex gap-3 pt-4 border-t border-gray-200">
+                        <button type="button" onclick="closeEditLeadModal()" class="flex-1 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition">
+                            Cancel
+                        </button>
+                        <button type="submit" class="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition">
+                            <i class="fa-solid fa-save mr-2"></i>Save Changes
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Notification Container -->
+    <div id="notificationContainer" class="notification-container"></div>
+
+    <!-- Custom Confirm Dialog -->
+    <div id="confirmModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-[10001] backdrop-blur-sm">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in-up">
+            <div class="p-6">
+                <div class="flex items-center gap-4 mb-4">
+                    <div id="confirmIcon" class="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-2xl">
+                        <i class="fa-solid fa-question text-blue-600"></i>
+                    </div>
+                    <h3 id="confirmTitle" class="text-xl font-bold text-gray-800">Confirm Action</h3>
+                </div>
+                <p id="confirmMessage" class="text-gray-600 mb-6">Are you sure you want to proceed?</p>
+                <div class="flex gap-3">
+                    <button onclick="confirmCancel()" class="flex-1 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition">
+                        Cancel
+                    </button>
+                    <button id="confirmOkBtn" onclick="confirmOk()" class="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition">
+                        Confirm
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Prompt Dialog -->
+    <div id="promptModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-[10001] backdrop-blur-sm">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in-up">
+            <div class="p-6">
+                <div class="flex items-center gap-4 mb-4">
+                    <div class="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center text-2xl">
+                        <i class="fa-solid fa-keyboard text-purple-600"></i>
+                    </div>
+                    <h3 id="promptTitle" class="text-xl font-bold text-gray-800">Enter Information</h3>
+                </div>
+                <p id="promptMessage" class="text-gray-600 mb-4">Please provide the following:</p>
+                <input type="text" id="promptInput" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:outline-none mb-6" placeholder="Enter value...">
+                <div class="flex gap-3">
+                    <button onclick="promptCancel()" class="flex-1 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition">
+                        Cancel
+                    </button>
+                    <button onclick="promptOk()" class="flex-1 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition">
+                        Submit
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Follow-up Modal -->
+    <div id="followUpModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50 backdrop-blur-sm overflow-y-auto">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-6xl my-8 overflow-hidden animate-fade-in-up max-h-[90vh] overflow-y-auto">
+            <div class="bg-gradient-to-r from-orange-500 to-orange-600 p-6 text-white flex justify-between items-start sticky top-0 z-10">
+                <div>
+                    <h2 class="text-2xl font-bold flex items-center gap-2">
+                        <i class="fa-solid fa-bell"></i> Follow-up Reminders
+                    </h2>
+                    <p class="text-orange-100 text-sm mt-1">Manage your follow-up leads</p>
+                </div>
+                <button onclick="closeFollowUpModal()" class="text-white hover:text-red-300 text-2xl">&times;</button>
+            </div>
+
+            <div class="p-6 bg-gray-50">
+                <!-- Tabs -->
+                <div class="flex gap-2 mb-6 border-b border-gray-200">
+                    <button onclick="switchFollowUpTab('today')" id="followUpTabToday" class="px-4 py-2 font-medium text-gray-700 border-b-2 border-orange-500 transition">
+                        <i class="fa-solid fa-calendar-check mr-2"></i>Follow-up Today (<span id="followUpTodayTabCount">0</span>)
+                    </button>
+                    <button onclick="switchFollowUpTab('done')" id="followUpTabDone" class="px-4 py-2 font-medium text-gray-500 hover:text-gray-700 transition">
+                        <i class="fa-solid fa-check-circle mr-2"></i>Follow-up Done (<span id="followUpDoneTabCount">0</span>)
+                    </button>
+                </div>
+
+                <!-- Follow-up Today Section -->
+                <div id="followUpTodayTab" class="space-y-4">
+                    <div id="followUpTodayList" class="space-y-3">
+                        <p class="text-center text-gray-400 py-8">Loading follow-up reminders...</p>
+                    </div>
+                </div>
+
+                <!-- Follow-up Done Section -->
+                <div id="followUpDoneTab" class="hidden space-y-4">
+                    <div id="followUpDoneList" class="space-y-3">
+                        <p class="text-center text-gray-400 py-8">No completed follow-ups yet.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Follow-up Action Modal (for completing follow-up) -->
+    <div id="followUpActionModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-[10002] backdrop-blur-sm">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-fade-in-up">
+            <div class="bg-gradient-to-r from-green-500 to-green-600 p-6 text-white flex justify-between items-start">
+                <div>
+                    <h2 class="text-xl font-bold flex items-center gap-2">
+                        <i class="fa-solid fa-check-circle"></i> Complete Follow-up
+                    </h2>
+                    <p class="text-green-100 text-sm mt-1" id="followUpActionLeadName">Lead Name</p>
+                </div>
+                <button onclick="closeFollowUpActionModal()" class="text-white hover:text-red-300 text-2xl">&times;</button>
+            </div>
+
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-2">
+                        Follow-up Note <span class="text-red-500">*</span>
+                    </label>
+                    <textarea id="followUpNoteInput" rows="4" placeholder="Enter your follow-up notes here..." class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:outline-none text-sm" required></textarea>
+                    <p class="text-xs text-red-500 mt-1 hidden" id="followUpNoteError">Please add a follow-up note before completing.</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-2">
+                        Next Action <span class="text-red-500">*</span>
+                    </label>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="followUpNextAction" value="nextDate" checked onchange="toggleFollowUpDateInput()" class="w-4 h-4 text-green-600">
+                                <span class="text-sm text-gray-700">Set Next Follow-up Date</span>
+                            </label>
+                            <input type="date" id="nextFollowUpDateNew" class="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:outline-none text-sm">
+                        </div>
+                        <div>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="followUpNextAction" value="deadLead" onchange="toggleFollowUpDateInput()" class="w-4 h-4 text-red-600">
+                                <span class="text-sm text-gray-700">Mark as Dead Lead</span>
+                            </label>
+                            <p class="text-xs text-gray-500 mt-1 ml-6">This will move the lead to "Dead Lead" stage</p>
+                        </div>
+                    </div>
+                    <p class="text-xs text-red-500 mt-2 hidden" id="followUpActionError">Please select next action: Set next follow-up date OR Mark as Dead Lead.</p>
+                </div>
+
+                <div class="flex gap-3 pt-4 border-t border-gray-200">
+                    <button onclick="closeFollowUpActionModal()" class="flex-1 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition">
+                        Cancel
+                    </button>
+                    <button onclick="completeFollowUp()" class="flex-1 px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition">
+                        <i class="fa-solid fa-check mr-2"></i>Complete Follow-up
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 

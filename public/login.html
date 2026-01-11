@@ -61,8 +61,15 @@
                 
                 if (res.ok) {
                     localStorage.setItem('token', data.token);
-                    localStorage.setItem('user', JSON.stringify(data.user)); // User Data Save
-                    window.location.href = 'index.html';
+                    localStorage.setItem('user', JSON.stringify(data.user));
+                    localStorage.setItem('role', data.role); // Save role
+                    
+                    // Redirect based on role
+                    if (data.role === 'superadmin') {
+                        window.location.href = 'super-admin.html';
+                    } else {
+                        window.location.href = 'index.html';
+                    }
                 } else {
                     alert(data.message || 'Login Failed');
                 }

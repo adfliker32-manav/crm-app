@@ -1,0 +1,13 @@
+# Gmail Email Setup Instructions
+
+1. Go to your Google Account settings
+2. Enable 2-Step Verification (if not already enabled)
+3. Go to Security > App passwords
+4. Generate an App Password for 'Mail'
+5. Use that App Password (16 characters) in your .env file
+
+Add to your .env file:
+EMAIL_USER=your-email@gmail.com
+EMAIL_PASSWORD=your-app-password-here
+
+For more info: https://support.google.com/accounts/answer/185833

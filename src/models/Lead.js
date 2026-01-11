@@ -42,7 +42,22 @@ const LeadSchema = new mongoose.Schema({
     }],
     
     // 👇 NEW: Yahan saari chatting save hogi
-    messages: [messageSchema] 
+    messages: [messageSchema],
+    
+    // 👇 Follow-up Reminder
+    nextFollowUpDate: {
+        type: Date
+    },
+    lastFollowUpDate: {
+        type: Date
+    },
+    // Follow-up History (completed follow-ups)
+    followUpHistory: [{
+        note: { type: String, required: true },
+        completedDate: { type: Date, default: Date.now },
+        nextFollowUpDate: Date,
+        markedAsDeadLead: { type: Boolean, default: false }
+    }] 
 
 }, { timestamps: true });
 

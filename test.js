@@ -8,8 +8,9 @@ async function testMyServer() {
 
     try {
         // यह कोड हमारे अपने ही सर्वर को कॉल कर रहा है (जैसे वेबसाइट का बटन करता)
-        const response = await axios.post('http://localhost:3000/api/sync-sheet', {
-            sheetUrl: mySheetLink
+        const response = await axios.post('http://localhost:3000/api/leads/sync-sheet', {
+            sheetUrl: mySheetLink,
+            userId: "test-user-id"
         });
 
         console.log("🟢 Success! Server ne bola:", response.data);

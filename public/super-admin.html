@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Admin | SaaS Control Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-900 text-white font-sans">
+
+    <div class="flex h-screen overflow-hidden">
+        
+        <aside class="w-64 bg-gray-800 border-r border-gray-700 flex flex-col">
+            <div class="p-6 flex items-center gap-3 border-b border-gray-700">
+                <div class="w-8 h-8 rounded-lg bg-purple-600 flex items-center justify-center">
+                    <i class="fa-solid fa-crown text-white text-sm"></i>
+                </div>
+                <h1 class="text-xl font-bold tracking-wide">Admin<span class="text-purple-400">Panel</span></h1>
+            </div>
+
+            <nav class="flex-1 p-4 space-y-2">
+                <a href="#" onclick="showDashboard()" id="dashboardNav" class="flex items-center gap-3 px-4 py-3 bg-purple-600/20 text-purple-300 rounded-xl border border-purple-500/30">
+                    <i class="fa-solid fa-chart-line"></i> Dashboard
+                </a>
+                <a href="#" onclick="showManageCompanies()" id="companiesNav" class="flex items-center gap-3 px-4 py-3 text-gray-400 hover:bg-gray-700 hover:text-white rounded-xl transition">
+                    <i class="fa-solid fa-users-gear"></i> Manage Companies
+                </a>
+                <a href="#" onclick="showBilling()" id="billingNav" class="flex items-center gap-3 px-4 py-3 text-gray-400 hover:bg-gray-700 hover:text-white rounded-xl transition">
+                    <i class="fa-solid fa-sack-dollar"></i> Billing & Revenue
+                </a>
+            </nav>
+
+            <div class="p-4 border-t border-gray-700">
+                <button onclick="logout()" class="w-full flex items-center justify-center gap-2 text-red-400 hover:bg-red-500/10 py-2 rounded-lg transition">
+                    <i class="fa-solid fa-right-from-bracket"></i> Logout
+                </button>
+            </div>
+        </aside>
+
+        <main class="flex-1 overflow-y-auto bg-gray-900 p-8">
+            <header class="flex justify-between items-center mb-8">
+                <div>
+                    <h2 class="text-2xl font-bold">Overview</h2>
+                    <p class="text-gray-400 text-sm">Welcome back, Super Admin.</p>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span class="text-xs bg-gray-800 px-3 py-1 rounded-full border border-gray-700 text-green-400">● System Live</span>
+                </div>
+            </header>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-gray-400 text-sm mb-1">Total Companies</p>
+                            <h3 class="text-3xl font-bold" id="totalCompanies">-</h3>
+                        </div>
+                        <div class="p-3 bg-blue-500/10 rounded-lg text-blue-400">
+                            <i class="fa-solid fa-building"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-gray-400 text-sm mb-1">Total Leads (Data)</p>
+                            <h3 class="text-3xl font-bold" id="totalLeads">-</h3>
+                        </div>
+                        <div class="p-3 bg-green-500/10 rounded-lg text-green-400">
+                            <i class="fa-solid fa-database"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-gray-400 text-sm mb-1">Active Agents</p>
+                            <h3 class="text-3xl font-bold" id="totalAgents">-</h3>
+                        </div>
+                        <div class="p-3 bg-purple-500/10 rounded-lg text-purple-400">
+                            <i class="fa-solid fa-headset"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Dashboard View -->
+            <div id="dashboardView">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div class="lg:col-span-2 bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                        <h3 class="font-bold mb-4">Growth Analytics</h3>
+                        <div class="h-64">
+                            <canvas id="growthChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                        <h3 class="font-bold mb-4">Recent Signups</h3>
+                        <div class="space-y-4" id="recentUsersList">
+                            <p class="text-gray-500 text-sm">Loading...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Manage Companies View -->
+            <div id="manageCompaniesView" class="hidden">
+                <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="font-bold text-xl">Manage Companies</h3>
+                        <div class="relative">
+                            <i class="fa-solid fa-search absolute left-3 top-3 text-gray-400"></i>
+                            <input type="text" id="companySearch" onkeyup="filterCompanies()" placeholder="Search companies..." class="pl-10 pr-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 w-64">
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead class="bg-gray-700 border-b border-gray-600">
+                                <tr>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Company Name</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Email</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Created</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Agents</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Leads</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="companiesTableBody" class="divide-y divide-gray-700">
+                                <tr>
+                                    <td colspan="6" class="px-4 py-8 text-center text-gray-400">Loading companies...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Billing & Revenue View -->
+            <div id="billingView" class="hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-6">
+                    <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                        <p class="text-gray-400 text-sm mb-1">Total Monthly Revenue</p>
+                        <h3 class="text-3xl font-bold text-green-400" id="totalMonthlyRevenue">$0</h3>
+                    </div>
+                    <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                        <p class="text-gray-400 text-sm mb-1">This Month Revenue</p>
+                        <h3 class="text-3xl font-bold text-blue-400" id="currentMonthRevenue">$0</h3>
+                    </div>
+                    <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                        <p class="text-gray-400 text-sm mb-1">Active Subscriptions</p>
+                        <h3 class="text-3xl font-bold text-purple-400" id="activeSubscriptions">0</h3>
+                    </div>
+                    <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                        <p class="text-gray-400 text-sm mb-1">Expiring Soon</p>
+                        <h3 class="text-3xl font-bold text-orange-400" id="expiringSoon">0</h3>
+                    </div>
+                </div>
+
+                <div class="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="font-bold text-xl">All Subscriptions</h3>
+                        <div class="flex gap-2">
+                            <select id="billingFilter" onchange="filterBilling()" class="px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
+                                <option value="all">All Status</option>
+                                <option value="active">Active</option>
+                                <option value="expired">Expired</option>
+                                <option value="trial">Trial</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead class="bg-gray-700 border-b border-gray-600">
+                                <tr>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Company</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Plan</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Status</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Monthly Revenue</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Last Payment</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Expires</th>
+                                    <th class="px-4 py-3 text-sm font-bold uppercase">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="billingTableBody" class="divide-y divide-gray-700">
+                                <tr>
+                                    <td colspan="7" class="px-4 py-8 text-center text-gray-400">Loading billing data...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Edit Company Modal -->
+    <div id="editCompanyModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50">
+        <div class="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold">Edit Company</h3>
+                <button onclick="closeEditModal()" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times text-xl"></i>
+                </button>
+            </div>
+            <form id="editCompanyForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Company Name</label>
+                    <input type="text" id="editCompanyName" required class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Contact Name</label>
+                    <input type="text" id="editContactName" required class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Email</label>
+                    <input type="email" id="editEmail" required class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="closeEditModal()" class="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition">
+                        Cancel
+                    </button>
+                    <button type="submit" class="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition font-medium">
+                        Save Changes
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- View Company Leads Modal -->
+    <div id="viewLeadsModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50 overflow-y-auto">
+        <div class="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-6xl p-6 my-8">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold">Company Leads</h3>
+                <button onclick="closeLeadsModal()" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="mb-4 text-sm text-gray-400" id="leadsModalInfo"></div>
+            <div class="overflow-x-auto max-h-[70vh]">
+                <table class="w-full text-left">
+                    <thead class="bg-gray-700 border-b border-gray-600 sticky top-0">
+                        <tr>
+                            <th class="px-4 py-3 text-sm font-bold">Name</th>
+                            <th class="px-4 py-3 text-sm font-bold">Phone</th>
+                            <th class="px-4 py-3 text-sm font-bold">Email</th>
+                            <th class="px-4 py-3 text-sm font-bold">Status</th>
+                            <th class="px-4 py-3 text-sm font-bold">Source</th>
+                            <th class="px-4 py-3 text-sm font-bold">Created</th>
+                        </tr>
+                    </thead>
+                    <tbody id="companyLeadsTableBody" class="divide-y divide-gray-700">
+                        <tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-4 flex justify-between items-center">
+                <button onclick="loadLeadsPage('prev')" id="prevLeadsBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition" disabled>Previous</button>
+                <span id="leadsPageInfo" class="text-sm text-gray-400"></span>
+                <button onclick="loadLeadsPage('next')" id="nextLeadsBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition" disabled>Next</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manage Agents Modal -->
+    <div id="manageAgentsModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50 overflow-y-auto">
+        <div class="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl p-6 my-8">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold">Manage Agents</h3>
+                <button onclick="closeAgentsModal()" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="mb-4 flex justify-between items-center">
+                <div class="text-sm text-gray-400" id="agentsModalInfo"></div>
+                <button onclick="showCreateAgentForm()" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition text-sm">
+                    <i class="fa-solid fa-plus mr-1"></i> Create Agent
+                </button>
+            </div>
+            <div class="overflow-x-auto max-h-[60vh] mb-4">
+                <table class="w-full text-left">
+                    <thead class="bg-gray-700 border-b border-gray-600 sticky top-0">
+                        <tr>
+                            <th class="px-4 py-3 text-sm font-bold">Name</th>
+                            <th class="px-4 py-3 text-sm font-bold">Email</th>
+                            <th class="px-4 py-3 text-sm font-bold">Created</th>
+                            <th class="px-4 py-3 text-sm font-bold">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="agentsTableBody" class="divide-y divide-gray-700">
+                        <tr><td colspan="4" class="px-4 py-8 text-center text-gray-400">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="border-t border-gray-700 pt-4">
+                <label class="block text-sm font-medium text-gray-300 mb-2">Agent Limit</label>
+                <div class="flex gap-2">
+                    <input type="number" id="agentLimitInput" min="0" class="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <button onclick="updateAgentLimit()" class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition">
+                        Update Limit
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create/Edit Agent Modal -->
+    <div id="agentFormModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50">
+        <div class="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold" id="agentFormTitle">Create Agent</h3>
+                <button onclick="closeAgentForm()" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times text-xl"></i>
+                </button>
+            </div>
+            <form id="agentForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Name</label>
+                    <input type="text" id="agentName" required class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Email</label>
+                    <input type="email" id="agentEmail" required class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Password</label>
+                    <input type="password" id="agentPassword" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="Leave blank to keep current">
+                </div>
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="closeAgentForm()" class="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition">
+                        Cancel
+                    </button>
+                    <button type="submit" class="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition font-medium">
+                        Save
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div id="changePasswordModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50">
+        <div class="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold">Change Company Password</h3>
+                <button onclick="closePasswordModal()" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times text-xl"></i>
+                </button>
+            </div>
+            <form id="changePasswordForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">New Password</label>
+                    <input type="password" id="newPassword" required minlength="6" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <p class="text-xs text-gray-400 mt-1">Minimum 6 characters</p>
+                </div>
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="closePasswordModal()" class="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition">
+                        Cancel
+                    </button>
+                    <button type="submit" class="flex-1 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg transition font-medium">
+                        Change Password
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Billing Modal -->
+    <div id="editBillingModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50">
+        <div class="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold">Edit Billing</h3>
+                <button onclick="closeBillingModal()" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times text-xl"></i>
+                </button>
+            </div>
+            <form id="editBillingForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Subscription Plan</label>
+                    <select id="billingPlan" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        <option value="free">Free</option>
+                        <option value="basic">Basic</option>
+                        <option value="premium">Premium</option>
+                        <option value="enterprise">Enterprise</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Status</label>
+                    <select id="billingStatus" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        <option value="trial">Trial</option>
+                        <option value="active">Active</option>
+                        <option value="expired">Expired</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Monthly Revenue ($)</label>
+                    <input type="number" id="billingRevenue" step="0.01" min="0" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Plan Expiry Date</label>
+                    <input type="date" id="billingExpiry" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-1">Last Payment Date</label>
+                    <input type="date" id="billingLastPayment" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="closeBillingModal()" class="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition">
+                        Cancel
+                    </button>
+                    <button type="submit" class="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition font-medium">
+                        Save
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const token = localStorage.getItem('token');
+        if (!token) window.location.href = 'login.html';
+
+        let allCompanies = [];
+        let currentEditingCompanyId = null;
+        let growthChart = null;
+
+        // View Navigation
+        function showDashboard() {
+            document.getElementById('dashboardView').classList.remove('hidden');
+            document.getElementById('manageCompaniesView').classList.add('hidden');
+            document.getElementById('billingView').classList.add('hidden');
+            document.getElementById('dashboardNav').classList.add('bg-purple-600/20', 'text-purple-300', 'border', 'border-purple-500/30');
+            document.getElementById('dashboardNav').classList.remove('text-gray-400');
+            document.getElementById('companiesNav').classList.remove('bg-purple-600/20', 'text-purple-300', 'border', 'border-purple-500/30');
+            document.getElementById('companiesNav').classList.add('text-gray-400');
+            document.getElementById('billingNav').classList.remove('bg-purple-600/20', 'text-purple-300', 'border', 'border-purple-500/30');
+            document.getElementById('billingNav').classList.add('text-gray-400');
+        }
+
+        function showManageCompanies() {
+            document.getElementById('dashboardView').classList.add('hidden');
+            document.getElementById('manageCompaniesView').classList.remove('hidden');
+            document.getElementById('billingView').classList.add('hidden');
+            document.getElementById('companiesNav').classList.add('bg-purple-600/20', 'text-purple-300', 'border', 'border-purple-500/30');
+            document.getElementById('companiesNav').classList.remove('text-gray-400');
+            document.getElementById('dashboardNav').classList.remove('bg-purple-600/20', 'text-purple-300', 'border', 'border-purple-500/30');
+            document.getElementById('dashboardNav').classList.add('text-gray-400');
+            document.getElementById('billingNav').classList.remove('bg-purple-600/20', 'text-purple-300', 'border', 'border-purple-500/30');
+            document.getElementById('billingNav').classList.add('text-gray-400');
+            loadCompanies();
+        }
+
+        function showBilling() {
+            document.getElementById('dashboardView').classList.add('hidden');
+            document.getElementById('manageCompaniesView').classList.add('hidden');
+            document.getElementById('billingView').classList.remove('hidden');
+            document.getElementById('billingNav').classList.add('bg-purple-600/20', 'text-purple-300', 'border', 'border-purple-500/30');
+            document.getElementById('billingNav').classList.remove('text-gray-400');
+            document.getElementById('dashboardNav').classList.remove('bg-purple-600/20', 'text-purple-300', 'border', 'border-purple-500/30');
+            document.getElementById('dashboardNav').classList.add('text-gray-400');
+            document.getElementById('companiesNav').classList.remove('bg-purple-600/20', 'text-purple-300', 'border', 'border-purple-500/30');
+            document.getElementById('companiesNav').classList.add('text-gray-400');
+            loadBillingData();
+        }
+
+        // Fetch Analytics Data
+        async function initSuperAdmin() {
+            try {
+                const res = await fetch('/api/superadmin/analytics', {
+                    headers: { 'Authorization': token }
+                });
+
+                if (res.status === 403) {
+                    alert("🚫 ACCESS DENIED: You are not a Super Admin!");
+                    window.location.href = 'index.html';
+                    return;
+                }
+
+                if (!res.ok) {
+                    throw new Error('Failed to fetch analytics');
+                }
+
+                const data = await res.json();
+                
+                // Update UI
+                document.getElementById('totalCompanies').innerText = data.totalCompanies || 0;
+                document.getElementById('totalLeads').innerText = data.totalLeads || 0;
+                document.getElementById('totalAgents').innerText = data.totalAgents || 0;
+
+                // Render List
+                const list = document.getElementById('recentUsersList');
+                list.innerHTML = '';
+                if (data.recentUsers && data.recentUsers.length > 0) {
+                    data.recentUsers.forEach(u => {
+                        list.innerHTML += `
+                            <div class="flex items-center gap-3 p-3 hover:bg-gray-700 rounded-lg transition">
+                                <div class="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-xs font-bold">
+                                    ${u.name.charAt(0).toUpperCase()}
+                                </div>
+                                <div class="overflow-hidden">
+                                    <h4 class="text-sm font-bold truncate">${u.name}</h4>
+                                    <p class="text-xs text-gray-400 truncate">${u.email}</p>
+                                </div>
+                            </div>
+                        `;
+                    });
+                } else {
+                    list.innerHTML = '<p class="text-gray-500 text-sm">No recent signups</p>';
+                }
+
+                // Render Chart
+                renderChart(data.totalCompanies || 0, data.totalAgents || 0);
+
+            } catch (err) {
+                console.error('Analytics Error:', err);
+                alert('Failed to load analytics data');
+            }
+        }
+
+        // Load Companies List
+        async function loadCompanies() {
+            try {
+                const tbody = document.getElementById('companiesTableBody');
+                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">Loading...</td></tr>';
+
+                const res = await fetch('/api/superadmin/companies', {
+                    headers: { 'Authorization': token }
+                });
+
+                if (!res.ok) {
+                    if (res.status === 403) {
+                        alert("🚫 ACCESS DENIED: You are not a Super Admin!");
+                        window.location.href = 'index.html';
+                        return;
+                    }
+                    throw new Error('Failed to fetch companies');
+                }
+
+                const data = await res.json();
+                allCompanies = data.companies || [];
+
+                renderCompaniesTable(allCompanies);
+
+            } catch (err) {
+                console.error('Load Companies Error:', err);
+                document.getElementById('companiesTableBody').innerHTML = 
+                    '<tr><td colspan="6" class="px-4 py-8 text-center text-red-400">Failed to load companies</td></tr>';
+            }
+        }
+
+        // Render Companies Table
+        function renderCompaniesTable(companies) {
+            const tbody = document.getElementById('companiesTableBody');
+            tbody.innerHTML = '';
+
+            if (companies.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">No companies found</td></tr>';
+                return;
+            }
+
+            companies.forEach(company => {
+                const date = new Date(company.createdAt).toLocaleDateString();
+                const companyName = (company.companyName || company.name || 'N/A').replace(/'/g, "\\'");
+                const contactName = (company.name || '').replace(/'/g, "\\'");
+                const email = (company.email || '').replace(/'/g, "\\'");
+                
+                tbody.innerHTML += `
+                    <tr class="hover:bg-gray-700 transition">
+                        <td class="px-4 py-3">
+                            <div class="font-medium">${escapeHtml(company.companyName || 'N/A')}</div>
+                            <div class="text-xs text-gray-400">${escapeHtml(company.name || '')}</div>
+                        </td>
+                        <td class="px-4 py-3 text-sm">${escapeHtml(company.email || '')}</td>
+                        <td class="px-4 py-3 text-sm text-gray-400">${date}</td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-1 bg-purple-500/20 text-purple-300 rounded text-xs font-medium">
+                                ${company.agentsCount || 0}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-1 bg-blue-500/20 text-blue-300 rounded text-xs font-medium">
+                                ${company.leadsCount || 0}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="flex gap-2 flex-wrap">
+                                <button onclick="viewCompanyLeads('${company._id}')" class="px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-xs transition" title="View Leads">
+                                    <i class="fa-solid fa-list mr-1"></i> Leads
+                                </button>
+                                <button onclick="manageCompanyAgents('${company._id}')" class="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs transition" title="Manage Agents">
+                                    <i class="fa-solid fa-users mr-1"></i> Agents
+                                </button>
+                                <button onclick="editCompany('${company._id}')" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs transition" title="Edit Company">
+                                    <i class="fa-solid fa-edit mr-1"></i> Edit
+                                </button>
+                                <button onclick="changeCompanyPassword('${company._id}')" class="px-3 py-1 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-xs transition" title="Change Password">
+                                    <i class="fa-solid fa-key mr-1"></i> Password
+                                </button>
+                                <button onclick="confirmDeleteCompany('${company._id}', '${companyName}')" class="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-xs transition" title="Delete Company">
+                                    <i class="fa-solid fa-trash mr-1"></i> Delete
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        // Filter Companies
+        function filterCompanies() {
+            const search = document.getElementById('companySearch').value.toLowerCase();
+            const filtered = allCompanies.filter(c => 
+                (c.companyName && c.companyName.toLowerCase().includes(search)) ||
+                (c.name && c.name.toLowerCase().includes(search)) ||
+                (c.email && c.email.toLowerCase().includes(search))
+            );
+            renderCompaniesTable(filtered);
+        }
+
+        // Edit Company
+        async function editCompany(id) {
+            try {
+                const res = await fetch(`/api/superadmin/companies/${id}`, {
+                    headers: { 'Authorization': token }
+                });
+
+                if (!res.ok) throw new Error('Failed to fetch company');
+
+                const data = await res.json();
+                const company = data.company;
+
+                currentEditingCompanyId = id;
+                document.getElementById('editCompanyName').value = company.companyName || '';
+                document.getElementById('editContactName').value = company.name || '';
+                document.getElementById('editEmail').value = company.email || '';
+
+                document.getElementById('editCompanyModal').classList.remove('hidden');
+                document.getElementById('editCompanyModal').classList.add('flex');
+
+            } catch (err) {
+                console.error('Edit Company Error:', err);
+                alert('Failed to load company details');
+            }
+        }
+
+        // Close Edit Modal
+        function closeEditModal() {
+            document.getElementById('editCompanyModal').classList.add('hidden');
+            document.getElementById('editCompanyModal').classList.remove('flex');
+            currentEditingCompanyId = null;
+            document.getElementById('editCompanyForm').reset();
+        }
+
+        // Save Company Changes
+        document.getElementById('editCompanyForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (!currentEditingCompanyId) return;
+
+            const companyName = document.getElementById('editCompanyName').value;
+            const contactName = document.getElementById('editContactName').value;
+            const email = document.getElementById('editEmail').value;
+
+            try {
+                const res = await fetch(`/api/superadmin/companies/${currentEditingCompanyId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': token,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: contactName,
+                        email: email,
+                        companyName: companyName
+                    })
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.success) {
+                    alert('Company updated successfully!');
+                    closeEditModal();
+                    loadCompanies();
+                } else {
+                    alert(data.message || 'Failed to update company');
+                }
+            } catch (err) {
+                console.error('Update Company Error:', err);
+                alert('Error updating company');
+            }
+        });
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Confirm and Delete Company
+        async function confirmDeleteCompany(id, name) {
+            if (!confirm(`Are you sure you want to delete "${name}"?\n\nThis will also delete all agents and leads associated with this company. This action cannot be undone!`)) {
+                return;
+            }
+            await deleteCompanyById(id);
+        }
+
+        // Delete Company (internal function)
+        async function deleteCompanyById(id) {
+            try {
+                const res = await fetch(`/api/superadmin/companies/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': token }
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.success) {
+                    alert('Company deleted successfully!');
+                    loadCompanies();
+                    // Refresh analytics if on dashboard
+                    if (!document.getElementById('dashboardView').classList.contains('hidden')) {
+                        initSuperAdmin();
+                    }
+                } else {
+                    alert(data.message || 'Failed to delete company');
+                }
+            } catch (err) {
+                console.error('Delete Company Error:', err);
+                alert('Error deleting company: ' + (err.message || 'Unknown error'));
+            }
+        }
+
+        // Render Chart
+        function renderChart(companies, agents) {
+            const ctx = document.getElementById('growthChart');
+            if (!ctx) return;
+
+            if (growthChart) {
+                growthChart.destroy();
+            }
+
+            growthChart = new Chart(ctx.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: ['Companies', 'Agents'],
+                    datasets: [{
+                        label: 'Total Count',
+                        data: [companies, agents],
+                        backgroundColor: ['#3b82f6', '#a855f7'],
+                        borderRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { 
+                        legend: { display: false }
+                    },
+                    scales: { 
+                        y: { 
+                            beginAtZero: true, 
+                            grid: { color: '#374151' },
+                            ticks: { color: '#9CA3AF' }
+                        }, 
+                        x: { 
+                            grid: { display: false },
+                            ticks: { color: '#9CA3AF' }
+                        } 
+                    }
+                }
+            });
+        }
+
+        // View Company Leads
+        let currentLeadsCompanyId = null;
+        let currentLeadsPage = 1;
+        async function viewCompanyLeads(companyId) {
+            currentLeadsCompanyId = companyId;
+            currentLeadsPage = 1;
+            document.getElementById('viewLeadsModal').classList.remove('hidden');
+            document.getElementById('viewLeadsModal').classList.add('flex');
+            await loadCompanyLeads();
+        }
+
+        async function loadCompanyLeads() {
+            if (!currentLeadsCompanyId) return;
+            try {
+                const res = await fetch(`/api/superadmin/companies/${currentLeadsCompanyId}/leads?page=${currentLeadsPage}&limit=50`, {
+                    headers: { 'Authorization': token }
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    const tbody = document.getElementById('companyLeadsTableBody');
+                    tbody.innerHTML = '';
+                    if (data.leads.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">No leads found</td></tr>';
+                    } else {
+                        data.leads.forEach(lead => {
+                            const date = new Date(lead.createdAt).toLocaleDateString();
+                            tbody.innerHTML += `
+                                <tr class="hover:bg-gray-700">
+                                    <td class="px-4 py-3">${escapeHtml(lead.name || 'N/A')}</td>
+                                    <td class="px-4 py-3">${escapeHtml(lead.phone || '-')}</td>
+                                    <td class="px-4 py-3">${escapeHtml(lead.email || '-')}</td>
+                                    <td class="px-4 py-3"><span class="px-2 py-1 bg-blue-500/20 text-blue-300 rounded text-xs">${escapeHtml(lead.status || 'New')}</span></td>
+                                    <td class="px-4 py-3">${escapeHtml(lead.source || '-')}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-400">${date}</td>
+                                </tr>
+                            `;
+                        });
+                    }
+                    document.getElementById('leadsModalInfo').innerText = `Total: ${data.totalLeads} leads | Page ${data.currentPage} of ${data.totalPages}`;
+                    document.getElementById('prevLeadsBtn').disabled = data.currentPage === 1;
+                    document.getElementById('nextLeadsBtn').disabled = data.currentPage >= data.totalPages;
+                    document.getElementById('leadsPageInfo').innerText = `Page ${data.currentPage} of ${data.totalPages}`;
+                }
+            } catch (err) {
+                console.error('Load Leads Error:', err);
+                alert('Failed to load leads');
+            }
+        }
+
+        function loadLeadsPage(direction) {
+            if (direction === 'next') currentLeadsPage++;
+            else if (direction === 'prev' && currentLeadsPage > 1) currentLeadsPage--;
+            loadCompanyLeads();
+        }
+
+        function closeLeadsModal() {
+            document.getElementById('viewLeadsModal').classList.add('hidden');
+            document.getElementById('viewLeadsModal').classList.remove('flex');
+            currentLeadsCompanyId = null;
+        }
+
+        // Manage Agents
+        let currentAgentsCompanyId = null;
+        let currentEditingAgentId = null;
+        async function manageCompanyAgents(companyId) {
+            currentAgentsCompanyId = companyId;
+            document.getElementById('manageAgentsModal').classList.remove('hidden');
+            document.getElementById('manageAgentsModal').classList.add('flex');
+            await loadCompanyAgents();
+        }
+
+        async function loadCompanyAgents() {
+            if (!currentAgentsCompanyId) return;
+            try {
+                const res = await fetch(`/api/superadmin/companies/${currentAgentsCompanyId}/agents`, {
+                    headers: { 'Authorization': token }
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    const tbody = document.getElementById('agentsTableBody');
+                    tbody.innerHTML = '';
+                    if (data.agents.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="4" class="px-4 py-8 text-center text-gray-400">No agents found</td></tr>';
+                    } else {
+                        data.agents.forEach(agent => {
+                            const date = new Date(agent.createdAt).toLocaleDateString();
+                            tbody.innerHTML += `
+                                <tr class="hover:bg-gray-700">
+                                    <td class="px-4 py-3">${escapeHtml(agent.name || 'N/A')}</td>
+                                    <td class="px-4 py-3">${escapeHtml(agent.email || '-')}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-400">${date}</td>
+                                    <td class="px-4 py-3">
+                                        <button onclick="editAgent('${agent._id}', '${escapeHtml(agent.name)}', '${escapeHtml(agent.email)}')" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs transition mr-2">
+                                            <i class="fa-solid fa-edit mr-1"></i> Edit
+                                        </button>
+                                        <button onclick="deleteAgent('${agent._id}', '${escapeHtml(agent.name)}')" class="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-xs transition">
+                                            <i class="fa-solid fa-trash mr-1"></i> Delete
+                                        </button>
+                                    </td>
+                                </tr>
+                            `;
+                        });
+                    }
+                    document.getElementById('agentsModalInfo').innerText = `Agents: ${data.currentAgentsCount} / ${data.agentLimit} limit`;
+                    document.getElementById('agentLimitInput').value = data.agentLimit;
+                }
+            } catch (err) {
+                console.error('Load Agents Error:', err);
+                alert('Failed to load agents');
+            }
+        }
+
+        function showCreateAgentForm() {
+            currentEditingAgentId = null;
+            document.getElementById('agentFormTitle').innerText = 'Create Agent';
+            document.getElementById('agentForm').reset();
+            document.getElementById('agentPassword').required = true;
+            document.getElementById('agentFormModal').classList.remove('hidden');
+            document.getElementById('agentFormModal').classList.add('flex');
+        }
+
+        function editAgent(agentId, name, email) {
+            currentEditingAgentId = agentId;
+            document.getElementById('agentFormTitle').innerText = 'Edit Agent';
+            document.getElementById('agentName').value = name;
+            document.getElementById('agentEmail').value = email;
+            document.getElementById('agentPassword').required = false;
+            document.getElementById('agentPassword').placeholder = 'Leave blank to keep current';
+            document.getElementById('agentFormModal').classList.remove('hidden');
+            document.getElementById('agentFormModal').classList.add('flex');
+        }
+
+        document.getElementById('agentForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentAgentsCompanyId) return;
+            
+            const name = document.getElementById('agentName').value;
+            const email = document.getElementById('agentEmail').value;
+            const password = document.getElementById('agentPassword').value;
+
+            try {
+                let res;
+                if (currentEditingAgentId) {
+                    // Update agent
+                    const body = { name, email };
+                    if (password) body.password = password;
+                    res = await fetch(`/api/superadmin/companies/${currentAgentsCompanyId}/agents/${currentEditingAgentId}`, {
+                        method: 'PUT',
+                        headers: { 'Authorization': token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                } else {
+                    // Create agent
+                    if (!password) {
+                        alert('Password is required for new agents');
+                        return;
+                    }
+                    res = await fetch(`/api/superadmin/companies/${currentAgentsCompanyId}/agents`, {
+                        method: 'POST',
+                        headers: { 'Authorization': token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, email, password })
+                    });
+                }
+
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    alert(data.message || 'Agent saved successfully');
+                    closeAgentForm();
+                    loadCompanyAgents();
+                } else {
+                    alert(data.message || 'Failed to save agent');
+                }
+            } catch (err) {
+                console.error('Save Agent Error:', err);
+                alert('Error saving agent');
+            }
+        });
+
+        async function deleteAgent(agentId, name) {
+            if (!confirm(`Are you sure you want to delete agent "${name}"?`)) return;
+            if (!currentAgentsCompanyId) return;
+            
+            try {
+                const res = await fetch(`/api/superadmin/companies/${currentAgentsCompanyId}/agents/${agentId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': token }
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    alert('Agent deleted successfully');
+                    loadCompanyAgents();
+                } else {
+                    alert(data.message || 'Failed to delete agent');
+                }
+            } catch (err) {
+                console.error('Delete Agent Error:', err);
+                alert('Error deleting agent');
+            }
+        }
+
+        async function updateAgentLimit() {
+            if (!currentAgentsCompanyId) return;
+            const limit = parseInt(document.getElementById('agentLimitInput').value);
+            if (isNaN(limit) || limit < 0) {
+                alert('Please enter a valid limit');
+                return;
+            }
+            
+            try {
+                const res = await fetch(`/api/superadmin/companies/${currentAgentsCompanyId}/agent-limit`, {
+                    method: 'PUT',
+                    headers: { 'Authorization': token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ agentLimit: limit })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    alert('Agent limit updated successfully');
+                    loadCompanyAgents();
+                } else {
+                    alert(data.message || 'Failed to update limit');
+                }
+            } catch (err) {
+                console.error('Update Limit Error:', err);
+                alert('Error updating limit');
+            }
+        }
+
+        function closeAgentsModal() {
+            document.getElementById('manageAgentsModal').classList.add('hidden');
+            document.getElementById('manageAgentsModal').classList.remove('flex');
+            currentAgentsCompanyId = null;
+        }
+
+        function closeAgentForm() {
+            document.getElementById('agentFormModal').classList.add('hidden');
+            document.getElementById('agentFormModal').classList.remove('flex');
+            currentEditingAgentId = null;
+        }
+
+        // Change Password
+        let currentPasswordCompanyId = null;
+        function changeCompanyPassword(companyId) {
+            currentPasswordCompanyId = companyId;
+            document.getElementById('changePasswordForm').reset();
+            document.getElementById('changePasswordModal').classList.remove('hidden');
+            document.getElementById('changePasswordModal').classList.add('flex');
+        }
+
+        document.getElementById('changePasswordForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentPasswordCompanyId) return;
+            
+            const newPassword = document.getElementById('newPassword').value;
+            try {
+                const res = await fetch(`/api/superadmin/companies/${currentPasswordCompanyId}/password`, {
+                    method: 'PUT',
+                    headers: { 'Authorization': token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ newPassword })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    alert('Password changed successfully');
+                    closePasswordModal();
+                } else {
+                    alert(data.message || 'Failed to change password');
+                }
+            } catch (err) {
+                console.error('Change Password Error:', err);
+                alert('Error changing password');
+            }
+        });
+
+        function closePasswordModal() {
+            document.getElementById('changePasswordModal').classList.add('hidden');
+            document.getElementById('changePasswordModal').classList.remove('flex');
+            currentPasswordCompanyId = null;
+        }
+
+        // Billing Management
+        let allBillingData = [];
+        let currentBillingCompanyId = null;
+        async function loadBillingData() {
+            try {
+                const res = await fetch('/api/superadmin/billing', {
+                    headers: { 'Authorization': token }
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    allBillingData = data.companies;
+                    
+                    // Update stats
+                    document.getElementById('totalMonthlyRevenue').innerText = `$${data.totalMonthlyRevenue.toFixed(2)}`;
+                    document.getElementById('currentMonthRevenue').innerText = `$${data.currentMonthRevenue.toFixed(2)}`;
+                    document.getElementById('activeSubscriptions').innerText = data.stats.activeSubscriptions;
+                    document.getElementById('expiringSoon').innerText = data.stats.expiringSoon;
+                    
+                    renderBillingTable(allBillingData);
+                }
+            } catch (err) {
+                console.error('Load Billing Error:', err);
+                alert('Failed to load billing data');
+            }
+        }
+
+        function renderBillingTable(companies) {
+            const tbody = document.getElementById('billingTableBody');
+            tbody.innerHTML = '';
+            if (companies.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-400">No companies found</td></tr>';
+                return;
+            }
+            
+            companies.forEach(company => {
+                const expiry = company.planExpiryDate ? new Date(company.planExpiryDate).toLocaleDateString() : 'N/A';
+                const lastPayment = company.lastPaymentDate ? new Date(company.lastPaymentDate).toLocaleDateString() : 'Never';
+                const statusClass = {
+                    'active': 'bg-green-500/20 text-green-300',
+                    'expired': 'bg-red-500/20 text-red-300',
+                    'trial': 'bg-yellow-500/20 text-yellow-300',
+                    'cancelled': 'bg-gray-500/20 text-gray-300'
+                }[company.subscriptionStatus] || 'bg-gray-500/20 text-gray-300';
+                
+                tbody.innerHTML += `
+                    <tr class="hover:bg-gray-700">
+                        <td class="px-4 py-3">
+                            <div class="font-medium">${escapeHtml(company.companyName || company.name || 'N/A')}</div>
+                            <div class="text-xs text-gray-400">${escapeHtml(company.email || '')}</div>
+                        </td>
+                        <td class="px-4 py-3"><span class="px-2 py-1 bg-purple-500/20 text-purple-300 rounded text-xs">${escapeHtml(company.subscriptionPlan || 'free')}</span></td>
+                        <td class="px-4 py-3"><span class="px-2 py-1 ${statusClass} rounded text-xs">${escapeHtml(company.subscriptionStatus || 'trial')}</span></td>
+                        <td class="px-4 py-3">$${(company.monthlyRevenue || 0).toFixed(2)}</td>
+                        <td class="px-4 py-3 text-sm text-gray-400">${lastPayment}</td>
+                        <td class="px-4 py-3 text-sm text-gray-400">${expiry}</td>
+                        <td class="px-4 py-3">
+                            <button onclick="editCompanyBilling('${company._id}')" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs transition">
+                                <i class="fa-solid fa-edit mr-1"></i> Edit
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        function filterBilling() {
+            const filter = document.getElementById('billingFilter').value;
+            let filtered = allBillingData;
+            if (filter !== 'all') {
+                filtered = allBillingData.filter(c => c.subscriptionStatus === filter);
+            }
+            renderBillingTable(filtered);
+        }
+
+        function editCompanyBilling(companyId) {
+            currentBillingCompanyId = companyId;
+            const company = allBillingData.find(c => c._id === companyId);
+            if (!company) return;
+            
+            document.getElementById('billingPlan').value = company.subscriptionPlan || 'free';
+            document.getElementById('billingStatus').value = company.subscriptionStatus || 'trial';
+            document.getElementById('billingRevenue').value = company.monthlyRevenue || 0;
+            document.getElementById('billingExpiry').value = company.planExpiryDate ? new Date(company.planExpiryDate).toISOString().split('T')[0] : '';
+            document.getElementById('billingLastPayment').value = company.lastPaymentDate ? new Date(company.lastPaymentDate).toISOString().split('T')[0] : '';
+            
+            document.getElementById('editBillingModal').classList.remove('hidden');
+            document.getElementById('editBillingModal').classList.add('flex');
+        }
+
+        document.getElementById('editBillingForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentBillingCompanyId) return;
+            
+            const billingData = {
+                subscriptionPlan: document.getElementById('billingPlan').value,
+                subscriptionStatus: document.getElementById('billingStatus').value,
+                monthlyRevenue: parseFloat(document.getElementById('billingRevenue').value) || 0,
+                planExpiryDate: document.getElementById('billingExpiry').value || null,
+                lastPaymentDate: document.getElementById('billingLastPayment').value || null
+            };
+            
+            try {
+                const res = await fetch(`/api/superadmin/companies/${currentBillingCompanyId}/billing`, {
+                    method: 'PUT',
+                    headers: { 'Authorization': token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify(billingData)
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    alert('Billing information updated successfully');
+                    closeBillingModal();
+                    loadBillingData();
+                } else {
+                    alert(data.message || 'Failed to update billing');
+                }
+            } catch (err) {
+                console.error('Update Billing Error:', err);
+                alert('Error updating billing');
+            }
+        });
+
+        function closeBillingModal() {
+            document.getElementById('editBillingModal').classList.add('hidden');
+            document.getElementById('editBillingModal').classList.remove('flex');
+            currentBillingCompanyId = null;
+        }
+
+        function logout() {
+            if (confirm('Are you sure you want to logout?')) {
+                localStorage.clear();
+                window.location.href = 'login.html';
+            }
+        }
+
+        // Initialize on load
+        initSuperAdmin();
+    </script>
+</body>
+</html>

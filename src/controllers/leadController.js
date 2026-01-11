@@ -1,36 +1,247 @@
 const Lead = require('../models/Lead');
 const Stage = require('../models/Stage');
+const User = require('../models/User'); // Required for Agent Logic
+const mongoose = require('mongoose');
 const axios = require('axios');
 const Papa = require('papaparse');
+const { sendAutomatedEmailOnLeadCreate, sendAutomatedEmailOnStageChange } = require('../services/emailAutomationService');
+const { sendAutomatedWhatsAppOnLeadCreate, sendAutomatedWhatsAppOnStageChange } = require('../services/whatsappAutomationService');
 
-// 1. GET LEADS
-exports.getLeads = async (req, res) => {
+// ==========================================
+// 1. GET LEADS (With Agent/Manager Logic)
+// ==========================================
+const getLeads = async (req, res) => {
     try {
-        console.log("-----------------------------------------");
-        console.log("📡 API HIT: Get Leads");
-        console.log("🆔 User ID in Request:", req.user ? req.user.id : "❌ MISSING");
+        // Default to current user
+        let ownerId = req.user.userId || req.user.id;
 
-        if (!req.user || !req.user.id) {
-            return res.status(401).json({ error: "User identity missing" });
+        // 👇 AGENT LOGIC CHECK
+        // Agar user 'agent' hai, to hum uske 'parentId' (Manager) ka data dikhayenge
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId);
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId; // Maalik (Manager) ka ID use karo
+            }
         }
 
-        const leads = await Lead.find({ userId: req.user.id }).sort({ date: -1 });
+        const leads = await Lead.find({ userId: ownerId }).sort({ date: -1 });
         res.json(leads);
+    } catch (err) {
+        console.error("Get Leads Error:", err);
+        res.status(500).send('Server Error');
+    }
+};
+
+// ==========================================
+// 2. CREATE LEAD
+// ==========================================
+const createLead = async (req, res) => {
+    try {
+        const { name, email, phone, status, source } = req.body;
+        
+        // Validation
+        if (!name || !phone) {
+            return res.status(400).json({ message: "Name and Phone are required" });
+        }
+
+        // Determine Owner ID (Agent creates for Manager)
+        let ownerId = req.user.userId || req.user.id;
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId);
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+
+        const newLead = new Lead({
+            userId: ownerId,
+            name,
+            email,
+            phone,
+            status: status || 'New',
+            source: source || 'Manual Entry'
+        });
+
+        await newLead.save();
+        
+        // Send automated email if configured
+        if (newLead.email) {
+            sendAutomatedEmailOnLeadCreate(newLead, ownerId).catch(err => {
+                console.error('Email automation error (non-blocking):', err);
+            });
+        }
+
+        // Send automated WhatsApp if configured
+        if (newLead.phone) {
+            sendAutomatedWhatsAppOnLeadCreate(newLead, ownerId).catch(err => {
+                console.error('WhatsApp automation error (non-blocking):', err);
+            });
+        }
+        
+        res.json(newLead);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// 3. UPDATE LEAD
+// ==========================================
+const updateLead = async (req, res) => {
+    try {
+        // SECURITY FIX: Validate ObjectId format
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ message: "Invalid lead ID format" });
+        }
+        
+        // SECURITY FIX: Check authorization - user can only update their own leads
+        let ownerId = req.user.userId || req.user.id;
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId).select('parentId').lean();
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+        
+        const lead = await Lead.findOne({ _id: req.params.id, userId: ownerId });
+        if (!lead) {
+            return res.status(404).json({ message: "Lead not found or access denied" });
+        }
+        
+        // Handle nextFollowUpDate update
+        if (req.body.hasOwnProperty('nextFollowUpDate')) {
+            if (req.body.nextFollowUpDate) {
+                // Setting a new follow-up date
+                if (lead.nextFollowUpDate && !lead.lastFollowUpDate) {
+                    // If previous nextFollowUpDate exists and we're setting a new one, mark the old one as lastFollowUpDate
+                    lead.lastFollowUpDate = lead.nextFollowUpDate;
+                }
+                lead.nextFollowUpDate = new Date(req.body.nextFollowUpDate);
+            } else {
+                // Clearing the follow-up date (setting to null)
+                lead.nextFollowUpDate = null;
+            }
+            // Remove from req.body so we can use $set for other fields
+            delete req.body.nextFollowUpDate;
+        }
+        
+        // Track old status for stage change automation
+        const oldStatus = lead.status;
+        
+        // Update other fields
+        Object.keys(req.body).forEach(key => {
+            if (req.body[key] !== undefined) {
+                lead[key] = req.body[key];
+            }
+        });
+        
+        await lead.save();
+        
+        // Send automated email if stage changed
+        if (req.body.status && req.body.status !== oldStatus && lead.email) {
+            const ownerId = lead.userId;
+            sendAutomatedEmailOnStageChange(lead, oldStatus, req.body.status, ownerId).catch(err => {
+                console.error('Email automation error (non-blocking):', err);
+            });
+        }
+
+        // Send automated WhatsApp if stage changed
+        if (req.body.status && req.body.status !== oldStatus && lead.phone) {
+            const ownerId = lead.userId;
+            sendAutomatedWhatsAppOnStageChange(lead, oldStatus, req.body.status, ownerId).catch(err => {
+                console.error('WhatsApp automation error (non-blocking):', err);
+            });
+        }
+        
+        res.json({ success: true, lead });
+    } catch (err) {
+        console.error("Update Lead Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// 4. DELETE LEAD
+// ==========================================
+const deleteLead = async (req, res) => {
+    try {
+        // SECURITY FIX: Validate ObjectId format
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ message: "Invalid lead ID format" });
+        }
+        
+        // SECURITY FIX: Check authorization - user can only delete their own leads
+        let ownerId = req.user.userId || req.user.id;
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId).select('parentId').lean();
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+        
+        const deletedLead = await Lead.findOneAndDelete({ _id: req.params.id, userId: ownerId });
+        if (!deletedLead) {
+            return res.status(404).json({ message: "Lead not found or access denied" });
+        }
+        res.json({ success: true, message: "Lead deleted successfully" });
+    } catch (err) {
+        console.error("Delete Lead Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// 5. ADD NOTE
+// ==========================================
+const addNote = async (req, res) => {
+    try {
+        // SECURITY FIX: Validate ObjectId format
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ message: "Invalid lead ID format" });
+        }
+        
+        // SECURITY FIX: Validate and sanitize input
+        const { text } = req.body;
+        if (!text || !text.trim()) {
+            return res.status(400).json({ message: "Note text is required" });
+        }
+        
+        // SECURITY FIX: Check authorization
+        let ownerId = req.user.userId || req.user.id;
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId).select('parentId').lean();
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+        
+        const updatedLead = await Lead.findOneAndUpdate(
+            { _id: req.params.id, userId: ownerId },
+            { $push: { notes: { text: text.trim(), date: new Date() } } },
+            { new: true }
+        );
+
+        if (!updatedLead) return res.status(404).json({ message: "Lead not found or access denied" });
+        res.json(updatedLead);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
-// 2. GET STAGES
-exports.getStages = async (req, res) => {
+// ==========================================
+// 6. STAGE MANAGEMENT (Get, Create, Delete)
+// ==========================================
+const getStages = async (req, res) => {
     try {
-        let stages = await Stage.find({ userId: req.user.id }).sort('order');
+        const userId = req.user.userId || req.user.id;
+        let stages = await Stage.find({ userId: userId }).sort('order');
 
         if (stages.length === 0) {
             const defaults = [
-                { name: 'New', order: 1, userId: req.user.id },
-                { name: 'Contacted', order: 2, userId: req.user.id },
-                { name: 'Won', order: 3, userId: req.user.id }
+                { name: 'New', order: 1, userId: userId },
+                { name: 'Contacted', order: 2, userId: userId },
+                { name: 'Won', order: 3, userId: userId }
             ];
             await Stage.insertMany(defaults);
             return res.json(defaults);
@@ -41,13 +252,13 @@ exports.getStages = async (req, res) => {
     }
 };
 
-// 3. CREATE STAGE
-exports.createStage = async (req, res) => {
+const createStage = async (req, res) => {
     try {
+        const userId = req.user.userId || req.user.id;
         const newStage = await Stage.create({
             name: req.body.name,
             order: Date.now(),
-            userId: req.user.id
+            userId: userId
         });
         res.json(newStage);
     } catch (err) {
@@ -55,63 +266,45 @@ exports.createStage = async (req, res) => {
     }
 };
 
-// 3b. DELETE STAGE
-exports.deleteStage = async (req, res) => {
+const deleteStage = async (req, res) => {
     try {
-        // Find the stage belonging to this user
-        const stage = await Stage.findOne({ _id: req.params.id, userId: req.user.id });
+        const userId = req.user.userId || req.user.id;
+        const stage = await Stage.findOne({ _id: req.params.id, userId: userId });
+        
         if (!stage) return res.status(404).json({ message: 'Stage not found' });
+        if (stage.name === 'New') return res.status(400).json({ message: "Cannot delete 'New' stage" });
 
-        // Protect the default 'New' stage from deletion
-        if (stage.name === 'New') {
-            return res.status(400).json({ message: "Cannot delete the default 'New' stage" });
-        }
-
-        // Delete the stage
         await Stage.deleteOne({ _id: stage._id });
 
-        // Reassign any leads that had this stage name back to 'New'
-        const updateResult = await Lead.updateMany(
-            { userId: req.user.id, status: stage.name },
+        // Move leads to 'New'
+        await Lead.updateMany(
+            { userId: userId, status: stage.name },
             { $set: { status: 'New' } }
         );
 
-        return res.json({ success: true, reassignCount: updateResult.modifiedCount ?? updateResult.nModified ?? 0 });
+        return res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
-// 4. UPDATE LEAD
-exports.updateLead = async (req, res) => {
-    try {
-        await Lead.findOneAndUpdate(
-            { _id: req.params.id, userId: req.user.id },
-            req.body
-        );
-        res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};
-
-// 5. DELETE LEAD
-exports.deleteLead = async (req, res) => {
-    try {
-        await Lead.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
-        res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};
-
-// 6. SYNC GOOGLE SHEET
-exports.syncLeads = async (req, res) => {
+// ==========================================
+// 7. SYNC GOOGLE SHEET
+// ==========================================
+const syncLeads = async (req, res) => {
     const { sheetUrl } = req.body;
     if (!sheetUrl) return res.status(400).json({ message: "Link required" });
 
     try {
-        const sheetId = sheetUrl.split('/d/')[1].split('/')[0];
+        const userId = req.user.userId || req.user.id;
+        
+        // Extract sheet ID from Google Sheets URL
+        const sheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+        if (!sheetIdMatch || !sheetIdMatch[1]) {
+            return res.status(400).json({ message: "Invalid Google Sheets URL format" });
+        }
+        
+        const sheetId = sheetIdMatch[1];
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
 
         const response = await axios.get(csvUrl);
@@ -130,90 +323,311 @@ exports.syncLeads = async (req, res) => {
 
             if (finalEmail || finalPhone !== 'No Phone') {
                 const exists = finalEmail
-                    ? await Lead.findOne({ email: finalEmail, userId: req.user.id })
+                    ? await Lead.findOne({ email: finalEmail, userId: userId })
                     : null;
 
                 if (!exists) {
-                    await Lead.create({
-                        userId: req.user.id,
+                    const newLead = await Lead.create({
+                        userId: userId,
                         name: finalName,
                         email: finalEmail,
                         phone: finalPhone,
                         source: 'Google Sheet',
                         status: 'New'
                     });
+                    
+                    // Send automated email if configured
+                    if (newLead.email) {
+                        sendAutomatedEmailOnLeadCreate(newLead, userId).catch(err => {
+                            console.error('Email automation error (non-blocking):', err);
+                        });
+                    }
+
+                    // Send automated WhatsApp if configured
+                    if (newLead.phone) {
+                        sendAutomatedWhatsAppOnLeadCreate(newLead, userId).catch(err => {
+                            console.error('WhatsApp automation error (non-blocking):', err);
+                        });
+                    }
+                    
                     count++;
                 }
             }
         }
-
         res.json({ success: true, message: `${count} New Leads Imported!` });
     } catch (err) {
-        res.status(500).json({ message: "Error syncing sheet." });
+        console.error("Sync Sheet Error:", err);
+        res.status(500).json({ message: "Error syncing sheet: " + (err.message || "Unknown error") });
     }
 };
 
-// 7. ANALYTICS
-exports.getAnalytics = async (req, res) => {
+// ==========================================
+// 8. ANALYTICS
+// ==========================================
+const getAnalytics = async (req, res) => {
     try {
-        const leads = await Lead.find({ userId: req.user.id });
+        // Note: For Agents, this should technically fetch Manager's analytics
+        // But for now, we keep it simple based on ID
+        let ownerId = req.user.userId || req.user.id;
+        
+        // Agent Logic Check
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId).select('parentId').lean();
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+        
+        // Optimized: Use aggregation pipeline instead of fetching all leads into memory
+        // This is much more efficient for large datasets
+        const ownerIdObjectId = mongoose.Types.ObjectId.isValid(ownerId) 
+            ? new mongoose.Types.ObjectId(ownerId) 
+            : ownerId;
+        
+        const statsArray = await Lead.aggregate([
+            { $match: { userId: ownerIdObjectId } },
+            {
+                $group: {
+                    _id: { $ifNull: ['$status', 'New'] },
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        
+        // Convert array to object format
         const stats = {};
-        leads.forEach(l => {
-            stats[l.status || 'New'] = (stats[l.status || 'New'] || 0) + 1;
+        statsArray.forEach(item => {
+            stats[item._id] = item.count;
         });
+        
         res.json(stats);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
-// 8. ADD NOTE
-exports.addNote = async (req, res) => {
+// ==========================================
+// 9. GET FOLLOW-UP LEADS (Due Today)
+// ==========================================
+const getFollowUpLeads = async (req, res) => {
     try {
-        const { text } = req.body;
-
-        const updatedLead = await Lead.findOneAndUpdate(
-            { _id: req.params.id, userId: req.user.id },
-            { $push: { notes: { text, date: new Date() } } },
-            { new: true }
-        );
-
-        if (!updatedLead) {
-            return res.status(404).json({ message: "Lead not found" });
+        let ownerId = req.user.userId || req.user.id;
+        
+        // Agent Logic Check
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId);
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
         }
-
-        res.json(updatedLead);
+        
+        // Get today's date (start and end of day)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        
+        // Find leads with nextFollowUpDate between today 00:00 and tomorrow 00:00
+        const followUpLeads = await Lead.find({
+            userId: ownerId,
+            nextFollowUpDate: {
+                $gte: today,
+                $lt: tomorrow
+            }
+        }).sort({ nextFollowUpDate: 1 });
+        
+        res.json(followUpLeads);
     } catch (err) {
+        console.error("Get Follow-up Leads Error:", err);
         res.status(500).json({ error: err.message });
     }
 };
 
-// 9. CREATE LEAD (MERGED EXACTLY AS ASKED)
-exports.createLead = async (req, res) => {
+// ==========================================
+// 10. UPDATE FOLLOW-UP DATE
+// ==========================================
+const updateFollowUpDate = async (req, res) => {
     try {
-        const { name, email, phone } = req.body;
-
-        if (!name || !phone) {
-            return res.status(400).json({ message: "Name and Phone are required" });
+        const { leadId, nextFollowUpDate } = req.body;
+        
+        if (!leadId || !nextFollowUpDate) {
+            return res.status(400).json({ message: "Lead ID and follow-up date are required" });
         }
-
-        const newLead = await Lead.create({
-            userId: req.user.id,
-            name,
-            email,
-            phone,
-            status: 'New',
-            source: 'Manual Entry'
-        });
-
-        // ... (Upar save wala code) ...
-        await newLead.save();
-
-        // WhatsApp automation removed
-        // ...
-
-        res.json(newLead);
+        
+        let ownerId = req.user.userId || req.user.id;
+        
+        // Agent Logic Check
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId);
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+        
+        const lead = await Lead.findOne({ _id: leadId, userId: ownerId });
+        
+        if (!lead) {
+            return res.status(404).json({ message: "Lead not found" });
+        }
+        
+        // If lead already has a nextFollowUpDate, move it to lastFollowUpDate
+        if (lead.nextFollowUpDate) {
+            lead.lastFollowUpDate = lead.nextFollowUpDate;
+        }
+        
+        lead.nextFollowUpDate = new Date(nextFollowUpDate);
+        await lead.save();
+        
+        res.json({ success: true, lead });
     } catch (err) {
+        console.error("Update Follow-up Date Error:", err);
         res.status(500).json({ error: err.message });
     }
+};
+
+// ==========================================
+// 11. COMPLETE FOLLOW-UP (Mark as Done)
+// ==========================================
+const completeFollowUp = async (req, res) => {
+    try {
+        const { leadId, note, nextFollowUpDate, markedAsDeadLead } = req.body;
+        
+        // Validation: Note is required
+        if (!note || !note.trim()) {
+            return res.status(400).json({ message: "Follow-up note is required" });
+        }
+        
+        // Validation: Either nextFollowUpDate OR markedAsDeadLead must be provided
+        if (!nextFollowUpDate && !markedAsDeadLead) {
+            return res.status(400).json({ message: "Either next follow-up date or 'Mark as Dead Lead' must be selected" });
+        }
+        
+        let ownerId = req.user.userId || req.user.id;
+        
+        // Agent Logic Check
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId);
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+        
+        const lead = await Lead.findOne({ _id: leadId, userId: ownerId });
+        
+        if (!lead) {
+            return res.status(404).json({ message: "Lead not found" });
+        }
+        
+        // Add note to lead's notes array
+        lead.notes.push({
+            text: note,
+            date: new Date()
+        });
+        
+        // Add to follow-up history
+        const followUpEntry = {
+            note: note,
+            completedDate: new Date(),
+            nextFollowUpDate: nextFollowUpDate ? new Date(nextFollowUpDate) : null,
+            markedAsDeadLead: markedAsDeadLead || false
+        };
+        
+        if (!lead.followUpHistory) {
+            lead.followUpHistory = [];
+        }
+        lead.followUpHistory.push(followUpEntry);
+        
+        // Update last follow-up date
+        lead.lastFollowUpDate = lead.nextFollowUpDate || new Date();
+        
+        // Update next follow-up date or status based on action
+        if (markedAsDeadLead) {
+            // Mark as Dead Lead stage - ensure the stage exists
+            lead.status = 'Dead Lead';
+            lead.nextFollowUpDate = null; // Clear next follow-up date
+            
+            // Optionally create "Dead Lead" stage if it doesn't exist
+            const deadLeadStage = await Stage.findOne({ name: 'Dead Lead', userId: ownerId });
+            if (!deadLeadStage) {
+                await Stage.create({
+                    name: 'Dead Lead',
+                    order: Date.now(),
+                    userId: ownerId
+                });
+            }
+        } else if (nextFollowUpDate) {
+            // Set next follow-up date
+            lead.nextFollowUpDate = new Date(nextFollowUpDate);
+        }
+        
+        await lead.save();
+        
+        res.json({ success: true, lead });
+    } catch (err) {
+        console.error("Complete Follow-up Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// 12. GET FOLLOW-UP DONE LEADS
+// ==========================================
+const getFollowUpDoneLeads = async (req, res) => {
+    try {
+        let ownerId = req.user.userId || req.user.id;
+        
+        // Agent Logic Check
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId);
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+        
+        // Get all leads for the user first
+        const allLeads = await Lead.find({ userId: ownerId });
+        
+        // Filter to only include leads with at least one follow-up history entry
+        const filteredDoneLeads = allLeads.filter(lead => 
+            lead.followUpHistory && 
+            Array.isArray(lead.followUpHistory) && 
+            lead.followUpHistory.length > 0
+        );
+        
+        // Sort by most recent follow-up completion date
+        filteredDoneLeads.sort((a, b) => {
+            const aDate = a.followUpHistory && a.followUpHistory.length > 0 
+                ? new Date(a.followUpHistory[a.followUpHistory.length - 1].completedDate || 0)
+                : new Date(0);
+            const bDate = b.followUpHistory && b.followUpHistory.length > 0
+                ? new Date(b.followUpHistory[b.followUpHistory.length - 1].completedDate || 0)
+                : new Date(0);
+            return bDate - aDate; // Most recent first
+        });
+        
+        res.json(filteredDoneLeads);
+    } catch (err) {
+        console.error("Get Follow-up Done Leads Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// 👇 EXPORT ALL FUNCTIONS (Fixes TypeError)
+// ==========================================
+module.exports = {
+    getLeads,
+    createLead,
+    updateLead,
+    deleteLead,
+    addNote,
+    getStages,
+    createStage,
+    deleteStage,
+    syncLeads,
+    getAnalytics,
+    getFollowUpLeads,
+    updateFollowUpDate,
+    completeFollowUp,
+    getFollowUpDoneLeads
 };
