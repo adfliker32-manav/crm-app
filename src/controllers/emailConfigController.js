@@ -149,13 +149,29 @@ exports.testEmailConfig = async (req, res) => {
                 user: userEmail,
                 pass: userPassword
             },
+            // Connection timeout settings
+            connectionTimeout: 10000, // 10 seconds
+            greetingTimeout: 10000, // 10 seconds
+            socketTimeout: 10000, // 10 seconds
             tls: {
                 rejectUnauthorized: false
             }
         });
         
-        // Verify connection
-        await transporter.verify();
+        // Verify connection with timeout handling
+        try {
+            await Promise.race([
+                transporter.verify(),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Connection timeout: SMTP server did not respond in time')), 10000)
+                )
+            ]);
+        } catch (verifyError) {
+            if (verifyError.message.includes('timeout') || verifyError.message.includes('ETIMEDOUT')) {
+                throw new Error('Connection timeout: Could not connect to email server. Please check your internet connection and try again.');
+            }
+            throw verifyError;
+        }
         
         // Send test email to the user's own email
         const testEmail = {
@@ -176,7 +192,12 @@ exports.testEmailConfig = async (req, res) => {
             text: 'Test Email from CRM Pro - Your email configuration is working correctly!'
         };
         
-        const info = await transporter.sendMail(testEmail);
+        const info = await Promise.race([
+            transporter.sendMail(testEmail),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Send timeout: Email sending took too long')), 30000)
+            )
+        ]);
         
         res.json({
             success: true,
@@ -187,7 +208,11 @@ exports.testEmailConfig = async (req, res) => {
         console.error('Error testing email config:', error);
         
         let errorMessage = 'Failed to test email configuration';
-        if (error.message.includes('Invalid login')) {
+        if (error.message.includes('ETIMEDOUT') || error.message.includes('timeout')) {
+            errorMessage = 'Connection timeout: Could not connect to email server. Please check your internet connection, firewall settings, or try again later.';
+        } else if (error.message.includes('ECONNREFUSED')) {
+            errorMessage = 'Connection refused: Email server is not reachable. Please check your network connection.';
+        } else if (error.message.includes('Invalid login') || error.message.includes('EAUTH')) {
             errorMessage = 'Invalid email credentials. Please check your email and password.';
         } else if (error.message.includes('ECONNECTION')) {
             errorMessage = 'Could not connect to email server. Please check your internet connection.';

@@ -1,6 +1,6 @@
 const EmailTemplate = require('../models/EmailTemplate');
 const User = require('../models/User');
-const { sendEmail } = require('./emailService');
+const { sendEmail, sendEmailWithRetry } = require('./emailService');
 const { logEmail } = require('./emailLogService');
 
 // Send automated email when lead is created
@@ -86,7 +86,8 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                     userId: userId // Pass userId to use user-specific email config
                 };
 
-                const result = await sendEmail(emailOptions);
+                // Use retry for automation emails to handle transient connection issues
+                const result = await sendEmailWithRetry(emailOptions, 1); // Retry once
                 console.log(`✅ Automated email sent to ${lead.email} using template: ${template.name}`);
                 
                 // Log successful email
@@ -214,7 +215,8 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                     userId: userId // Pass userId to use user-specific email config
                 };
 
-                const result = await sendEmail(emailOptions);
+                // Use retry for automation emails to handle transient connection issues
+                const result = await sendEmailWithRetry(emailOptions, 1); // Retry once
                 console.log(`✅ Automated email sent to ${lead.email} for stage change to ${newStage}`);
                 
                 // Log successful email
