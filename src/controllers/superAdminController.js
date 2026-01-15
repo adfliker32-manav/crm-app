@@ -44,7 +44,7 @@ const getAllCompanies = async (req, res) => {
             companies.map(async (company) => {
                 const agentsCount = await User.countDocuments({ parentId: company._id, role: 'agent' });
                 const leadsCount = await Lead.countDocuments({ userId: company._id });
-                
+
                 return {
                     ...company.toObject(),
                     agentsCount,
@@ -67,7 +67,7 @@ const getAllCompanies = async (req, res) => {
 const getCompanyById = async (req, res) => {
     try {
         const { id } = req.params;
-        
+
         const company = await User.findOne({ _id: id, role: 'manager' })
             .select('-password')
             .populate('parentId', 'name email');
@@ -101,7 +101,7 @@ const getCompanyById = async (req, res) => {
 const updateCompany = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, email, companyName } = req.body;
+        const { name, email, companyName, contactPerson, phone } = req.body;
 
         // Check if company exists
         const company = await User.findOne({ _id: id, role: 'manager' });
@@ -120,10 +120,12 @@ const updateCompany = async (req, res) => {
         // Update company
         const updatedCompany = await User.findByIdAndUpdate(
             id,
-            { 
+            {
                 ...(name && { name }),
                 ...(email && { email: email.toLowerCase() }),
-                ...(companyName !== undefined && { companyName })
+                ...(companyName !== undefined && { companyName }),
+                ...(contactPerson !== undefined && { contactPerson }),
+                ...(phone !== undefined && { phone })
             },
             { new: true, runValidators: true }
         ).select('-password');
@@ -174,7 +176,7 @@ const getCompanyLeads = async (req, res) => {
     try {
         const { id } = req.params;
         const { page = 1, limit = 50 } = req.query;
-        
+
         // Check if company exists
         const company = await User.findOne({ _id: id, role: 'manager' });
         if (!company) {
@@ -186,7 +188,7 @@ const getCompanyLeads = async (req, res) => {
             .sort({ createdAt: -1 })
             .limit(parseInt(limit))
             .skip(skip);
-        
+
         const totalLeads = await Lead.countDocuments({ userId: id });
 
         res.json({
@@ -234,7 +236,7 @@ const changeCompanyPassword = async (req, res) => {
 const getCompanyAgents = async (req, res) => {
     try {
         const { id } = req.params;
-        
+
         const company = await User.findOne({ _id: id, role: 'manager' });
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
@@ -274,10 +276,10 @@ const createCompanyAgent = async (req, res) => {
         // Check agent limit
         const currentAgentsCount = await User.countDocuments({ parentId: id, role: 'agent' });
         const agentLimit = company.agentLimit || 5;
-        
+
         if (currentAgentsCount >= agentLimit) {
-            return res.status(400).json({ 
-                message: `Agent limit reached. Current limit: ${agentLimit}. Please upgrade plan or contact admin.` 
+            return res.status(400).json({
+                message: `Agent limit reached. Current limit: ${agentLimit}. Please upgrade plan or contact admin.`
             });
         }
 
@@ -367,7 +369,7 @@ const deleteCompanyAgent = async (req, res) => {
 
         // Delete agent's leads
         await Lead.deleteMany({ userId: agentId });
-        
+
         // Delete agent
         await User.findByIdAndDelete(agentId);
 
@@ -430,7 +432,7 @@ const getBillingData = async (req, res) => {
         const currentMonth = new Date();
         currentMonth.setDate(1);
         currentMonth.setHours(0, 0, 0, 0);
-        
+
         const currentMonthRevenue = companies
             .filter(c => c.lastPaymentDate && new Date(c.lastPaymentDate) >= currentMonth)
             .reduce((sum, company) => sum + (company.monthlyRevenue || 0), 0);
@@ -507,7 +509,178 @@ const updateCompanyBilling = async (req, res) => {
     }
 };
 
-module.exports = { 
+// Get dashboard stats (for frontend dashboard)
+const getDashboardStats = async (req, res) => {
+    try {
+        const [totalCompanies, totalLeads, totalAgents] = await Promise.all([
+            User.countDocuments({ role: 'manager' }),
+            Lead.countDocuments(),
+            User.countDocuments({ role: 'agent' })
+        ]);
+
+        const activeSubscriptions = await User.countDocuments({
+            role: 'manager',
+            subscriptionStatus: 'active'
+        });
+
+        res.json({
+            totalCompanies,
+            totalLeads,
+            totalAgents,
+            activeSubscriptions
+        });
+    } catch (error) {
+        console.error("Dashboard Stats Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Get recent signups
+const getRecentSignups = async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 10;
+
+        const recentCompanies = await User.find({ role: 'manager' })
+            .select('companyName email createdAt')
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .lean();
+
+        res.json(recentCompanies);
+    } catch (error) {
+        console.error("Recent Signups Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Get growth data for charts (last 30 days)
+const getGrowthData = async (req, res) => {
+    try {
+        const days = parseInt(req.query.days) || 30;
+        const endDate = new Date();
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - days);
+
+        // Get daily company signups
+        const companies = await User.find({
+            role: 'manager',
+            createdAt: { $gte: startDate, $lte: endDate }
+        }).select('createdAt').lean();
+
+        // Get daily lead creation
+        const leads = await Lead.find({
+            createdAt: { $gte: startDate, $lte: endDate }
+        }).select('createdAt').lean();
+
+        // Create date labels and count data
+        const labels = [];
+        const companyCounts = [];
+        const leadCounts = [];
+
+        for (let i = days - 1; i >= 0; i--) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            labels.push(dateStr);
+
+            // Count companies created on this day
+            const dayStart = new Date(date);
+            dayStart.setHours(0, 0, 0, 0);
+            const dayEnd = new Date(date);
+            dayEnd.setHours(23, 59, 59, 999);
+
+            const companyCount = companies.filter(c => {
+                const created = new Date(c.createdAt);
+                return created >= dayStart && created <= dayEnd;
+            }).length;
+
+            const leadCount = leads.filter(l => {
+                const created = new Date(l.createdAt);
+                return created >= dayStart && created <= dayEnd;
+            }).length;
+
+            companyCounts.push(companyCount);
+            leadCounts.push(leadCount);
+        }
+
+        res.json({
+            labels,
+            companies: companyCounts,
+            leads: leadCounts
+        });
+    } catch (error) {
+        console.error("Growth Data Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Get billing stats (separate from full billing data)
+const getBillingStats = async (req, res) => {
+    try {
+        const companies = await User.find({ role: 'manager' })
+            .select('monthlyRevenue subscriptionStatus planExpiryDate lastPaymentDate')
+            .lean();
+
+        const totalMonthlyRevenue = companies.reduce((sum, c) => sum + (c.monthlyRevenue || 0), 0);
+
+        const currentMonth = new Date();
+        currentMonth.setDate(1);
+        currentMonth.setHours(0, 0, 0, 0);
+
+        const currentMonthRevenue = companies
+            .filter(c => c.lastPaymentDate && new Date(c.lastPaymentDate) >= currentMonth)
+            .reduce((sum, c) => sum + (c.monthlyRevenue || 0), 0);
+
+        const activeSubscriptions = companies.filter(c => c.subscriptionStatus === 'active').length;
+
+        const sevenDaysFromNow = new Date();
+        sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+        const expiringSoon = companies.filter(c => {
+            if (!c.planExpiryDate) return false;
+            const expiry = new Date(c.planExpiryDate);
+            return expiry <= sevenDaysFromNow && expiry >= new Date() && c.subscriptionStatus === 'active';
+        }).length;
+
+        res.json({
+            totalMonthlyRevenue,
+            currentMonthRevenue,
+            activeSubscriptions,
+            expiringSoon
+        });
+    } catch (error) {
+        console.error("Billing Stats Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Get all subscriptions (for billing view table)
+const getSubscriptions = async (req, res) => {
+    try {
+        const companies = await User.find({ role: 'manager' })
+            .select('companyName email subscriptionPlan subscriptionStatus monthlyRevenue planExpiryDate lastPaymentDate createdAt')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // Map to match frontend expectations
+        const subscriptions = companies.map(c => ({
+            _id: c._id,
+            companyName: c.companyName || c.email,
+            email: c.email,
+            plan: c.subscriptionPlan ? c.subscriptionPlan.charAt(0).toUpperCase() + c.subscriptionPlan.slice(1) : 'Free',
+            billingStatus: c.subscriptionStatus ? c.subscriptionStatus.charAt(0).toUpperCase() + c.subscriptionStatus.slice(1) : 'Trial',
+            monthlyRevenue: c.monthlyRevenue || 0,
+            expiryDate: c.planExpiryDate,
+            lastPaymentDate: c.lastPaymentDate
+        }));
+
+        res.json(subscriptions);
+    } catch (error) {
+        console.error("Get Subscriptions Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+module.exports = {
     getSaaSAnalytics,
     getAllCompanies,
     getCompanyById,
@@ -521,5 +694,11 @@ module.exports = {
     deleteCompanyAgent,
     updateAgentLimit,
     getBillingData,
-    updateCompanyBilling
+    updateCompanyBilling,
+    // New endpoints for frontend
+    getDashboardStats,
+    getRecentSignups,
+    getGrowthData,
+    getBillingStats,
+    getSubscriptions
 };

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authMiddleware, requireSuperAdmin } = require('../middleware/authMiddleware');
-const { 
+const {
     getSaaSAnalytics,
     getAllCompanies,
     getCompanyById,
@@ -15,11 +15,19 @@ const {
     deleteCompanyAgent,
     updateAgentLimit,
     getBillingData,
-    updateCompanyBilling
+    updateCompanyBilling,
+    getDashboardStats,
+    getRecentSignups,
+    getGrowthData,
+    getBillingStats,
+    getSubscriptions
 } = require('../controllers/superAdminController');
 
-// Analytics Route
+// Analytics Routes
 router.get('/analytics', authMiddleware, requireSuperAdmin, getSaaSAnalytics);
+router.get('/stats', authMiddleware, requireSuperAdmin, getDashboardStats);
+router.get('/recent-signups', authMiddleware, requireSuperAdmin, getRecentSignups);
+router.get('/growth-data', authMiddleware, requireSuperAdmin, getGrowthData);
 
 // Company Management Routes
 router.get('/companies', authMiddleware, requireSuperAdmin, getAllCompanies);
@@ -31,19 +39,21 @@ router.delete('/companies/:id', authMiddleware, requireSuperAdmin, deleteCompany
 router.get('/companies/:id/leads', authMiddleware, requireSuperAdmin, getCompanyLeads);
 
 // Company Password
-router.put('/companies/:id/password', authMiddleware, requireSuperAdmin, changeCompanyPassword);
+router.put('/companies/:id/change-password', authMiddleware, requireSuperAdmin, changeCompanyPassword);
 
 // Company Agents
 router.get('/companies/:id/agents', authMiddleware, requireSuperAdmin, getCompanyAgents);
 router.post('/companies/:id/agents', authMiddleware, requireSuperAdmin, createCompanyAgent);
 router.put('/companies/:id/agents/:agentId', authMiddleware, requireSuperAdmin, updateCompanyAgent);
-router.delete('/companies/:id/agents/:agentId', authMiddleware, requireSuperAdmin, deleteCompanyAgent);
+router.delete('/agents/:agentId', authMiddleware, requireSuperAdmin, deleteCompanyAgent);
 
 // Agent Limit
 router.put('/companies/:id/agent-limit', authMiddleware, requireSuperAdmin, updateAgentLimit);
 
 // Billing & Revenue
 router.get('/billing', authMiddleware, requireSuperAdmin, getBillingData);
+router.get('/billing-stats', authMiddleware, requireSuperAdmin, getBillingStats);
+router.get('/subscriptions', authMiddleware, requireSuperAdmin, getSubscriptions);
 router.put('/companies/:id/billing', authMiddleware, requireSuperAdmin, updateCompanyBilling);
 
 module.exports = router;

@@ -16,7 +16,7 @@ router.post('/sync-sheet', authMiddleware, leadController.syncLeads);
 
 // 2. Analytics (MUST BE BEFORE /:id routes!)
 // Path: /api/leads/analytics-data
-router.get('/analytics-data', authMiddleware, leadController.getAnalytics);
+router.get('/analytics-data', authMiddleware, leadController.getAnalyticsData);
 
 // 3. Get Follow-up Leads (Due Today) (MUST BE BEFORE /:id routes!)
 // Path: /api/leads/follow-up-today

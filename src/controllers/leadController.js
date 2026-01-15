@@ -38,7 +38,7 @@ const getLeads = async (req, res) => {
 const createLead = async (req, res) => {
     try {
         const { name, email, phone, status, source } = req.body;
-        
+
         // Validation
         if (!name || !phone) {
             return res.status(400).json({ message: "Name and Phone are required" });
@@ -63,7 +63,7 @@ const createLead = async (req, res) => {
         });
 
         await newLead.save();
-        
+
         // Send automated email if configured
         if (newLead.email) {
             sendAutomatedEmailOnLeadCreate(newLead, ownerId).catch(err => {
@@ -77,7 +77,7 @@ const createLead = async (req, res) => {
                 console.error('WhatsApp automation error (non-blocking):', err);
             });
         }
-        
+
         res.json(newLead);
     } catch (err) {
         console.error(err);
@@ -94,7 +94,7 @@ const updateLead = async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
-        
+
         // SECURITY FIX: Check authorization - user can only update their own leads
         let ownerId = req.user.userId || req.user.id;
         if (req.user.role === 'agent') {
@@ -103,12 +103,12 @@ const updateLead = async (req, res) => {
                 ownerId = agentUser.parentId;
             }
         }
-        
+
         const lead = await Lead.findOne({ _id: req.params.id, userId: ownerId });
         if (!lead) {
             return res.status(404).json({ message: "Lead not found or access denied" });
         }
-        
+
         // Handle nextFollowUpDate update
         if (req.body.hasOwnProperty('nextFollowUpDate')) {
             if (req.body.nextFollowUpDate) {
@@ -125,19 +125,19 @@ const updateLead = async (req, res) => {
             // Remove from req.body so we can use $set for other fields
             delete req.body.nextFollowUpDate;
         }
-        
+
         // Track old status for stage change automation
         const oldStatus = lead.status;
-        
+
         // Update other fields
         Object.keys(req.body).forEach(key => {
             if (req.body[key] !== undefined) {
                 lead[key] = req.body[key];
             }
         });
-        
+
         await lead.save();
-        
+
         // Send automated email if stage changed
         if (req.body.status && req.body.status !== oldStatus && lead.email) {
             const ownerId = lead.userId;
@@ -153,7 +153,7 @@ const updateLead = async (req, res) => {
                 console.error('WhatsApp automation error (non-blocking):', err);
             });
         }
-        
+
         res.json({ success: true, lead });
     } catch (err) {
         console.error("Update Lead Error:", err);
@@ -170,7 +170,7 @@ const deleteLead = async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
-        
+
         // SECURITY FIX: Check authorization - user can only delete their own leads
         let ownerId = req.user.userId || req.user.id;
         if (req.user.role === 'agent') {
@@ -179,7 +179,7 @@ const deleteLead = async (req, res) => {
                 ownerId = agentUser.parentId;
             }
         }
-        
+
         const deletedLead = await Lead.findOneAndDelete({ _id: req.params.id, userId: ownerId });
         if (!deletedLead) {
             return res.status(404).json({ message: "Lead not found or access denied" });
@@ -200,13 +200,13 @@ const addNote = async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
-        
+
         // SECURITY FIX: Validate and sanitize input
         const { text } = req.body;
         if (!text || !text.trim()) {
             return res.status(400).json({ message: "Note text is required" });
         }
-        
+
         // SECURITY FIX: Check authorization
         let ownerId = req.user.userId || req.user.id;
         if (req.user.role === 'agent') {
@@ -215,7 +215,7 @@ const addNote = async (req, res) => {
                 ownerId = agentUser.parentId;
             }
         }
-        
+
         const updatedLead = await Lead.findOneAndUpdate(
             { _id: req.params.id, userId: ownerId },
             { $push: { notes: { text: text.trim(), date: new Date() } } },
@@ -270,7 +270,7 @@ const deleteStage = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const stage = await Stage.findOne({ _id: req.params.id, userId: userId });
-        
+
         if (!stage) return res.status(404).json({ message: 'Stage not found' });
         if (stage.name === 'New') return res.status(400).json({ message: "Cannot delete 'New' stage" });
 
@@ -297,13 +297,13 @@ const syncLeads = async (req, res) => {
 
     try {
         const userId = req.user.userId || req.user.id;
-        
+
         // Extract sheet ID from Google Sheets URL
         const sheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
         if (!sheetIdMatch || !sheetIdMatch[1]) {
             return res.status(400).json({ message: "Invalid Google Sheets URL format" });
         }
-        
+
         const sheetId = sheetIdMatch[1];
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
 
@@ -335,7 +335,7 @@ const syncLeads = async (req, res) => {
                         source: 'Google Sheet',
                         status: 'New'
                     });
-                    
+
                     // Send automated email if configured
                     if (newLead.email) {
                         sendAutomatedEmailOnLeadCreate(newLead, userId).catch(err => {
@@ -349,7 +349,7 @@ const syncLeads = async (req, res) => {
                             console.error('WhatsApp automation error (non-blocking):', err);
                         });
                     }
-                    
+
                     count++;
                 }
             }
@@ -369,7 +369,7 @@ const getAnalytics = async (req, res) => {
         // Note: For Agents, this should technically fetch Manager's analytics
         // But for now, we keep it simple based on ID
         let ownerId = req.user.userId || req.user.id;
-        
+
         // Agent Logic Check
         if (req.user.role === 'agent') {
             const agentUser = await User.findById(ownerId).select('parentId').lean();
@@ -377,13 +377,13 @@ const getAnalytics = async (req, res) => {
                 ownerId = agentUser.parentId;
             }
         }
-        
+
         // Optimized: Use aggregation pipeline instead of fetching all leads into memory
         // This is much more efficient for large datasets
-        const ownerIdObjectId = mongoose.Types.ObjectId.isValid(ownerId) 
-            ? new mongoose.Types.ObjectId(ownerId) 
+        const ownerIdObjectId = mongoose.Types.ObjectId.isValid(ownerId)
+            ? new mongoose.Types.ObjectId(ownerId)
             : ownerId;
-        
+
         const statsArray = await Lead.aggregate([
             { $match: { userId: ownerIdObjectId } },
             {
@@ -393,15 +393,172 @@ const getAnalytics = async (req, res) => {
                 }
             }
         ]);
-        
+
         // Convert array to object format
         const stats = {};
         statsArray.forEach(item => {
             stats[item._id] = item.count;
         });
-        
+
+        // Calculate follow-up analytics
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const nextWeek = new Date(today);
+        nextWeek.setDate(nextWeek.getDate() + 7);
+
+        // Follow-ups due today
+        const followUpToday = await Lead.countDocuments({
+            userId: ownerIdObjectId,
+            nextFollowUpDate: {
+                $gte: today,
+                $lt: tomorrow
+            }
+        });
+
+        // Overdue follow-ups (before today)
+        const followUpOverdue = await Lead.countDocuments({
+            userId: ownerIdObjectId,
+            nextFollowUpDate: {
+                $lt: today
+            }
+        });
+
+        // Upcoming follow-ups (next 7 days, excluding today)
+        const followUpUpcoming = await Lead.countDocuments({
+            userId: ownerIdObjectId,
+            nextFollowUpDate: {
+                $gte: tomorrow,
+                $lt: nextWeek
+            }
+        });
+
+        // Add follow-up analytics to response
+        stats.followUpAnalytics = {
+            dueToday: followUpToday,
+            overdue: followUpOverdue,
+            upcoming: followUpUpcoming,
+            total: followUpToday + followUpOverdue + followUpUpcoming
+        };
+
         res.json(stats);
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// 8.5. GET ANALYTICS DATA (For Dashboard)
+// ==========================================
+const getAnalyticsData = async (req, res) => {
+    try {
+        let ownerId = req.user.userId || req.user.id;
+
+        // Agent Logic Check
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId).select('parentId').lean();
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+
+        const ownerIdObjectId = mongoose.Types.ObjectId.isValid(ownerId)
+            ? new mongoose.Types.ObjectId(ownerId)
+            : ownerId;
+
+        // Get all leads for this user
+        const allLeads = await Lead.find({ userId: ownerIdObjectId }).lean();
+        const totalLeads = allLeads.length;
+
+        // Calculate today's leads
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        const leadsToday = allLeads.filter(lead => {
+            const leadDate = new Date(lead.date || lead.createdAt);
+            return leadDate >= today && leadDate < tomorrow;
+        }).length;
+
+        // Calculate conversion rate (Won leads / Total leads)
+        const wonLeads = allLeads.filter(lead =>
+            lead.status && lead.status.toLowerCase().includes('won')
+        ).length;
+        const conversionRate = totalLeads > 0 ? ((wonLeads / totalLeads) * 100).toFixed(1) : 0;
+
+        // Follow-up analytics
+        const nextWeek = new Date(today);
+        nextWeek.setDate(nextWeek.getDate() + 7);
+
+        const followUpToday = allLeads.filter(lead => {
+            if (!lead.nextFollowUpDate) return false;
+            const followUpDate = new Date(lead.nextFollowUpDate);
+            return followUpDate >= today && followUpDate < tomorrow;
+        }).length;
+
+        const followUpOverdue = allLeads.filter(lead => {
+            if (!lead.nextFollowUpDate) return false;
+            const followUpDate = new Date(lead.nextFollowUpDate);
+            return followUpDate < today;
+        }).length;
+
+        const followUpUpcoming = allLeads.filter(lead => {
+            if (!lead.nextFollowUpDate) return false;
+            const followUpDate = new Date(lead.nextFollowUpDate);
+            return followUpDate >= tomorrow && followUpDate < nextWeek;
+        }).length;
+
+        const followUpTotal = allLeads.filter(lead => lead.nextFollowUpDate).length;
+
+        // Lead source distribution
+        const leadSource = {};
+        allLeads.forEach(lead => {
+            const source = lead.source || 'Unknown';
+            leadSource[source] = (leadSource[source] || 0) + 1;
+        });
+
+        // Leads over time (last 7 days)
+        const leadsOverTime = [];
+        for (let i = 6; i >= 0; i--) {
+            const date = new Date(today);
+            date.setDate(date.getDate() - i);
+            const nextDate = new Date(date);
+            nextDate.setDate(nextDate.getDate() + 1);
+
+            const count = allLeads.filter(lead => {
+                const leadDate = new Date(lead.date || lead.createdAt);
+                return leadDate >= date && leadDate < nextDate;
+            }).length;
+
+            leadsOverTime.push({
+                date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                count
+            });
+        }
+
+        // Stage distribution
+        const stageDistribution = {};
+        allLeads.forEach(lead => {
+            const stage = lead.status || 'New';
+            stageDistribution[stage] = (stageDistribution[stage] || 0) + 1;
+        });
+
+        res.json({
+            totalLeads,
+            leadsToday,
+            conversionRate: parseFloat(conversionRate),
+            followUpToday,
+            followUpOverdue,
+            followUpUpcoming,
+            followUpTotal,
+            leadSource,
+            leadsOverTime,
+            stageDistribution
+        });
+    } catch (err) {
+        console.error("Get Analytics Data Error:", err);
         res.status(500).json({ error: err.message });
     }
 };
@@ -412,7 +569,7 @@ const getAnalytics = async (req, res) => {
 const getFollowUpLeads = async (req, res) => {
     try {
         let ownerId = req.user.userId || req.user.id;
-        
+
         // Agent Logic Check
         if (req.user.role === 'agent') {
             const agentUser = await User.findById(ownerId);
@@ -420,13 +577,13 @@ const getFollowUpLeads = async (req, res) => {
                 ownerId = agentUser.parentId;
             }
         }
-        
+
         // Get today's date (start and end of day)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
-        
+
         // Find leads with nextFollowUpDate between today 00:00 and tomorrow 00:00
         const followUpLeads = await Lead.find({
             userId: ownerId,
@@ -435,7 +592,7 @@ const getFollowUpLeads = async (req, res) => {
                 $lt: tomorrow
             }
         }).sort({ nextFollowUpDate: 1 });
-        
+
         res.json(followUpLeads);
     } catch (err) {
         console.error("Get Follow-up Leads Error:", err);
@@ -449,13 +606,13 @@ const getFollowUpLeads = async (req, res) => {
 const updateFollowUpDate = async (req, res) => {
     try {
         const { leadId, nextFollowUpDate } = req.body;
-        
+
         if (!leadId || !nextFollowUpDate) {
             return res.status(400).json({ message: "Lead ID and follow-up date are required" });
         }
-        
+
         let ownerId = req.user.userId || req.user.id;
-        
+
         // Agent Logic Check
         if (req.user.role === 'agent') {
             const agentUser = await User.findById(ownerId);
@@ -463,21 +620,21 @@ const updateFollowUpDate = async (req, res) => {
                 ownerId = agentUser.parentId;
             }
         }
-        
+
         const lead = await Lead.findOne({ _id: leadId, userId: ownerId });
-        
+
         if (!lead) {
             return res.status(404).json({ message: "Lead not found" });
         }
-        
+
         // If lead already has a nextFollowUpDate, move it to lastFollowUpDate
         if (lead.nextFollowUpDate) {
             lead.lastFollowUpDate = lead.nextFollowUpDate;
         }
-        
+
         lead.nextFollowUpDate = new Date(nextFollowUpDate);
         await lead.save();
-        
+
         res.json({ success: true, lead });
     } catch (err) {
         console.error("Update Follow-up Date Error:", err);
@@ -491,19 +648,19 @@ const updateFollowUpDate = async (req, res) => {
 const completeFollowUp = async (req, res) => {
     try {
         const { leadId, note, nextFollowUpDate, markedAsDeadLead } = req.body;
-        
+
         // Validation: Note is required
         if (!note || !note.trim()) {
             return res.status(400).json({ message: "Follow-up note is required" });
         }
-        
+
         // Validation: Either nextFollowUpDate OR markedAsDeadLead must be provided
         if (!nextFollowUpDate && !markedAsDeadLead) {
             return res.status(400).json({ message: "Either next follow-up date or 'Mark as Dead Lead' must be selected" });
         }
-        
+
         let ownerId = req.user.userId || req.user.id;
-        
+
         // Agent Logic Check
         if (req.user.role === 'agent') {
             const agentUser = await User.findById(ownerId);
@@ -511,19 +668,19 @@ const completeFollowUp = async (req, res) => {
                 ownerId = agentUser.parentId;
             }
         }
-        
+
         const lead = await Lead.findOne({ _id: leadId, userId: ownerId });
-        
+
         if (!lead) {
             return res.status(404).json({ message: "Lead not found" });
         }
-        
+
         // Add note to lead's notes array
         lead.notes.push({
             text: note,
             date: new Date()
         });
-        
+
         // Add to follow-up history
         const followUpEntry = {
             note: note,
@@ -531,21 +688,21 @@ const completeFollowUp = async (req, res) => {
             nextFollowUpDate: nextFollowUpDate ? new Date(nextFollowUpDate) : null,
             markedAsDeadLead: markedAsDeadLead || false
         };
-        
+
         if (!lead.followUpHistory) {
             lead.followUpHistory = [];
         }
         lead.followUpHistory.push(followUpEntry);
-        
+
         // Update last follow-up date
         lead.lastFollowUpDate = lead.nextFollowUpDate || new Date();
-        
+
         // Update next follow-up date or status based on action
         if (markedAsDeadLead) {
             // Mark as Dead Lead stage - ensure the stage exists
             lead.status = 'Dead Lead';
             lead.nextFollowUpDate = null; // Clear next follow-up date
-            
+
             // Optionally create "Dead Lead" stage if it doesn't exist
             const deadLeadStage = await Stage.findOne({ name: 'Dead Lead', userId: ownerId });
             if (!deadLeadStage) {
@@ -559,9 +716,9 @@ const completeFollowUp = async (req, res) => {
             // Set next follow-up date
             lead.nextFollowUpDate = new Date(nextFollowUpDate);
         }
-        
+
         await lead.save();
-        
+
         res.json({ success: true, lead });
     } catch (err) {
         console.error("Complete Follow-up Error:", err);
@@ -575,7 +732,7 @@ const completeFollowUp = async (req, res) => {
 const getFollowUpDoneLeads = async (req, res) => {
     try {
         let ownerId = req.user.userId || req.user.id;
-        
+
         // Agent Logic Check
         if (req.user.role === 'agent') {
             const agentUser = await User.findById(ownerId);
@@ -583,20 +740,20 @@ const getFollowUpDoneLeads = async (req, res) => {
                 ownerId = agentUser.parentId;
             }
         }
-        
+
         // Get all leads for the user first
         const allLeads = await Lead.find({ userId: ownerId });
-        
+
         // Filter to only include leads with at least one follow-up history entry
-        const filteredDoneLeads = allLeads.filter(lead => 
-            lead.followUpHistory && 
-            Array.isArray(lead.followUpHistory) && 
+        const filteredDoneLeads = allLeads.filter(lead =>
+            lead.followUpHistory &&
+            Array.isArray(lead.followUpHistory) &&
             lead.followUpHistory.length > 0
         );
-        
+
         // Sort by most recent follow-up completion date
         filteredDoneLeads.sort((a, b) => {
-            const aDate = a.followUpHistory && a.followUpHistory.length > 0 
+            const aDate = a.followUpHistory && a.followUpHistory.length > 0
                 ? new Date(a.followUpHistory[a.followUpHistory.length - 1].completedDate || 0)
                 : new Date(0);
             const bDate = b.followUpHistory && b.followUpHistory.length > 0
@@ -604,7 +761,7 @@ const getFollowUpDoneLeads = async (req, res) => {
                 : new Date(0);
             return bDate - aDate; // Most recent first
         });
-        
+
         res.json(filteredDoneLeads);
     } catch (err) {
         console.error("Get Follow-up Done Leads Error:", err);
@@ -626,6 +783,7 @@ module.exports = {
     deleteStage,
     syncLeads,
     getAnalytics,
+    getAnalyticsData,
     getFollowUpLeads,
     updateFollowUpDate,
     completeFollowUp,

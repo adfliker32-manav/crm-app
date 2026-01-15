@@ -17,7 +17,7 @@ exports.register = async (req, res) => {
         if (!password || password.length < 6) {
             return res.status(400).json({ message: "Password must be at least 6 characters" });
         }
-        
+
         // SECURITY FIX: Email format validation
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) {
@@ -52,9 +52,9 @@ exports.register = async (req, res) => {
         if (!JWT_SECRET) {
             return res.status(500).json({ error: 'Server configuration error' });
         }
-        
+
         const token = jwt.sign(
-            payload, 
+            payload,
             JWT_SECRET,
             { expiresIn: '1d' }
         );
@@ -97,18 +97,18 @@ exports.login = async (req, res) => {
         if (!JWT_SECRET) {
             return res.status(500).json({ error: 'Server configuration error' });
         }
-        
+
         const token = jwt.sign(
-            payload, 
+            payload,
             JWT_SECRET,
             { expiresIn: '1d' }
         );
 
         // Frontend ko bhi batao ki role kya hai
-        res.json({ 
-            token, 
-            role: user.role, 
-            user: { id: user._id, name: user.name, email: user.email } 
+        res.json({
+            token,
+            role: user.role,
+            user: { id: user._id, name: user.name, email: user.email }
         });
 
     } catch (err) {
@@ -154,6 +154,33 @@ exports.createAgent = async (req, res) => {
     }
 };
 // 4. GET MY TEAM (Manager apne agents dekhega)
+// 5. DELETE AGENT (Manager apne agent ko remove kar sakta hai)
+exports.deleteAgent = async (req, res) => {
+    try {
+        const agentId = req.params.id;
+
+        // Verify requester is a manager (Double check, although middleware handles role)
+        if (req.user.role !== 'manager') {
+            return res.status(403).json({ message: "Only Managers can delete Agents" });
+        }
+
+        // Find the agent and ensure they belong to this manager
+        const agent = await User.findOne({ _id: agentId, parentId: req.user.userId });
+
+        if (!agent) {
+            return res.status(404).json({ message: "Agent not found or does not belong to you" });
+        }
+
+        // Delete the agent
+        await User.findByIdAndDelete(agentId);
+
+        res.json({ success: true, message: "Agent deleted successfully" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
 exports.getMyTeam = async (req, res) => {
     try {
         // Sirf wo users dhundo jinka 'parentId' logged-in user (Manager) hai

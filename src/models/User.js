@@ -18,34 +18,42 @@ const userSchema = new mongoose.Schema({
         required: true
     },
 
-    companyName: { 
-        type: String 
+    companyName: {
+        type: String
+    },
+    contactPerson: {
+        type: String,
+        default: null
+    },
+    phone: {
+        type: String,
+        default: null
     },
 
     // 👇 3-LAYER ROLE SYSTEM
-    role: { 
-        type: String, 
-        enum: ['superadmin', 'manager', 'agent'], 
+    role: {
+        type: String,
+        enum: ['superadmin', 'manager', 'agent'],
         default: 'manager'
     },
-    parentId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'User', 
-        default: null 
+    parentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
     },
 
     // WhatsApp Info
-    waBusinessId: { 
-        type: String, 
-        default: null 
+    waBusinessId: {
+        type: String,
+        default: null
     },
-    waPhoneNumberId: { 
-        type: String, 
-        default: null 
+    waPhoneNumberId: {
+        type: String,
+        default: null
     },
-    waAccessToken: { 
-        type: String, 
-        default: null 
+    waAccessToken: {
+        type: String,
+        default: null
     },
 
     // Email Configuration (for SaaS - per user email settings)
