@@ -3,6 +3,7 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import EditCompanyModal from './EditCompanyModal';
+import CreateCompanyModal from './CreateCompanyModal';
 import ViewLeadsModal from './ViewLeadsModal';
 import ManageAgentsModal from './ManageAgentsModal';
 import ChangePasswordModal from './ChangePasswordModal';
@@ -17,6 +18,7 @@ const CompaniesView = () => {
     const [selectedCompany, setSelectedCompany] = useState(null);
 
     // Modal states
+    const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [isViewLeadsModalOpen, setIsViewLeadsModalOpen] = useState(false);
     const [isManageAgentsModalOpen, setIsManageAgentsModalOpen] = useState(false);
@@ -39,8 +41,9 @@ const CompaniesView = () => {
         setLoading(true);
         try {
             const res = await api.get('/superadmin/companies');
-            setCompanies(res.data);
-            setFilteredCompanies(res.data);
+            const companiesData = res.data.companies || res.data;
+            setCompanies(companiesData);
+            setFilteredCompanies(companiesData);
         } catch (error) {
             console.error('Error fetching companies:', error);
             showError('Failed to load companies');
@@ -87,6 +90,39 @@ const CompaniesView = () => {
         setIsChangePasswordModalOpen(true);
     };
 
+    const handleImpersonate = async (company) => {
+        const confirmed = await showDanger(
+            `You are about to login as "${company.companyName}". You will be logged out of Super Admin.`,
+            'Login as User?'
+        );
+
+        if (!confirmed) return;
+
+        try {
+            const res = await api.post('/superadmin/impersonate', { userId: company._id });
+            const { token, user } = res.data;
+
+            // Clear current session
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+
+            // Set new session (Impersonated)
+            localStorage.setItem('token', token);
+            localStorage.setItem('user', JSON.stringify(user));
+
+            showSuccess(`Logged in as ${user.name}`);
+
+            // Hard redirect to refresh app with new permissions
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 1000);
+
+        } catch (error) {
+            console.error('Impersonation failed:', error);
+            showError(error.response?.data?.message || 'Failed to login as user');
+        }
+    };
+
     if (loading) {
         return (
             <div className="flex items-center justify-center h-96">
@@ -103,13 +139,22 @@ const CompaniesView = () => {
                     <h1 className="text-3xl font-bold text-slate-800">Company Management</h1>
                     <p className="text-slate-500 mt-1">Manage all registered companies</p>
                 </div>
-                <button
-                    onClick={fetchCompanies}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition shadow-md flex items-center gap-2"
-                >
-                    <i className="fa-solid fa-rotate"></i>
-                    Refresh
-                </button>
+                <div className="flex gap-3">
+                    <button
+                        onClick={() => setIsCreateModalOpen(true)}
+                        className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition shadow-md flex items-center gap-2"
+                    >
+                        <i className="fa-solid fa-plus"></i>
+                        Create Company
+                    </button>
+                    <button
+                        onClick={fetchCompanies}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition shadow-md flex items-center gap-2"
+                    >
+                        <i className="fa-solid fa-rotate"></i>
+                        Refresh
+                    </button>
+                </div>
             </div>
 
             {/* Search Bar */}
@@ -186,6 +231,13 @@ const CompaniesView = () => {
                                         <td className="px-6 py-4">
                                             <div className="flex items-center justify-end gap-2">
                                                 <button
+                                                    onClick={() => handleImpersonate(company)}
+                                                    className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                                                    title="Login as User"
+                                                >
+                                                    <i className="fa-solid fa-right-to-bracket"></i>
+                                                </button>
+                                                <button
                                                     onClick={() => handleViewLeads(company)}
                                                     className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
                                                     title="View Leads"
@@ -240,6 +292,11 @@ const CompaniesView = () => {
             </div>
 
             {/* Modals */}
+            <CreateCompanyModal
+                isOpen={isCreateModalOpen}
+                onClose={() => setIsCreateModalOpen(false)}
+                onSuccess={fetchCompanies}
+            />
             <EditCompanyModal
                 isOpen={isEditModalOpen}
                 onClose={() => setIsEditModalOpen(false)}

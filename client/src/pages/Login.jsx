@@ -18,7 +18,11 @@ const Login = () => {
         const result = await login(email, password);
 
         if (result.success) {
-            navigate('/');
+            if (result.role === 'superadmin') {
+                navigate('/super-admin');
+            } else {
+                navigate('/dashboard');
+            }
         } else {
             setError(result.message);
             setIsLoading(false);
@@ -26,78 +30,107 @@ const Login = () => {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-100 font-sans">
-            <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md animate-fade-in-up">
-                <div className="text-center mb-8">
-                    <div className="bg-red-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <i className="fa-solid fa-user-circle text-3xl text-red-600"></i>
+        <div className="min-h-screen bg-white font-sans flex">
+            {/* Left - Branding */}
+            <div className="hidden lg:flex lg:w-1/2 bg-neutral-950 flex-col justify-between p-12">
+                <div>
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
+                            <span className="text-neutral-950 font-black text-sm">C</span>
+                        </div>
+                        <span className="text-white font-semibold text-lg tracking-tight">CRM Pro</span>
                     </div>
-                    <h2 className="text-2xl font-bold text-gray-800">Welcome Back</h2>
-                    <p className="text-gray-500 mt-1">Sign in to your CRM account</p>
                 </div>
 
-                {error && (
-                    <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm mb-6 flex items-center gap-2">
-                        <i className="fa-solid fa-exclamation-circle"></i>
-                        {error}
-                    </div>
-                )}
+                <div className="max-w-md">
+                    <h1 className="text-5xl font-semibold text-white leading-tight mb-6">
+                        The modern way to manage your sales.
+                    </h1>
+                    <p className="text-neutral-400 text-lg leading-relaxed">
+                        Simple, powerful, and designed for teams who want to close more deals with less friction.
+                    </p>
+                </div>
 
-                <form onSubmit={handleSubmit} className="space-y-6">
-                    <div>
-                        <label className="block text-sm font-bold text-gray-700 mb-2">Email Address</label>
-                        <div className="relative">
-                            <i className="fa-solid fa-envelope absolute left-4 top-3.5 text-gray-400"></i>
+                <div className="flex items-center gap-8 text-neutral-500 text-sm">
+                    <span>© 2026 CRM Pro</span>
+                    <a href="#" className="hover:text-white transition-colors">Privacy</a>
+                    <a href="#" className="hover:text-white transition-colors">Terms</a>
+                </div>
+            </div>
+
+            {/* Right - Form */}
+            <div className="flex-1 flex items-center justify-center p-8 lg:p-16">
+                <div className="w-full max-w-sm">
+                    {/* Mobile Logo */}
+                    <div className="lg:hidden flex items-center gap-2 mb-12">
+                        <div className="w-8 h-8 bg-neutral-950 rounded-lg flex items-center justify-center">
+                            <span className="text-white font-black text-sm">C</span>
+                        </div>
+                        <span className="text-neutral-950 font-semibold text-lg">CRM Pro</span>
+                    </div>
+
+                    <div className="mb-8">
+                        <h2 className="text-2xl font-semibold text-neutral-900 mb-2">Welcome back</h2>
+                        <p className="text-neutral-500">Enter your credentials to continue</p>
+                    </div>
+
+                    {error && (
+                        <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm mb-6 border border-red-100">
+                            {error}
+                        </div>
+                    )}
+
+                    <form onSubmit={handleSubmit} className="space-y-5">
+                        <div>
+                            <label className="block text-sm font-medium text-neutral-700 mb-2">Email</label>
                             <input
                                 type="email"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 required
-                                className="w-full pl-11 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition"
-                                placeholder="name@company.com"
+                                className="w-full px-4 py-3 bg-neutral-50 border border-neutral-200 rounded-lg text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all"
+                                placeholder="you@company.com"
                             />
                         </div>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-bold text-gray-700 mb-2">Password</label>
-                        <div className="relative">
-                            <i className="fa-solid fa-lock absolute left-4 top-3.5 text-gray-400"></i>
+
+                        <div>
+                            <label className="block text-sm font-medium text-neutral-700 mb-2">Password</label>
                             <input
                                 type="password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 required
-                                className="w-full pl-11 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition"
+                                className="w-full px-4 py-3 bg-neutral-50 border border-neutral-200 rounded-lg text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all"
                                 placeholder="••••••••"
                             />
                         </div>
+
+                        <div className="flex items-center justify-between text-sm">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" className="w-4 h-4 rounded border-neutral-300 text-neutral-900 focus:ring-neutral-900" />
+                                <span className="text-neutral-600">Remember me</span>
+                            </label>
+                            <a href="#" className="text-neutral-900 font-medium hover:underline">Forgot password?</a>
+                        </div>
+
+                        <button
+                            type="submit"
+                            disabled={isLoading}
+                            className="w-full bg-neutral-900 hover:bg-neutral-800 text-white font-medium py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isLoading ? 'Signing in...' : 'Sign in'}
+                        </button>
+                    </form>
+
+                    <div className="mt-8 pt-8 border-t border-neutral-100 text-center">
+                        <p className="text-neutral-500 text-sm">
+                            Don't have an account?{' '}
+                            <Link to="/register" className="text-neutral-900 font-medium hover:underline">
+                                Get started
+                            </Link>
+                        </p>
                     </div>
-
-                    <button
-                        type="submit"
-                        disabled={isLoading}
-                        className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg transition shadow-lg flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-                    >
-                        {isLoading ? (
-                            <>
-                                <i className="fa-solid fa-spinner fa-spin"></i> Signing In...
-                            </>
-                        ) : (
-                            'Sign In'
-                        )}
-                    </button>
-                </form>
-
-                <div className="mt-8 text-center">
-                    <p className="text-gray-500 mb-4">Don't have an account?</p>
-                    <Link to="/register" className="w-full block bg-white border-2 border-slate-200 hover:border-red-500 text-slate-600 hover:text-red-600 font-bold py-2.5 rounded-lg transition">
-                        Register Now
-                    </Link>
                 </div>
-
-                <p className="mt-8 text-center text-sm text-gray-400">
-                    &copy; 2026 CRM Pro. All rights reserved.
-                </p>
             </div>
         </div>
     );

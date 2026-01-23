@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import ActivityTimeline from './ActivityTimeline';
 
 const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
     const { showSuccess, showError } = useNotification();
     const [nextFollowUpDate, setNextFollowUpDate] = useState('');
     const [loading, setLoading] = useState(false);
+    const [customFields, setCustomFields] = useState([]);
 
     // Email section states
     const [showEmailSection, setShowEmailSection] = useState(false);
@@ -13,6 +15,12 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
     const [emailSubject, setEmailSubject] = useState('');
     const [emailMessage, setEmailMessage] = useState('');
     const [emailLoading, setEmailLoading] = useState(false);
+
+    useEffect(() => {
+        if (isOpen) {
+            fetchCustomFields();
+        }
+    }, [isOpen]);
 
     useEffect(() => {
         if (lead) {
@@ -25,11 +33,21 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
         }
     }, [lead]);
 
+    const fetchCustomFields = async () => {
+        try {
+            const res = await api.get('/custom-fields');
+            setCustomFields(res.data || []);
+        } catch (err) {
+            console.error('Failed to fetch custom fields:', err);
+        }
+    };
+
     if (!isOpen || !lead) return null;
 
     const formatDate = (dateString) => {
         if (!dateString) return '-';
-        return new Date(dateString).toLocaleDateString('en-US', {
+        const d = new Date(dateString);
+        return isNaN(d.getTime()) ? '-' : d.toLocaleDateString('en-US', {
             year: 'numeric',
             month: 'short',
             day: 'numeric'
@@ -78,14 +96,37 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
         }
     };
 
+    // Helper to get custom field value safely
+    const getCustomValue = (key) => {
+        if (!lead.customData) return '-';
+        // Handle both Map and Object structures which might come from backend
+        return lead.customData[key] || '-';
+    };
+
     return (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 animate-fade-in-up backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
                 {/* Header */}
                 <div className="bg-slate-900 p-6 text-white flex justify-between items-start sticky top-0 z-10">
                     <div>
                         <h2 className="text-2xl font-bold">{lead.name}</h2>
-                        <p className="text-slate-400 text-sm mt-1">{lead.phone || 'No Phone'} • {lead.email || 'No Email'}</p>
+                        <div className="flex flex-wrap gap-4 text-slate-300 text-sm mt-2">
+                            {lead.phone && (
+                                <span className="flex items-center gap-1.5"><i className="fa-solid fa-phone text-blue-400"></i> {lead.phone}</span>
+                            )}
+                            {lead.email && (
+                                <span className="flex items-center gap-1.5"><i className="fa-solid fa-envelope text-red-400"></i> {lead.email}</span>
+                            )}
+                            {lead.source && (
+                                <span className="flex items-center gap-1.5"><i className="fa-solid fa-code-branch text-green-400"></i> {lead.source}</span>
+                            )}
+                            {lead.dealValue > 0 && (
+                                <span className="flex items-center gap-1.5 bg-emerald-500/20 px-2 py-0.5 rounded-full">
+                                    <i className="fa-solid fa-indian-rupee-sign text-emerald-400"></i>
+                                    <span className="font-semibold text-emerald-300">₹{lead.dealValue.toLocaleString()}</span>
+                                </span>
+                            )}
+                        </div>
                     </div>
                     <button onClick={onClose} className="text-white hover:text-red-400 text-2xl transition">
                         &times;
@@ -93,6 +134,28 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
                 </div>
 
                 <div className="p-6 bg-slate-50 flex-1 overflow-y-auto space-y-6">
+
+                    {/* Additional Information (Custom Fields) */}
+                    {customFields.length > 0 && (
+                        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                            <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2 border-b border-slate-100 pb-2">
+                                <i className="fa-solid fa-list-ul text-indigo-500"></i> Additional Information
+                            </h4>
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-y-4 gap-x-6">
+                                {customFields.map(field => (
+                                    <div key={field.key}>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                            {field.label}
+                                        </label>
+                                        <p className="text-sm text-slate-800 font-medium truncate">
+                                            {getCustomValue(field.key)}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     {/* Follow-up Reminder Section */}
                     <div>
                         <h4 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
@@ -202,26 +265,74 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
                         )}
                     </div>
 
-                    {/* Quick Info / History Preview (Optional) */}
+                    {/* Activity Audit Log */}
                     <div>
                         <h4 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
-                            <i className="fa-solid fa-clock-rotate-left text-blue-500"></i> Recent History
+                            <i className="fa-solid fa-clock-rotate-left text-blue-500"></i> Activity Audit Log
                         </h4>
                         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-                            {lead.followUpHistory && lead.followUpHistory.length > 0 ? (
-                                <ul className="space-y-3">
-                                    {lead.followUpHistory.slice(-3).reverse().map((history, index) => (
-                                        <li key={index} className="text-sm border-l-2 border-blue-200 pl-3 py-1">
-                                            <p className="text-slate-800">{history.note}</p>
-                                            <p className="text-xs text-slate-400 mt-0.5">{formatDate(history.date)}</p>
-                                        </li>
-                                    ))}
-                                </ul>
-                            ) : (
-                                <p className="text-sm text-slate-400 italic">No history available.</p>
-                            )}
+                            <ActivityTimeline leadId={lead._id} />
                         </div>
                     </div>
+
+                    {/* Legacy History Timeline (Optional - Can be removed if audit log is sufficient) */}
+                    {(lead.history || []).length > 0 && (
+                        <div>
+                            <h4 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
+                                <i className="fa-solid fa-list text-slate-500"></i> Legacy History
+                            </h4>
+                            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm max-h-64 overflow-y-auto">
+                                {(() => {
+                                    // Map history items
+                                    const historyItems = (lead.history || []).map(h => {
+                                        let icon = 'fa-solid fa-circle-info';
+                                        let color = 'text-gray-500';
+                                        let bg = 'bg-gray-50';
+                                        let border = 'border-gray-100';
+
+                                        if (h.type === 'Email') {
+                                            icon = h.subType === 'Auto' ? 'fa-solid fa-robot' : 'fa-solid fa-envelope';
+                                            color = 'text-blue-500';
+                                            bg = 'bg-blue-50';
+                                            border = 'border-blue-100';
+                                        } else if (h.type === 'WhatsApp') {
+                                            icon = h.subType === 'Auto' ? 'fa-solid fa-robot' : 'fa-brands fa-whatsapp';
+                                            color = 'text-green-500';
+                                            bg = 'bg-green-50';
+                                            border = 'border-green-100';
+                                        } else if (h.type === 'Note') {
+                                            icon = 'fa-regular fa-note-sticky';
+                                            color = 'text-orange-500';
+                                            bg = 'bg-orange-50';
+                                            border = 'border-orange-100';
+                                        }
+
+                                        return { ...h, icon, color, bg, border };
+                                    });
+
+                                    const combinedHistory = historyItems.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+                                    return (
+                                        <ul className="space-y-3">
+                                            {combinedHistory.slice(0, 10).map((item, index) => (
+                                                <li key={index} className={`p-2 rounded-lg border ${item.bg} ${item.border}`}>
+                                                    <div className="flex justify-between items-start mb-1">
+                                                        <span className={`text-xs font-bold uppercase ${item.color}`}>
+                                                            <i className={item.icon}></i> {item.type}
+                                                        </span>
+                                                        <span className="text-xs text-slate-400">
+                                                            {new Date(item.date).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-sm text-slate-800 truncate">{item.content}</p>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    );
+                                })()}
+                            </div>
+                        </div>
+                    )}
 
                 </div>
             </div>

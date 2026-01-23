@@ -20,8 +20,19 @@ const {
     getRecentSignups,
     getGrowthData,
     getBillingStats,
-    getSubscriptions
+    getSubscriptions,
+    createCompany,
+    // Phase 2
+    getSettings,
+    updateSettings,
+    impersonateUser,
+    // Plan Management
+    getAllPlans,
+    createPlan,
+    updatePlan,
+    deletePlan
 } = require('../controllers/superAdminController');
+
 
 // Analytics Routes
 router.get('/analytics', authMiddleware, requireSuperAdmin, getSaaSAnalytics);
@@ -30,6 +41,7 @@ router.get('/recent-signups', authMiddleware, requireSuperAdmin, getRecentSignup
 router.get('/growth-data', authMiddleware, requireSuperAdmin, getGrowthData);
 
 // Company Management Routes
+router.post('/companies', authMiddleware, requireSuperAdmin, createCompany);
 router.get('/companies', authMiddleware, requireSuperAdmin, getAllCompanies);
 router.get('/companies/:id', authMiddleware, requireSuperAdmin, getCompanyById);
 router.put('/companies/:id', authMiddleware, requireSuperAdmin, updateCompany);
@@ -55,5 +67,16 @@ router.get('/billing', authMiddleware, requireSuperAdmin, getBillingData);
 router.get('/billing-stats', authMiddleware, requireSuperAdmin, getBillingStats);
 router.get('/subscriptions', authMiddleware, requireSuperAdmin, getSubscriptions);
 router.put('/companies/:id/billing', authMiddleware, requireSuperAdmin, updateCompanyBilling);
+
+// Phase 2: Core Platform Features
+router.get('/settings', authMiddleware, requireSuperAdmin, getSettings);
+router.put('/settings', authMiddleware, requireSuperAdmin, updateSettings);
+router.post('/impersonate', authMiddleware, requireSuperAdmin, impersonateUser);
+
+// Subscription Plan Management
+router.get('/plans', authMiddleware, requireSuperAdmin, getAllPlans);
+router.post('/plans', authMiddleware, requireSuperAdmin, createPlan);
+router.put('/plans/:id', authMiddleware, requireSuperAdmin, updatePlan);
+router.delete('/plans/:id', authMiddleware, requireSuperAdmin, deletePlan);
 
 module.exports = router;

@@ -1,6 +1,58 @@
 const User = require('../models/User');
 const Lead = require('../models/Lead');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const GlobalSetting = require('../models/GlobalSetting');
+
+// Helper for Token Generation (match authController logic)
+const generateToken = (id, role) => {
+    return jwt.sign({ id, role }, process.env.JWT_SECRET, {
+        expiresIn: '1d' // Impersonation session
+    });
+};
+
+// Create new company (Manager)
+const createCompany = async (req, res) => {
+    try {
+        const { companyName, name, email, password, phone } = req.body;
+
+        if (!companyName || !name || !email || !password) {
+            return res.status(400).json({ message: "All fields are required" });
+        }
+
+        const existingUser = await User.findOne({ email: email.toLowerCase() });
+        if (existingUser) {
+            return res.status(400).json({ message: "Email already in use" });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newCompany = await User.create({
+            companyName,
+            name,
+            email: email.toLowerCase(),
+            password: hashedPassword,
+            phone,
+            role: 'manager',
+            subscriptionStatus: 'Trial', // Default to Trial
+            subscriptionPlan: 'Free',
+            planExpiryDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) // 14 days trial
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Company created successfully",
+            company: {
+                _id: newCompany._id,
+                companyName: newCompany.companyName,
+                email: newCompany.email,
+                role: newCompany.role
+            }
+        });
+    } catch (error) {
+        console.error("Create Create Company Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
 
 const getSaaSAnalytics = async (req, res) => {
     try {
@@ -438,9 +490,9 @@ const getBillingData = async (req, res) => {
             .reduce((sum, company) => sum + (company.monthlyRevenue || 0), 0);
 
         // Count by status
-        const activeSubscriptions = companies.filter(c => c.subscriptionStatus === 'active').length;
-        const expiredSubscriptions = companies.filter(c => c.subscriptionStatus === 'expired').length;
-        const trialSubscriptions = companies.filter(c => c.subscriptionStatus === 'trial').length;
+        const activeSubscriptions = companies.filter(c => c.subscriptionStatus === 'Active').length;
+        const expiredSubscriptions = companies.filter(c => c.subscriptionStatus === 'Expired').length;
+        const trialSubscriptions = companies.filter(c => c.subscriptionStatus === 'Trial').length;
 
         // Get expiring soon (within 7 days)
         const sevenDaysFromNow = new Date();
@@ -448,7 +500,7 @@ const getBillingData = async (req, res) => {
         const expiringSoon = companies.filter(c => {
             if (!c.planExpiryDate) return false;
             const expiry = new Date(c.planExpiryDate);
-            return expiry <= sevenDaysFromNow && expiry >= new Date() && c.subscriptionStatus === 'active';
+            return expiry <= sevenDaysFromNow && expiry >= new Date() && c.subscriptionStatus === 'Active';
         });
 
         res.json({
@@ -481,7 +533,14 @@ const getBillingData = async (req, res) => {
 const updateCompanyBilling = async (req, res) => {
     try {
         const { id } = req.params;
-        const { subscriptionPlan, subscriptionStatus, planExpiryDate, monthlyRevenue, lastPaymentDate } = req.body;
+        // Accept both frontend field names (plan, billingStatus, expiryDate) and backend names
+        const {
+            subscriptionPlan, plan,
+            subscriptionStatus, billingStatus,
+            planExpiryDate, expiryDate,
+            monthlyRevenue,
+            lastPaymentDate
+        } = req.body;
 
         const company = await User.findOne({ _id: id, role: 'manager' });
         if (!company) {
@@ -489,9 +548,14 @@ const updateCompanyBilling = async (req, res) => {
         }
 
         const updateData = {};
-        if (subscriptionPlan) updateData.subscriptionPlan = subscriptionPlan;
-        if (subscriptionStatus) updateData.subscriptionStatus = subscriptionStatus;
-        if (planExpiryDate) updateData.planExpiryDate = new Date(planExpiryDate);
+        // Use frontend field names as fallback
+        const finalPlan = subscriptionPlan || plan;
+        const finalStatus = subscriptionStatus || billingStatus;
+        const finalExpiryDate = planExpiryDate || expiryDate;
+
+        if (finalPlan) updateData.subscriptionPlan = finalPlan;
+        if (finalStatus) updateData.subscriptionStatus = finalStatus;
+        if (finalExpiryDate) updateData.planExpiryDate = new Date(finalExpiryDate);
         if (monthlyRevenue !== undefined) updateData.monthlyRevenue = parseFloat(monthlyRevenue);
         if (lastPaymentDate) updateData.lastPaymentDate = new Date(lastPaymentDate);
 
@@ -520,7 +584,7 @@ const getDashboardStats = async (req, res) => {
 
         const activeSubscriptions = await User.countDocuments({
             role: 'manager',
-            subscriptionStatus: 'active'
+            subscriptionStatus: 'Active'
         });
 
         res.json({
@@ -631,14 +695,14 @@ const getBillingStats = async (req, res) => {
             .filter(c => c.lastPaymentDate && new Date(c.lastPaymentDate) >= currentMonth)
             .reduce((sum, c) => sum + (c.monthlyRevenue || 0), 0);
 
-        const activeSubscriptions = companies.filter(c => c.subscriptionStatus === 'active').length;
+        const activeSubscriptions = companies.filter(c => c.subscriptionStatus === 'Active').length;
 
         const sevenDaysFromNow = new Date();
         sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
         const expiringSoon = companies.filter(c => {
             if (!c.planExpiryDate) return false;
             const expiry = new Date(c.planExpiryDate);
-            return expiry <= sevenDaysFromNow && expiry >= new Date() && c.subscriptionStatus === 'active';
+            return expiry <= sevenDaysFromNow && expiry >= new Date() && c.subscriptionStatus === 'Active';
         }).length;
 
         res.json({
@@ -680,7 +744,214 @@ const getSubscriptions = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🌍 GLOBAL SETTINGS
+// ==========================================
+
+// Get all system settings
+const getSettings = async (req, res) => {
+    try {
+        const settings = await GlobalSetting.find().sort({ key: 1 });
+
+        // Convert array to object for easier frontend consumption
+        const settingsMap = {};
+        settings.forEach(item => {
+            settingsMap[item.key] = item.value;
+        });
+
+        res.json({
+            success: true,
+            settings: settingsMap,
+            raw: settings
+        });
+    } catch (error) {
+        console.error("Get Settings Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Update system settings (Bulk or Single)
+const updateSettings = async (req, res) => {
+    try {
+        const { settings } = req.body; // Expect object: { 'maintenance_mode': true, 'app_name': 'MyCRM' }
+
+        if (!settings || typeof settings !== 'object') {
+            return res.status(400).json({ message: "Invalid settings format" });
+        }
+
+        const updates = [];
+        for (const [key, value] of Object.entries(settings)) {
+            updates.push({
+                updateOne: {
+                    filter: { key },
+                    update: {
+                        key,
+                        value,
+                        updatedBy: req.user.id,
+                        updatedAt: new Date()
+                    },
+                    upsert: true
+                }
+            });
+        }
+
+        if (updates.length > 0) {
+            await GlobalSetting.bulkWrite(updates);
+        }
+
+        res.json({
+            success: true,
+            message: "Settings updated successfully"
+        });
+    } catch (error) {
+        console.error("Update Settings Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// ==========================================
+// 📦 SUBSCRIPTION PLANS MANAGEMENT
+// ==========================================
+
+const SubscriptionPlan = require('../models/SubscriptionPlan');
+
+// Get all plans
+const getAllPlans = async (req, res) => {
+    try {
+        const plans = await SubscriptionPlan.find().sort({ price: 1 });
+        res.json({
+            success: true,
+            plans
+        });
+    } catch (error) {
+        console.error("Get Plans Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Create new plan
+const createPlan = async (req, res) => {
+    try {
+        const { name, price, features, limits } = req.body;
+
+        if (!name || price === undefined) {
+            return res.status(400).json({ message: "Name and price are required" });
+        }
+
+        const existingPlan = await SubscriptionPlan.findOne({ name });
+        if (existingPlan) {
+            return res.status(400).json({ message: "Plan with this name already exists" });
+        }
+
+        const newPlan = await SubscriptionPlan.create({
+            name,
+            price,
+            features: features || [],
+            limits: limits || { agents: 5, leads: 1000 }
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Plan created successfully",
+            plan: newPlan
+        });
+    } catch (error) {
+        console.error("Create Plan Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Update plan
+const updatePlan = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, price, features, limits, isActive } = req.body;
+
+        const plan = await SubscriptionPlan.findById(id);
+        if (!plan) {
+            return res.status(404).json({ message: "Plan not found" });
+        }
+
+        const updateData = {};
+        if (name) updateData.name = name;
+        if (price !== undefined) updateData.price = price;
+        if (features) updateData.features = features;
+        if (limits) updateData.limits = limits;
+        if (isActive !== undefined) updateData.isActive = isActive;
+
+        const updatedPlan = await SubscriptionPlan.findByIdAndUpdate(id, updateData, { new: true });
+
+        res.json({
+            success: true,
+            message: "Plan updated successfully",
+            plan: updatedPlan
+        });
+    } catch (error) {
+        console.error("Update Plan Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Delete plan
+const deletePlan = async (req, res) => {
+    try {
+        const { id } = req.params;
+        await SubscriptionPlan.findByIdAndDelete(id);
+        res.json({
+            success: true,
+            message: "Plan deleted successfully"
+        });
+    } catch (error) {
+        console.error("Delete Plan Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// ==========================================
+// 🕵️ IMPERSONATION
+// ==========================================
+
+// Login as specific user (Impersonation)
+const impersonateUser = async (req, res) => {
+    try {
+        const { userId } = req.body; // Target ID
+
+        const targetUser = await User.findById(userId);
+        if (!targetUser) {
+            return res.status(404).json({ message: "User to impersonate not found" });
+        }
+
+        // Prevent impersonating another Super Admin (Security)
+        if (targetUser.role === 'superadmin') {
+            return res.status(403).json({ message: "Cannot impersonate a Super Admin" });
+        }
+
+        // Generate token for that user
+        const token = generateToken(targetUser._id, targetUser.role);
+
+        // Security Log
+        console.log(`🚨 ALERT: Super Admin (${req.user.email}) is impersonating ${targetUser.email}`);
+
+        res.json({
+            success: true,
+            message: `Impersonating ${targetUser.name}`,
+            token,
+            user: {
+                _id: targetUser._id,
+                name: targetUser.name,
+                email: targetUser.email,
+                role: targetUser.role
+            }
+        });
+
+    } catch (error) {
+        console.error("Impersonation Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
 module.exports = {
+    createCompany,
     getSaaSAnalytics,
     getAllCompanies,
     getCompanyById,
@@ -695,10 +966,19 @@ module.exports = {
     updateAgentLimit,
     getBillingData,
     updateCompanyBilling,
-    // New endpoints for frontend
     getDashboardStats,
     getRecentSignups,
     getGrowthData,
     getBillingStats,
-    getSubscriptions
+    getSubscriptions,
+    getSettings,
+    updateSettings,
+    impersonateUser,
+
+    // Plan Management
+    getAllPlans,
+    createPlan,
+    updatePlan,
+    deletePlan
 };
+

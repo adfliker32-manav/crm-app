@@ -15,13 +15,17 @@ const Leads = () => {
     const { showDanger } = useConfirm();
 
     // View state: 'pipeline' or 'table'
-    const [view, setView] = useState('pipeline');
+    const [view, setView] = useState('table');
 
     // Common state
     const [loading, setLoading] = useState(true);
     const [leads, setLeads] = useState([]);
     const [stages, setStages] = useState([]);
-    const [searchQuery] = useState('');
+    const [searchQuery, setSearchQuery] = useState("");
+
+    // Filter & Sort State
+    const [filterSource, setFilterSource] = useState("All");
+    const [sortOption, setSortOption] = useState("newest");
 
     // Pipeline-specific state
     const [columns, setColumns] = useState({});
@@ -33,10 +37,6 @@ const Leads = () => {
     const [isLeadDetailsModalOpen, setIsLeadDetailsModalOpen] = useState(false);
     const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
     const [selectedLead, setSelectedLead] = useState(null);
-
-    useEffect(() => {
-        fetchData();
-    }, []);
 
     const fetchData = useCallback(async () => {
         try {
@@ -54,17 +54,6 @@ const Leads = () => {
 
             setLeads(fetchedLeads);
             setStages(fetchedStages);
-
-            // Transform data for pipeline view
-            const newColumns = {};
-            fetchedStages.forEach(stage => {
-                newColumns[stage.name] = {
-                    id: stage._id,
-                    name: stage.name,
-                    items: fetchedLeads.filter(lead => (lead.status || 'New') === stage.name)
-                };
-            });
-            setColumns(newColumns);
         } catch (error) {
             console.error("Error loading data", error);
             showError("Failed to load leads data");
@@ -73,17 +62,95 @@ const Leads = () => {
         }
     }, [showError]);
 
+    useEffect(() => {
+        fetchData();
+    }, [fetchData]);
+
+    // Derived Sources for Filter Dropdown
+    const sources = React.useMemo(() => {
+        const uniqueSources = [...new Set(leads.map(lead => lead.source || 'Manual'))];
+        return ['All', ...uniqueSources];
+    }, [leads]);
+
+    // Central Filtering & Sorting Logic
+    const filteredLeads = React.useMemo(() => {
+        let processed = [...leads];
+
+        // 1. Filter by Search Query
+        if (searchQuery) {
+            const query = searchQuery.toLowerCase();
+            processed = processed.filter(lead =>
+                (lead.name && lead.name.toLowerCase().includes(query)) ||
+                (lead.phone && lead.phone.toLowerCase().includes(query)) ||
+                (lead.email && lead.email.toLowerCase().includes(query)) ||
+                (lead.source && lead.source.toLowerCase().includes(query)) ||
+                (lead.status && lead.status.toLowerCase().includes(query))
+            );
+        }
+
+        // 2. Filter by Source
+        if (filterSource !== "All") {
+            processed = processed.filter(lead => (lead.source || 'Manual') === filterSource);
+        }
+
+        // 3. Sort
+        processed.sort((a, b) => {
+            const dateA = new Date(a.createdAt || a.date).getTime();
+            const dateB = new Date(b.createdAt || b.date).getTime();
+
+            switch (sortOption) {
+                case "newest":
+                    return dateB - dateA;
+                case "oldest":
+                    return dateA - dateB;
+                case "last_updated":
+                    const updateA = new Date(a.updatedAt || a.createdAt).getTime();
+                    const updateB = new Date(b.updatedAt || b.createdAt).getTime();
+                    return updateB - updateA;
+                case "name_asc":
+                    return a.name.localeCompare(b.name);
+                case "name_desc":
+                    return b.name.localeCompare(a.name);
+                default:
+                    return 0;
+            }
+        });
+
+        return processed;
+    }, [leads, searchQuery, filterSource, sortOption]);
+
+    // Update Pipeline Columns when filteredLeads or stages change
+    useEffect(() => {
+        const newColumns = {};
+        stages.forEach(stage => {
+            newColumns[stage.name] = {
+                id: stage._id,
+                name: stage.name,
+                items: filteredLeads.filter(lead => (lead.status || 'New') === stage.name)
+            };
+        });
+        setColumns(newColumns);
+    }, [filteredLeads, stages]);
+
     // Pipeline handlers
     const onDragEnd = async (result) => {
+        console.log('🔄 [DEBUG] onDragEnd triggered:', result);
+
         if (!result.destination) return;
+
         const { source, destination } = result;
 
         if (source.droppableId !== destination.droppableId) {
             const sourceColumn = columns[source.droppableId];
             const destColumn = columns[destination.droppableId];
+
+            if (!sourceColumn || !destColumn) return;
+
             const sourceItems = [...sourceColumn.items];
             const destItems = [...destColumn.items];
             const [removed] = sourceItems.splice(source.index, 1);
+
+            if (!removed) return;
 
             const newStatus = destColumn.name;
             const updatedItem = { ...removed, status: newStatus };
@@ -95,40 +162,31 @@ const Leads = () => {
                 [destination.droppableId]: { ...destColumn, items: destItems }
             });
 
-            // Optimistically update the leads state so Table view is in sync
+            // Optimistically update main leads state
             setLeads(prevLeads => prevLeads.map(lead =>
                 lead._id === removed._id ? { ...lead, status: newStatus } : lead
             ));
 
             try {
                 await api.put(`/leads/${removed._id}`, { status: newStatus });
+                showSuccess(`Lead moved to "${newStatus}"`);
             } catch (error) {
                 console.error("Failed to update status", error);
-                fetchData();
+                showError("Failed to update status");
+                fetchData(); // Revert
             }
         }
     };
 
     const deleteStage = async (stageId, stageName) => {
-        if (stageName === 'New') {
-            showError("Cannot delete the default 'New' stage");
-            return;
-        }
-
-        const confirmed = await showDanger(
-            `Leads will be moved to "New" stage.`,
-            `Delete "${stageName}" stage?`
-        );
+        if (stageName === 'New') return showError("Cannot delete default 'New' stage");
+        const confirmed = await showDanger(`Delete "${stageName}" stage?`, "Delete Stage");
         if (!confirmed) return;
-
         try {
             await api.delete(`/stages/${stageId}`);
-            showSuccess('Stage deleted successfully');
+            showSuccess('Stage deleted');
             fetchData();
-        } catch (error) {
-            console.error("Failed to delete stage", error);
-            showError("Failed to delete stage");
-        }
+        } catch (error) { showError("Failed to delete stage"); }
     };
 
     // Table handlers
@@ -206,51 +264,103 @@ const Leads = () => {
     if (loading) return <div className="p-8 text-center text-slate-500">Loading leads...</div>;
 
     return (
-        <div className="h-full flex flex-col">
+        <div className="h-full flex flex-col bg-gradient-to-br from-slate-50 to-blue-50/20">
             {/* Header with View Toggle */}
-            <div className="flex justify-between items-center p-4 bg-white border-b border-slate-200">
-                <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                    <i className="fa-solid fa-users text-blue-600"></i>
-                    Leads
+            <div className="flex flex-col lg:flex-row justify-between items-center p-6 bg-white/80 backdrop-blur-md border-b border-white/50 sticky top-0 z-20 gap-4">
+                <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-800 to-indigo-600 flex items-center gap-3 w-full lg:w-auto">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-blue-500/30 shadow-lg">
+                        <i className="fa-solid fa-users text-lg"></i>
+                    </div>
+                    Leads Pipeline
                 </h1>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
+                    {/* Search Bar */}
+                    <div className="relative group w-full sm:w-60">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i className="fa-solid fa-search text-slate-400 group-focus-within:text-blue-500 transition-colors"></i>
+                        </div>
+                        <input
+                            type="text"
+                            placeholder="Search leads..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full pl-10 pr-4 py-2 bg-slate-100/50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm focus:shadow-md"
+                        />
+                    </div>
+
+                    {/* Source Filter */}
+                    <div className="relative w-full sm:w-auto">
+                        <select
+                            value={filterSource}
+                            onChange={(e) => setFilterSource(e.target.value)}
+                            className="w-full sm:w-auto appearance-none bg-slate-100/50 border border-slate-200 rounded-xl py-2 pl-4 pr-10 text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer hover:bg-slate-100 transition shadow-sm"
+                        >
+                            {sources.map(source => (
+                                <option key={source} value={source}>
+                                    {source === 'All' ? 'All Sources' : source}
+                                </option>
+                            ))}
+                        </select>
+                        <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-400">
+                            <i className="fa-solid fa-filter text-xs"></i>
+                        </div>
+                    </div>
+
+                    {/* Sort Filter */}
+                    <div className="relative w-full sm:w-auto">
+                        <select
+                            value={sortOption}
+                            onChange={(e) => setSortOption(e.target.value)}
+                            className="w-full sm:w-auto appearance-none bg-slate-100/50 border border-slate-200 rounded-xl py-2 pl-4 pr-10 text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer hover:bg-slate-100 transition shadow-sm"
+                        >
+                            <option value="newest">Newest First</option>
+                            <option value="oldest">Oldest First</option>
+                            <option value="last_updated">Last Updated</option>
+                            <option value="name_asc">Name (A-Z)</option>
+                            <option value="name_desc">Name (Z-A)</option>
+                        </select>
+                        <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-400">
+                            <i className="fa-solid fa-sort text-xs"></i>
+                        </div>
+                    </div>
+
                     {/* View Toggle */}
-                    <div className="flex bg-slate-100 rounded-lg p-1">
+                    <div className="flex bg-slate-100/80 p-1 rounded-xl shadow-inner border border-slate-200/50">
                         <button
                             onClick={() => setView('pipeline')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition ${view === 'pipeline'
-                                ? 'bg-white text-blue-600 shadow-sm'
-                                : 'text-slate-600 hover:text-slate-800'
+                            className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all duration-300 flex items-center gap-2 ${view === 'pipeline'
+                                ? 'bg-white text-blue-600 shadow-sm transform scale-100'
+                                : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
                                 }`}
                         >
-                            <i className="fa-solid fa-grip-vertical mr-2"></i>
-                            Pipeline
+                            <i className="fa-solid fa-grip-vertical"></i>
                         </button>
                         <button
                             onClick={() => setView('table')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition ${view === 'table'
-                                ? 'bg-white text-blue-600 shadow-sm'
-                                : 'text-slate-600 hover:text-slate-800'
+                            className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all duration-300 flex items-center gap-2 ${view === 'table'
+                                ? 'bg-white text-blue-600 shadow-sm transform scale-100'
+                                : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
                                 }`}
                         >
-                            <i className="fa-solid fa-table mr-2"></i>
-                            Table
+                            <i className="fa-solid fa-table"></i>
                         </button>
                     </div>
 
                     {/* Action Buttons */}
                     <button
                         onClick={() => setIsAddLeadModalOpen(true)}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-md flex items-center gap-2"
+                        className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white w-8 h-8 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2 shrink-0"
+                        title="Add Lead"
                     >
-                        <i className="fa-solid fa-plus"></i> New Lead
+                        <i className="fa-solid fa-plus"></i> <span className="hidden sm:inline">Add</span>
                     </button>
                     <button
                         onClick={() => setIsAddStageModalOpen(true)}
-                        className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-md flex items-center gap-2"
+                        className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 w-8 h-8 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-xl text-sm font-bold transition-all shadow-sm flex items-center justify-center gap-2 shrink-0"
+                        title="Add Stage"
                     >
-                        <i className="fa-solid fa-layer-group"></i> New Stage
+                        <i className="fa-solid fa-layer-group text-slate-400"></i> <span className="hidden sm:inline">Stage</span>
                     </button>
                 </div>
             </div>
@@ -258,80 +368,143 @@ const Leads = () => {
             {/* Content Area */}
             {view === 'pipeline' ? (
                 // Pipeline View
-                <div className="flex-1 overflow-x-auto pb-6">
-                    <div className="flex h-full gap-6 min-w-max p-4">
+                <div className="flex-1 overflow-x-auto pb-8 pt-4 px-6">
+                    <div className="flex h-full gap-8 min-w-max">
                         <DragDropContext onDragEnd={onDragEnd}>
-                            {Object.entries(columns).map(([columnId, column]) => (
-                                <div key={columnId} className="flex flex-col w-80 max-h-full">
-                                    <div className="flex items-center justify-between p-4 bg-slate-800 text-white rounded-t-xl font-bold shadow-md">
-                                        <div className="flex items-center gap-3">
-                                            <span className="truncate uppercase text-sm tracking-wide">{column.name}</span>
-                                            <span className="bg-slate-600 text-xs px-2 py-1 rounded-full">{column.items.length}</span>
-                                        </div>
-                                        {column.name !== 'New' && (
-                                            <button
-                                                onClick={() => deleteStage(column.id, column.name)}
-                                                className="text-slate-400 hover:text-red-400 transition"
-                                                title="Delete Stage"
-                                            >
-                                                <i className="fa-solid fa-trash"></i>
-                                            </button>
-                                        )}
-                                    </div>
-                                    <Droppable droppableId={columnId}>
-                                        {(provided, snapshot) => (
-                                            <div
-                                                {...provided.droppableProps}
-                                                ref={provided.innerRef}
-                                                className={`flex-1 p-3 bg-slate-200 rounded-b-xl overflow-y-auto space-y-3 transition-colors ${snapshot.isDraggingOver ? 'bg-slate-300' : ''}`}
-                                            >
-                                                {column.items.map((item, index) => (
-                                                    <Draggable key={item._id} draggableId={item._id} index={index}>
-                                                        {(provided, snapshot) => (
-                                                            <div
-                                                                ref={provided.innerRef}
-                                                                {...provided.draggableProps}
-                                                                {...provided.dragHandleProps}
-                                                                className={`bg-white p-4 rounded-lg shadow-sm border-l-4 border-blue-500 cursor-grab hover:shadow-md transition ${snapshot.isDragging ? 'rotate-2 shadow-xl scale-105' : ''}`}
-                                                                style={{ ...provided.draggableProps.style }}
-                                                            >
-                                                                <h4 className="font-bold text-slate-800 text-sm">{item.name}</h4>
-                                                                <p className="text-xs text-slate-500 mt-2 flex items-center gap-2">
-                                                                    <i className="fa-solid fa-phone"></i> {item.phone || 'No phone'}
-                                                                </p>
-                                                                {item.email && (
-                                                                    <p className="text-xs text-slate-500 mt-1 flex items-center gap-2 truncate">
-                                                                        <i className="fa-solid fa-envelope"></i> {item.email}
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                    </Draggable>
-                                                ))}
-                                                {provided.placeholder}
+                            {Object.entries(columns).map(([columnId, column]) => {
+                                // Filter items for this column if search query exists
+                                const filteredItems = searchQuery
+                                    ? column.items.filter(item =>
+                                        (item.name && item.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                                        (item.lead?.phone && item.lead.phone.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                                        (item.lead?.email && item.lead.email.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                                        (item.lead?.source && item.lead.source.toLowerCase().includes(searchQuery.toLowerCase()))
+                                    )
+                                    : column.items;
+
+                                return (
+                                    <div key={columnId} className="flex flex-col w-[340px] max-h-full">
+                                        <div className="flex items-center justify-between p-4 mb-3 rounded-xl bg-white/60 backdrop-blur-sm border border-slate-200/60 shadow-sm">
+                                            <div className="flex items-center gap-3">
+                                                <div className={`w-3 h-3 rounded-full ${column.name === 'New' ? 'bg-blue-500' :
+                                                    column.name === 'Contacted' ? 'bg-yellow-500' :
+                                                        column.name === 'Won' ? 'bg-green-500' :
+                                                            column.name === 'Lost' ? 'bg-red-500' : 'bg-slate-400'
+                                                    } ring-4 ring-white/50`}></div>
+                                                <span className="font-extrabold text-slate-700 tracking-tight text-sm uppercase">{column.name}</span>
+                                                <span className="bg-slate-100 text-slate-500 text-xs font-bold px-2.5 py-1 rounded-lg border border-slate-200/50">
+                                                    {filteredItems.length}
+                                                </span>
                                             </div>
-                                        )}
-                                    </Droppable>
-                                </div>
-                            ))}
+                                            {column.name !== 'New' && (
+                                                <button
+                                                    onClick={() => deleteStage(column.id, column.name)}
+                                                    className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100"
+                                                    title="Delete Stage"
+                                                >
+                                                    <i className="fa-solid fa-trash text-xs"></i>
+                                                </button>
+                                            )}
+                                        </div>
+                                        <Droppable droppableId={columnId}>
+                                            {(provided, snapshot) => (
+                                                <div
+                                                    {...provided.droppableProps}
+                                                    ref={provided.innerRef}
+                                                    className={`min-h-[150px] transition-all duration-300 rounded-2xl flex-1 p-2 ${snapshot.isDraggingOver ? 'bg-slate-100/50 ring-2 ring-blue-500/20 ring-dashed' : 'bg-slate-100/30'}`}
+                                                >
+                                                    {filteredItems.map((item, index) => (
+                                                        <Draggable
+                                                            key={item._id}
+                                                            draggableId={item._id}
+                                                            index={index}
+                                                            isDragDisabled={!!searchQuery}
+                                                        >
+                                                            {(provided, snapshot) => (
+                                                                <div
+                                                                    ref={provided.innerRef}
+                                                                    {...provided.draggableProps}
+                                                                    {...provided.dragHandleProps}
+                                                                    onClick={() => handleLeadClick(item)}
+                                                                    className={`group mb-3 bg-white p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-xl hover:shadow-slate-200/50 hover:-translate-y-1 transition-all duration-300 cursor-grab relative overflow-hidden ${searchQuery ? 'cursor-default hover:translate-y-0' : ''} ${snapshot.isDragging ? 'rotate-2 shadow-2xl scale-105 z-50 ring-2 ring-blue-500 ring-offset-2' : ''}`}
+                                                                    style={{ ...provided.draggableProps.style }}
+                                                                >
+                                                                    {/* Accent Line */}
+                                                                    <div className={`absolute top-0 left-0 w-1 h-full ${column.name === 'New' ? 'bg-blue-500' :
+                                                                        column.name === 'Contacted' ? 'bg-yellow-500' :
+                                                                            column.name === 'Won' ? 'bg-green-500' :
+                                                                                column.name === 'Lost' ? 'bg-red-500' : 'bg-slate-300'
+                                                                        }`}></div>
+
+                                                                    <div className="pl-2">
+                                                                        <div className="flex justify-between items-start mb-2">
+                                                                            <h4 className="font-bold text-slate-800 text-base leading-tight group-hover:text-blue-600 transition-colors">
+                                                                                {item.name}
+                                                                            </h4>
+                                                                            <button className="text-slate-300 hover:text-blue-500 transition-colors -mr-1">
+                                                                                <i className="fa-solid fa-ellipsis-vertical px-2"></i>
+                                                                            </button>
+                                                                        </div>
+
+                                                                        <div className="space-y-1.5 mb-4">
+                                                                            <p className="text-sm text-slate-500 flex items-center gap-2.5">
+                                                                                <span className="w-6 h-6 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center text-[10px]">
+                                                                                    <i className="fa-solid fa-phone"></i>
+                                                                                </span>
+                                                                                <span className="font-medium">{item.phone || 'No phone'}</span>
+                                                                            </p>
+                                                                            {item.email && (
+                                                                                <p className="text-sm text-slate-500 flex items-center gap-2.5 truncate">
+                                                                                    <span className="w-6 h-6 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center text-[10px]">
+                                                                                        <i className="fa-solid fa-envelope"></i>
+                                                                                    </span>
+                                                                                    <span className="truncate">{item.email}</span>
+                                                                                </p>
+                                                                            )}
+                                                                        </div>
+
+                                                                        <div className="flex items-center justify-between pt-3 border-t border-slate-50">
+                                                                            <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded shadow-sm ${item.source === 'Facebook' ? 'bg-blue-50 text-blue-600' : 'bg-slate-50 text-slate-500'}`}>
+                                                                                {item.source || 'Manual'}
+                                                                            </span>
+                                                                            <button className="text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transform translate-y-2 group-hover:translate-y-0 duration-200">
+                                                                                View
+                                                                                <i className="fa-solid fa-arrow-right text-[10px]"></i>
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </Draggable>
+                                                    ))}
+                                                    {provided.placeholder}
+                                                </div>
+                                            )}
+                                        </Droppable>
+                                    </div>
+                                );
+                            })}
                         </DragDropContext>
                     </div>
                 </div>
             ) : (
                 // Table View
-                <div className="flex-1 overflow-auto">
-                    <LeadsTable
-                        leads={leads}
-                        stages={stages}
-                        searchQuery={searchQuery}
-                        onEdit={handleEditLead}
-                        onDelete={handleDeleteLead}
-                        onLeadClick={handleLeadClick}
-                        onStatusChange={handleStatusChange}
-                        onNoteClick={handleNoteClick}
-                        onBulkDelete={handleBulkDelete}
-                        onBulkStatusUpdate={handleBulkStatusUpdate}
-                    />
+                <div className="flex-1 overflow-auto p-6">
+                    <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
+                        <LeadsTable
+                            leads={filteredLeads}
+                            stages={stages}
+                            searchQuery={searchQuery}
+                            onEdit={handleEditLead}
+                            onDelete={handleDeleteLead}
+                            onLeadClick={handleLeadClick}
+                            onStatusChange={handleStatusChange}
+                            onNoteClick={handleNoteClick}
+                            onBulkDelete={handleBulkDelete}
+                            onBulkStatusUpdate={handleBulkStatusUpdate}
+                            onRefresh={fetchData}
+                        />
+                    </div>
                 </div>
             )}
 

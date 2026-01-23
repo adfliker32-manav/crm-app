@@ -6,14 +6,18 @@ const axios = require('axios');
 const Papa = require('papaparse');
 const { sendAutomatedEmailOnLeadCreate, sendAutomatedEmailOnStageChange } = require('../services/emailAutomationService');
 const { sendAutomatedWhatsAppOnLeadCreate, sendAutomatedWhatsAppOnStageChange } = require('../services/whatsappAutomationService');
+const { sendMetaEvent } = require('../services/metaConversionService');
+const { sendEmail } = require('../services/emailService');
+const { logActivity } = require('../services/auditService');
 
 // ==========================================
-// 1. GET LEADS (With Agent/Manager Logic)
+// 1. GET LEADS (With Agent/Manager Logic + Permission Filtering)
 // ==========================================
 const getLeads = async (req, res) => {
     try {
         // Default to current user
         let ownerId = req.user.userId || req.user.id;
+        let query = {};
 
         // 👇 AGENT LOGIC CHECK
         // Agar user 'agent' hai, to hum uske 'parentId' (Manager) ka data dikhayenge
@@ -21,10 +25,21 @@ const getLeads = async (req, res) => {
             const agentUser = await User.findById(ownerId);
             if (agentUser && agentUser.parentId) {
                 ownerId = agentUser.parentId; // Maalik (Manager) ka ID use karo
+
+                // 🔒 PERMISSION CHECK: viewAllLeads
+                // If agent doesn't have viewAllLeads permission, show only assigned leads
+                if (!agentUser.permissions || !agentUser.permissions.viewAllLeads) {
+                    query.assignedTo = agentUser._id;
+                }
             }
         }
 
-        const leads = await Lead.find({ userId: ownerId }).sort({ date: -1 });
+        // Set base query filter
+        query.userId = ownerId;
+
+        const leads = await Lead.find(query)
+            .populate('assignedTo', 'name email')
+            .sort({ date: -1 });
         res.json(leads);
     } catch (err) {
         console.error("Get Leads Error:", err);
@@ -37,14 +52,8 @@ const getLeads = async (req, res) => {
 // ==========================================
 const createLead = async (req, res) => {
     try {
-        const { name, email, phone, status, source } = req.body;
+        const { name, email, phone, status, source, customData } = req.body;
 
-        // Validation
-        if (!name || !phone) {
-            return res.status(400).json({ message: "Name and Phone are required" });
-        }
-
-        // Determine Owner ID (Agent creates for Manager)
         let ownerId = req.user.userId || req.user.id;
         if (req.user.role === 'agent') {
             const agentUser = await User.findById(ownerId);
@@ -59,23 +68,70 @@ const createLead = async (req, res) => {
             email,
             phone,
             status: status || 'New',
-            source: source || 'Manual Entry'
+            source: source || 'Manual Entry',
+            customData: customData || {}
         });
 
         await newLead.save();
 
+        // Log activity
+        logActivity({
+            userId: ownerId,
+            userName: req.user.name || 'Unknown',
+            actionType: 'LEAD_CREATED',
+            entityType: 'Lead',
+            entityId: newLead._id,
+            entityName: newLead.name,
+            metadata: { source: source || 'Manual Entry', status: status || 'New' },
+            companyId: ownerId
+        }).catch(err => console.error('Audit log error:', err));
+
         // Send automated email if configured
         if (newLead.email) {
-            sendAutomatedEmailOnLeadCreate(newLead, ownerId).catch(err => {
-                console.error('Email automation error (non-blocking):', err);
-            });
+            setTimeout(() => {
+                sendAutomatedEmailOnLeadCreate(newLead, ownerId)
+                    .then(sent => {
+                        if (sent) {
+                            Lead.findByIdAndUpdate(newLead._id, {
+                                $push: {
+                                    history: {
+                                        type: 'Email',
+                                        subType: 'Auto',
+                                        content: 'Automated Welcome Email Sent',
+                                        date: new Date()
+                                    }
+                                }
+                            }).exec();
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Email automation error (non-blocking):', err);
+                    });
+            }, 0);
         }
 
         // Send automated WhatsApp if configured
         if (newLead.phone) {
-            sendAutomatedWhatsAppOnLeadCreate(newLead, ownerId).catch(err => {
-                console.error('WhatsApp automation error (non-blocking):', err);
-            });
+            setTimeout(() => {
+                sendAutomatedWhatsAppOnLeadCreate(newLead, ownerId)
+                    .then(sent => {
+                        if (sent) {
+                            Lead.findByIdAndUpdate(newLead._id, {
+                                $push: {
+                                    history: {
+                                        type: 'WhatsApp',
+                                        subType: 'Auto',
+                                        content: 'Automated Welcome WhatsApp Sent',
+                                        date: new Date()
+                                    }
+                                }
+                            }).exec();
+                        }
+                    })
+                    .catch(err => {
+                        console.error('WhatsApp automation error (non-blocking):', err);
+                    });
+            }, 0);
         }
 
         res.json(newLead);
@@ -86,12 +142,58 @@ const createLead = async (req, res) => {
 };
 
 // ==========================================
+// 2.5 SEND MANUAL EMAIL (New)
+// ==========================================
+const sendManualEmail = async (req, res) => {
+    try {
+        const { to, subject, message } = req.body;
+        const leadId = req.params.id;
+        const userId = req.user.userId || req.user.id;
+
+        if (!to || !subject || !message) {
+            return res.status(400).json({ message: "To, Subject, and Message are required" });
+        }
+
+        // Send Email
+        await sendEmail({
+            to,
+            subject,
+            text: message,
+            userId
+        });
+
+        // Log to History
+        await Lead.findByIdAndUpdate(leadId, {
+            $push: {
+                history: {
+                    type: 'Email',
+                    subType: 'Manual',
+                    content: `Sent: ${subject}`,
+                    metadata: { subject, body: message },
+                    date: new Date()
+                }
+            }
+        });
+
+        res.json({ success: true, message: "Email sent successfully" });
+    } catch (err) {
+        console.error("Manual Email Error:", err);
+        res.status(500).json({ message: "Failed to send email", error: err.message });
+    }
+};
+
+// ==========================================
 // 3. UPDATE LEAD
 // ==========================================
 const updateLead = async (req, res) => {
     try {
+        console.log('🔄 [DEBUG updateLead] Request received for lead:', req.params.id);
+        console.log('🔄 [DEBUG updateLead] Request body:', JSON.stringify(req.body));
+        console.log('🔄 [DEBUG updateLead] User:', req.user?.userId || req.user?.id, 'Role:', req.user?.role);
+
         // SECURITY FIX: Validate ObjectId format
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            console.log('❌ [DEBUG updateLead] Invalid ObjectId format');
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
 
@@ -101,13 +203,20 @@ const updateLead = async (req, res) => {
             const agentUser = await User.findById(ownerId).select('parentId').lean();
             if (agentUser && agentUser.parentId) {
                 ownerId = agentUser.parentId;
+                console.log('🔄 [DEBUG updateLead] Agent detected, using parent ownerId:', ownerId);
             }
         }
 
+        console.log('🔄 [DEBUG updateLead] Looking for lead with _id:', req.params.id, 'userId:', ownerId);
         const lead = await Lead.findOne({ _id: req.params.id, userId: ownerId });
+
         if (!lead) {
+            console.log('❌ [DEBUG updateLead] Lead not found or access denied');
+            console.log('❌ [DEBUG updateLead] Attempted query: { _id:', req.params.id, ', userId:', ownerId, '}');
             return res.status(404).json({ message: "Lead not found or access denied" });
         }
+
+        console.log('✅ [DEBUG updateLead] Lead found:', lead._id, 'Current status:', lead.status);
 
         // Handle nextFollowUpDate update
         if (req.body.hasOwnProperty('nextFollowUpDate')) {
@@ -128,6 +237,7 @@ const updateLead = async (req, res) => {
 
         // Track old status for stage change automation
         const oldStatus = lead.status;
+        console.log('🔄 [DEBUG updateLead] Old status:', oldStatus, '-> New status:', req.body.status);
 
         // Update other fields
         Object.keys(req.body).forEach(key => {
@@ -137,21 +247,104 @@ const updateLead = async (req, res) => {
         });
 
         await lead.save();
+        console.log('✅ [DEBUG updateLead] Lead saved successfully. New status:', lead.status);
+
+        // Fetch user name if missing from token (for backward compatibility)
+        let initiatorName = req.user.name;
+        if (!initiatorName) {
+            const u = await User.findById(req.user.userId || req.user.id).select('name');
+            initiatorName = u ? u.name : 'Unknown';
+        }
+
+        // Log lead edit
+        const changesObj = {};
+        if (oldStatus && req.body.status && oldStatus !== req.body.status) {
+            changesObj.status = { before: oldStatus, after: req.body.status };
+        }
+        logActivity({
+            userId: req.user.userId || req.user.id,
+            userName: initiatorName,
+            actionType: req.body.status && oldStatus !== req.body.status ? 'LEAD_STATUS_CHANGED' : 'LEAD_EDITED',
+            entityType: 'Lead',
+            entityId: lead._id,
+            entityName: lead.name,
+            changes: Object.keys(changesObj).length > 0 ? changesObj : null,
+            metadata: { fieldsUpdated: Object.keys(req.body) },
+            companyId: ownerId
+        }).catch(err => console.error('Audit log error:', err));
 
         // Send automated email if stage changed
         if (req.body.status && req.body.status !== oldStatus && lead.email) {
             const ownerId = lead.userId;
-            sendAutomatedEmailOnStageChange(lead, oldStatus, req.body.status, ownerId).catch(err => {
-                console.error('Email automation error (non-blocking):', err);
-            });
+            sendAutomatedEmailOnStageChange(lead, oldStatus, req.body.status, ownerId)
+                .then(sent => {
+                    if (sent) {
+                        Lead.findByIdAndUpdate(lead._id, {
+                            $push: {
+                                history: {
+                                    type: 'Email',
+                                    subType: 'Auto',
+                                    content: `Automated Email: Stage changed to ${req.body.status}`,
+                                    date: new Date()
+                                }
+                            }
+                        }).exec();
+                    }
+                })
+                .catch(err => {
+                    console.error('Email automation error (non-blocking):', err);
+                });
         }
 
         // Send automated WhatsApp if stage changed
         if (req.body.status && req.body.status !== oldStatus && lead.phone) {
             const ownerId = lead.userId;
-            sendAutomatedWhatsAppOnStageChange(lead, oldStatus, req.body.status, ownerId).catch(err => {
-                console.error('WhatsApp automation error (non-blocking):', err);
+            sendAutomatedWhatsAppOnStageChange(lead, oldStatus, req.body.status, ownerId)
+                .then(sent => {
+                    if (sent) {
+                        Lead.findByIdAndUpdate(lead._id, {
+                            $push: {
+                                history: {
+                                    type: 'WhatsApp',
+                                    subType: 'Auto',
+                                    content: `Automated WhatsApp: Stage changed to ${req.body.status}`,
+                                    date: new Date()
+                                }
+                            }
+                        }).exec();
+                    }
+                })
+                .catch(err => {
+                    console.error('WhatsApp automation error (non-blocking):', err);
+                });
+        }
+
+        // 🟢 Explicit History Log for Stage Change (Requested by User)
+        if (req.body.status && req.body.status !== oldStatus) {
+            await Lead.findByIdAndUpdate(lead._id, {
+                $push: {
+                    history: {
+                        type: 'System',
+                        subType: 'Stage Change',
+                        content: `${initiatorName} changed stage from "${oldStatus}" to "${req.body.status}"`,
+                        date: new Date()
+                    }
+                }
             });
+        }
+
+        // Send Meta Conversion API event if status changed
+        if (req.body.status && req.body.status !== oldStatus) {
+            try {
+                const ownerUser = await User.findById(lead.userId).select('metaCapiEnabled metaPixelId metaCapiAccessToken metaTestEventCode metaStageMapping');
+                if (ownerUser && ownerUser.metaCapiEnabled) {
+                    sendMetaEvent(ownerUser, lead, req.body.status, oldStatus).catch(err => {
+                        console.error('Meta CAPI error (non-blocking):', err);
+                    });
+                }
+            } catch (err) {
+                console.error('Error fetching user for Meta CAPI (non-blocking):', err);
+            }
         }
 
         res.json({ success: true, lead });
@@ -181,9 +374,22 @@ const deleteLead = async (req, res) => {
         }
 
         const deletedLead = await Lead.findOneAndDelete({ _id: req.params.id, userId: ownerId });
+
         if (!deletedLead) {
             return res.status(404).json({ message: "Lead not found or access denied" });
         }
+
+        // Log deletion
+        logActivity({
+            userId: req.user.userId || req.user.id,
+            userName: req.user.name || 'Unknown',
+            actionType: 'LEAD_DELETED',
+            entityType: 'Lead',
+            entityId: deletedLead._id,
+            entityName: deletedLead.name,
+            companyId: ownerId
+        }).catch(err => console.error('Audit log error:', err));
+
         res.json({ success: true, message: "Lead deleted successfully" });
     } catch (err) {
         console.error("Delete Lead Error:", err);
@@ -218,11 +424,34 @@ const addNote = async (req, res) => {
 
         const updatedLead = await Lead.findOneAndUpdate(
             { _id: req.params.id, userId: ownerId },
-            { $push: { notes: { text: text.trim(), date: new Date() } } },
+            {
+                $push: {
+                    notes: { text: text.trim(), date: new Date() },
+                    history: {
+                        type: 'Note',
+                        subType: 'Manual',
+                        content: text.trim(),
+                        date: new Date()
+                    }
+                }
+            },
             { new: true }
         );
 
         if (!updatedLead) return res.status(404).json({ message: "Lead not found or access denied" });
+
+        // Log note addition
+        logActivity({
+            userId: req.user.userId || req.user.id,
+            userName: req.user.name || 'Unknown',
+            actionType: 'NOTE_ADDED',
+            entityType: 'Lead',
+            entityId: updatedLead._id,
+            entityName: updatedLead.name,
+            metadata: { noteText: text.trim().substring(0, 100) },
+            companyId: ownerId
+        }).catch(err => console.error('Audit log error:', err));
+
         res.json(updatedLead);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -304,22 +533,50 @@ const syncLeads = async (req, res) => {
             return res.status(400).json({ message: "Invalid Google Sheets URL format" });
         }
 
+        // Fetch user's custom field definitions
+        const user = await User.findById(userId).select('customFieldDefinitions').lean();
+        const customFieldDefs = user?.customFieldDefinitions || [];
+
+        // Create a map of lowercase label -> key for matching
+        const customFieldMap = {};
+        customFieldDefs.forEach(field => {
+            customFieldMap[field.label.toLowerCase()] = field.key;
+        });
+
         const sheetId = sheetIdMatch[1];
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
 
         const response = await axios.get(csvUrl);
         const parsed = Papa.parse(response.data, { header: true, skipEmptyLines: true });
 
+        // Standard field keywords to exclude from custom mapping
+        const standardKeywords = ['name', 'email', 'phone', 'mobile', 'status', 'source'];
+
         let count = 0;
         for (const row of parsed.data) {
             const keys = Object.keys(row);
             const nameKey = keys.find(k => k.toLowerCase().includes('name'));
             const emailKey = keys.find(k => k.toLowerCase().includes('email'));
-            const phoneKey = keys.find(k => k.toLowerCase().includes('phone'));
+            const phoneKey = keys.find(k => k.toLowerCase().includes('phone') || k.toLowerCase().includes('mobile'));
 
             const finalName = nameKey ? row[nameKey] : 'Unknown';
             const finalEmail = emailKey ? row[emailKey] : null;
             const finalPhone = phoneKey ? row[phoneKey] : 'No Phone';
+
+            // Build customData from remaining columns
+            const customData = {};
+            keys.forEach(header => {
+                const headerLower = header.toLowerCase();
+                // Skip standard fields
+                if (standardKeywords.some(sw => headerLower.includes(sw))) {
+                    return;
+                }
+                // Check if header matches a custom field label
+                const matchedKey = customFieldMap[headerLower];
+                if (matchedKey && row[header]) {
+                    customData[matchedKey] = row[header];
+                }
+            });
 
             if (finalEmail || finalPhone !== 'No Phone') {
                 const exists = finalEmail
@@ -333,7 +590,8 @@ const syncLeads = async (req, res) => {
                         email: finalEmail,
                         phone: finalPhone,
                         source: 'Google Sheet',
-                        status: 'New'
+                        status: 'New',
+                        customData: customData
                     });
 
                     // Send automated email if configured
@@ -694,6 +952,17 @@ const completeFollowUp = async (req, res) => {
         }
         lead.followUpHistory.push(followUpEntry);
 
+        // Add to unified history
+        if (!lead.history) {
+            lead.history = [];
+        }
+        lead.history.push({
+            type: 'Follow-up',
+            subType: 'Manual',
+            content: note,
+            date: new Date()
+        });
+
         // Update last follow-up date
         lead.lastFollowUpDate = lead.nextFollowUpDate || new Date();
 
@@ -772,6 +1041,99 @@ const getFollowUpDoneLeads = async (req, res) => {
 // ==========================================
 // 👇 EXPORT ALL FUNCTIONS (Fixes TypeError)
 // ==========================================
+
+
+// ==========================================
+// 15. ASSIGN LEAD TO AGENT (Single)
+// ==========================================
+const assignLead = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { agentId } = req.body;
+
+        let ownerId = req.user.userId || req.user.id;
+
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId);
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+
+        const lead = await Lead.findOne({ _id: id, userId: ownerId });
+        if (!lead) {
+            return res.status(404).json({ message: "Lead not found" });
+        }
+
+        if (agentId) {
+            const agent = await User.findOne({ _id: agentId, parentId: ownerId, role: 'agent' });
+            if (!agent) {
+                return res.status(400).json({ message: "Invalid agent ID" });
+            }
+        }
+
+        lead.assignedTo = agentId || null;
+        await lead.save();
+
+        // Log assignment
+        logActivity({
+            userId: req.user.userId || req.user.id,
+            userName: req.user.name || 'Unknown',
+            actionType: 'LEAD_ASSIGNED',
+            entityType: 'Lead',
+            entityId: lead._id,
+            entityName: lead.name,
+            metadata: { assignedTo: agentId ? 'Agent' : 'Unassigned' },
+            companyId: ownerId
+        }).catch(err => console.error('Audit log error:', err));
+
+        const updatedLead = await Lead.findById(id).populate('assignedTo', 'name email');
+        res.json({ success: true, message: agentId ? "Lead assigned" : "Lead unassigned", lead: updatedLead });
+    } catch (err) {
+        console.error("Assign Lead Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// 16. BULK ASSIGN LEADS
+// ==========================================
+const bulkAssignLeads = async (req, res) => {
+    try {
+        const { leadIds, agentId } = req.body;
+
+        if (!leadIds || !Array.isArray(leadIds) || leadIds.length === 0) {
+            return res.status(400).json({ message: "Lead IDs array required" });
+        }
+
+        let ownerId = req.user.userId || req.user.id;
+
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId);
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+
+        if (agentId) {
+            const agent = await User.findOne({ _id: agentId, parentId: ownerId, role: 'agent' });
+            if (!agent) {
+                return res.status(400).json({ message: "Invalid agent ID" });
+            }
+        }
+
+        const result = await Lead.updateMany(
+            { _id: { $in: leadIds }, userId: ownerId },
+            { $set: { assignedTo: agentId || null } }
+        );
+
+        res.json({ success: true, message: `${result.modifiedCount} leads updated`, modifiedCount: result.modifiedCount });
+    } catch (err) {
+        console.error("Bulk Assign Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
 module.exports = {
     getLeads,
     createLead,
@@ -787,5 +1149,9 @@ module.exports = {
     getFollowUpLeads,
     updateFollowUpDate,
     completeFollowUp,
-    getFollowUpDoneLeads
+    getFollowUpDoneLeads,
+    sendManualEmail
+    ,
+    assignLead,
+    bulkAssignLeads
 };

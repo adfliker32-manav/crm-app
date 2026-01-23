@@ -73,7 +73,7 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
                 const result = await sendWhatsAppTextMessage(lead.phone, message, userId);
                 const messageId = result?.messages?.[0]?.id;
                 console.log(`✅ Automated WhatsApp sent to ${lead.phone} using template: ${template.name}`);
-                
+
                 // Log successful message (non-blocking)
                 if (messageId) {
                     logWhatsApp({
@@ -93,9 +93,10 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
                 // Continue with next template even if one fails
             }
         }
+        return templates.length > 0;
     } catch (error) {
         console.error('❌ Error in WhatsApp automation:', error.message);
-        // Don't throw error, just log it - automation shouldn't break lead creation
+        return false;
     }
 };
 
@@ -175,9 +176,10 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
                 // Continue with next template even if one fails
             }
         }
+        return templates.length > 0;
     } catch (error) {
         console.error('❌ Error in WhatsApp automation:', error.message);
-        // Don't throw error, just log it - automation shouldn't break stage change
+        return false;
     }
 };
 

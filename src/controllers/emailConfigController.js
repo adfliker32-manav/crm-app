@@ -51,14 +51,18 @@ exports.getEmailConfig = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const user = await User.findById(userId).select('emailUser emailPassword emailFromName');
-        
+
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
-        
-        // Return config without password (or return masked password)
+
+        // Decrypt password before returning
+        const decryptedPassword = user.emailPassword ? decrypt(user.emailPassword) : '';
+
+        // Return config with decrypted password
         res.json({
             emailUser: user.emailUser || '',
+            emailPassword: decryptedPassword || '',
             emailFromName: user.emailFromName || user.name || '',
             isConfigured: !!(user.emailUser && user.emailPassword)
         });
@@ -73,38 +77,38 @@ exports.updateEmailConfig = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { emailUser, emailPassword, emailFromName } = req.body;
-        
+
         // Validation
         if (!emailUser) {
             return res.status(400).json({ message: 'Email address is required' });
         }
-        
+
         // Email format validation
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(emailUser)) {
             return res.status(400).json({ message: 'Invalid email format' });
         }
-        
+
         // If password is provided, encrypt it
         const updateData = {
             emailUser: emailUser.toLowerCase().trim(),
             emailFromName: emailFromName || null
         };
-        
+
         if (emailPassword) {
             updateData.emailPassword = encrypt(emailPassword);
         }
-        
+
         const user = await User.findByIdAndUpdate(
             userId,
             { $set: updateData },
             { new: true, select: 'emailUser emailFromName' }
         );
-        
+
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
-        
+
         res.json({
             success: true,
             message: 'Email configuration updated successfully',
@@ -123,22 +127,22 @@ exports.testEmailConfig = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { emailUser, emailPassword } = req.body;
-        
+
         // Use provided credentials or get from user
         let userEmail = emailUser;
         let userPassword = emailPassword;
-        
+
         if (!userEmail || !userPassword) {
             const user = await User.findById(userId).select('emailUser emailPassword');
             if (!user || !user.emailUser || !user.emailPassword) {
-                return res.status(400).json({ 
-                    message: 'Email configuration not found. Please configure your email settings first.' 
+                return res.status(400).json({
+                    message: 'Email configuration not found. Please configure your email settings first.'
                 });
             }
             userEmail = user.emailUser;
             userPassword = decrypt(user.emailPassword);
         }
-        
+
         // Create test transporter
         const transporter = nodemailer.createTransport({
             service: 'gmail',
@@ -157,12 +161,12 @@ exports.testEmailConfig = async (req, res) => {
                 rejectUnauthorized: false
             }
         });
-        
+
         // Verify connection with timeout handling
         try {
             await Promise.race([
                 transporter.verify(),
-                new Promise((_, reject) => 
+                new Promise((_, reject) =>
                     setTimeout(() => reject(new Error('Connection timeout: SMTP server did not respond in time')), 10000)
                 )
             ]);
@@ -172,7 +176,7 @@ exports.testEmailConfig = async (req, res) => {
             }
             throw verifyError;
         }
-        
+
         // Send test email to the user's own email
         const testEmail = {
             from: `"CRM Pro" <${userEmail}>`,
@@ -191,14 +195,14 @@ exports.testEmailConfig = async (req, res) => {
             `,
             text: 'Test Email from CRM Pro - Your email configuration is working correctly!'
         };
-        
+
         const info = await Promise.race([
             transporter.sendMail(testEmail),
-            new Promise((_, reject) => 
+            new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('Send timeout: Email sending took too long')), 30000)
             )
         ]);
-        
+
         res.json({
             success: true,
             message: 'Test email sent successfully! Please check your inbox.',
@@ -206,7 +210,7 @@ exports.testEmailConfig = async (req, res) => {
         });
     } catch (error) {
         console.error('Error testing email config:', error);
-        
+
         let errorMessage = 'Failed to test email configuration';
         if (error.message.includes('ETIMEDOUT') || error.message.includes('timeout')) {
             errorMessage = 'Connection timeout: Could not connect to email server. Please check your internet connection, firewall settings, or try again later.';
@@ -219,7 +223,7 @@ exports.testEmailConfig = async (req, res) => {
         } else {
             errorMessage = error.message || 'Failed to send test email';
         }
-        
+
         res.status(500).json({
             success: false,
             message: errorMessage

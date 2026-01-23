@@ -1,222 +1,335 @@
-/* eslint-disable react-hooks/set-state-in-effect */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import api from '../../services/api';
+import { useNotification } from '../../context/NotificationContext';
 
 const WhatsAppInbox = () => {
-    // Initialize with mock data directly to avoid setState in useEffect
-    const [conversations, setConversations] = useState([
-        { id: 1, name: 'John Doe', number: '+1 (555) 123-4567', lastMessage: 'Thanks for the info!', time: '10:30 AM', unread: 2 },
-        { id: 2, name: 'Jane Smith', number: '+1 (555) 987-6543', lastMessage: 'When is the meeting?', time: 'Yesterday', unread: 0 },
-        { id: 3, name: 'Mike Johnson', number: '+1 (555) 567-8901', lastMessage: 'Confirmed.', time: 'Oct 23', unread: 0 },
-    ]);
+    const { showSuccess, showError } = useNotification();
+    const [conversations, setConversations] = useState([]);
     const [selectedChat, setSelectedChat] = useState(null);
     const [messages, setMessages] = useState([]);
     const [newMessage, setNewMessage] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
+    const [loading, setLoading] = useState(true);
+    const [sending, setSending] = useState(false);
     const scrollRef = useRef(null);
 
-    // Mock fetch messages when chat is selected
-    useEffect(() => {
-        if (selectedChat) {
-            // In reality, fetch from /api/whatsapp/messages/:chatId
-            const mockMessages = [
-                { id: 1, text: 'Hello, I am interested in your services.', sender: 'them', time: '10:00 AM' },
-                { id: 2, text: 'Hi! I would be happy to help. What specific services are you looking for?', sender: 'me', time: '10:05 AM' },
-                { id: 3, text: 'I need help with marketing automation.', sender: 'them', time: '10:06 AM' },
-                { id: 4, text: 'Great, we specialize in that. Do you have a specific platform in mind?', sender: 'me', time: '10:10 AM' },
-                { id: 5, text: 'Not really, open to suggestions.', sender: 'them', time: '10:12 AM' },
-            ];
-            setMessages(mockMessages);
+    const fetchConversations = useCallback(async () => {
+        try {
+            const res = await api.get('/whatsapp/conversations', {
+                params: { status: 'active', search: searchTerm }
+            });
+            setConversations(res.data.conversations || []);
+        } catch (error) {
+            console.error('Error fetching conversations:', error);
+            showError('Failed to load conversations');
+        } finally {
+            setLoading(false);
         }
-    }, [selectedChat]);
+    }, [searchTerm, showError]);
 
-    // Auto-scroll to bottom
+    const fetchMessages = useCallback(async (conversationId) => {
+        try {
+            const res = await api.get(`/whatsapp/conversations/${conversationId}`);
+            setMessages(res.data.messages || []);
+            setSelectedChat(res.data.conversation);
+
+            await api.put(`/whatsapp/conversations/${conversationId}/read`);
+
+            setConversations(prev => prev.map(c =>
+                c._id === conversationId ? { ...c, unreadCount: 0 } : c
+            ));
+        } catch (error) {
+            console.error('Error fetching messages:', error);
+            showError('Failed to load messages');
+        }
+    }, [showError]);
+
+    useEffect(() => {
+        fetchConversations();
+    }, [fetchConversations]);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            fetchConversations();
+            if (selectedChat) {
+                fetchMessages(selectedChat._id);
+            }
+        }, 5000);
+
+        return () => clearInterval(interval);
+    }, [selectedChat, fetchConversations, fetchMessages]);
+
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [messages]);
 
-    const handleSendMessage = (e) => {
+    const handleSendMessage = async (e) => {
         e.preventDefault();
-        if (!newMessage.trim()) return;
+        if (!newMessage.trim() || !selectedChat) return;
 
-        // Mock send
-        const msg = {
-            id: Date.now(),
-            text: newMessage,
-            sender: 'me',
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages([...messages, msg]);
-        setNewMessage('');
+        setSending(true);
+        try {
+            const res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send`, {
+                text: newMessage.trim()
+            });
 
-        // Update last message in conversation list
-        setConversations(prev => prev.map(c =>
-            c.id === selectedChat.id ? { ...c, lastMessage: newMessage, time: 'Just now' } : c
-        ));
+            setMessages(prev => [...prev, res.data.message]);
+            setNewMessage('');
+
+            setConversations(prev => prev.map(c =>
+                c._id === selectedChat._id
+                    ? { ...c, lastMessage: newMessage.trim(), lastMessageAt: new Date(), lastMessageDirection: 'outbound' }
+                    : c
+            ));
+
+            showSuccess('Message sent!');
+        } catch (error) {
+            console.error('Error sending message:', error);
+            showError(error.response?.data?.message || 'Failed to send message');
+        } finally {
+            setSending(false);
+        }
     };
 
-    const filteredConversations = conversations.filter(c =>
-        c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        c.number.includes(searchTerm)
-    );
+    const handleSelectChat = (chat) => {
+        setSelectedChat(chat);
+        fetchMessages(chat._id);
+    };
+
+    const formatTime = (date) => {
+        const d = new Date(date);
+        const now = new Date();
+        const diffMs = now - d;
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 0) {
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        } else if (diffDays === 1) {
+            return 'Yesterday';
+        } else if (diffDays < 7) {
+            return d.toLocaleDateString([], { weekday: 'short' });
+        } else {
+            return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        }
+    };
+
+    const renderMessageContent = (message) => {
+        if (message.type === 'text') {
+            return message.content.text;
+        } else if (message.type === 'image') {
+            return message.content.caption || '📷 Image';
+        } else if (message.type === 'document') {
+            return `📄 ${message.content.fileName || 'Document'}`;
+        } else if (message.type === 'audio') {
+            return '🎵 Audio';
+        } else if (message.type === 'video') {
+            return message.content.caption || '🎬 Video';
+        } else if (message.type === 'location') {
+            return `📍 ${message.content.locationName || 'Location'}`;
+        }
+        return 'Message';
+    };
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center h-full bg-[#f0f2f5]">
+                <div className="text-center">
+                    <i className="fa-solid fa-spinner fa-spin text-4xl text-[#00a884] mb-3"></i>
+                    <p className="text-slate-600">Loading conversations...</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
-        <div className="flex h-[calc(100vh-250px)] bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-            {/* Left Sidebar: Conversations */}
-            <div className="w-1/3 border-r border-slate-200 flex flex-col bg-slate-50">
-                <div className="p-4 border-b border-slate-200 bg-white">
+        <div className="flex h-full bg-[#f0f2f5]">
+            {/* Left Sidebar - Conversations List */}
+            <div className="w-[30%] bg-white border-r border-slate-200 flex flex-col">
+                {/* Search Bar */}
+                <div className="p-3 bg-[#f0f2f5]">
                     <div className="relative">
-                        <i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                        <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
                         <input
                             type="text"
-                            placeholder="Search chats..."
+                            placeholder="Search or start new chat"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-sm bg-slate-50 focus:bg-white transition"
+                            className="w-full pl-12 pr-4 py-2.5 bg-white border-none rounded-lg text-sm focus:outline-none"
                         />
                     </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto">
-                    {filteredConversations.map(chat => (
+                {/* Conversations List */}
+                <div className="flex-1 overflow-y-auto bg-white">
+                    {conversations.map(chat => (
                         <div
-                            key={chat.id}
-                            onClick={() => setSelectedChat(chat)}
-                            className={`p-4 border-b border-slate-100 cursor-pointer hover:bg-slate-100 transition relative ${selectedChat?.id === chat.id ? 'bg-blue-50 hover:bg-blue-50 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'
+                            key={chat._id}
+                            onClick={() => handleSelectChat(chat)}
+                            className={`px-4 py-3 border-b border-slate-100 cursor-pointer hover:bg-[#f5f6f6] transition ${selectedChat?._id === chat._id ? 'bg-[#f0f2f5]' : ''
                                 }`}
                         >
-                            <div className="flex justify-between items-start mb-1">
-                                <h4 className="font-bold text-slate-800 text-sm">{chat.name}</h4>
-                                <span className="text-xs text-slate-500">{chat.time}</span>
-                            </div>
-                            <p className="text-xs text-slate-500 mb-1">{chat.number}</p>
-                            <div className="flex justify-between items-center">
-                                <p className="text-sm text-slate-600 truncate max-w-[180px]">{chat.lastMessage}</p>
-                                {chat.unread > 0 && (
-                                    <span className="bg-green-500 text-white text-xs font-bold px-2 py-0.5 rounded-full min-w-[20px] text-center">
-                                        {chat.unread}
-                                    </span>
-                                )}
+                            <div className="flex gap-3">
+                                {/* Avatar */}
+                                <div className="flex-shrink-0">
+                                    <div className="w-12 h-12 bg-slate-200 rounded-full flex items-center justify-center text-slate-600">
+                                        <i className="fa-solid fa-user text-lg"></i>
+                                    </div>
+                                </div>
+
+                                {/* Chat Info */}
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex justify-between items-start mb-1">
+                                        <h3 className="font-semibold text-[#111b21] truncate">
+                                            {chat.displayName || chat.phone}
+                                        </h3>
+                                        <span className="text-xs text-slate-500 flex-shrink-0 ml-2">
+                                            {formatTime(chat.lastMessageAt)}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <p className="text-sm text-slate-600 truncate flex items-center gap-1">
+                                            {chat.lastMessageDirection === 'outbound' && (
+                                                <i className="fa-solid fa-check-double text-[#53bdeb] text-xs"></i>
+                                            )}
+                                            <span className="truncate">{chat.lastMessage}</span>
+                                        </p>
+                                        {chat.unreadCount > 0 && (
+                                            <span className="bg-[#25d366] text-white text-xs font-semibold px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ml-2">
+                                                {chat.unreadCount}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     ))}
-                    {filteredConversations.length === 0 && (
-                        <div className="p-8 text-center text-slate-400 text-sm">
-                            No conversations found
+                    {conversations.length === 0 && (
+                        <div className="p-8 text-center text-slate-400">
+                            <i className="fa-brands fa-whatsapp text-6xl mb-4 text-slate-300"></i>
+                            <p className="text-sm">No conversations yet</p>
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* Right Pane: Chat Window */}
-            <div className="flex-1 flex flex-col bg-[#e5ded8] relative">
-                {/* Whatsapp-like background color/pattern could go here */}
-                <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")' }}></div>
-
+            {/* Right Pane - Chat Window */}
+            <div className="flex-1 flex flex-col">
                 {selectedChat ? (
                     <>
                         {/* Chat Header */}
-                        <div className="p-4 bg-white border-b border-slate-200 flex items-center justify-between shadow-sm z-10">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-slate-200 rounded-full flex items-center justify-center text-slate-500">
-                                    <i className="fa-solid fa-user"></i>
-                                </div>
-                                <div>
-                                    <h3 className="font-bold text-slate-800">{selectedChat.name}</h3>
-                                    <p className="text-xs text-slate-500">{selectedChat.number}</p>
-                                </div>
+                        <div className="px-4 py-3 bg-[#f0f2f5] border-b border-slate-200 flex items-center gap-3">
+                            <div className="w-10 h-10 bg-slate-200 rounded-full flex items-center justify-center text-slate-600">
+                                <i className="fa-solid fa-user"></i>
                             </div>
-                            <div className="flex gap-2">
-                                <button className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100">
-                                    <i className="fa-solid fa-phone"></i>
+                            <div className="flex-1">
+                                <h3 className="font-semibold text-[#111b21]">
+                                    {selectedChat.displayName || selectedChat.phone}
+                                </h3>
+                                <p className="text-xs text-slate-500">{selectedChat.phone}</p>
+                            </div>
+                            <div className="flex gap-4 text-slate-600">
+                                <button className="hover:text-slate-800 transition">
+                                    <i className="fa-solid fa-search text-xl"></i>
                                 </button>
-                                <button className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100">
-                                    <i className="fa-solid fa-ellipsis-v"></i>
+                                <button className="hover:text-slate-800 transition">
+                                    <i className="fa-solid fa-ellipsis-vertical text-xl"></i>
                                 </button>
                             </div>
                         </div>
 
                         {/* Messages Area */}
-                        <div className="flex-1 overflow-y-auto p-4 space-y-4 z-0" ref={scrollRef}>
-                            {messages.map((msg) => (
-                                <div
-                                    key={msg.id}
-                                    className={`flex ${msg.sender === 'me' ? 'justify-end' : 'justify-start'}`}
-                                >
+                        <div
+                            className="flex-1 overflow-y-auto p-4 bg-[#efeae2]"
+                            ref={scrollRef}
+                            style={{
+                                backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cpath d=\'M0 0h100v100H0z\' fill=\'%23efeae2\'/%3E%3Cpath d=\'M20 20h60v60H20z\' fill=\'%23fff\' opacity=\'.03\'/%3E%3C/svg%3E")'
+                            }}
+                        >
+                            <div className="space-y-2 max-w-4xl mx-auto">
+                                {messages.map((msg) => (
                                     <div
-                                        className={`max-w-[70%] rounded-lg p-3 shadow-sm relative ${msg.sender === 'me'
-                                            ? 'bg-[#d9fdd3] text-slate-800 rounded-tr-none'
-                                            : 'bg-white text-slate-800 rounded-tl-none'
-                                            }`}
+                                        key={msg._id}
+                                        className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}
                                     >
-                                        <p className="text-sm leading-relaxed">{msg.text}</p>
-                                        <p className="text-[10px] text-slate-500 text-right mt-1 flex items-center justify-end gap-1">
-                                            {msg.time}
-                                            {msg.sender === 'me' && <i className="fa-solid fa-check-double text-blue-500"></i>}
-                                        </p>
+                                        <div
+                                            className={`max-w-[65%] rounded-lg px-3 py-2 shadow-sm ${msg.direction === 'outbound'
+                                                    ? 'bg-[#d9fdd3]'
+                                                    : 'bg-white'
+                                                }`}
+                                        >
+                                            <p className="text-sm text-[#111b21] break-words">{renderMessageContent(msg)}</p>
+                                            <div className="flex items-center justify-end gap-1 mt-1">
+                                                <span className="text-[10px] text-slate-500">{formatTime(msg.timestamp)}</span>
+                                                {msg.direction === 'outbound' && (
+                                                    <i className={`fa-solid text-[10px] ${msg.status === 'read' ? 'fa-check-double text-[#53bdeb]' :
+                                                            msg.status === 'delivered' ? 'fa-check-double text-slate-400' :
+                                                                msg.status === 'sent' ? 'fa-check text-slate-400' :
+                                                                    'fa-clock text-slate-400'
+                                                        }`}></i>
+                                                )}
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                ))}
+                            </div>
                         </div>
 
                         {/* Input Area */}
-                        <div className="p-3 bg-white border-t border-slate-200 z-10">
-                            <form onSubmit={handleSendMessage} className="flex gap-2 items-end">
-                                <button
-                                    type="button"
-                                    className="p-3 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition"
-                                    title="Add Attachment"
-                                >
-                                    <i className="fa-solid fa-paperclip"></i>
+                        <div className="p-3 bg-[#f0f2f5] border-t border-slate-200">
+                            <form onSubmit={handleSendMessage} className="flex gap-2 items-center">
+                                <button type="button" className="p-2 text-slate-600 hover:text-slate-800 transition">
+                                    <i className="fa-solid fa-face-smile text-2xl"></i>
                                 </button>
-                                <button
-                                    type="button"
-                                    className="p-3 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition"
-                                    title="Use Template"
-                                >
-                                    <i className="fa-solid fa-bolt"></i>
+                                <button type="button" className="p-2 text-slate-600 hover:text-slate-800 transition">
+                                    <i className="fa-solid fa-paperclip text-xl"></i>
                                 </button>
 
-                                <div className="flex-1 bg-slate-100 rounded-lg flex items-center">
-                                    <textarea
+                                <div className="flex-1 bg-white rounded-lg flex items-center px-4">
+                                    <input
+                                        type="text"
                                         value={newMessage}
                                         onChange={(e) => setNewMessage(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter' && !e.shiftKey) {
-                                                e.preventDefault();
-                                                handleSendMessage(e);
-                                            }
-                                        }}
-                                        placeholder="Type a message..."
-                                        className="w-full bg-transparent border-none focus:ring-0 p-3 text-sm resize-none max-h-32"
-                                        rows="1"
+                                        placeholder="Type a message"
+                                        className="w-full bg-transparent border-none focus:outline-none py-2.5 text-sm"
+                                        disabled={sending}
                                     />
-                                    <button
-                                        type="button"
-                                        className="p-3 text-slate-400 hover:text-slate-600"
-                                    >
-                                        <i className="fa-regular fa-face-smile"></i>
-                                    </button>
                                 </div>
 
                                 <button
                                     type="submit"
-                                    disabled={!newMessage.trim()}
-                                    className="p-3 bg-green-600 hover:bg-green-700 text-white rounded-full shadow-md transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                    disabled={!newMessage.trim() || sending}
+                                    className="p-3 bg-[#00a884] hover:bg-[#008f6f] text-white rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                    <i className="fa-solid fa-paper-plane"></i>
+                                    {sending ? (
+                                        <i className="fa-solid fa-spinner fa-spin"></i>
+                                    ) : (
+                                        <i className="fa-solid fa-paper-plane"></i>
+                                    )}
                                 </button>
                             </form>
                         </div>
                     </>
                 ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center text-slate-400 z-10">
-                        <div className="w-24 h-24 bg-slate-200 rounded-full flex items-center justify-center mb-4">
-                            <i className="fa-brands fa-whatsapp text-5xl text-slate-400"></i>
+                    <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5] border-l border-slate-200">
+                        <div className="text-center max-w-md">
+                            <div className="w-64 h-64 mx-auto mb-8 relative">
+                                <div className="absolute inset-0 bg-gradient-to-br from-[#25d366] to-[#128c7e] rounded-full opacity-10"></div>
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                    <i className="fa-brands fa-whatsapp text-9xl text-[#25d366] opacity-30"></i>
+                                </div>
+                            </div>
+                            <h2 className="text-3xl font-light text-[#41525d] mb-3">WhatsApp Business</h2>
+                            <p className="text-sm text-slate-500 mb-6">
+                                Send and receive messages without keeping your phone online.<br />
+                                Select a conversation to start messaging.
+                            </p>
+                            <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
+                                <i className="fa-solid fa-lock"></i>
+                                <span>End-to-end encrypted</span>
+                            </div>
                         </div>
-                        <h3 className="text-xl font-bold text-slate-600">WhatsApp for Business</h3>
-                        <p className="text-sm mt-2">Select a conversation to start chatting</p>
                     </div>
                 )}
             </div>
