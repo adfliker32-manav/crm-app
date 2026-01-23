@@ -259,4 +259,24 @@ exports.getTemplateAnalytics = async (req, res) => {
     }
 };
 
+// Send template message
+exports.sendTemplateMessage = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const { to, templateName } = req.body;
+
+        if (!to || !templateName) {
+            return res.status(400).json({ message: 'To and Template Name are required' });
+        }
+
+        const { sendWhatsAppMessage } = require('../services/whatsappService');
+        const result = await sendWhatsAppMessage(to, templateName, userId);
+
+        res.json({ success: true, message: 'Template sent successfully', data: result });
+    } catch (error) {
+        console.error('Error sending template message:', error);
+        res.status(500).json({ message: 'Error sending template message', error: error.message });
+    }
+};
+
 module.exports = exports;
