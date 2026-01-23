@@ -30,7 +30,8 @@ app.use((req, res, next) => {
   console.log(`${req.method} ${req.url}`);
   next();
 });
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'client/dist')));
+app.use(express.static('public')); // Keep for existing public assets if any
 // Serve uploaded files
 app.use('/uploads', express.static('uploads'));
 
@@ -121,6 +122,11 @@ app.use('/api/activity-logs', require('./src/routes/activityLogRoutes'));
 app.use('/api/reports', reportRoutes); // Reports & Analytics
 
 // Meta Webhook URL: /api/meta/webhook
+
+// 5. CATCH-ALL HANDLER FOR REACT (Make sure this is AFTER all API routes)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+});
 
 // 🔥 SERVER START
 const PORT = process.env.PORT || 3000;

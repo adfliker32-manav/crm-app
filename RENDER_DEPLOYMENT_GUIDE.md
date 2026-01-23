@@ -62,8 +62,9 @@ ENCRYPTION_KEY=your-encryption-key-for-user-credentials-min-32-chars
 VERIFY_TOKEN=your-webhook-verify-token
 
 # CLIENT SIDE (Frontend)
-VITE_API_URL=https://your-app-name.onrender.com/api
-# Note: For VITE_API_URL, use your actual Render app URL followed by /api
+# OPTIONAL: Only needed if frontend and backend are on different domains.
+# Since we configured the backend to serve the frontend, this is usually NOT needed.
+# VITE_API_URL=https://your-app-name.onrender.com/api
 ```
 
 ---
