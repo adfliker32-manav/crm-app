@@ -126,10 +126,21 @@ app.use('/api/reports', reportRoutes); // Reports & Analytics
 
 // Meta Webhook URL: /api/meta/webhook
 
-// 5. CATCH-ALL HANDLER FOR REACT (Make sure this is AFTER all API routes)
-// Using Express 5 compatible syntax with named splat parameter
-app.get('{*splat}', (req, res) => {
-  res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+// 5. CATCH-ALL HANDLER FOR REACT SPA
+// Must be AFTER all API routes - serves React app for client-side routing
+app.use((req, res, next) => {
+  // Only handle GET requests that aren't for API endpoints
+  if (req.method === 'GET' && !req.path.startsWith('/api/') && !req.path.startsWith('/webhook/')) {
+    const indexPath = path.join(__dirname, 'client/dist/index.html');
+    res.sendFile(indexPath, (err) => {
+      if (err) {
+        console.error('Error serving index.html:', err.message);
+        res.status(404).send('Frontend not built. Run: npm run build');
+      }
+    });
+  } else {
+    next();
+  }
 });
 
 // 🔥 SERVER START
