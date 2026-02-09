@@ -126,7 +126,7 @@ const EmailManagement = () => {
                 </div>
 
                 {/* Content Container */}
-                <div className="flex-1 overflow-hidden">
+                <div className="flex-1 overflow-y-auto">
                     <div className="h-full">
                         {activeTab === 'templates' && <EmailTemplates />}
                         {activeTab === 'inbox' && <EmailInbox />}
