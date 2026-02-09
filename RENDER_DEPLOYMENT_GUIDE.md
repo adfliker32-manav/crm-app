@@ -60,6 +60,11 @@ MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/database?retryWrit
 # OPTIONAL - Recommended
 ENCRYPTION_KEY=your-encryption-key-for-user-credentials-min-32-chars
 VERIFY_TOKEN=your-webhook-verify-token
+
+# CLIENT SIDE (Frontend)
+# OPTIONAL: Only needed if frontend and backend are on different domains.
+# Since we configured the backend to serve the frontend, this is usually NOT needed.
+# VITE_API_URL=https://your-app-name.onrender.com/api
 ```
 
 ---

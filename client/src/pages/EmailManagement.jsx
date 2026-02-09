@@ -6,7 +6,7 @@ import EmailInbox from '../components/Email/EmailInbox';
 import EmailSettings from '../components/Email/EmailSettings';
 
 const EmailManagement = () => {
-    const [activeTab, setActiveTab] = useState('templates');
+    const [activeTab, setActiveTab] = useState('inbox');
     const [stats, setStats] = useState({
         today: { sent: 0, failed: 0, automated: { sent: 0 } },
         thisMonth: { sent: 0 }
@@ -25,113 +25,113 @@ const EmailManagement = () => {
         fetchAnalytics();
     }, [fetchAnalytics]);
 
+    const StatCard = ({ title, value, label, icon, color, bgColor }) => (
+        <div className="bg-white rounded-2xl p-6 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07),0_10px_20px_-2px_rgba(0,0,0,0.04)] hover:shadow-lg transition-all duration-300 border border-slate-100 group">
+            <div className="flex justify-between items-start">
+                <div>
+                    <p className="text-slate-500 text-sm font-medium mb-1">{title}</p>
+                    <h3 className="text-3xl font-bold text-slate-800 tracking-tight">{value}</h3>
+                </div>
+                <div className={`${bgColor} ${color} p-3 rounded-xl transform group-hover:scale-110 transition-transform duration-300`}>
+                    <i className={`fa-solid ${icon} text-lg`}></i>
+                </div>
+            </div>
+            <div className="mt-4 pt-4 border-t border-slate-50 flex items-center gap-2">
+                <span className={`text-xs font-semibold ${color} bg-opacity-10 px-2 py-1 rounded-full ${bgColor}`}>
+                    {label}
+                </span>
+                <span className="text-slate-400 text-xs">updated just now</span>
+            </div>
+        </div>
+    );
+
     return (
-        <div className="space-y-8 animate-fade-in-up">
-            {/* Header with Analytics */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-                    <i className="fa-solid fa-envelope-open-text text-blue-600"></i> Email Management
-                </h2>
-
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    {/* Sent Today */}
-                    <div className="bg-gradient-to-br from-green-500 to-green-600 text-white p-4 rounded-xl shadow-lg relative overflow-hidden group">
-                        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition">
-                            <i className="fa-solid fa-paper-plane text-6xl"></i>
-                        </div>
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="bg-white/20 p-2 rounded-lg">
-                                <i className="fa-solid fa-paper-plane text-xl"></i>
-                            </div>
-                            <span className="text-sm font-medium bg-white/20 px-2 py-0.5 rounded-full">Today</span>
-                        </div>
-                        <p className="text-3xl font-bold">{stats.today.sent}</p>
-                        <p className="text-xs opacity-80 mt-1">Emails Sent Successfully</p>
-                    </div>
-
-                    {/* Failed Today */}
-                    <div className="bg-gradient-to-br from-red-500 to-red-600 text-white p-4 rounded-xl shadow-lg relative overflow-hidden group">
-                        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition">
-                            <i className="fa-solid fa-exclamation-circle text-6xl"></i>
-                        </div>
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="bg-white/20 p-2 rounded-lg">
-                                <i className="fa-solid fa-exclamation-circle text-xl"></i>
-                            </div>
-                            <span className="text-sm font-medium bg-white/20 px-2 py-0.5 rounded-full">Today</span>
-                        </div>
-                        <p className="text-3xl font-bold">{stats.today.failed}</p>
-                        <p className="text-xs opacity-80 mt-1">Emails Failed</p>
-                    </div>
-
-                    {/* Sent Month */}
-                    <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-4 rounded-xl shadow-lg relative overflow-hidden group">
-                        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition">
-                            <i className="fa-solid fa-calendar text-6xl"></i>
-                        </div>
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="bg-white/20 p-2 rounded-lg">
-                                <i className="fa-solid fa-calendar text-xl"></i>
-                            </div>
-                            <span className="text-sm font-medium bg-white/20 px-2 py-0.5 rounded-full">This Month</span>
-                        </div>
-                        <p className="text-3xl font-bold">{stats.thisMonth.sent}</p>
-                        <p className="text-xs opacity-80 mt-1">Total Sent</p>
-                    </div>
-
-                    {/* Automated Today */}
-                    <div className="bg-gradient-to-br from-purple-500 to-purple-600 text-white p-4 rounded-xl shadow-lg relative overflow-hidden group">
-                        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition">
-                            <i className="fa-solid fa-robot text-6xl"></i>
-                        </div>
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="bg-white/20 p-2 rounded-lg">
-                                <i className="fa-solid fa-robot text-xl"></i>
-                            </div>
-                            <span className="text-sm font-medium bg-white/20 px-2 py-0.5 rounded-full">Today</span>
-                        </div>
-                        <p className="text-3xl font-bold">{stats.today.automated.sent}</p>
-                        <p className="text-xs opacity-80 mt-1">Auto-Replies Sent</p>
-                    </div>
+        <div className="min-h-screen bg-slate-50/50 p-8 font-sans space-y-8 animate-fade-in-up">
+            {/* Header Section */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                    <h1 className="text-3xl font-bold text-slate-800 tracking-tight">Email Center</h1>
+                    <p className="text-slate-500 mt-1">Manage templates, track performance, and configure settings</p>
+                </div>
+                <div className="flex items-center gap-3">
+                    <span className="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full text-xs font-medium border border-emerald-100 flex items-center gap-2">
+                        <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                        System Operational
+                    </span>
                 </div>
             </div>
 
-            {/* Tabs & Content */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden min-h-[600px]">
-                <div className="flex items-center gap-1 px-6 pt-4 border-b border-slate-200 bg-slate-50">
-                    <button
-                        onClick={() => setActiveTab('templates')}
-                        className={`px-6 py-3 text-sm font-bold border-b-2 rounded-t-lg transition-all ${activeTab === 'templates'
-                            ? 'border-red-500 text-red-600 bg-white'
-                            : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-100'
-                            }`}
-                    >
-                        <i className="fa-solid fa-envelope mr-2"></i>Templates
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('inbox')}
-                        className={`px-6 py-3 text-sm font-bold border-b-2 rounded-t-lg transition-all ${activeTab === 'inbox'
-                            ? 'border-red-500 text-red-600 bg-white'
-                            : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-100'
-                            }`}
-                    >
-                        <i className="fa-solid fa-inbox mr-2"></i>Inbox & Logs
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('settings')}
-                        className={`px-6 py-3 text-sm font-bold border-b-2 rounded-t-lg transition-all ${activeTab === 'settings'
-                            ? 'border-red-500 text-red-600 bg-white'
-                            : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-100'
-                            }`}
-                    >
-                        <i className="fa-solid fa-cog mr-2"></i>Configuration
-                    </button>
+            {/* Stats Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <StatCard
+                    title="Sent Today"
+                    value={stats.today.sent}
+                    label="+2.5% vs yesterday"
+                    icon="fa-paper-plane"
+                    color="text-emerald-600"
+                    bgColor="bg-emerald-50"
+                />
+                <StatCard
+                    title="Failed Delivery"
+                    value={stats.today.failed}
+                    label="Needs attention"
+                    icon="fa-circle-exclamation"
+                    color="text-rose-500"
+                    bgColor="bg-rose-50"
+                />
+                <StatCard
+                    title="Monthly Volume"
+                    value={stats.thisMonth.sent}
+                    label="Current billing period"
+                    icon="fa-chart-line"
+                    color="text-blue-600"
+                    bgColor="bg-blue-50"
+                />
+                <StatCard
+                    title="Auto-Responses"
+                    value={stats.today.automated.sent}
+                    label="Triggered automatically"
+                    icon="fa-robot"
+                    color="text-violet-600"
+                    bgColor="bg-violet-50"
+                />
+            </div>
+
+            {/* Main Content Area */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden h-[calc(100vh-200px)] flex flex-col">
+                {/* Modern Tab Navigation */}
+                <div className="border-b border-slate-100 px-6 py-4">
+                    <div className="flex items-center gap-1 bg-slate-100/50 p-1 rounded-xl w-fit">
+                        {[
+                            { id: 'templates', label: 'Templates', icon: 'fa-layer-group' },
+                            { id: 'inbox', label: 'Inbox & Logs', icon: 'fa-inbox' },
+                            { id: 'settings', label: 'Configuration', icon: 'fa-sliders' }
+                        ].map((tab) => (
+                            <button
+                                key={tab.id}
+                                onClick={() => setActiveTab(tab.id)}
+                                className={`
+                                    flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all duration-300
+                                    ${activeTab === tab.id
+                                        ? 'bg-white text-slate-800 shadow-sm shadow-slate-200'
+                                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+                                    }
+                                `}
+                            >
+                                <i className={`fa-solid ${tab.icon} ${activeTab === tab.id ? 'text-indigo-500' : 'opacity-70'}`}></i>
+                                {tab.label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
-                <div className="p-0">
-                    {activeTab === 'templates' && <EmailTemplates />}
-                    {activeTab === 'inbox' && <EmailInbox />}
-                    {activeTab === 'settings' && <EmailSettings />}
+                {/* Content Container */}
+                <div className="flex-1 overflow-hidden">
+                    <div className="h-full">
+                        {activeTab === 'templates' && <EmailTemplates />}
+                        {activeTab === 'inbox' && <EmailInbox />}
+                        {activeTab === 'settings' && <EmailSettings />}
+                    </div>
                 </div>
             </div>
         </div>

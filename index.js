@@ -30,12 +30,13 @@ app.use((req, res, next) => {
   console.log(`${req.method} ${req.url}`);
   next();
 });
-app.use(express.static('public'));
-// Serve uploaded files
-app.use('/uploads', express.static('uploads'));
 
 // Serve static files from the React app
 app.use(express.static(path.join(__dirname, 'client/dist')));
+app.use(express.static('public')); // Keep for existing public assets if any
+
+// Serve uploaded files
+app.use('/uploads', express.static('uploads'));
 
 // 🔥 DATABASE CONNECTION
 // SECURITY FIX: Use environment variable instead of hardcoded credentials
@@ -104,9 +105,19 @@ app.use('/api/custom-fields', customFieldRoutes); // Custom Lead Fields
 app.use('/api/email', emailRoutes);
 app.use('/api/email-templates', emailTemplateRoutes);
 app.use('/api/email-logs', emailLogRoutes);
+
+// WhatsApp Webhook (PUBLIC - no auth, Meta needs to access)
+const whatsappWebhookRoutes = require('./src/routes/whatsappWebhookRoutes');
+app.use('/webhook/whatsapp', whatsappWebhookRoutes);
+
+// WhatsApp API (authenticated)
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/whatsapp/templates', whatsappTemplateRoutes);
 app.use('/api/whatsapp-logs', whatsAppLogRoutes);
+
+// Chatbot flows
+const chatbotRoutes = require('./src/routes/chatbotRoutes');
+app.use('/api/chatbot/flows', chatbotRoutes);
 
 // 4. Meta Lead Sync
 app.use('/api/meta', metaRoutes);
@@ -115,8 +126,8 @@ app.use('/api/reports', reportRoutes); // Reports & Analytics
 
 // Meta Webhook URL: /api/meta/webhook
 
-// Catch-all handler: for any request that doesn't match API routes,
-// send back React's index.html file (for client-side routing)
+// 5. CATCH-ALL HANDLER FOR REACT (Make sure this is AFTER all API routes)
+// Using Express 5 compatible syntax with named splat parameter
 app.get('{*splat}', (req, res) => {
   res.sendFile(path.join(__dirname, 'client/dist/index.html'));
 });
@@ -125,9 +136,9 @@ app.get('{*splat}', (req, res) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server Running on Port ${PORT}`);
-  console.log("👉 Verify Token in .env:", process.env.VERIFY_TOKEN ? "✅ Loaded" : "❌ Missing");
-  console.log("📡 WhatsApp Webhook URL:");
-  console.log(`   GET/POST: http://your-domain.com:${PORT}/api/whatsapp/webhook`);
-  console.log(`   For local testing: http://localhost:${PORT}/api/whatsapp/webhook`);
-  console.log("⚠️  Make sure VERIFY_TOKEN in .env matches Meta's webhook verify token!");
+  console.log("👉 WA Verify Token:", process.env.WA_WEBHOOK_VERIFY_TOKEN ? "✅ Loaded" : "❌ Missing");
+  console.log("📡 WhatsApp Webhook URL (configure in Meta):");
+  console.log(`   GET/POST: http://your-domain.com:${PORT}/webhook/whatsapp`);
+  console.log(`   For local testing: http://localhost:${PORT}/webhook/whatsapp`);
+  console.log("⚠️  Set WA_WEBHOOK_VERIFY_TOKEN in .env to match Meta's webhook verify token!");
 });
