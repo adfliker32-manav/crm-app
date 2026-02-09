@@ -22,6 +22,6 @@ router.delete('/:id', authMiddleware, whatsappTemplateController.deleteTemplate)
 router.post('/send', authMiddleware, whatsappTemplateController.sendTemplateMessage);
 
 // Submit template for review
-router.post('/:id/submit-review', authMiddleware, whatsappTemplateController.submitForReview);
+router.post('/:id/submit-review', authMiddleware, whatsappTemplateController.submitTemplate);
 
 module.exports = router;
