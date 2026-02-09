@@ -14,6 +14,7 @@ const EmailSettings = () => {
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
+    const [showCredentials, setShowCredentials] = useState(false); // Toggle to view/hide saved credentials
 
     useEffect(() => {
         fetchConfig();
@@ -25,6 +26,7 @@ const EmailSettings = () => {
             setConfig(prev => ({
                 ...prev,
                 emailUser: res.data.emailUser || '',
+                emailPassword: res.data.emailPassword || '', // Keep password if returned
                 emailFromName: res.data.emailFromName || '',
                 isConfigured: res.data.isConfigured || false
             }));
@@ -75,9 +77,10 @@ const EmailSettings = () => {
                 showSuccess('Email configuration saved successfully!');
                 setConfig(prev => ({
                     ...prev,
-                    emailPassword: '', // Clear password from form
+                    // Keep password in state but don't clear it
                     isConfigured: true
                 }));
+                setShowCredentials(false); // Hide credentials after saving
             }
         } catch (error) {
             console.error('Error saving config:', error);
@@ -149,7 +152,44 @@ const EmailSettings = () => {
                     </div>
                 )}
 
-                <form onSubmit={handleSave} className="space-y-5">
+                {/* View Credentials Button */}
+                {config.isConfigured && !showCredentials && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <i className="fa-solid fa-lock text-slate-600 text-xl"></i>
+                                <div>
+                                    <p className="font-medium text-slate-800">Credentials Secured</p>
+                                    <p className="text-sm text-slate-600">From Name: <span className="font-semibold">{config.emailFromName || 'Not set'}</span></p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowCredentials(true)}
+                                className="bg-slate-600 hover:bg-slate-700 text-white px-4 py-2 rounded-lg font-medium transition flex items-center gap-2"
+                            >
+                                <i className="fa-solid fa-eye"></i>
+                                View Details
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Edit/Hide Button */}
+                {config.isConfigured && showCredentials && (
+                    <div className="flex justify-end mb-4">
+                        <button
+                            type="button"
+                            onClick={() => setShowCredentials(false)}
+                            className="text-sm text-slate-600 hover:text-slate-800 flex items-center gap-2"
+                        >
+                            <i className="fa-solid fa-eye-slash"></i>
+                            Hide Credentials
+                        </button>
+                    </div>
+                )}
+
+                <form onSubmit={handleSave} className={`space-y-5 ${config.isConfigured && !showCredentials ? 'hidden' : ''}`}>
                     {/* Email Address */}
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">

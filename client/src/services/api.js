@@ -25,10 +25,27 @@ api.interceptors.request.use(
 api.interceptors.response.use(
     (response) => response,
     (error) => {
+        // Only handle 401 for authenticated requests where token exists but is invalid
         if (error.response && error.response.status === 401) {
-            // Clear storage and redirect to login
-            localStorage.clear();
-            window.location.href = '/login'; // Or handle via router if possible, but hard reload checks auth
+            const token = localStorage.getItem('token');
+            const requestUrl = error.config?.url || '';
+
+            // Skip logout for login/register endpoints (expected 401 for wrong credentials)
+            const isAuthEndpoint = requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register');
+
+            // Only logout if we have a token but server says it's invalid
+            // This means the token expired or is corrupted
+            if (token && !isAuthEndpoint) {
+                const errorMessage = error.response?.data?.message || '';
+                // Only clear on specific token-related errors
+                if (errorMessage.includes('Token') || errorMessage.includes('token') ||
+                    errorMessage.includes('Authorization') || errorMessage.includes('expired')) {
+                    console.warn('Token invalid, logging out:', errorMessage);
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('user');
+                    window.location.href = '/login';
+                }
+            }
         }
         return Promise.reject(error);
     }

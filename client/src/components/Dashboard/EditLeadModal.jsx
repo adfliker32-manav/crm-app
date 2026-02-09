@@ -12,6 +12,7 @@ const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
                 name: lead.name || '',
                 phone: lead.phone || '',
                 email: lead.email || '',
+                dealValue: lead.dealValue || '',
                 nextFollowUpDate: lead.nextFollowUpDate ? new Date(lead.nextFollowUpDate).toISOString().split('T')[0] : ''
             });
         }
@@ -80,6 +81,21 @@ const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
                             name="email"
                             value={formData.email}
                             onChange={handleChange}
+                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                            <i className="fa-solid fa-indian-rupee-sign text-green-500"></i>
+                            Deal Value (Optional)
+                        </label>
+                        <input
+                            type="number"
+                            name="dealValue"
+                            min="0"
+                            value={formData.dealValue}
+                            onChange={handleChange}
+                            placeholder="Enter deal value"
                             className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         />
                     </div>

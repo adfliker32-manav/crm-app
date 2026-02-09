@@ -4,7 +4,7 @@ const { getUserEmailCredentials } = require('../utils/emailUtils');
 // Create reusable transporter for Gmail SMTP
 const createTransporter = (userCredentials = null) => {
     let email, password;
-    
+
     // Use user credentials if provided, otherwise fallback to env
     if (userCredentials && userCredentials.email && userCredentials.password) {
         email = userCredentials.email;
@@ -56,30 +56,30 @@ const createTransporter = (userCredentials = null) => {
 // Retry helper for transient failures
 const sendEmailWithRetry = async (options, maxRetries = 2) => {
     let lastError;
-    
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
             return await sendEmail(options);
         } catch (error) {
             lastError = error;
-            
+
             // Only retry on connection/timeout errors, not auth errors
-            const isRetryable = error.message.includes('ETIMEDOUT') || 
-                               error.message.includes('timeout') || 
-                               error.message.includes('ECONNREFUSED') ||
-                               error.message.includes('ECONNECTION');
-            
+            const isRetryable = error.message.includes('ETIMEDOUT') ||
+                error.message.includes('timeout') ||
+                error.message.includes('ECONNREFUSED') ||
+                error.message.includes('ECONNECTION');
+
             if (!isRetryable || attempt === maxRetries) {
                 throw error;
             }
-            
+
             // Exponential backoff: wait 1s, 2s, 4s...
             const delay = Math.pow(2, attempt) * 1000;
             console.log(`⚠️ Email send failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
-    
+
     throw lastError;
 };
 
@@ -94,7 +94,7 @@ const sendEmail = async (options) => {
     // Get user credentials if userId provided
     let userCredentials = null;
     let fromName = process.env.EMAIL_FROM_NAME || 'CRM Pro';
-    
+
     if (userId) {
         userCredentials = await getUserEmailCredentials(userId);
         if (userCredentials) {
@@ -104,7 +104,7 @@ const sendEmail = async (options) => {
 
     const transporter = createTransporter(userCredentials);
     if (!transporter) {
-        const errorMsg = userId 
+        const errorMsg = userId
             ? 'Email configuration not found. Please configure your email settings in Email Management.'
             : 'Email service not configured. Please configure email settings.';
         throw new Error(errorMsg);
@@ -123,31 +123,17 @@ const sendEmail = async (options) => {
     };
 
     try {
-        // Verify connection with timeout handling
-        try {
-            await Promise.race([
-                transporter.verify(),
-                new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Connection timeout: SMTP server did not respond in time')), 10000)
-                )
-            ]);
-            console.log('✅ SMTP Server is ready to send emails');
-        } catch (verifyError) {
-            console.error('❌ SMTP Connection verification failed:', verifyError.message);
-            // Continue anyway - sometimes verify fails but sendMail works
-            if (verifyError.message.includes('timeout') || verifyError.message.includes('ETIMEDOUT')) {
-                throw new Error('Connection timeout: Could not connect to email server. Please check your internet connection and try again.');
-            }
-        }
+        // Verify connection removed for performance - sendMail will handle connection errors
+
 
         // Send email with timeout handling
         const info = await Promise.race([
             transporter.sendMail(mailOptions),
-            new Promise((_, reject) => 
+            new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('Send timeout: Email sending took too long')), 30000)
             )
         ]);
-        
+
         console.log('✅ Email sent successfully:');
         console.log('   To:', to);
         console.log('   Subject:', subject);
@@ -160,7 +146,7 @@ const sendEmail = async (options) => {
         };
     } catch (error) {
         console.error('❌ Error sending email:', error);
-        
+
         // Provide more helpful error messages
         if (error.message.includes('ETIMEDOUT') || error.message.includes('timeout')) {
             throw new Error('Connection timeout: Could not connect to email server. Please check your internet connection, firewall settings, or try again later.');
@@ -171,7 +157,7 @@ const sendEmail = async (options) => {
         } else if (error.message.includes('EAUTH')) {
             throw new Error('Authentication failed. Please verify your email credentials in Email Management settings.');
         }
-        
+
         throw error;
     }
 };

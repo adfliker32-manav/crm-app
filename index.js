@@ -17,15 +17,25 @@ const whatsappRoutes = require('./src/routes/whatsappRoutes');
 const whatsappTemplateRoutes = require('./src/routes/whatsappTemplateRoutes');
 const whatsAppLogRoutes = require('./src/routes/whatsAppLogRoutes');
 const superAdminRoutes = require('./src/routes/superAdminRoutes');
+const metaRoutes = require('./src/routes/metaRoutes'); // Meta Lead Sync
+const customFieldRoutes = require('./src/routes/customFieldRoutes'); // Custom Lead Fields
+const reportRoutes = require('./src/routes/reportRoutes'); // Reports & Analytics
 
 const app = express();
 
 // Middleware
 app.use(express.json());
 app.use(cors());
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
 app.use(express.static('public'));
 // Serve uploaded files
 app.use('/uploads', express.static('uploads'));
+
+// Serve static files from the React app
+app.use(express.static(path.join(__dirname, 'client/dist')));
 
 // 🔥 DATABASE CONNECTION
 // SECURITY FIX: Use environment variable instead of hardcoded credentials
@@ -36,8 +46,29 @@ if (!MONGO_URI) {
   process.exit(1);
 }
 
+// Validate Super Admin credentials
+if (!process.env.SUPERADMIN_EMAIL || !process.env.SUPERADMIN_PASSWORD) {
+  console.error('❌ CRITICAL: SUPERADMIN_EMAIL and SUPERADMIN_PASSWORD must be set in .env');
+  console.error('Add these to your .env file:');
+  console.error('   SUPERADMIN_EMAIL=superadmin@crm.com');
+  console.error('   SUPERADMIN_PASSWORD=YourSecurePassword123!');
+  process.exit(1);
+}
+
 mongoose.connect(MONGO_URI)
-  .then(() => console.log('✅ MongoDB Connected to Cloud! ☁️'))
+  .then(async () => {
+    console.log('✅ MongoDB Connected to Cloud! ☁️');
+
+    // Auto-create/update Super Admin on startup
+    try {
+      console.log('\n🔐 Initializing Super Admin...');
+      const createSuperAdmin = require('./scripts/createSuperAdmin');
+      await createSuperAdmin();
+    } catch (error) {
+      console.error('⚠️  Failed to initialize Super Admin:', error.message);
+      console.error('Server will continue, but Super Admin may not be available.');
+    }
+  })
   .catch(err => {
     console.error('\n❌ MongoDB Connection Error:');
     console.error('   Error:', err.message);
@@ -67,6 +98,7 @@ app.use('/api/superadmin', superAdminRoutes);
 // 2. Leads System (FIXED PATHS) 🛠️
 app.use('/api/leads', leadRoutes);    // URL: /api/leads/
 app.use('/api/stages', stageRoutes);  // URL: /api/stages/
+app.use('/api/custom-fields', customFieldRoutes); // Custom Lead Fields
 
 // 3. Communications
 app.use('/api/email', emailRoutes);
@@ -74,13 +106,23 @@ app.use('/api/email-templates', emailTemplateRoutes);
 app.use('/api/email-logs', emailLogRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/whatsapp/templates', whatsappTemplateRoutes);
-app.use('/api/whatsapp-logs', whatsAppLogRoutes); 
-// Note: Webhook URL ab hai -> /api/whatsapp/webhook
-// Meta will call: GET /api/whatsapp/webhook (for verification)
-// Meta will call: POST /api/whatsapp/webhook (for incoming messages)
+app.use('/api/whatsapp-logs', whatsAppLogRoutes);
+
+// 4. Meta Lead Sync
+app.use('/api/meta', metaRoutes);
+app.use('/api/activity-logs', require('./src/routes/activityLogRoutes'));
+app.use('/api/reports', reportRoutes); // Reports & Analytics
+
+// Meta Webhook URL: /api/meta/webhook
+
+// Catch-all handler: for any request that doesn't match API routes,
+// send back React's index.html file (for client-side routing)
+app.get('{*splat}', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+});
 
 // 🔥 SERVER START
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server Running on Port ${PORT}`);
   console.log("👉 Verify Token in .env:", process.env.VERIFY_TOKEN ? "✅ Loaded" : "❌ Missing");

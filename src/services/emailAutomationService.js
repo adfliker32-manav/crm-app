@@ -89,7 +89,7 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                 // Use retry for automation emails to handle transient connection issues
                 const result = await sendEmailWithRetry(emailOptions, 1); // Retry once
                 console.log(`✅ Automated email sent to ${lead.email} using template: ${template.name}`);
-                
+
                 // Log successful email
                 await logEmail({
                     userId: userId,
@@ -106,7 +106,7 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                 });
             } catch (error) {
                 console.error(`❌ Error sending automated email for template ${template.name}:`, error.message);
-                
+
                 // Log failed email
                 await logEmail({
                     userId: userId,
@@ -121,13 +121,14 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                     leadId: lead._id,
                     attachments: template.attachments || []
                 });
-                
+
                 // Continue with next template even if one fails
             }
         }
+        return templates.length > 0;
     } catch (error) {
         console.error('❌ Error in email automation:', error.message);
-        // Don't throw error, just log it - automation shouldn't break lead creation
+        return false;
     }
 };
 
@@ -218,7 +219,7 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                 // Use retry for automation emails to handle transient connection issues
                 const result = await sendEmailWithRetry(emailOptions, 1); // Retry once
                 console.log(`✅ Automated email sent to ${lead.email} for stage change to ${newStage}`);
-                
+
                 // Log successful email
                 await logEmail({
                     userId: userId,
@@ -235,7 +236,7 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                 });
             } catch (error) {
                 console.error(`❌ Error sending automated email for template ${template.name}:`, error.message);
-                
+
                 // Log failed email
                 await logEmail({
                     userId: userId,
@@ -250,13 +251,14 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                     leadId: lead._id,
                     attachments: template.attachments || []
                 });
-                
+
                 // Continue with next template even if one fails
             }
         }
+        return templates.length > 0;
     } catch (error) {
         console.error('❌ Error in email automation:', error.message);
-        // Don't throw error, just log it - automation shouldn't break stage change
+        return false;
     }
 };
 

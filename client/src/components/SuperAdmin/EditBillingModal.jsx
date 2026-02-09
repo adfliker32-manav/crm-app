@@ -12,11 +12,16 @@ const EditBillingModal = ({ isOpen, onClose, company, onSuccess }) => {
         lastPaymentDate: ''
     });
     const [loading, setLoading] = useState(false);
+    const [availablePlans, setAvailablePlans] = useState([]);
+
+    useEffect(() => {
+        fetchPlans();
+    }, []);
 
     useEffect(() => {
         if (company) {
             setFormData({
-                plan: company.plan || 'Free',
+                plan: company.plan || 'free',
                 billingStatus: company.billingStatus || 'Trial',
                 monthlyRevenue: company.monthlyRevenue || 0,
                 expiryDate: company.expiryDate ? new Date(company.expiryDate).toISOString().split('T')[0] : '',
@@ -24,6 +29,15 @@ const EditBillingModal = ({ isOpen, onClose, company, onSuccess }) => {
             });
         }
     }, [company]);
+
+    const fetchPlans = async () => {
+        try {
+            const response = await api.get('/superadmin/plans');
+            setAvailablePlans(response.data.plans || []);
+        } catch (error) {
+            console.error('Error fetching plans:', error);
+        }
+    };
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -73,10 +87,12 @@ const EditBillingModal = ({ isOpen, onClose, company, onSuccess }) => {
                             onChange={handleChange}
                             className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         >
-                            <option value="Free">Free</option>
-                            <option value="Basic">Basic</option>
-                            <option value="Premium">Premium</option>
-                            <option value="Enterprise">Enterprise</option>
+                            <option value="free">Free</option>
+                            {availablePlans.map((plan) => (
+                                <option key={plan._id} value={plan.name.toLowerCase()}>
+                                    {plan.name} (${plan.price}/month)
+                                </option>
+                            ))}
                         </select>
                     </div>
 

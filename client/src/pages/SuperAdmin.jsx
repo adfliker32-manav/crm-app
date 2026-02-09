@@ -3,6 +3,8 @@ import SuperAdminSidebar from '../components/SuperAdmin/SuperAdminSidebar';
 import DashboardView from '../components/SuperAdmin/DashboardView';
 import CompaniesView from '../components/SuperAdmin/CompaniesView';
 import BillingView from '../components/SuperAdmin/BillingView';
+import PlansView from '../components/SuperAdmin/PlansView';
+import GlobalSettingsView from '../components/SuperAdmin/GlobalSettingsView';
 
 const SuperAdmin = () => {
     const [activeView, setActiveView] = useState('dashboard');
@@ -15,6 +17,10 @@ const SuperAdmin = () => {
                 return <CompaniesView />;
             case 'billing':
                 return <BillingView />;
+            case 'plans':
+                return <PlansView />;
+            case 'settings':
+                return <GlobalSettingsView />;
             default:
                 return <DashboardView />;
         }

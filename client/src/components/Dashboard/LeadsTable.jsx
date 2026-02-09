@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from 'react';
+import { useAuth } from '../../context/AuthContext';
+import AssignLeadDropdown from '../Leads/AssignLeadDropdown';
 
 // SortIcon component moved outside to avoid re-creation on each render
 const SortIcon = ({ sortConfig, column }) => {
@@ -8,7 +10,8 @@ const SortIcon = ({ sortConfig, column }) => {
         : <i className="fa-solid fa-sort-down text-blue-600 ml-1"></i>;
 };
 
-const LeadsTable = ({ leads, stages = [], searchQuery = '', onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate }) => {
+const LeadsTable = ({ leads, stages = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onRefresh }) => {
+    const { user } = useAuth();
     const [selectedIds, setSelectedIds] = useState([]);
     const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
 
@@ -16,16 +19,8 @@ const LeadsTable = ({ leads, stages = [], searchQuery = '', onEdit, onDelete, on
     const sortedLeads = useMemo(() => {
         let processed = [...leads];
 
-        // Filter
-        if (searchQuery) {
-            const query = searchQuery.toLowerCase();
-            processed = processed.filter(lead =>
-                (lead.name && lead.name.toLowerCase().includes(query)) ||
-                (lead.phone && lead.phone.toLowerCase().includes(query)) ||
-                (lead.email && lead.email.toLowerCase().includes(query)) ||
-                (lead.source && lead.source.toLowerCase().includes(query))
-            );
-        }
+        // Local Sort (respecting parent's initial sort/filter)
+        // Note: Search filtering is now done by parent (Leads.jsx) before passing 'leads' prop.
 
         // Sort
         if (sortConfig.key) {
@@ -222,6 +217,9 @@ const LeadsTable = ({ leads, stages = [], searchQuery = '', onEdit, onDelete, on
                                 <th onClick={() => handleSort('date')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition">
                                     Created <SortIcon sortConfig={sortConfig} column="date" />
                                 </th>
+                                {(user?.role === 'manager' || user?.role === 'superadmin' || user?.permissions?.assignLeads) && (
+                                    <th className="px-6 py-4">Assigned To</th>
+                                )}
                                 <th className="px-6 py-4 text-right">Actions</th>
                             </tr>
                         </thead>
@@ -271,15 +269,31 @@ const LeadsTable = ({ leads, stages = [], searchQuery = '', onEdit, onDelete, on
                                         {getFollowUpBadge(lead.nextFollowUpDate, false)}
                                     </td>
                                     <td className="px-6 py-4 text-xs font-medium text-slate-500">
-                                        <span className="bg-slate-100 px-2 py-1 rounded border border-slate-200">
+                                        <span className="bg-slate-100 px-2 py-1 rounded border border-slate-200 whitespace-nowrap">
                                             {lead.source || 'Manual'}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-sm text-slate-500">
                                         {formatDate(lead.createdAt || lead.date)}
                                     </td>
+                                    {(user?.role === 'manager' || user?.role === 'superadmin' || user?.permissions?.assignLeads) && (
+                                        <td className="px-6 py-4">
+                                            <AssignLeadDropdown
+                                                leadId={lead._id}
+                                                currentAssignee={lead.assignedTo?._id}
+                                                onAssign={onRefresh}
+                                            />
+                                        </td>
+                                    )}
                                     <td className="px-6 py-4 text-right">
                                         <div className="flex items-center justify-end gap-2">
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); onLeadClick && onLeadClick(lead); }}
+                                                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-100 hover:text-blue-600 transition flex items-center justify-center text-slate-400 border border-transparent hover:border-blue-200"
+                                                title="View Full Details"
+                                            >
+                                                <i className="fa-solid fa-eye text-xs"></i>
+                                            </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); onNoteClick(lead); }}
                                                 className="w-8 h-8 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-600 transition flex items-center justify-center border border-orange-200"

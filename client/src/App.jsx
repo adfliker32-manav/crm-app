@@ -16,6 +16,8 @@ import Leads from './pages/Leads';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import SuperAdmin from './pages/SuperAdmin';
+import Settings from './pages/Settings';
+import Reports from './pages/Reports';
 
 function App() {
   return (
@@ -31,15 +33,27 @@ function App() {
                 <Route element={<ProtectedRoute />}>
                   <Route path="/super-admin" element={<SuperAdmin />} />
 
-                  <Route path="/" element={<Layout />}>
-                    <Route index element={<Dashboard />} />
-                    <Route path="dashboard" element={<Navigate to="/" replace />} />
-                    <Route path="leads" element={<Leads />} />
-                    <Route path="email" element={<EmailManagement />} />
-                    <Route path="whatsapp" element={<WhatsAppManagement />} />
-                    <Route path="team" element={<Team />} />
+                  {/* Dashboard Layout Routes */}
+                  <Route element={<Layout />}>
+                    <Route path="/dashboard" element={<Dashboard />} />
+
+                    {/* Preserve other routes as siblings if you want them accessible strictly under layout, 
+                        BUT originally they were at root. Since Layout uses <Outlet>, nesting them under a 
+                        pathless layout route keeps their paths but wraps them. 
+                        However, we want to start organizing better. 
+                        If we keeping old paths:
+                    */}
+                    <Route path="/leads" element={<Leads />} />
+                    <Route path="/email" element={<EmailManagement />} />
+                    <Route path="/whatsapp" element={<WhatsAppManagement />} />
+                    <Route path="/team" element={<Team />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/reports" element={<Reports />} />
                   </Route>
                 </Route>
+
+                {/* Default root redirects to login for now (no Landing Page) */}
+                <Route path="/" element={<Navigate to="/login" replace />} />
               </Routes>
               <NotificationContainer />
               <ConfirmDialog />
