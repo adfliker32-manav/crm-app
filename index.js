@@ -143,10 +143,32 @@ app.use((req, res, next) => {
   }
 });
 
+// 6. HEALTH CHECK & KEEP-ALIVE (Prevent Render Free Tier Step)
+app.get('/api/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
+// Self-Ping Mechanism (Runs every 10 minutes)
+const axios = require('axios');
+const reloadWebsite = () => {
+  // Replace with your actual Render URL if auto-detection fails
+  const url = process.env.SERVER_URL || `http://localhost:${PORT}`;
+  axios.get(`${url}/api/health`)
+    .then(() => console.log(`✅ Keep-Alive Ping Successful: ${url}`))
+    .catch(err => console.error(`❌ Keep-Alive Ping Failed: ${err.message}`));
+};
+
 // 🔥 SERVER START
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server Running on Port ${PORT}`);
+
+  // Start Keep-Alive Loop (only in production or if configured)
+  if (process.env.NODE_ENV === 'production') {
+    console.log('⏰ Starting Keep-Alive mechanism (every 10 mins)...');
+    setInterval(reloadWebsite, 600000); // 10 minutes
+  }
+
   console.log("👉 WA Verify Token:", process.env.WA_WEBHOOK_VERIFY_TOKEN ? "✅ Loaded" : "❌ Missing");
   console.log("📡 WhatsApp Webhook URL (configure in Meta):");
   console.log(`   GET/POST: http://your-domain.com:${PORT}/webhook/whatsapp`);
