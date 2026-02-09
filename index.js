@@ -169,9 +169,12 @@ app.listen(PORT, () => {
     setInterval(reloadWebsite, 600000); // 10 minutes
   }
 
-  console.log("👉 WA Verify Token:", process.env.WA_WEBHOOK_VERIFY_TOKEN ? "✅ Loaded" : "❌ Missing");
+  const verifyToken = process.env.WA_WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN;
+  console.log("👉 WA Verify Token:", verifyToken ? "✅ Loaded" : "❌ Missing");
   console.log("📡 WhatsApp Webhook URL (configure in Meta):");
   console.log(`   GET/POST: http://your-domain.com:${PORT}/webhook/whatsapp`);
   console.log(`   For local testing: http://localhost:${PORT}/webhook/whatsapp`);
-  console.log("⚠️  Set WA_WEBHOOK_VERIFY_TOKEN in .env to match Meta's webhook verify token!");
+  if (!verifyToken) {
+    console.log("⚠️  Set VERIFY_TOKEN or WA_WEBHOOK_VERIFY_TOKEN in .env to match Meta's webhook verify token!");
+  }
 });

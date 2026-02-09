@@ -10,8 +10,8 @@ exports.verifyWebhook = (req, res) => {
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
 
-    // Get verify token from environment
-    const VERIFY_TOKEN = process.env.WA_WEBHOOK_VERIFY_TOKEN || 'whatsapp_webhook_verify_token';
+    // Get verify token from environment (support both names)
+    const VERIFY_TOKEN = process.env.WA_WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN || 'whatsapp_webhook_verify_token';
 
     if (mode && token) {
         if (mode === 'subscribe' && token === VERIFY_TOKEN) {
