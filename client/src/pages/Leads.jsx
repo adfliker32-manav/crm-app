@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import api from '../services/api';
 import LeadsTable from '../components/Dashboard/LeadsTable';
@@ -29,6 +29,11 @@ const Leads = () => {
 
     // Pipeline-specific state
     const [columns, setColumns] = useState({});
+
+    // Inline edit stage state
+    const [editingStageId, setEditingStageId] = useState(null);
+    const [editingStageName, setEditingStageName] = useState('');
+    const editInputRef = useRef(null);
 
     // Modal states
     const [isAddLeadModalOpen, setIsAddLeadModalOpen] = useState(false);
@@ -65,6 +70,14 @@ const Leads = () => {
     useEffect(() => {
         fetchData();
     }, [fetchData]);
+
+    // Focus the edit input when editing starts
+    useEffect(() => {
+        if (editingStageId && editInputRef.current) {
+            editInputRef.current.focus();
+            editInputRef.current.select();
+        }
+    }, [editingStageId]);
 
     // Derived Sources for Filter Dropdown
     const sources = React.useMemo(() => {
@@ -178,9 +191,49 @@ const Leads = () => {
         }
     };
 
+    // ---- Stage Rename (Edit) ----
+    const startEditingStage = (stageId, stageName) => {
+        setEditingStageId(stageId);
+        setEditingStageName(stageName);
+    };
+
+    const cancelEditingStage = () => {
+        setEditingStageId(null);
+        setEditingStageName('');
+    };
+
+    const saveStageRename = async (stageId) => {
+        const newName = editingStageName.trim();
+        if (!newName) {
+            showError('Stage name cannot be empty');
+            cancelEditingStage();
+            return;
+        }
+        try {
+            await api.put(`/stages/${stageId}`, { name: newName });
+            showSuccess('Stage renamed successfully');
+            cancelEditingStage();
+            fetchData();
+        } catch (error) {
+            console.error("Failed to rename stage", error);
+            showError(error.response?.data?.message || 'Failed to rename stage');
+            cancelEditingStage();
+        }
+    };
+
+    const handleEditKeyDown = (e, stageId) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            saveStageRename(stageId);
+        } else if (e.key === 'Escape') {
+            cancelEditingStage();
+        }
+    };
+
+    // ---- Stage Delete ----
     const deleteStage = async (stageId, stageName) => {
         if (stageName === 'New') return showError("Cannot delete default 'New' stage");
-        const confirmed = await showDanger(`Delete "${stageName}" stage?`, "Delete Stage");
+        const confirmed = await showDanger(`Delete "${stageName}" stage? All leads will be moved to "New".`, "Delete Stage");
         if (!confirmed) return;
         try {
             await api.delete(`/stages/${stageId}`);
@@ -384,26 +437,67 @@ const Leads = () => {
 
                                 return (
                                     <div key={columnId} className="flex flex-col w-[340px] max-h-full">
-                                        <div className="flex items-center justify-between p-4 mb-3 rounded-xl bg-white/60 backdrop-blur-sm border border-slate-200/60 shadow-sm">
-                                            <div className="flex items-center gap-3">
-                                                <div className={`w-3 h-3 rounded-full ${column.name === 'New' ? 'bg-blue-500' :
+                                        <div className="group flex items-center justify-between p-4 mb-3 rounded-xl bg-white/60 backdrop-blur-sm border border-slate-200/60 shadow-sm">
+                                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                                                <div className={`w-3 h-3 rounded-full flex-shrink-0 ${column.name === 'New' ? 'bg-blue-500' :
                                                     column.name === 'Contacted' ? 'bg-yellow-500' :
                                                         column.name === 'Won' ? 'bg-green-500' :
                                                             column.name === 'Lost' ? 'bg-red-500' : 'bg-slate-400'
                                                     } ring-4 ring-white/50`}></div>
-                                                <span className="font-extrabold text-slate-700 tracking-tight text-sm uppercase">{column.name}</span>
-                                                <span className="bg-slate-100 text-slate-500 text-xs font-bold px-2.5 py-1 rounded-lg border border-slate-200/50">
-                                                    {filteredItems.length}
-                                                </span>
+                                                {editingStageId === column.id ? (
+                                                    <input
+                                                        ref={editInputRef}
+                                                        type="text"
+                                                        value={editingStageName}
+                                                        onChange={(e) => setEditingStageName(e.target.value)}
+                                                        onKeyDown={(e) => handleEditKeyDown(e, column.id)}
+                                                        onBlur={() => saveStageRename(column.id)}
+                                                        className="bg-white border border-blue-300 text-slate-700 text-sm font-bold uppercase tracking-tight px-2 py-1 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 w-full"
+                                                    />
+                                                ) : (
+                                                    <span className="font-extrabold text-slate-700 tracking-tight text-sm uppercase truncate">{column.name}</span>
+                                                )}
+                                                {editingStageId !== column.id && (
+                                                    <span className="bg-slate-100 text-slate-500 text-xs font-bold px-2.5 py-1 rounded-lg border border-slate-200/50 flex-shrink-0">
+                                                        {filteredItems.length}
+                                                    </span>
+                                                )}
                                             </div>
-                                            {column.name !== 'New' && (
-                                                <button
-                                                    onClick={() => deleteStage(column.id, column.name)}
-                                                    className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100"
-                                                    title="Delete Stage"
-                                                >
-                                                    <i className="fa-solid fa-trash text-xs"></i>
-                                                </button>
+                                            {column.name !== 'New' && editingStageId !== column.id && (
+                                                <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                                                    <button
+                                                        onClick={() => startEditingStage(column.id, column.name)}
+                                                        className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all"
+                                                        title="Rename Stage"
+                                                    >
+                                                        <i className="fa-solid fa-pen text-xs"></i>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => deleteStage(column.id, column.name)}
+                                                        className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                                                        title="Delete Stage"
+                                                    >
+                                                        <i className="fa-solid fa-trash text-xs"></i>
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {editingStageId === column.id && (
+                                                <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                                                    <button
+                                                        onMouseDown={(e) => { e.preventDefault(); saveStageRename(column.id); }}
+                                                        className="w-7 h-7 flex items-center justify-center rounded-lg text-green-500 hover:bg-green-50 transition-all"
+                                                        title="Save"
+                                                    >
+                                                        <i className="fa-solid fa-check text-xs"></i>
+                                                    </button>
+                                                    <button
+                                                        onMouseDown={(e) => { e.preventDefault(); cancelEditingStage(); }}
+                                                        className="w-7 h-7 flex items-center justify-center rounded-lg text-red-400 hover:bg-red-50 transition-all"
+                                                        title="Cancel"
+                                                    >
+                                                        <i className="fa-solid fa-xmark text-xs"></i>
+                                                    </button>
+                                                </div>
                                             )}
                                         </div>
                                         <Droppable droppableId={columnId}>

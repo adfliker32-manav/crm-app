@@ -12,4 +12,7 @@ router.post('/', authMiddleware, leadController.createStage);
 // 3. Delete Stage
 router.delete('/:id', authMiddleware, leadController.deleteStage);
 
+// 4. Update Stage (Rename)
+router.put('/:id', authMiddleware, leadController.updateStage);
+
 module.exports = router;

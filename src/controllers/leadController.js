@@ -517,6 +517,35 @@ const deleteStage = async (req, res) => {
     }
 };
 
+const updateStage = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const { name } = req.body;
+
+        if (!name || !name.trim()) {
+            return res.status(400).json({ message: 'Stage name is required' });
+        }
+
+        const stage = await Stage.findOne({ _id: req.params.id, userId: userId });
+        if (!stage) return res.status(404).json({ message: 'Stage not found' });
+        if (stage.name === 'New') return res.status(400).json({ message: "Cannot rename the 'New' stage" });
+
+        const oldName = stage.name;
+        stage.name = name.trim();
+        await stage.save();
+
+        // Bulk-update all leads that had the old stage name
+        await Lead.updateMany(
+            { userId: userId, status: oldName },
+            { $set: { status: name.trim() } }
+        );
+
+        return res.json({ success: true, stage });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
 // ==========================================
 // 7. SYNC GOOGLE SHEET
 // ==========================================
@@ -1143,6 +1172,7 @@ module.exports = {
     getStages,
     createStage,
     deleteStage,
+    updateStage,
     syncLeads,
     getAnalytics,
     getAnalyticsData,
@@ -1150,8 +1180,7 @@ module.exports = {
     updateFollowUpDate,
     completeFollowUp,
     getFollowUpDoneLeads,
-    sendManualEmail
-    ,
+    sendManualEmail,
     assignLead,
     bulkAssignLeads
 };

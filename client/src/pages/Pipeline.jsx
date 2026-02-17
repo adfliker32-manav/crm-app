@@ -197,8 +197,8 @@ const Pipeline = () => {
                                                 {...provided.droppableProps}
                                                 ref={provided.innerRef}
                                                 className={`flex-1 p-4 bg-white/50 backdrop-blur-sm rounded-b-2xl overflow-y-auto space-y-4 transition-all duration-300 border border-t-0 ${snapshot.isDraggingOver
-                                                        ? `${colors.bg} border-2 ${colors.border}`
-                                                        : 'border-slate-100/50'
+                                                    ? `${colors.bg} border-2 ${colors.border}`
+                                                    : 'border-slate-100/50'
                                                     }`}
                                             >
                                                 {column.items.map((item, index) => (

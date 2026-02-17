@@ -15,10 +15,10 @@ const checkPermission = require('../middleware/checkPermission');
 router.post('/sync-sheet', authMiddleware, checkPermission('createLeads'), leadController.syncLeads);
 
 // 2. Analytics (MUST BE BEFORE /:id routes!)
-router.get('/analytics-data', authMiddleware, checkPermission('viewDashboard'), leadController.getAnalyticsData);
+router.get('/analytics-data', authMiddleware, leadController.getAnalyticsData);
 
 // 3. Get Follow-up Leads (Due Today)
-router.get('/follow-up-today', authMiddleware, checkPermission('manageFollowUps'), leadController.getFollowUpLeads);
+router.get('/follow-up-today', authMiddleware, leadController.getFollowUpLeads);
 
 // 4. Get Follow-up Done Leads
 router.get('/follow-up-done', authMiddleware, checkPermission('manageFollowUps'), leadController.getFollowUpDoneLeads);
