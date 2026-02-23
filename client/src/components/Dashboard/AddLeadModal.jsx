@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 
 const AddLeadModal = ({ isOpen, onClose, onSuccess }) => {
@@ -8,10 +8,16 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess }) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
+    // Duplicate detection state
+    const [duplicateWarning, setDuplicateWarning] = useState(null);
+    const [checkingDuplicate, setCheckingDuplicate] = useState(false);
+
     // Fetch custom fields when modal opens
     useEffect(() => {
         if (isOpen) {
             fetchCustomFields();
+            // Reset duplicate warning on open
+            setDuplicateWarning(null);
         }
     }, [isOpen]);
 
@@ -27,6 +33,40 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess }) => {
             setCustomData(initialCustomData);
         } catch (err) {
             console.error('Failed to fetch custom fields:', err);
+        }
+    };
+
+    // 🔍 Live duplicate check on phone/email blur
+    const checkForDuplicates = useCallback(async (phone, email) => {
+        if (!phone && !email) {
+            setDuplicateWarning(null);
+            return;
+        }
+        setCheckingDuplicate(true);
+        try {
+            const res = await api.post('/leads/check-duplicates', { phone, email });
+            if (res.data.hasDuplicates) {
+                setDuplicateWarning(res.data.duplicates[0]);
+            } else {
+                setDuplicateWarning(null);
+            }
+        } catch (err) {
+            // Silently ignore — don't block the form
+            console.error('Duplicate check failed:', err);
+        } finally {
+            setCheckingDuplicate(false);
+        }
+    }, []);
+
+    const handlePhoneBlur = () => {
+        if (formData.phone.trim()) {
+            checkForDuplicates(formData.phone, formData.email);
+        }
+    };
+
+    const handleEmailBlur = () => {
+        if (formData.email.trim()) {
+            checkForDuplicates(formData.phone, formData.email);
         }
     };
 
@@ -55,6 +95,38 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess }) => {
                 onClose();
                 setFormData({ name: '', phone: '', email: '', dealValue: '' });
                 setCustomData({});
+                setDuplicateWarning(null);
+            }
+        } catch (err) {
+            // Handle duplicate response (409)
+            if (err.response?.status === 409 && err.response?.data?.duplicate) {
+                setDuplicateWarning(err.response.data.existingLead);
+                setError(err.response.data.message);
+            } else {
+                setError(err.response?.data?.message || 'Failed to add lead');
+            }
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Force create (bypass duplicate check)
+    const handleForceCreate = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const payload = {
+                ...formData,
+                customData: customData,
+                force: true
+            };
+            const res = await api.post('/leads', payload);
+            if (res.status === 200 || res.status === 201) {
+                onSuccess();
+                onClose();
+                setFormData({ name: '', phone: '', email: '', dealValue: '' });
+                setCustomData({});
+                setDuplicateWarning(null);
             }
         } catch (err) {
             setError(err.response?.data?.message || 'Failed to add lead');
@@ -156,6 +228,39 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess }) => {
 
                 {error && <div className="bg-red-100 text-red-700 p-2 rounded mb-3 text-sm">{error}</div>}
 
+                {/* 🔍 Duplicate Warning Banner */}
+                {duplicateWarning && (
+                    <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 mb-3 animate-fade-in-up">
+                        <div className="flex items-start gap-2">
+                            <i className="fa-solid fa-triangle-exclamation text-amber-500 mt-0.5"></i>
+                            <div className="flex-1">
+                                <p className="text-amber-700 text-sm font-bold">Duplicate Detected!</p>
+                                <p className="text-amber-600 text-xs mt-1">
+                                    A lead with matching info already exists:
+                                </p>
+                                <div className="bg-white rounded-lg p-2 mt-2 border border-amber-200">
+                                    <p className="text-sm font-bold text-slate-700">{duplicateWarning.name}</p>
+                                    <p className="text-xs text-slate-500">
+                                        📞 {duplicateWarning.phone}
+                                        {duplicateWarning.email && ` • ✉️ ${duplicateWarning.email}`}
+                                    </p>
+                                    <p className="text-[10px] text-slate-400 mt-1">
+                                        Status: {duplicateWarning.status} • Source: {duplicateWarning.source}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleForceCreate}
+                                    disabled={loading}
+                                    className="mt-2 w-full bg-amber-500 hover:bg-amber-600 text-white py-1.5 rounded-lg text-xs font-bold transition disabled:opacity-50"
+                                >
+                                    {loading ? 'Saving...' : 'Save Anyway (Force Create)'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 <form onSubmit={handleSubmit} className="space-y-3">
                     {/* Standard Fields */}
                     <div>
@@ -172,14 +277,22 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess }) => {
 
                     <div>
                         <label className="text-xs font-bold text-gray-500 uppercase">Phone <span className="text-red-500">*</span></label>
-                        <input
-                            type="text"
-                            required
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                            placeholder="Enter Phone"
-                            value={formData.phone}
-                            onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                        />
+                        <div className="relative">
+                            <input
+                                type="text"
+                                required
+                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm pr-8"
+                                placeholder="Enter Phone"
+                                value={formData.phone}
+                                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                                onBlur={handlePhoneBlur}
+                            />
+                            {checkingDuplicate && (
+                                <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                                    <div className="w-4 h-4 border-2 border-blue-200 border-t-blue-500 rounded-full animate-spin"></div>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     <div>
@@ -190,6 +303,7 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess }) => {
                             placeholder="Enter Email (Optional)"
                             value={formData.email}
                             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                            onBlur={handleEmailBlur}
                         />
                     </div>
 
@@ -240,4 +354,3 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess }) => {
 };
 
 export default AddLeadModal;
-

@@ -7,6 +7,7 @@ import AddStageModal from '../components/Dashboard/AddStageModal';
 import EditLeadModal from '../components/Dashboard/EditLeadModal';
 import LeadDetailsModal from '../components/Dashboard/LeadDetailsModal';
 import NoteModal from '../components/Dashboard/NoteModal';
+import DuplicateLeadsModal from '../components/Dashboard/DuplicateLeadsModal';
 import { useNotification } from '../context/NotificationContext';
 import { useConfirm } from '../context/ConfirmContext';
 
@@ -41,6 +42,7 @@ const Leads = () => {
     const [isEditLeadModalOpen, setIsEditLeadModalOpen] = useState(false);
     const [isLeadDetailsModalOpen, setIsLeadDetailsModalOpen] = useState(false);
     const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
+    const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
     const [selectedLead, setSelectedLead] = useState(null);
 
     const fetchData = useCallback(async () => {
@@ -415,6 +417,13 @@ const Leads = () => {
                     >
                         <i className="fa-solid fa-layer-group text-slate-400"></i> <span className="hidden sm:inline">Stage</span>
                     </button>
+                    <button
+                        onClick={() => setIsDuplicateModalOpen(true)}
+                        className="bg-white hover:bg-orange-50 text-orange-600 border border-orange-200 w-8 h-8 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-xl text-sm font-bold transition-all shadow-sm flex items-center justify-center gap-2 shrink-0"
+                        title="Find Duplicates"
+                    >
+                        <i className="fa-solid fa-copy"></i> <span className="hidden sm:inline">Duplicates</span>
+                    </button>
                 </div>
             </div>
 
@@ -637,6 +646,12 @@ const Leads = () => {
                     onSuccess={fetchData}
                 />
             )}
+
+            <DuplicateLeadsModal
+                isOpen={isDuplicateModalOpen}
+                onClose={() => setIsDuplicateModalOpen(false)}
+                onSuccess={fetchData}
+            />
         </div>
     );
 };

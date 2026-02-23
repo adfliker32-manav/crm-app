@@ -9,6 +9,7 @@ const { sendAutomatedWhatsAppOnLeadCreate, sendAutomatedWhatsAppOnStageChange } 
 const { sendMetaEvent } = require('../services/metaConversionService');
 const { sendEmail } = require('../services/emailService');
 const { logActivity } = require('../services/auditService');
+const { findDuplicates, findAllDuplicateGroups, normalizePhone } = require('../services/duplicateService');
 
 // ==========================================
 // 1. GET LEADS (With Agent/Manager Logic + Permission Filtering)
@@ -52,13 +53,25 @@ const getLeads = async (req, res) => {
 // ==========================================
 const createLead = async (req, res) => {
     try {
-        const { name, email, phone, status, source, customData } = req.body;
+        const { name, email, phone, status, source, customData, force } = req.body;
 
         let ownerId = req.user.userId || req.user.id;
         if (req.user.role === 'agent') {
             const agentUser = await User.findById(ownerId);
             if (agentUser && agentUser.parentId) {
                 ownerId = agentUser.parentId;
+            }
+        }
+
+        // 🔍 DUPLICATE CHECK — unless force=true
+        if (!force) {
+            const duplicates = await findDuplicates(ownerId, phone, email);
+            if (duplicates.length > 0) {
+                return res.status(409).json({
+                    duplicate: true,
+                    message: 'Duplicate lead detected! A lead with the same phone or email already exists.',
+                    existingLead: duplicates[0]
+                });
             }
         }
 
@@ -608,11 +621,12 @@ const syncLeads = async (req, res) => {
             });
 
             if (finalEmail || finalPhone !== 'No Phone') {
-                const exists = finalEmail
-                    ? await Lead.findOne({ email: finalEmail, userId: userId })
-                    : null;
+                // 🔍 IMPROVED: Check both phone AND email for duplicates
+                const duplicates = await findDuplicates(userId, finalPhone, finalEmail);
+                const exists = duplicates.length > 0;
 
                 if (!exists) {
+                    // No duplicate found — create new lead
                     const newLead = await Lead.create({
                         userId: userId,
                         name: finalName,
@@ -1163,6 +1177,106 @@ const bulkAssignLeads = async (req, res) => {
     }
 };
 
+// ==========================================
+// 17. CHECK DUPLICATES (Real-time)
+// ==========================================
+const checkDuplicates = async (req, res) => {
+    try {
+        const { phone, email } = req.body;
+
+        let ownerId = req.user.userId || req.user.id;
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId).select('parentId').lean();
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+
+        const duplicates = await findDuplicates(ownerId, phone, email);
+        res.json({ hasDuplicates: duplicates.length > 0, duplicates });
+    } catch (err) {
+        console.error('Check Duplicates Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// 18. GET ALL DUPLICATE GROUPS
+// ==========================================
+const getDuplicateGroups = async (req, res) => {
+    try {
+        let ownerId = req.user.userId || req.user.id;
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId).select('parentId').lean();
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+
+        const groups = await findAllDuplicateGroups(ownerId);
+        const totalDuplicates = groups.reduce((sum, g) => sum + g.duplicates.length, 0);
+
+        res.json({
+            totalGroups: groups.length,
+            totalDuplicates,
+            groups
+        });
+    } catch (err) {
+        console.error('Get Duplicate Groups Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ==========================================
+// 19. AUTO-DELETE DUPLICATES (Keep Oldest)
+// ==========================================
+const autoDeleteDuplicates = async (req, res) => {
+    try {
+        let ownerId = req.user.userId || req.user.id;
+        if (req.user.role === 'agent') {
+            const agentUser = await User.findById(ownerId).select('parentId').lean();
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+
+        const groups = await findAllDuplicateGroups(ownerId);
+        let deletedCount = 0;
+        const deletedIds = [];
+
+        for (const group of groups) {
+            for (const dup of group.duplicates) {
+                await Lead.findByIdAndDelete(dup._id);
+                deletedIds.push(dup._id);
+                deletedCount++;
+            }
+        }
+
+        // Log activity
+        if (deletedCount > 0) {
+            logActivity({
+                userId: req.user.userId || req.user.id,
+                userName: req.user.name || 'Unknown',
+                actionType: 'DUPLICATES_DELETED',
+                entityType: 'Lead',
+                entityName: `${deletedCount} duplicate leads`,
+                metadata: { deletedCount, groupCount: groups.length },
+                companyId: ownerId
+            }).catch(err => console.error('Audit log error:', err));
+        }
+
+        res.json({
+            success: true,
+            message: `${deletedCount} duplicate leads deleted successfully`,
+            deletedCount,
+            groupsProcessed: groups.length
+        });
+    } catch (err) {
+        console.error('Auto Delete Duplicates Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
 module.exports = {
     getLeads,
     createLead,
@@ -1182,5 +1296,8 @@ module.exports = {
     getFollowUpDoneLeads,
     sendManualEmail,
     assignLead,
-    bulkAssignLeads
+    bulkAssignLeads,
+    checkDuplicates,
+    getDuplicateGroups,
+    autoDeleteDuplicates
 };
