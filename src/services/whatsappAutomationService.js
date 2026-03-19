@@ -1,7 +1,5 @@
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const User = require('../models/User');
-const WhatsAppTemplate = require('../models/WhatsAppTemplate');
-const User = require('../models/User');
 const { sendWhatsAppMessage } = require('./whatsappService');// Helper to resolve specific mapped variables
 const resolveVariable = (mappingObj, varNum, data) => {
     // Handle Mongoose Map vs plain object
