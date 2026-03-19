@@ -45,7 +45,7 @@ exports.getTemplate = async (req, res) => {
 exports.createTemplate = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const { name, language, category, components } = req.body;
+        const { name, language, category, components, variableMapping } = req.body;
 
         // Validation
         if (!name || !language || !category || !components) {
@@ -75,6 +75,7 @@ exports.createTemplate = async (req, res) => {
             language,
             category,
             components,
+            variableMapping: variableMapping || {},
             status: 'DRAFT'
         });
 
@@ -101,7 +102,7 @@ exports.updateTemplate = async (req, res) => {
             return res.status(400).json({ message: 'Can only edit DRAFT or REJECTED templates' });
         }
 
-        const { name, language, category, components, isActive } = req.body;
+        const { name, language, category, components, isActive, variableMapping } = req.body;
 
         if (name && name !== template.name) {
             if (!/^[a-z0-9_]+$/.test(name)) {
@@ -114,6 +115,7 @@ exports.updateTemplate = async (req, res) => {
         if (category) template.category = category;
         if (components) template.components = components;
         if (isActive !== undefined) template.isActive = isActive;
+        if (variableMapping !== undefined) template.variableMapping = variableMapping;
 
         await template.save();
         res.json({ template });

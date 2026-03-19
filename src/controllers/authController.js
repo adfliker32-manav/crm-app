@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 
 // 1. REGISTER (Naya Account)
 exports.register = async (req, res) => {
@@ -100,6 +101,11 @@ exports.login = async (req, res) => {
         const user = await User.findOne({ email: email.toLowerCase().trim() });
         if (!user) return res.status(400).json({ message: "Invalid Email or Password" });
 
+        // If user signed up via Google and has no password
+        if (user.authProvider === 'google' && !user.password) {
+            return res.status(400).json({ message: "This account uses Google Sign-In. Please use the 'Sign in with Google' button." });
+        }
+
         // Password match karo
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ message: "Invalid Email or Password" });
@@ -135,6 +141,86 @@ exports.login = async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
+    }
+};
+
+// 2.5 GOOGLE LOGIN (OAuth)
+exports.googleLogin = async (req, res) => {
+    try {
+        const { credential } = req.body;
+
+        if (!credential) {
+            return res.status(400).json({ message: 'Google credential is required' });
+        }
+
+        const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+        if (!GOOGLE_CLIENT_ID) {
+            console.error('GOOGLE_CLIENT_ID missing from environment');
+            return res.status(500).json({ message: 'Google login is not configured on the server' });
+        }
+
+        // Verify the Google ID token
+        const client = new OAuth2Client(GOOGLE_CLIENT_ID);
+        const ticket = await client.verifyIdToken({
+            idToken: credential,
+            audience: GOOGLE_CLIENT_ID,
+        });
+        const payload = ticket.getPayload();
+
+        const { sub: googleId, email, name, picture } = payload;
+
+        if (!email) {
+            return res.status(400).json({ message: 'Unable to get email from Google account' });
+        }
+
+        // Find existing user by googleId or email
+        let user = await User.findOne({ $or: [{ googleId }, { email: email.toLowerCase() }] });
+
+        if (user) {
+            // Update googleId if user exists by email but hasn't linked Google yet
+            if (!user.googleId) {
+                user.googleId = googleId;
+                user.authProvider = user.password ? user.authProvider : 'google';
+                await user.save();
+            }
+        } else {
+            // Create new user (auto-register via Google)
+            user = await User.create({
+                name: name || email.split('@')[0],
+                email: email.toLowerCase(),
+                googleId,
+                authProvider: 'google',
+                role: 'manager' // Default role for new Google sign-ups
+            });
+        }
+
+        // Create JWT token (same format as normal login)
+        const JWT_SECRET = process.env.JWT_SECRET;
+        if (!JWT_SECRET) {
+            return res.status(500).json({ error: 'Server configuration error' });
+        }
+
+        const tokenPayload = {
+            userId: user._id,
+            role: user.role,
+            name: user.name,
+            permissions: user.permissions
+        };
+
+        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '1d' });
+
+        res.json({
+            token,
+            role: user.role,
+            user: { id: user._id, name: user.name, email: user.email, role: user.role }
+        });
+
+    } catch (err) {
+        console.error('Google Login Error:', err);
+        if (err.message?.includes('Token used too late') || err.message?.includes('Invalid token')) {
+            return res.status(401).json({ message: 'Google token has expired. Please try again.' });
+        }
+        res.status(500).json({ message: 'Google authentication failed. Please try again.' });
     }
 };
 // ... Upar register aur login waisa hi rahega ...

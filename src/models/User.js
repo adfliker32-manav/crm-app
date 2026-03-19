@@ -15,7 +15,17 @@ const userSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        required: true
+        required: false  // Optional for Google OAuth users
+    },
+    googleId: {
+        type: String,
+        default: null,
+        sparse: true  // Allow multiple nulls but unique when set
+    },
+    authProvider: {
+        type: String,
+        enum: ['local', 'google'],
+        default: 'local'
     },
 
     companyName: {
@@ -193,6 +203,44 @@ const userSchema = new mongoose.Schema({
         required: { type: Boolean, default: false },
         order: { type: Number, default: 0 }
     }],
+
+    // Google Sheet Auto-Sync Configuration
+    googleSheetSync: {
+        sheetUrl: { type: String, default: null },
+        syncEnabled: { type: Boolean, default: false },
+        syncIntervalMinutes: {
+            type: Number,
+            enum: [5, 15, 30, 60],
+            default: 15
+        },
+        lastSyncAt: { type: Date, default: null },
+        lastSyncStatus: {
+            type: String,
+            enum: ['success', 'error', 'rate_limited', null],
+            default: null
+        },
+        lastSyncError: { type: String, default: null }
+    },
+
+    // WhatsApp Automations & Settings
+    whatsappSettings: {
+        businessHours: {
+            timezone: { type: String, default: 'UTC' }, // e.g. 'Asia/Kolkata'
+            monday: { isOpen: { type: Boolean, default: true }, start: { type: String, default: '09:00' }, end: { type: String, default: '18:00' } },
+            tuesday: { isOpen: { type: Boolean, default: true }, start: { type: String, default: '09:00' }, end: { type: String, default: '18:00' } },
+            wednesday: { isOpen: { type: Boolean, default: true }, start: { type: String, default: '09:00' }, end: { type: String, default: '18:00' } },
+            thursday: { isOpen: { type: Boolean, default: true }, start: { type: String, default: '09:00' }, end: { type: String, default: '18:00' } },
+            friday: { isOpen: { type: Boolean, default: true }, start: { type: String, default: '09:00' }, end: { type: String, default: '18:00' } },
+            saturday: { isOpen: { type: Boolean, default: false }, start: { type: String, default: '09:00' }, end: { type: String, default: '13:00' } },
+            sunday: { isOpen: { type: Boolean, default: false }, start: { type: String, default: '09:00' }, end: { type: String, default: '13:00' } }
+        },
+        autoReply: {
+            outOfOfficeEnabled: { type: Boolean, default: false },
+            outOfOfficeMessage: { type: String, default: 'Thanks for reaching out! We are currently away and will get back to you during business hours.' },
+            welcomeEnabled: { type: Boolean, default: false },
+            welcomeMessage: { type: String, default: 'Hi there! How can we help you today?' },
+        }
+    },
 
     // Granular Permission System (for agents)
     permissions: {

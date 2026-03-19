@@ -17,9 +17,10 @@ const WhatsAppTemplates = () => {
 
     const fetchTemplates = async () => {
         try {
-            const res = await api.get('/api/whatsapp/templates');
-            setTemplates(res.data);
-            setFilteredTemplates(res.data);
+            const res = await api.get('/whatsapp/templates');
+            const templates = res.data.templates || res.data;
+            setTemplates(templates);
+            setFilteredTemplates(templates);
         } catch (error) {
             console.error("Error fetching templates", error);
             showError('Failed to load templates');
@@ -77,7 +78,7 @@ const WhatsAppTemplates = () => {
         if (!confirmed) return;
 
         try {
-            await api.delete(`/api/whatsapp/templates/${template._id}`);
+            await api.delete(`/whatsapp/templates/${template._id}`);
             showSuccess('Template deleted successfully!');
             fetchTemplates();
         } catch (error) {
@@ -88,7 +89,7 @@ const WhatsAppTemplates = () => {
 
     const handleDuplicate = async (template) => {
         try {
-            await api.post(`/api/whatsapp/templates/${template._id}/duplicate`);
+            await api.post(`/whatsapp/templates/${template._id}/duplicate`);
             showSuccess('Template duplicated successfully!');
             fetchTemplates();
         } catch (error) {

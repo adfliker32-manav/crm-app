@@ -2,11 +2,86 @@ const ChatbotFlow = require('../models/ChatbotFlow');
 const ChatbotSession = require('../models/ChatbotSession');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const Lead = require('../models/Lead');
+const User = require('../models/User');
 const { sendWhatsAppTextMessage, sendInteractiveMessage } = require('./whatsappService');
 
-// Process incoming message and check if it should trigger a chatbot
+// Helper to evaluate if currently within business hours
+const isWithinBusinessHours = (settings) => {
+    if (!settings || !settings.businessHours) return true; // Default to open
+    
+    try {
+        const tz = settings.businessHours.timezone || 'UTC';
+        const now = new Date();
+        
+        // Get day and time in the specified timezone
+        const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: tz,
+            weekday: 'long',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+        
+        const parts = formatter.formatToParts(now);
+        let dayName = ''; let hour = ''; let minute = '';
+        
+        for (const part of parts) {
+            if (part.type === 'weekday') dayName = part.value.toLowerCase();
+            if (part.type === 'hour') hour = part.value;
+            if (part.type === 'minute') minute = part.value;
+        }
+        
+        if (hour === '24') hour = '00';
+        const currentTime = `${hour}:${minute}`;
+        
+        const dayConfig = settings.businessHours[dayName];
+        if (!dayConfig || !dayConfig.isOpen) return false;
+        
+        return currentTime >= dayConfig.start && currentTime <= dayConfig.end;
+    } catch (err) {
+        console.error('Error evaluating business hours:', err);
+        return true; // Fallback to open
+    }
+};
+
+// Process incoming message and check if it should trigger a chatbot or auto-reply
 exports.processIncomingMessage = async (message, conversationId, userId) => {
     try {
+        const conversation = await WhatsAppConversation.findById(conversationId);
+        if (!conversation) return null;
+
+        // 1. Check Global Automations (Welcome & Out-of-Office)
+        const user = await User.findById(userId).select('whatsappSettings');
+        if (user && user.whatsappSettings && user.whatsappSettings.autoReply) {
+            const autoReply = user.whatsappSettings.autoReply;
+            const settings = user.whatsappSettings;
+
+            // Welcome Message logic
+            if (autoReply.welcomeEnabled && autoReply.welcomeMessage) {
+                // If this is the absolute first message inbound
+                if (conversation.metadata.totalInbound === 1) {
+                    await sendWhatsAppTextMessage(conversation.phone, autoReply.welcomeMessage, userId);
+                }
+            }
+
+            // Out-Of-Office logic
+            if (autoReply.outOfOfficeEnabled && autoReply.outOfOfficeMessage) {
+                const isOpen = isWithinBusinessHours(settings);
+                if (!isOpen) {
+                    // Prevent spamming: only send OOO if we haven't sent one recently (e.g. in the last 12 hours)
+                    // We'll approximate this by only sending it if this is the first message in the current "burst"
+                    // (Checking if previous message was more than 4 hours ago, or if it's the very first message)
+                    const isNewConversationBurst = !conversation.lastMessageAt || 
+                        (new Date() - new Date(conversation.lastMessageAt)) > (4 * 60 * 60 * 1000);
+                    
+                    if (conversation.metadata.totalInbound === 1 || isNewConversationBurst) {
+                        await sendWhatsAppTextMessage(conversation.phone, autoReply.outOfOfficeMessage, userId);
+                    }
+                }
+            }
+        }
+
+        // 2. Chatbot Flow Evaluation
         const messageText = message.content?.text?.toLowerCase().trim();
         if (!messageText) return null;
 
@@ -34,9 +109,8 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             return await startSession(flows[0], conversationId, userId);
         }
 
-        // Check for first_message trigger
-        const conversation = await WhatsAppConversation.findById(conversationId);
-        if (conversation && conversation.metadata.totalInbound === 1) {
+        // Check for first_message trigger (Chatbots)
+        if (conversation.metadata.totalInbound === 1) {
             const firstMessageFlows = await ChatbotFlow.find({
                 userId: userId,
                 isActive: true,
@@ -50,7 +124,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 
         return null;
     } catch (error) {
-        console.error('Error processing chatbot message:', error);
+        console.error('Error processing auto-replies / chatbot:', error);
         return null;
     }
 };

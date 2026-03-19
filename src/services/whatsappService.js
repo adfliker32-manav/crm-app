@@ -3,7 +3,29 @@ require('dotenv').config(); // Ensure env vars are loaded
 const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
 const { logWhatsApp } = require('./whatsAppLogService');
 
-const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null) => {
+// Internal Helper: Get valid credentials for Meta API
+const getCredentials = async (userId = null) => {
+    let phoneNumberId, accessToken;
+    if (userId) {
+        const userCredentials = await getUserWhatsAppCredentials(userId);
+        if (userCredentials && userCredentials.phoneNumberId && userCredentials.accessToken) {
+            phoneNumberId = userCredentials.phoneNumberId;
+            accessToken = userCredentials.accessToken;
+        }
+    }
+    if (!phoneNumberId || !accessToken) {
+        phoneNumberId = process.env.WA_PHONE_NUMBER_ID || process.env.Phone_Number_ID;
+        accessToken = process.env.WA_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN;
+    }
+    if (!phoneNumberId || !accessToken) {
+        throw new Error(userId 
+            ? "WhatsApp configuration not found. Please configure your WhatsApp settings." 
+            : "WhatsApp credentials not configured. Please configure WhatsApp settings or set WA_PHONE_NUMBER_ID and WA_ACCESS_TOKEN in .env file");
+    }
+    return { phoneNumberId, accessToken };
+};
+
+const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null) => {
     try {
         let phoneNumberId, accessToken;
 
@@ -49,6 +71,10 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
                 }
             }
         };
+
+        if (components && Array.isArray(components) && components.length > 0) {
+            data.template.components = components;
+        }
 
         const config = {
             headers: {
@@ -167,33 +193,6 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
     }
 };
 
-// Helper: Get credentials (reusable)
-const getCredentials = async (userId) => {
-    let phoneNumberId, accessToken;
-
-    if (userId) {
-        const userCredentials = await getUserWhatsAppCredentials(userId);
-        if (userCredentials && userCredentials.phoneNumberId && userCredentials.accessToken) {
-            phoneNumberId = userCredentials.phoneNumberId;
-            accessToken = userCredentials.accessToken;
-        }
-    }
-
-    if (!phoneNumberId || !accessToken) {
-        phoneNumberId = process.env.WA_PHONE_NUMBER_ID || process.env.Phone_Number_ID;
-        accessToken = process.env.WA_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN;
-    }
-
-    if (!phoneNumberId || !accessToken) {
-        const errorMsg = userId
-            ? "WhatsApp configuration not found. Please configure your WhatsApp settings."
-            : "WhatsApp credentials not configured.";
-        throw new Error(errorMsg);
-    }
-
-    return { phoneNumberId, accessToken };
-};
-
 // Send media message (image, document, audio, video)
 const sendMediaMessage = async (to, mediaType, mediaId, caption = null, userId = null) => {
     try {
@@ -304,10 +303,154 @@ const downloadMedia = async (mediaId, userId = null) => {
     }
 };
 
+// Submit template to Meta for approval
+const submitTemplateToMeta = async (userId, template) => {
+    try {
+        const { accessToken } = await getCredentials(userId);
+        const User = require('../models/User');
+        const user = await User.findById(userId);
+        const wabaId = user?.waBusinessId || process.env.WA_BUSINESS_ID;
+
+        if (!wabaId) {
+            return { success: false, error: 'WhatsApp Business Account ID not configured. Please set it in WhatsApp Settings.' };
+        }
+
+        const url = `https://graph.facebook.com/v17.0/${wabaId}/message_templates`;
+
+        // Build components for Meta API
+        const metaComponents = [];
+        for (const comp of template.components) {
+            const metaComp = { type: comp.type };
+
+            if (comp.type === 'HEADER') {
+                metaComp.format = comp.format || 'TEXT';
+                if (metaComp.format === 'TEXT') {
+                    metaComp.text = comp.text;
+                } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(metaComp.format)) {
+                    // Media header: include the handle from Resumable Upload API
+                    if (comp.example?.header_handle?.length > 0) {
+                        metaComp.example = { header_handle: comp.example.header_handle };
+                    }
+                }
+            } else if (comp.type === 'BODY') {
+                metaComp.text = comp.text;
+                if (comp.example?.body_text?.length > 0 && comp.example.body_text[0].length > 0) {
+                    metaComp.example = { body_text: comp.example.body_text };
+                }
+            } else if (comp.type === 'FOOTER') {
+                metaComp.text = comp.text;
+            } else if (comp.type === 'BUTTONS') {
+                metaComp.buttons = comp.buttons.map(btn => {
+                    const metaBtn = { type: btn.type, text: btn.text };
+                    if (btn.type === 'URL') metaBtn.url = btn.url;
+                    if (btn.type === 'PHONE_NUMBER') metaBtn.phone_number = btn.phone_number;
+                    return metaBtn;
+                });
+            }
+
+            metaComponents.push(metaComp);
+        }
+
+        const data = {
+            name: template.name,
+            language: template.language,
+            category: template.category,
+            components: metaComponents
+        };
+
+        const response = await axios.post(url, data, {
+            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+        });
+
+        console.log('✅ Template submitted to Meta:', response.data.id);
+        return { success: true, templateId: response.data.id };
+    } catch (error) {
+        console.error('❌ Failed to submit template to Meta:', error.response?.data || error.message);
+        const metaError = error.response?.data?.error?.message || error.message;
+        return { success: false, error: metaError };
+    }
+};
+
+// Sync template status from Meta
+const syncTemplateFromMeta = async (userId, metaTemplateId) => {
+    try {
+        const { accessToken } = await getCredentials(userId);
+        const url = `https://graph.facebook.com/v17.0/${metaTemplateId}`;
+
+        const response = await axios.get(url, {
+            headers: { 'Authorization': `Bearer ${accessToken}` },
+            params: { fields: 'name,status,quality_score,rejected_reason,category' }
+        });
+
+        const data = response.data;
+        console.log('✅ Template synced from Meta:', data.status);
+
+        return {
+            success: true,
+            status: data.status,
+            quality: data.quality_score?.score || 'UNKNOWN',
+            rejectionReason: data.rejected_reason || null
+        };
+    } catch (error) {
+        console.error('❌ Failed to sync template from Meta:', error.response?.data || error.message);
+        return { success: false, error: error.response?.data?.error?.message || error.message };
+    }
+};
+
+// Upload media to Meta for template headers (Resumable Upload API)
+const uploadMediaForTemplate = async (userId, fileBuffer, mimeType, fileName) => {
+    try {
+        const { accessToken } = await getCredentials(userId);
+        const User = require('../models/User');
+        const user = await User.findById(userId);
+        const appId = user?.waAppId || process.env.WA_APP_ID || process.env.META_APP_ID;
+
+        if (!appId) {
+            throw new Error('Meta App ID not configured. Please set WA_APP_ID or META_APP_ID in your settings.');
+        }
+
+        // Step 1: Create upload session
+        const sessionUrl = `https://graph.facebook.com/v17.0/${appId}/uploads`;
+        const sessionRes = await axios.post(sessionUrl, null, {
+            params: {
+                file_length: fileBuffer.length,
+                file_type: mimeType,
+                file_name: fileName
+            },
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
+        const uploadSessionId = sessionRes.data.id;
+        console.log('📤 Upload session created:', uploadSessionId);
+
+        // Step 2: Upload the file binary
+        const uploadUrl = `https://graph.facebook.com/v17.0/${uploadSessionId}`;
+        const uploadRes = await axios.post(uploadUrl, fileBuffer, {
+            headers: {
+                'Authorization': `OAuth ${accessToken}`,
+                'file_offset': '0',
+                'Content-Type': mimeType
+            }
+        });
+
+        const mediaHandle = uploadRes.data.h;
+        console.log('✅ Media uploaded to Meta, handle:', mediaHandle);
+
+        return { success: true, handle: mediaHandle };
+    } catch (error) {
+        console.error('❌ Failed to upload media to Meta:', error.response?.data || error.message);
+        const metaError = error.response?.data?.error?.message || error.message;
+        return { success: false, error: metaError };
+    }
+};
+
 module.exports = {
     sendWhatsAppMessage,
     sendWhatsAppTextMessage,
     sendMediaMessage,
     sendInteractiveMessage,
-    downloadMedia
-};
+    downloadMedia,
+    submitTemplateToMeta,
+    syncTemplateFromMeta,
+    uploadMediaForTemplate
+};

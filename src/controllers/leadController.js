@@ -167,6 +167,21 @@ const sendManualEmail = async (req, res) => {
             return res.status(400).json({ message: "To, Subject, and Message are required" });
         }
 
+        // SECURITY FIX: Tenant isolation check
+        let ownerId = userId;
+        if (req.user && req.user.role === 'agent') {
+            const User = require('../models/User');
+            const agentUser = await User.findById(userId).select('parentId').lean();
+            if (agentUser && agentUser.parentId) {
+                ownerId = agentUser.parentId;
+            }
+        }
+
+        const leadToUpdate = await Lead.findOne({ _id: leadId, userId: ownerId });
+        if (!leadToUpdate) {
+            return res.status(404).json({ message: "Lead not found or access denied" });
+        }
+
         // Send Email
         await sendEmail({
             to,
@@ -579,11 +594,6 @@ const syncLeads = async (req, res) => {
         const user = await User.findById(userId).select('customFieldDefinitions').lean();
         const customFieldDefs = user?.customFieldDefinitions || [];
 
-        // Create a map of lowercase label -> key for matching
-        const customFieldMap = {};
-        customFieldDefs.forEach(field => {
-            customFieldMap[field.label.toLowerCase()] = field.key;
-        });
 
         const sheetId = sheetIdMatch[1];
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
@@ -591,8 +601,6 @@ const syncLeads = async (req, res) => {
         const response = await axios.get(csvUrl);
         const parsed = Papa.parse(response.data, { header: true, skipEmptyLines: true });
 
-        // Standard field keywords to exclude from custom mapping
-        const standardKeywords = ['name', 'email', 'phone', 'mobile', 'status', 'source'];
 
         let count = 0;
         for (const row of parsed.data) {
@@ -605,18 +613,14 @@ const syncLeads = async (req, res) => {
             const finalEmail = emailKey ? row[emailKey] : null;
             const finalPhone = phoneKey ? row[phoneKey] : 'No Phone';
 
-            // Build customData from remaining columns
+            // Build customData by iterating over CRM's custom fields only
+            // This safely skips any extra/unmapped columns in the sheet
             const customData = {};
-            keys.forEach(header => {
-                const headerLower = header.toLowerCase();
-                // Skip standard fields
-                if (standardKeywords.some(sw => headerLower.includes(sw))) {
-                    return;
-                }
-                // Check if header matches a custom field label
-                const matchedKey = customFieldMap[headerLower];
-                if (matchedKey && row[header]) {
-                    customData[matchedKey] = row[header];
+            customFieldDefs.forEach(field => {
+                // Find a matching CSV header by comparing lowercase labels
+                const matchingHeader = keys.find(k => k.toLowerCase() === field.label.toLowerCase());
+                if (matchingHeader && row[matchingHeader]) {
+                    customData[field.key] = row[matchingHeader];
                 }
             });
 

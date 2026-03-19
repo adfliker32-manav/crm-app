@@ -187,3 +187,51 @@ exports.testWhatsAppConfig = async (req, res) => {
         });
     }
 };
+
+// ==========================================
+// WhatsApp Automations & Settings
+// ==========================================
+
+exports.getWhatsAppSettings = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const user = await User.findById(userId).select('whatsappSettings');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        
+        res.json({
+            success: true,
+            settings: user.whatsappSettings || {}
+        });
+    } catch (error) {
+        console.error('Error fetching WhatsApp settings:', error);
+        res.status(500).json({ message: 'Error fetching settings', error: error.message });
+    }
+};
+
+exports.updateWhatsAppSettings = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const { businessHours, autoReply } = req.body;
+        
+        const updateData = {};
+        if (businessHours) updateData['whatsappSettings.businessHours'] = businessHours;
+        if (autoReply) updateData['whatsappSettings.autoReply'] = autoReply;
+        
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $set: updateData },
+            { new: true, select: 'whatsappSettings' }
+        );
+        
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        
+        res.json({
+            success: true,
+            message: 'Settings updated successfully',
+            settings: user.whatsappSettings
+        });
+    } catch (error) {
+        console.error('Error updating WhatsApp settings:', error);
+        res.status(500).json({ message: 'Error updating settings', error: error.message });
+    }
+};

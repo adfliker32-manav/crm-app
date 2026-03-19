@@ -1,3 +1,4 @@
+import { GoogleOAuthProvider } from '@react-oauth/google';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
@@ -19,8 +20,11 @@ import SuperAdmin from './pages/SuperAdmin';
 import Settings from './pages/Settings';
 import Reports from './pages/Reports';
 
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+
 function App() {
   return (
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
     <AuthProvider>
       <NotificationProvider>
         <ConfirmProvider>
@@ -63,6 +67,7 @@ function App() {
         </ConfirmProvider>
       </NotificationProvider>
     </AuthProvider>
+    </GoogleOAuthProvider>
   );
 }
 

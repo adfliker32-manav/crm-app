@@ -12,6 +12,7 @@ router.post('/webhook', metaWebhookController.handleLeadWebhook);
 // OAuth routes
 router.get('/auth', authMiddleware, metaController.getAuthUrl);
 router.get('/callback', metaController.handleCallback); // No auth - redirect from FB
+router.post('/exchange-token', authMiddleware, metaController.exchangeToken);
 
 // Configuration routes (require auth)
 router.get('/status', authMiddleware, metaController.getStatus);

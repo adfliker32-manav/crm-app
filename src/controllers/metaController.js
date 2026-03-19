@@ -152,10 +152,10 @@ const getAuthUrl = async (req, res) => {
     }
 };
 
-// Handle OAuth callback from Facebook
+// Handle OAuth callback from Facebook (GET)
 const handleCallback = async (req, res) => {
     try {
-        const { code, state, error, error_description } = req.query;
+        const { code, error, error_description } = req.query;
 
         // Handle user denial
         if (error) {
@@ -163,17 +163,28 @@ const handleCallback = async (req, res) => {
             return res.redirect('/settings?meta_error=' + encodeURIComponent(error_description || 'Authorization denied'));
         }
 
-        if (!code || !state) {
+        if (!code) {
             return res.redirect('/settings?meta_error=Missing authorization code');
         }
 
-        // Decode state to get user ID
-        let userId;
-        try {
-            const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-            userId = stateData.userId;
-        } catch (e) {
-            return res.redirect('/settings?meta_error=Invalid state parameter');
+        // SECURITY FIX: Prevent OAuth CSRF by deferring token exchange to the authenticated frontend.
+        // Redirect browser to settings UI, carrying the one-time code.
+        return res.redirect('/settings?meta_code=' + encodeURIComponent(code));
+
+    } catch (error) {
+        console.error('❌ Meta OAuth Callback Redirect Error:', error.message);
+        res.redirect('/settings?meta_error=' + encodeURIComponent('Authentication redirect failed'));
+    }
+};
+
+// Authed token exchange endpoint - Securely called by frontend using Bearer token
+const exchangeToken = async (req, res) => {
+    try {
+        const { code } = req.body;
+        const userId = req.user.userId || req.user.id;
+
+        if (!code) {
+            return res.status(400).json({ success: false, message: 'Missing authorization code' });
         }
 
         const appId = process.env.META_APP_ID;
@@ -190,7 +201,7 @@ const handleCallback = async (req, res) => {
             }
         });
 
-        const { access_token, expires_in } = tokenResponse.data;
+        const { access_token } = tokenResponse.data;
 
         // Get long-lived token
         const longLivedResponse = await axios.get(`${META_GRAPH_URL}/oauth/access_token`, {
@@ -210,18 +221,18 @@ const handleCallback = async (req, res) => {
             params: { access_token: longLivedToken }
         });
 
-        // Update user with Meta credentials
+        // Update authenticated user with Meta credentials
         await User.findByIdAndUpdate(userId, {
             metaAccessToken: longLivedToken,
             metaTokenExpiry: tokenExpiry,
             metaUserId: userInfoResponse.data.id
         });
 
-        console.log('✅ Meta OAuth successful for user:', userId);
-        res.redirect('/settings?meta_success=true');
+        console.log('✅ Meta OAuth securely linked for user:', userId);
+        res.json({ success: true, message: 'Facebook linked successfully' });
 
     } catch (error) {
-        console.error('❌ Meta OAuth Callback Error:', error.response?.data || error.message);
+        console.error('❌ Meta Token Exchange Error:', error.response?.data || error.message);
 
         // Provide specific, actionable error messages
         let errorMessage = 'Authentication failed. Please try again.';
@@ -229,7 +240,6 @@ const handleCallback = async (req, res) => {
         if (error.response?.data?.error) {
             const metaError = error.response.data.error;
 
-            // Handle specific Meta error codes
             if (metaError.code === 190) {
                 errorMessage = 'Your session expired. Please try connecting again.';
             } else if (metaError.code === 102) {
@@ -241,13 +251,9 @@ const handleCallback = async (req, res) => {
             } else if (metaError.message) {
                 errorMessage = `Facebook error: ${metaError.message}`;
             }
-        } else if (error.code === 'ENOTFOUND' || error.code === 'ETIMEDOUT') {
-            errorMessage = 'Network error. Please check your internet connection and try again.';
-        } else if (error.message.includes('META_APP_ID')) {
-            errorMessage = 'Meta App not configured properly. Please contact your administrator.';
         }
 
-        res.redirect('/settings?meta_error=' + encodeURIComponent(errorMessage));
+        res.status(500).json({ success: false, message: errorMessage });
     }
 };
 
@@ -651,5 +657,6 @@ module.exports = {
     toggleSync,
     getCapiSettings,
     updateCapiSettings,
-    testCapiConnection
+    testCapiConnection,
+    exchangeToken
 };

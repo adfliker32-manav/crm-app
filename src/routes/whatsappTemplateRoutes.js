@@ -23,5 +23,16 @@ router.post('/send', authMiddleware, whatsappTemplateController.sendTemplateMess
 
 // Submit template for review
 router.post('/:id/submit-review', authMiddleware, whatsappTemplateController.submitTemplate);
+router.post('/:id/submit', authMiddleware, whatsappTemplateController.submitTemplate); // alias
+
+// Sync template status from Meta
+router.post('/:id/sync', authMiddleware, whatsappTemplateController.syncTemplate);
+
+// Duplicate template
+router.post('/:id/duplicate', authMiddleware, whatsappTemplateController.duplicateTemplate);
+
+// Get template analytics
+router.get('/:id/analytics', authMiddleware, whatsappTemplateController.getTemplateAnalytics);
 
 module.exports = router;
+

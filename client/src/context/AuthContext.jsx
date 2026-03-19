@@ -70,8 +70,28 @@ export const AuthProvider = ({ children }) => {
         setUser(updatedUser);
     };
 
+    const googleLogin = async (credential) => {
+        try {
+            const res = await api.post('/auth/google', { credential });
+            const { token, role, user } = res.data;
+
+            const userWithRole = { ...user, role: user.role || role };
+
+            localStorage.setItem('token', token);
+            localStorage.setItem('user', JSON.stringify(userWithRole));
+            setUser(userWithRole);
+            return { success: true, role: userWithRole.role };
+        } catch (error) {
+            console.error("Google Login failed", error);
+            return {
+                success: false,
+                message: error.response?.data?.message || 'Google login failed'
+            };
+        }
+    };
+
     return (
-        <AuthContext.Provider value={{ user, login, register, logout, updateUser, loading }}>
+        <AuthContext.Provider value={{ user, login, register, logout, updateUser, googleLogin, loading }}>
             {!loading && children}
         </AuthContext.Provider>
     );

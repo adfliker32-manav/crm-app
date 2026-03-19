@@ -11,30 +11,39 @@ const WhatsAppInbox = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
     const [sending, setSending] = useState(false);
+    const [showContactPanel, setShowContactPanel] = useState(false);
+    const [showAttachMenu, setShowAttachMenu] = useState(false);
+    const [showNewChatModal, setShowNewChatModal] = useState(false);
+    const [newChatPhone, setNewChatPhone] = useState('');
+    const [newChatTemplate, setNewChatTemplate] = useState('');
+    const [templates, setTemplates] = useState([]);
+    const [startingChat, setStartingChat] = useState(false);
+    const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+    const [filter, setFilter] = useState('all'); // all, unread, archived
     const scrollRef = useRef(null);
+    const fileInputRef = useRef(null);
+    const attachRef = useRef(null);
 
     const fetchConversations = useCallback(async () => {
         try {
+            const status = filter === 'archived' ? 'archived' : 'active';
             const res = await api.get('/whatsapp/conversations', {
-                params: { status: 'active', search: searchTerm }
+                params: { status, search: searchTerm }
             });
             setConversations(res.data.conversations || []);
         } catch (error) {
             console.error('Error fetching conversations:', error);
-            showError('Failed to load conversations');
         } finally {
             setLoading(false);
         }
-    }, [searchTerm, showError]);
+    }, [searchTerm, filter]);
 
     const fetchMessages = useCallback(async (conversationId) => {
         try {
             const res = await api.get(`/whatsapp/conversations/${conversationId}`);
             setMessages(res.data.messages || []);
             setSelectedChat(res.data.conversation);
-
             await api.put(`/whatsapp/conversations/${conversationId}/read`);
-
             setConversations(prev => prev.map(c =>
                 c._id === conversationId ? { ...c, unreadCount: 0 } : c
             ));
@@ -44,100 +53,247 @@ const WhatsAppInbox = () => {
         }
     }, [showError]);
 
-    useEffect(() => {
-        fetchConversations();
-    }, [fetchConversations]);
+    useEffect(() => { fetchConversations(); fetchTemplates(); }, [fetchConversations]);
+
+    const fetchTemplates = async () => {
+        try {
+            const res = await api.get('/whatsapp/templates');
+            const data = res.data.templates || res.data;
+            setTemplates(data.filter(t => t.status === 'APPROVED'));
+        } catch (err) { console.error('Failed to load templates', err); }
+    };
+
+    // Check if the 24-hour messaging window is still open
+    const isWindowOpen = (chat) => {
+        if (!chat) return false;
+        // Window is open if the contact has sent us a message in the last 24 hours
+        if (chat.lastMessageDirection === 'inbound') {
+            const lastMsg = new Date(chat.lastMessageAt);
+            const now = new Date();
+            return (now - lastMsg) < (24 * 60 * 60 * 1000);
+        }
+        // If they never messaged us, or last was outbound, check total inbound count
+        return (chat.metadata?.totalInbound || 0) > 0 && chat.lastMessageDirection === 'inbound';
+    };
 
     useEffect(() => {
         const interval = setInterval(() => {
             fetchConversations();
-            if (selectedChat) {
-                fetchMessages(selectedChat._id);
-            }
+            if (selectedChat) fetchMessages(selectedChat._id);
         }, 5000);
-
         return () => clearInterval(interval);
     }, [selectedChat, fetchConversations, fetchMessages]);
 
     useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }, [messages]);
+
+    // Close attach menu on outside click
+    useEffect(() => {
+        const handler = (e) => {
+            if (attachRef.current && !attachRef.current.contains(e.target)) setShowAttachMenu(false);
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, []);
 
     const handleSendMessage = async (e) => {
         e.preventDefault();
         if (!newMessage.trim() || !selectedChat) return;
-
         setSending(true);
         try {
-            const res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send`, {
-                text: newMessage.trim()
-            });
-
+            const res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send`, { text: newMessage.trim() });
             setMessages(prev => [...prev, res.data.message]);
             setNewMessage('');
-
             setConversations(prev => prev.map(c =>
                 c._id === selectedChat._id
                     ? { ...c, lastMessage: newMessage.trim(), lastMessageAt: new Date(), lastMessageDirection: 'outbound' }
                     : c
             ));
-
-            showSuccess('Message sent!');
         } catch (error) {
-            console.error('Error sending message:', error);
             showError(error.response?.data?.message || 'Failed to send message');
         } finally {
             setSending(false);
         }
     };
 
+    const handleStartNewChat = async () => {
+        if (!newChatPhone.trim() || !newChatTemplate) return;
+        setStartingChat(true);
+        try {
+            const res = await api.post('/whatsapp/conversations/new', {
+                phone: newChatPhone.trim(),
+                templateName: newChatTemplate
+            });
+            setShowNewChatModal(false);
+            setNewChatPhone('');
+            setNewChatTemplate('');
+            await fetchConversations();
+            if (res.data.conversation) {
+                setSelectedChat(res.data.conversation);
+                fetchMessages(res.data.conversation._id);
+            }
+            showSuccess('Template message sent!');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to start conversation');
+        } finally {
+            setStartingChat(false);
+        }
+    };
+
+    const handleSendTemplate = async (templateNameToSend) => {
+        if (!selectedChat || !templateNameToSend) return;
+        setSending(true);
+        try {
+            const res = await api.post('/whatsapp/conversations/new', {
+                phone: selectedChat.phone,
+                templateName: templateNameToSend
+            });
+            if (res.data.message) setMessages(prev => [...prev, res.data.message]);
+            fetchConversations();
+            setShowTemplatePicker(false);
+            showSuccess('Template sent! Conversation window re-opened.');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to send template');
+        } finally {
+            setSending(false);
+        }
+    };
+
+    const handleArchive = async (chatId, newStatus) => {
+        try {
+            await api.put(`/whatsapp/conversations/${chatId}/status`, { status: newStatus });
+            if (selectedChat?._id === chatId) setSelectedChat(null);
+            fetchConversations();
+            showSuccess(newStatus === 'archived' ? 'Chat archived' : 'Chat unarchived');
+        } catch { showError('Failed to update'); }
+    };
+
     const handleSelectChat = (chat) => {
         setSelectedChat(chat);
         fetchMessages(chat._id);
+        setShowContactPanel(false);
     };
 
     const formatTime = (date) => {
         const d = new Date(date);
         const now = new Date();
-        const diffMs = now - d;
-        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        const diffDays = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+        if (diffDays === 0) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (diffDays === 1) return 'Yesterday';
+        if (diffDays < 7) return d.toLocaleDateString([], { weekday: 'short' });
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    };
 
-        if (diffDays === 0) {
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        } else if (diffDays === 1) {
-            return 'Yesterday';
-        } else if (diffDays < 7) {
-            return d.toLocaleDateString([], { weekday: 'short' });
-        } else {
-            return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const getStatusIcon = (status, direction) => {
+        if (direction !== 'outbound') return null;
+        switch (status) {
+            case 'read': return <i className="fa-solid fa-check-double text-[#53bdeb]"></i>;
+            case 'delivered': return <i className="fa-solid fa-check-double text-[#8696a0]"></i>;
+            case 'sent': return <i className="fa-solid fa-check text-[#8696a0]"></i>;
+            case 'failed': return <i className="fa-solid fa-exclamation-circle text-red-500"></i>;
+            default: return <i className="fa-regular fa-clock text-[#8696a0]"></i>;
         }
     };
 
-    const renderMessageContent = (message) => {
-        if (message.type === 'text') {
-            return message.content.text;
-        } else if (message.type === 'image') {
-            return message.content.caption || '📷 Image';
-        } else if (message.type === 'document') {
-            return `📄 ${message.content.fileName || 'Document'}`;
-        } else if (message.type === 'audio') {
-            return '🎵 Audio';
-        } else if (message.type === 'video') {
-            return message.content.caption || '🎬 Video';
-        } else if (message.type === 'location') {
-            return `📍 ${message.content.locationName || 'Location'}`;
+    const renderMediaContent = (msg) => {
+        const mediaProxy = msg.content?.mediaId ? `/whatsapp/media/${msg.content.mediaId}` : null;
+
+        switch (msg.type) {
+            case 'image':
+                return (
+                    <div className="mb-1">
+                        {mediaProxy ? (
+                            <img src={`${api.defaults.baseURL}${mediaProxy}`} alt="Shared" className="rounded-lg max-w-[280px] max-h-[300px] object-cover cursor-pointer hover:opacity-90 transition" loading="lazy" />
+                        ) : msg.content?.mediaUrl ? (
+                            <img src={msg.content.mediaUrl} alt="Shared" className="rounded-lg max-w-[280px] max-h-[300px] object-cover" loading="lazy" />
+                        ) : (
+                            <div className="bg-slate-100 rounded-lg p-4 flex items-center gap-2 text-slate-500"><i className="fa-solid fa-image text-2xl"></i> Image</div>
+                        )}
+                        {msg.content?.caption && <p className="text-sm mt-1.5">{msg.content.caption}</p>}
+                    </div>
+                );
+            case 'video':
+                return (
+                    <div className="mb-1">
+                        <div className="bg-slate-900/10 rounded-lg p-6 flex flex-col items-center gap-2 max-w-[280px]">
+                            <i className="fa-solid fa-play-circle text-4xl text-white/80"></i>
+                            <span className="text-xs text-slate-600">Video</span>
+                        </div>
+                        {msg.content?.caption && <p className="text-sm mt-1.5">{msg.content.caption}</p>}
+                    </div>
+                );
+            case 'document':
+                return (
+                    <div className="bg-slate-50/80 rounded-lg p-3 flex items-center gap-3 max-w-[280px] border border-slate-200/50 mb-1">
+                        <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <i className="fa-solid fa-file-lines text-white"></i>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-slate-800 truncate">{msg.content?.fileName || 'Document'}</p>
+                            <p className="text-xs text-slate-500">PDF • Document</p>
+                        </div>
+                        {mediaProxy && (
+                            <a href={`${api.defaults.baseURL}${mediaProxy}`} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600">
+                                <i className="fa-solid fa-download"></i>
+                            </a>
+                        )}
+                    </div>
+                );
+            case 'audio':
+                return (
+                    <div className="flex items-center gap-3 bg-slate-50/50 rounded-full px-4 py-2 max-w-[280px] mb-1">
+                        <button className="w-8 h-8 bg-[#00a884] rounded-full flex items-center justify-center text-white flex-shrink-0">
+                            <i className="fa-solid fa-play text-xs ml-0.5"></i>
+                        </button>
+                        <div className="flex-1 h-1 bg-slate-300 rounded-full"><div className="h-1 bg-[#00a884] rounded-full w-1/3"></div></div>
+                        <span className="text-[10px] text-slate-500">0:00</span>
+                    </div>
+                );
+            case 'sticker':
+                return <div className="text-4xl mb-1">🎨</div>;
+            case 'location':
+                return (
+                    <div className="bg-slate-100 rounded-lg overflow-hidden max-w-[280px] mb-1">
+                        <div className="h-32 bg-gradient-to-br from-green-200 to-blue-200 flex items-center justify-center">
+                            <i className="fa-solid fa-location-dot text-3xl text-red-500"></i>
+                        </div>
+                        <div className="p-2">
+                            <p className="text-sm font-medium">{msg.content?.locationName || 'Location'}</p>
+                            {msg.content?.address && <p className="text-xs text-slate-500">{msg.content.address}</p>}
+                        </div>
+                    </div>
+                );
+            case 'interactive':
+                return (
+                    <div className="mb-1">
+                        {msg.content?.text && <p className="text-sm mb-2">{msg.content.text}</p>}
+                        {msg.content?.buttons?.map((btn, i) => (
+                            <div key={i} className="border-t border-slate-200/50 py-2 text-center">
+                                <span className="text-[#00a884] text-sm font-medium">{btn.text}</span>
+                            </div>
+                        ))}
+                    </div>
+                );
+            case 'reaction':
+                return <div className="text-2xl">{msg.content?.reactionEmoji || '❤️'}</div>;
+            default:
+                return msg.content?.text ? <p className="text-sm break-words whitespace-pre-wrap">{msg.content.text}</p> : <p className="text-sm text-slate-400 italic">Unsupported message</p>;
         }
-        return 'Message';
     };
+
+    const filteredConversations = filter === 'unread'
+        ? conversations.filter(c => c.unreadCount > 0)
+        : conversations;
+
+    const totalUnread = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
 
     if (loading) {
         return (
             <div className="flex items-center justify-center h-full bg-[#f0f2f5]">
                 <div className="text-center">
-                    <i className="fa-solid fa-spinner fa-spin text-4xl text-[#00a884] mb-3"></i>
-                    <p className="text-slate-600">Loading conversations...</p>
+                    <div className="w-16 h-16 border-4 border-[#00a884] border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-slate-600 font-medium">Loading conversations...</p>
                 </div>
             </div>
         );
@@ -145,58 +301,100 @@ const WhatsAppInbox = () => {
 
     return (
         <div className="flex h-full bg-[#f0f2f5]">
-            {/* Left Sidebar - Conversations List */}
-            <div className="w-[30%] bg-white border-r border-slate-200 flex flex-col">
-                {/* Search Bar */}
-                <div className="p-3 bg-[#f0f2f5]">
+            {/* ═══════════ LEFT SIDEBAR ═══════════ */}
+            <div className="w-[380px] bg-white border-r border-[#e9edef] flex flex-col flex-shrink-0">
+                {/* Sidebar Header */}
+                <div className="p-3 bg-[#f0f2f5] flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-gradient-to-br from-[#00a884] to-[#25d366] rounded-full flex items-center justify-center text-white">
+                            <i className="fa-brands fa-whatsapp text-xl"></i>
+                        </div>
+                        <div>
+                            <span className="font-semibold text-[#111b21] text-sm">Chats</span>
+                            {totalUnread > 0 && (
+                                <span className="ml-2 bg-[#25d366] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{totalUnread}</span>
+                            )}
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                        <button
+                            onClick={() => setShowNewChatModal(true)}
+                            className="w-9 h-9 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition"
+                            title="New chat"
+                        >
+                            <i className="fa-solid fa-pen-to-square text-lg"></i>
+                        </button>
+                    </div>
+                </div>
+
+                {/* Search */}
+                <div className="px-3 py-2">
                     <div className="relative">
-                        <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                        <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-[#8696a0] text-sm"></i>
                         <input
                             type="text"
                             placeholder="Search or start new chat"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pl-12 pr-4 py-2.5 bg-white border-none rounded-lg text-sm focus:outline-none"
+                            className="w-full pl-12 pr-4 py-2 bg-[#f0f2f5] border-none rounded-lg text-sm focus:outline-none focus:bg-white focus:shadow-sm transition"
                         />
                     </div>
                 </div>
 
+                {/* Filter Tabs */}
+                <div className="px-3 pb-2 flex gap-2">
+                    {[
+                        { id: 'all', label: 'All' },
+                        { id: 'unread', label: 'Unread', count: totalUnread },
+                        { id: 'archived', label: 'Archived' }
+                    ].map(tab => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setFilter(tab.id)}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filter === tab.id
+                                ? 'bg-[#e7fce3] text-[#008069]'
+                                : 'bg-[#f0f2f5] text-[#54656f] hover:bg-slate-200'}`}
+                        >
+                            {tab.label}
+                            {tab.count > 0 && <span className="ml-1 bg-[#25d366] text-white text-[9px] px-1.5 py-0.5 rounded-full">{tab.count}</span>}
+                        </button>
+                    ))}
+                </div>
+
                 {/* Conversations List */}
-                <div className="flex-1 overflow-y-auto bg-white">
-                    {conversations.map(chat => (
+                <div className="flex-1 overflow-y-auto">
+                    {filteredConversations.map(chat => (
                         <div
                             key={chat._id}
                             onClick={() => handleSelectChat(chat)}
-                            className={`px-4 py-3 border-b border-slate-100 cursor-pointer hover:bg-[#f5f6f6] transition ${selectedChat?._id === chat._id ? 'bg-[#f0f2f5]' : ''
-                                }`}
+                            className={`px-4 py-3 border-b border-[#f0f2f5] cursor-pointer transition-colors ${selectedChat?._id === chat._id
+                                ? 'bg-[#f0f2f5]'
+                                : 'hover:bg-[#f5f6f6]'}`}
                         >
                             <div className="flex gap-3">
-                                {/* Avatar */}
                                 <div className="flex-shrink-0">
-                                    <div className="w-12 h-12 bg-slate-200 rounded-full flex items-center justify-center text-slate-600">
-                                        <i className="fa-solid fa-user text-lg"></i>
+                                    <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-semibold ${chat.unreadCount > 0 ? 'bg-gradient-to-br from-[#00a884] to-[#25d366]' : 'bg-[#dfe5e7]'}`}>
+                                        {chat.displayName ? chat.displayName.charAt(0).toUpperCase() : <i className="fa-solid fa-user text-[#8696a0]"></i>}
                                     </div>
                                 </div>
-
-                                {/* Chat Info */}
                                 <div className="flex-1 min-w-0">
-                                    <div className="flex justify-between items-start mb-1">
-                                        <h3 className="font-semibold text-[#111b21] truncate">
+                                    <div className="flex justify-between items-center mb-0.5">
+                                        <h3 className={`text-[15px] truncate ${chat.unreadCount > 0 ? 'font-bold text-[#111b21]' : 'font-normal text-[#111b21]'}`}>
                                             {chat.displayName || chat.phone}
                                         </h3>
-                                        <span className="text-xs text-slate-500 flex-shrink-0 ml-2">
-                                            {formatTime(chat.lastMessageAt)}
+                                        <span className={`text-[11px] flex-shrink-0 ml-2 ${chat.unreadCount > 0 ? 'text-[#25d366] font-medium' : 'text-[#8696a0]'}`}>
+                                            {chat.lastMessageAt ? formatTime(chat.lastMessageAt) : ''}
                                         </span>
                                     </div>
                                     <div className="flex justify-between items-center">
-                                        <p className="text-sm text-slate-600 truncate flex items-center gap-1">
+                                        <p className="text-[13px] text-[#8696a0] truncate flex items-center gap-1">
                                             {chat.lastMessageDirection === 'outbound' && (
-                                                <i className="fa-solid fa-check-double text-[#53bdeb] text-xs"></i>
+                                                <span className="flex-shrink-0">{getStatusIcon('delivered', 'outbound')}</span>
                                             )}
-                                            <span className="truncate">{chat.lastMessage}</span>
+                                            <span className={`truncate ${chat.unreadCount > 0 ? 'text-[#111b21] font-medium' : ''}`}>{chat.lastMessage || 'Start a conversation'}</span>
                                         </p>
                                         {chat.unreadCount > 0 && (
-                                            <span className="bg-[#25d366] text-white text-xs font-semibold px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ml-2">
+                                            <span className="bg-[#25d366] text-white text-[11px] font-bold min-w-[20px] h-5 px-1.5 rounded-full flex items-center justify-center flex-shrink-0 ml-2">
                                                 {chat.unreadCount}
                                             </span>
                                         )}
@@ -205,134 +403,342 @@ const WhatsAppInbox = () => {
                             </div>
                         </div>
                     ))}
-                    {conversations.length === 0 && (
-                        <div className="p-8 text-center text-slate-400">
-                            <i className="fa-brands fa-whatsapp text-6xl mb-4 text-slate-300"></i>
-                            <p className="text-sm">No conversations yet</p>
+                    {filteredConversations.length === 0 && (
+                        <div className="p-10 text-center">
+                            <i className="fa-brands fa-whatsapp text-6xl text-[#e9edef] mb-4"></i>
+                            <p className="text-sm text-[#8696a0]">{filter === 'unread' ? 'No unread messages' : filter === 'archived' ? 'No archived chats' : 'No conversations yet'}</p>
+                            <button onClick={() => setShowNewChatModal(true)} className="mt-3 text-[#00a884] text-sm font-medium hover:underline">
+                                Start a new chat
+                            </button>
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* Right Pane - Chat Window */}
-            <div className="flex-1 flex flex-col">
+            {/* ═══════════ CHAT WINDOW ═══════════ */}
+            <div className="flex-1 flex flex-col min-w-0">
                 {selectedChat ? (
                     <>
                         {/* Chat Header */}
-                        <div className="px-4 py-3 bg-[#f0f2f5] border-b border-slate-200 flex items-center gap-3">
-                            <div className="w-10 h-10 bg-slate-200 rounded-full flex items-center justify-center text-slate-600">
-                                <i className="fa-solid fa-user"></i>
+                        <div className="h-[60px] px-4 bg-[#f0f2f5] border-b border-[#e9edef] flex items-center gap-3 flex-shrink-0">
+                            <div className="w-10 h-10 bg-[#dfe5e7] rounded-full flex items-center justify-center text-[#8696a0] font-semibold">
+                                {selectedChat.displayName ? selectedChat.displayName.charAt(0).toUpperCase() : <i className="fa-solid fa-user"></i>}
                             </div>
-                            <div className="flex-1">
-                                <h3 className="font-semibold text-[#111b21]">
-                                    {selectedChat.displayName || selectedChat.phone}
-                                </h3>
-                                <p className="text-xs text-slate-500">{selectedChat.phone}</p>
+                            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setShowContactPanel(!showContactPanel)}>
+                                <h3 className="font-semibold text-[15px] text-[#111b21] truncate">{selectedChat.displayName || selectedChat.phone}</h3>
+                                <p className="text-xs text-[#8696a0]">
+                                    {selectedChat.leadId ? `Lead: ${selectedChat.leadId.name || 'Linked'}` : selectedChat.phone}
+                                </p>
                             </div>
-                            <div className="flex gap-4 text-slate-600">
-                                <button className="hover:text-slate-800 transition">
-                                    <i className="fa-solid fa-search text-xl"></i>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setShowContactPanel(!showContactPanel)} className="w-9 h-9 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition">
+                                    <i className="fa-solid fa-user-circle text-xl"></i>
                                 </button>
-                                <button className="hover:text-slate-800 transition">
-                                    <i className="fa-solid fa-ellipsis-vertical text-xl"></i>
+                                <button onClick={() => handleArchive(selectedChat._id, selectedChat.status === 'archived' ? 'active' : 'archived')} className="w-9 h-9 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition" title={selectedChat.status === 'archived' ? 'Unarchive' : 'Archive'}>
+                                    <i className={`fa-solid ${selectedChat.status === 'archived' ? 'fa-box-open' : 'fa-box-archive'}`}></i>
                                 </button>
                             </div>
                         </div>
 
-                        {/* Messages Area */}
-                        <div
-                            className="flex-1 overflow-y-auto p-4 bg-[#efeae2]"
-                            ref={scrollRef}
-                            style={{
-                                backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cpath d=\'M0 0h100v100H0z\' fill=\'%23efeae2\'/%3E%3Cpath d=\'M20 20h60v60H20z\' fill=\'%23fff\' opacity=\'.03\'/%3E%3C/svg%3E")'
-                            }}
+                        {/* Messages */}
+                        <div className="flex-1 overflow-y-auto px-16 py-4" ref={scrollRef}
+                            style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='400' height='400' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3Cpattern id='p' width='60' height='60' patternUnits='userSpaceOnUse'%3E%3Cpath d='M30 5 q5 8 0 16 q-5 8 0 16' fill='none' stroke='%23d4cfc4' stroke-width='.4' opacity='.6'/%3E%3Ccircle cx='10' cy='50' r='1.5' fill='%23d4cfc4' opacity='.3'/%3E%3Ccircle cx='50' cy='20' r='1' fill='%23d4cfc4' opacity='.3'/%3E%3C/pattern%3E%3C/defs%3E%3Crect fill='%23efeae2' width='400' height='400'/%3E%3Crect fill='url(%23p)' width='400' height='400'/%3E%3C/svg%3E")`, backgroundSize: '400px' }}
                         >
-                            <div className="space-y-2 max-w-4xl mx-auto">
+                            <div className="space-y-1 max-w-3xl mx-auto">
+                                {/* Date separator */}
+                                {messages.length > 0 && (
+                                    <div className="text-center my-3">
+                                        <span className="bg-white text-[#8696a0] text-[11px] font-medium px-3 py-1.5 rounded-lg shadow-sm">
+                                            {new Date(messages[0].timestamp).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
+                                        </span>
+                                    </div>
+                                )}
+
                                 {messages.map((msg) => (
-                                    <div
-                                        key={msg._id}
-                                        className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}
-                                    >
-                                        <div
-                                            className={`max-w-[65%] rounded-lg px-3 py-2 shadow-sm ${msg.direction === 'outbound'
-                                                    ? 'bg-[#d9fdd3]'
-                                                    : 'bg-white'
-                                                }`}
-                                        >
-                                            <p className="text-sm text-[#111b21] break-words">{renderMessageContent(msg)}</p>
-                                            <div className="flex items-center justify-end gap-1 mt-1">
-                                                <span className="text-[10px] text-slate-500">{formatTime(msg.timestamp)}</span>
-                                                {msg.direction === 'outbound' && (
-                                                    <i className={`fa-solid text-[10px] ${msg.status === 'read' ? 'fa-check-double text-[#53bdeb]' :
-                                                            msg.status === 'delivered' ? 'fa-check-double text-slate-400' :
-                                                                msg.status === 'sent' ? 'fa-check text-slate-400' :
-                                                                    'fa-clock text-slate-400'
-                                                        }`}></i>
-                                                )}
-                                            </div>
+                                    <div key={msg._id} className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}>
+                                        <div className={`max-w-[65%] rounded-lg px-2.5 pt-1.5 pb-1 shadow-sm relative ${msg.direction === 'outbound' ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
+                                            {msg.type === 'text' ? (
+                                                <p className="text-[14.2px] text-[#111b21] break-words whitespace-pre-wrap leading-[19px]">
+                                                    {msg.content?.text}
+                                                    <span className="float-right ml-3 mt-1 flex items-center gap-1">
+                                                        <span className="text-[11px] text-[#8696a0]">{formatTime(msg.timestamp)}</span>
+                                                        {getStatusIcon(msg.status, msg.direction)}
+                                                    </span>
+                                                </p>
+                                            ) : (
+                                                <>
+                                                    {renderMediaContent(msg)}
+                                                    <div className="flex items-center justify-end gap-1 mt-0.5">
+                                                        <span className="text-[11px] text-[#8696a0]">{formatTime(msg.timestamp)}</span>
+                                                        {getStatusIcon(msg.status, msg.direction)}
+                                                    </div>
+                                                </>
+                                            )}
+                                            {msg.status === 'failed' && msg.error && (
+                                                <p className="text-[10px] text-red-500 mt-1"><i className="fa-solid fa-exclamation-triangle mr-1"></i>{msg.error.message}</p>
+                                            )}
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         </div>
 
-                        {/* Input Area */}
-                        <div className="p-3 bg-[#f0f2f5] border-t border-slate-200">
-                            <form onSubmit={handleSendMessage} className="flex gap-2 items-center">
-                                <button type="button" className="p-2 text-slate-600 hover:text-slate-800 transition">
-                                    <i className="fa-solid fa-face-smile text-2xl"></i>
-                                </button>
-                                <button type="button" className="p-2 text-slate-600 hover:text-slate-800 transition">
-                                    <i className="fa-solid fa-paperclip text-xl"></i>
-                                </button>
+                        {/* Input Bar */}
+                        <div className="bg-[#f0f2f5] border-t border-[#e9edef] flex-shrink-0">
+                            {/* 24-hour window expired banner */}
+                            {selectedChat && !isWindowOpen(selectedChat) && (
+                                <div className="px-4 py-2 bg-amber-50 border-b border-amber-200">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2 text-amber-700 text-xs">
+                                            <i className="fa-solid fa-clock"></i>
+                                            <span className="font-semibold">24-hour messaging window closed.</span>
+                                            <span>Send a template to re-open it.</span>
+                                        </div>
+                                        <div className="relative">
+                                            <button onClick={() => setShowTemplatePicker(!showTemplatePicker)} className="px-3 py-1.5 bg-[#00a884] hover:bg-[#008f6f] text-white rounded-lg text-xs font-semibold transition flex items-center gap-1.5">
+                                                <i className="fa-solid fa-file-lines"></i> Send Template
+                                            </button>
+                                            {showTemplatePicker && (
+                                                <div className="absolute bottom-10 right-0 bg-white rounded-xl shadow-2xl border border-slate-200 w-[280px] max-h-[200px] overflow-y-auto z-50 p-2">
+                                                    {templates.length === 0 ? (
+                                                        <div className="p-4 text-center text-slate-400 text-xs">No approved templates found</div>
+                                                    ) : templates.map(t => (
+                                                        <button key={t._id} onClick={() => handleSendTemplate(t.name)} className="w-full text-left px-3 py-2.5 hover:bg-slate-50 rounded-lg transition flex items-center gap-2 text-sm">
+                                                            <i className="fa-solid fa-file-lines text-[#00a884]"></i>
+                                                            <span className="font-medium text-slate-700 truncate">{t.name}</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
 
-                                <div className="flex-1 bg-white rounded-lg flex items-center px-4">
+                            <div className="px-4 py-2.5">
+                            <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+                                {/* Attach button */}
+                                <div className="relative" ref={attachRef}>
+                                    <button type="button" onClick={() => setShowAttachMenu(!showAttachMenu)} className="w-10 h-10 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition">
+                                        <i className={`fa-solid fa-paperclip text-xl transform ${showAttachMenu ? 'rotate-45 text-[#00a884]' : ''} transition-transform`}></i>
+                                    </button>
+                                    {showAttachMenu && (
+                                        <div className="absolute bottom-14 left-0 bg-white rounded-2xl shadow-xl border border-slate-100 py-3 px-2 flex flex-col gap-1 z-50 min-w-[180px] animate-in slide-in-from-bottom-2">
+                                            {[
+                                                { icon: 'fa-image', label: 'Photos & Videos', accept: 'image/*,video/*', color: 'from-purple-500 to-pink-500' },
+                                                { icon: 'fa-file', label: 'Document', accept: '.pdf,.doc,.docx,.xls,.xlsx', color: 'from-blue-500 to-indigo-500' },
+                                            ].map((item, i) => (
+                                                <button
+                                                    key={i}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        fileInputRef.current.accept = item.accept;
+                                                        fileInputRef.current.click();
+                                                        setShowAttachMenu(false);
+                                                    }}
+                                                    className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50 transition text-left"
+                                                >
+                                                    <div className={`w-9 h-9 bg-gradient-to-br ${item.color} rounded-full flex items-center justify-center text-white`}>
+                                                        <i className={`fa-solid ${item.icon} text-sm`}></i>
+                                                    </div>
+                                                    <span className="text-sm font-medium text-[#111b21]">{item.label}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                <input ref={fileInputRef} type="file" className="hidden" onChange={(e) => {
+                                    const file = e.target.files[0];
+                                    if (file) showSuccess(`File "${file.name}" selected. File upload coming soon!`);
+                                    e.target.value = '';
+                                }} />
+
+                                {/* Text Input */}
+                                <div className="flex-1 bg-white rounded-lg shadow-sm">
                                     <input
                                         type="text"
                                         value={newMessage}
                                         onChange={(e) => setNewMessage(e.target.value)}
-                                        placeholder="Type a message"
-                                        className="w-full bg-transparent border-none focus:outline-none py-2.5 text-sm"
-                                        disabled={sending}
+                                        placeholder={isWindowOpen(selectedChat) ? 'Type a message' : 'Send a template to start messaging...'}
+                                        className="w-full bg-transparent border-none focus:outline-none px-4 py-2.5 text-[15px] text-[#111b21]"
+                                        disabled={sending || !isWindowOpen(selectedChat)}
                                     />
                                 </div>
 
+                                {/* Send / Mic */}
                                 <button
                                     type="submit"
-                                    disabled={!newMessage.trim() || sending}
-                                    className="p-3 bg-[#00a884] hover:bg-[#008f6f] text-white rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                    disabled={!newMessage.trim() || sending || !isWindowOpen(selectedChat)}
+                                    className="w-10 h-10 rounded-full flex items-center justify-center transition text-[#54656f] hover:bg-slate-200 disabled:opacity-40"
                                 >
                                     {sending ? (
-                                        <i className="fa-solid fa-spinner fa-spin"></i>
+                                        <i className="fa-solid fa-spinner fa-spin text-xl"></i>
+                                    ) : newMessage.trim() ? (
+                                        <i className="fa-solid fa-paper-plane text-[#00a884] text-xl"></i>
                                     ) : (
-                                        <i className="fa-solid fa-paper-plane"></i>
+                                        <i className="fa-solid fa-microphone text-xl"></i>
                                     )}
                                 </button>
                             </form>
+                            </div>
                         </div>
                     </>
                 ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5] border-l border-slate-200">
+                    /* Empty State */
+                    <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5]">
                         <div className="text-center max-w-md">
-                            <div className="w-64 h-64 mx-auto mb-8 relative">
-                                <div className="absolute inset-0 bg-gradient-to-br from-[#25d366] to-[#128c7e] rounded-full opacity-10"></div>
+                            <div className="w-72 h-72 mx-auto mb-6 relative">
+                                <div className="absolute inset-0 bg-gradient-to-br from-[#25d366]/10 to-[#128c7e]/10 rounded-full animate-pulse"></div>
                                 <div className="absolute inset-0 flex items-center justify-center">
-                                    <i className="fa-brands fa-whatsapp text-9xl text-[#25d366] opacity-30"></i>
+                                    <i className="fa-brands fa-whatsapp text-[120px] text-[#25d366]/20"></i>
                                 </div>
                             </div>
-                            <h2 className="text-3xl font-light text-[#41525d] mb-3">WhatsApp Business</h2>
-                            <p className="text-sm text-slate-500 mb-6">
+                            <h2 className="text-[28px] font-light text-[#41525d] mb-2">WhatsApp Business</h2>
+                            <p className="text-sm text-[#8696a0] leading-relaxed">
                                 Send and receive messages without keeping your phone online.<br />
-                                Select a conversation to start messaging.
+                                Select a conversation from the left panel to start messaging.
                             </p>
-                            <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
-                                <i className="fa-solid fa-lock"></i>
+                            <button onClick={() => setShowNewChatModal(true)} className="mt-6 bg-[#00a884] hover:bg-[#008f6f] text-white px-6 py-2.5 rounded-full text-sm font-medium transition shadow-md">
+                                <i className="fa-solid fa-plus mr-2"></i>Start New Chat
+                            </button>
+                            <div className="flex items-center justify-center gap-2 text-xs text-[#8696a0] mt-8">
+                                <i className="fa-solid fa-lock text-[10px]"></i>
                                 <span>End-to-end encrypted</span>
                             </div>
                         </div>
                     </div>
                 )}
             </div>
+
+            {/* ═══════════ CONTACT INFO PANEL ═══════════ */}
+            {showContactPanel && selectedChat && (
+                <div className="w-[340px] bg-[#f0f2f5] border-l border-[#e9edef] flex flex-col flex-shrink-0 overflow-y-auto">
+                    {/* Panel Header */}
+                    <div className="h-[60px] px-6 bg-[#f0f2f5] border-b border-[#e9edef] flex items-center gap-4 flex-shrink-0">
+                        <button onClick={() => setShowContactPanel(false)} className="text-[#54656f] hover:text-[#111b21] transition">
+                            <i className="fa-solid fa-xmark text-xl"></i>
+                        </button>
+                        <h3 className="font-semibold text-[#111b21]">Contact Info</h3>
+                    </div>
+
+                    {/* Avatar + Name */}
+                    <div className="bg-white p-6 text-center mb-2">
+                        <div className="w-[120px] h-[120px] bg-gradient-to-br from-[#dfe5e7] to-[#c4cdd2] rounded-full mx-auto mb-4 flex items-center justify-center text-white text-4xl font-light">
+                            {selectedChat.displayName ? selectedChat.displayName.charAt(0).toUpperCase() : <i className="fa-solid fa-user text-4xl text-[#8696a0]"></i>}
+                        </div>
+                        <h2 className="text-xl font-semibold text-[#111b21]">{selectedChat.displayName || 'Unknown'}</h2>
+                        <p className="text-sm text-[#8696a0] mt-1">{selectedChat.phone}</p>
+                    </div>
+
+                    {/* Lead Info */}
+                    {selectedChat.leadId && (
+                        <div className="bg-white p-5 mb-2">
+                            <h4 className="text-sm font-medium text-[#8696a0] mb-3 uppercase tracking-wider">Linked Lead</h4>
+                            <div className="space-y-2.5">
+                                <div className="flex items-center gap-3">
+                                    <i className="fa-solid fa-user text-[#00a884] w-5 text-center"></i>
+                                    <span className="text-sm text-[#111b21]">{selectedChat.leadId.name || '—'}</span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <i className="fa-solid fa-envelope text-[#00a884] w-5 text-center"></i>
+                                    <span className="text-sm text-[#111b21]">{selectedChat.leadId.email || '—'}</span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <i className="fa-solid fa-circle-dot text-[#00a884] w-5 text-center"></i>
+                                    <span className="text-sm text-[#111b21]">{selectedChat.leadId.status || '—'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Chat Stats */}
+                    <div className="bg-white p-5 mb-2">
+                        <h4 className="text-sm font-medium text-[#8696a0] mb-3 uppercase tracking-wider">Chat Stats</h4>
+                        <div className="grid grid-cols-3 gap-3 text-center">
+                            <div className="bg-[#f0f2f5] rounded-xl p-3">
+                                <div className="text-lg font-bold text-[#111b21]">{selectedChat.metadata?.totalMessages || 0}</div>
+                                <div className="text-[10px] text-[#8696a0] font-medium">Messages</div>
+                            </div>
+                            <div className="bg-[#f0f2f5] rounded-xl p-3">
+                                <div className="text-lg font-bold text-[#00a884]">{selectedChat.metadata?.totalInbound || 0}</div>
+                                <div className="text-[10px] text-[#8696a0] font-medium">Received</div>
+                            </div>
+                            <div className="bg-[#f0f2f5] rounded-xl p-3">
+                                <div className="text-lg font-bold text-blue-500">{selectedChat.metadata?.totalOutbound || 0}</div>
+                                <div className="text-[10px] text-[#8696a0] font-medium">Sent</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* First Contact */}
+                    {selectedChat.metadata?.firstMessageAt && (
+                        <div className="bg-white p-5">
+                            <h4 className="text-sm font-medium text-[#8696a0] mb-2 uppercase tracking-wider">First Contact</h4>
+                            <p className="text-sm text-[#111b21]">{new Date(selectedChat.metadata.firstMessageAt).toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ═══════════ NEW CHAT MODAL ═══════════ */}
+            {showNewChatModal && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center" onClick={() => setShowNewChatModal(false)}>
+                    <div className="bg-white rounded-2xl shadow-2xl w-[440px] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        <div className="bg-gradient-to-r from-[#00a884] to-[#25d366] p-5 text-white">
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-lg font-semibold flex items-center gap-2">
+                                    <i className="fa-solid fa-comment-dots"></i> New Conversation
+                                </h3>
+                                <button onClick={() => setShowNewChatModal(false)} className="text-white/80 hover:text-white transition">
+                                    <i className="fa-solid fa-xmark text-xl"></i>
+                                </button>
+                            </div>
+                            <p className="text-sm text-white/80 mt-1">Select an approved template to initiate the chat</p>
+                        </div>
+                        <div className="p-5 space-y-4">
+                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
+                                <i className="fa-solid fa-circle-info text-amber-500 mt-0.5"></i>
+                                <p className="text-xs text-amber-700">WhatsApp requires you to send an <strong>approved template</strong> as the first message to a new contact. After they reply, you can send free-form text.</p>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-[#111b21] mb-1.5">Phone Number</label>
+                                <div className="relative">
+                                    <i className="fa-solid fa-phone absolute left-3.5 top-1/2 -translate-y-1/2 text-[#8696a0]"></i>
+                                    <input
+                                        type="text"
+                                        value={newChatPhone}
+                                        onChange={(e) => setNewChatPhone(e.target.value)}
+                                        placeholder="e.g. 919876543210"
+                                        className="w-full pl-10 pr-4 py-3 border border-[#e9edef] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#00a884]/30 focus:border-[#00a884] text-sm"
+                                    />
+                                </div>
+                                <p className="text-[11px] text-[#8696a0] mt-1">Include country code without +</p>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-[#111b21] mb-1.5">Template Message</label>
+                                <select
+                                    value={newChatTemplate}
+                                    onChange={(e) => setNewChatTemplate(e.target.value)}
+                                    className="w-full px-4 py-3 border border-[#e9edef] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#00a884]/30 focus:border-[#00a884] text-sm bg-white"
+                                >
+                                    <option value="">Select an approved template</option>
+                                    {templates.map(t => (
+                                        <option key={t._id} value={t.name}>{t.name} ({t.category})</option>
+                                    ))}
+                                </select>
+                                {templates.length === 0 && <p className="text-xs text-red-500 mt-1">No approved templates. Create one in Templates tab first.</p>}
+                            </div>
+                            <button
+                                onClick={handleStartNewChat}
+                                disabled={startingChat || !newChatPhone.trim() || !newChatTemplate}
+                                className="w-full bg-[#00a884] hover:bg-[#008f6f] text-white py-3 rounded-xl font-medium transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-md"
+                            >
+                                {startingChat ? <><i className="fa-solid fa-spinner fa-spin"></i> Sending...</> : <><i className="fa-solid fa-paper-plane"></i> Send Template</>}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

@@ -43,8 +43,29 @@ const MetaConfigSection = () => {
         const params = new URLSearchParams(window.location.search);
         const metaSuccess = params.get('meta_success');
         const metaError = params.get('meta_error');
+        const metaCode = params.get('meta_code');
 
-        if (metaSuccess) {
+        if (metaCode) {
+            // SECURITY FIX: Exchange authorization code securely via authenticated frontend API call
+            setLoading(true);
+            api.post('/meta/exchange-token', { code: metaCode })
+                .then(res => {
+                    if (res.data.success) {
+                        showSuccess('Successfully connected to Facebook!');
+                        loadStatus();
+                    } else {
+                        showError(res.data.message || 'Failed to link Facebook account.');
+                    }
+                })
+                .catch(err => {
+                    console.error('Meta Token Exchange Error:', err);
+                    showError(err.response?.data?.message || 'Error occurred during Facebook link.');
+                })
+                .finally(() => {
+                    setLoading(false);
+                    window.history.replaceState({}, '', '/settings');
+                });
+        } else if (metaSuccess) {
             showSuccess('Successfully connected to Facebook!');
             // Clean up URL
             window.history.replaceState({}, '', '/settings');
@@ -56,6 +77,10 @@ const MetaConfigSection = () => {
 
     // Load status on mount
     useEffect(() => {
+        // Prevent double loading if exchanging token
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('meta_code')) return;
+
         loadStatus();
         loadCapiSettings();
         loadStages();

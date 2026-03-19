@@ -5,6 +5,7 @@ import api from '../services/api';
 import MetaConfigSection from '../components/Settings/MetaConfigSection';
 import CustomFieldsSettings from '../components/Settings/CustomFieldsSettings';
 import BillingSettings from '../components/Settings/BillingSettings';
+import SheetSyncSettings from '../components/Settings/SheetSyncSettings';
 
 const Settings = () => {
     const { user, updateUser } = useAuth();
@@ -66,6 +67,7 @@ const Settings = () => {
     const tabs = [
         { id: 'profile', label: 'Profile', icon: 'fa-user' },
         { id: 'customFields', label: 'Custom Fields', icon: 'fa-list-check' },
+        { id: 'sheetSync', label: 'Sheet Sync', icon: 'fa-table' },
         { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' },
         { id: 'billing', label: 'Billing', icon: 'fa-credit-card' }
     ];
@@ -192,6 +194,10 @@ const Settings = () => {
                     <div className="p-6">
                         <CustomFieldsSettings />
                     </div>
+                )}
+
+                {activeTab === 'sheetSync' && (
+                    <SheetSyncSettings />
                 )}
 
                 {activeTab === 'billing' && (

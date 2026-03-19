@@ -1,8 +1,66 @@
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const Lead = require('../models/Lead');
+const User = require('../models/User');
+const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const { sendWhatsAppTextMessage } = require('../services/whatsappService');
 const mongoose = require('mongoose');
+
+// Helper to resolve specific mapped variables
+const resolveVariable = (mappingObj, varNum, data) => {
+    // Handle Mongoose Map vs plain object
+    const mapType = (mappingObj && typeof mappingObj.get === 'function') 
+        ? mappingObj.get(varNum.toString()) 
+        : (mappingObj?.[varNum.toString()] || '');
+        
+    switch (mapType) {
+        case 'lead.name': return data.leadName || '';
+        case 'lead.phone': return data.leadPhone || '';
+        case 'lead.email': return data.leadEmail || '';
+        case 'lead.status': return data.stageName || '';
+        case 'company.name': return data.companyName || '';
+        case 'user.name': return data.userName || '';
+        case 'custom': 
+            const customVal = (mappingObj && typeof mappingObj.get === 'function') 
+                ? mappingObj.get(`${varNum}_custom`) 
+                : (mappingObj?.[`${varNum}_custom`] || '');
+            return customVal || '';
+        default: 
+            // Fallback to older static convention if unmapped
+            if (varNum === 1) return data.leadName || 'Customer';
+            if (varNum === 2) return data.stageName || 'New';
+            if (varNum === 3) return data.companyName || 'Our Company';
+            if (varNum === 4) return data.userName || 'Representative';
+            return '';
+    }
+};
+
+// Helper to build Meta API components
+const buildMetaComponents = (dbComponents, variableMapping, data) => {
+    const metaComponents = [];
+
+    for (const comp of dbComponents) {
+        if (comp.type === 'BODY' && comp.text) {
+            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+            if (matches && matches.length > 0) {
+                const parameters = [];
+                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a,b)=>a-b);
+                for (const n of nums) parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
+                metaComponents.push({ type: 'body', parameters });
+            }
+        }
+        if (comp.type === 'HEADER' && comp.format === 'TEXT' && comp.text) {
+            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+            if (matches && matches.length > 0) {
+                const parameters = [];
+                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a,b)=>a-b);
+                for (const n of nums) parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
+                metaComponents.push({ type: 'header', parameters });
+            }
+        }
+    }
+    return metaComponents;
+};
 
 // Get all conversations for the user
 exports.getConversations = async (req, res) => {
@@ -271,10 +329,14 @@ exports.getUnreadCount = async (req, res) => {
 exports.startConversation = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const { phone, text, leadId } = req.body;
+        const { phone, text, leadId, templateName } = req.body;
 
-        if (!phone || !text) {
-            return res.status(400).json({ message: 'Phone number and message text are required' });
+        if (!phone) {
+            return res.status(400).json({ message: 'Phone number is required' });
+        }
+
+        if (!templateName && !text) {
+            return res.status(400).json({ message: 'Template name or message text is required' });
         }
 
         // Normalize phone number
@@ -299,9 +361,41 @@ exports.startConversation = async (req, res) => {
             });
         }
 
-        // Send message via WhatsApp API
-        const result = await sendWhatsAppTextMessage(normalizedPhone, text.trim(), userId);
-        const waMessageId = result?.messages?.[0]?.id;
+        let result, waMessageId, messageContent, messageType;
+
+        if (templateName) {
+            // Send via Template API (required for new contacts / outside 24hr window)
+            const templateObj = await WhatsAppTemplate.findOne({ userId, name: templateName });
+            let metaComponents = null;
+            
+            if (templateObj) {
+                const userObj = await User.findById(userId);
+                const leadObj = leadId ? await Lead.findById(leadId) : await Lead.findOne({ user: userId, phone: normalizedPhone });
+                
+                const templateData = {
+                    leadName: leadObj?.name || '',
+                    leadEmail: leadObj?.email || '',
+                    leadPhone: normalizedPhone || '',
+                    companyName: userObj?.companyName || '',
+                    userName: userObj?.name || '',
+                    stageName: leadObj?.status || 'New'
+                };
+                
+                metaComponents = buildMetaComponents(templateObj.components || [], templateObj.variableMapping, templateData);
+            }
+
+            const { sendWhatsAppMessage } = require('../services/whatsappService');
+            result = await sendWhatsAppMessage(normalizedPhone, templateName, userId, metaComponents);
+            waMessageId = result?.messages?.[0]?.id;
+            messageContent = { text: `[Template: ${templateName}]` };
+            messageType = 'template';
+        } else {
+            // Send via free-text (only works within 24hr window)
+            result = await sendWhatsAppTextMessage(normalizedPhone, text.trim(), userId);
+            waMessageId = result?.messages?.[0]?.id;
+            messageContent = { text: text.trim() };
+            messageType = 'text';
+        }
 
         // Create message record
         const message = new WhatsAppMessage({
@@ -309,15 +403,16 @@ exports.startConversation = async (req, res) => {
             userId: userId,
             waMessageId: waMessageId,
             direction: 'outbound',
-            type: 'text',
-            content: { text: text.trim() },
+            type: messageType,
+            content: messageContent,
             status: waMessageId ? 'sent' : 'pending',
             timestamp: new Date(),
             isAutomated: false
         });
 
         // Update conversation
-        conversation.lastMessage = text.trim().substring(0, 100);
+        const preview = templateName ? `📋 Template: ${templateName}` : text.trim().substring(0, 100);
+        conversation.lastMessage = preview;
         conversation.lastMessageAt = new Date();
         conversation.lastMessageDirection = 'outbound';
         conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
@@ -339,3 +434,94 @@ exports.startConversation = async (req, res) => {
         });
     }
 };
+
+// Send media message in a conversation
+exports.sendMediaMessage = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const { id } = req.params;
+        const { mediaType, mediaUrl, caption } = req.body;
+
+        const conversation = await WhatsAppConversation.findOne({ _id: id, userId });
+        if (!conversation) {
+            return res.status(404).json({ message: 'Conversation not found' });
+        }
+
+        const { sendMediaMessage: sendMedia } = require('../services/whatsappService');
+
+        // Upload media to WhatsApp first, then send
+        const axios = require('axios');
+        const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
+        let phoneNumberId, accessToken;
+
+        const creds = await getUserWhatsAppCredentials(userId);
+        if (creds?.phoneNumberId && creds?.accessToken) {
+            phoneNumberId = creds.phoneNumberId;
+            accessToken = creds.accessToken;
+        } else {
+            phoneNumberId = process.env.WA_PHONE_NUMBER_ID;
+            accessToken = process.env.WA_ACCESS_TOKEN;
+        }
+
+        // If mediaUrl is a link, send by link
+        const url = `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`;
+        const data = {
+            messaging_product: "whatsapp",
+            to: conversation.phone,
+            type: mediaType,
+            [mediaType]: { link: mediaUrl }
+        };
+        if (caption) data[mediaType].caption = caption;
+
+        const response = await axios.post(url, data, {
+            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+        });
+
+        const waMessageId = response.data.messages?.[0]?.id;
+
+        // Save message record
+        const message = new WhatsAppMessage({
+            conversationId: conversation._id,
+            userId,
+            waMessageId,
+            direction: 'outbound',
+            type: mediaType,
+            content: { mediaUrl, caption, text: caption || '' },
+            status: waMessageId ? 'sent' : 'pending',
+            timestamp: new Date(),
+            isAutomated: false
+        });
+        await message.save();
+
+        conversation.lastMessage = caption || `📎 ${mediaType}`;
+        conversation.lastMessageAt = new Date();
+        conversation.lastMessageDirection = 'outbound';
+        conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
+        conversation.metadata.totalOutbound = (conversation.metadata.totalOutbound || 0) + 1;
+        await conversation.save();
+
+        res.json({ success: true, message: message.toObject() });
+    } catch (error) {
+        console.error('Error sending media:', error);
+        res.status(500).json({ message: 'Error sending media', error: error.response?.data?.error?.message || error.message });
+    }
+};
+
+// Proxy to download media from WhatsApp (frontend can't call Meta API directly)
+exports.downloadMediaProxy = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const { mediaId } = req.params;
+
+        const { downloadMedia } = require('../services/whatsappService');
+        const result = await downloadMedia(mediaId, userId);
+
+        res.set('Content-Type', result.mimeType);
+        res.set('Content-Length', result.data.length);
+        res.send(Buffer.from(result.data));
+    } catch (error) {
+        console.error('Error downloading media:', error);
+        res.status(500).json({ message: 'Error downloading media' });
+    }
+};
+

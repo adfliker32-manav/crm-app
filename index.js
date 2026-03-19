@@ -69,6 +69,27 @@ mongoose.connect(MONGO_URI)
       console.error('⚠️  Failed to initialize Super Admin:', error.message);
       console.error('Server will continue, but Super Admin may not be available.');
     }
+
+    // Start Google Sheet Auto-Sync Scheduler
+    try {
+      const { startSheetSyncScheduler } = require('./src/services/sheetSyncQueue');
+      await startSheetSyncScheduler();
+    } catch (error) {
+      console.error('⚠️  Failed to start Sheet Sync Scheduler:', error.message);
+      console.error('Server will continue, but auto-sync will not be available.');
+    }
+    
+    // Initialize Agenda for Broadcasting
+    try {
+      const Agenda = require('agenda');
+      const agenda = new Agenda({ db: { address: MONGO_URI, collection: 'agendaJobs' } });
+      const { defineBroadcastJob } = require('./src/controllers/whatsappBroadcastController');
+      defineBroadcastJob(agenda);
+      await agenda.start();
+      console.log('✅ Agenda Job Queue Started for Broadcasts');
+    } catch(error) {
+      console.error('⚠️ Failed to start Agenda (Broadcast Queue):', error.message);
+    }
   })
   .catch(err => {
     console.error('\n❌ MongoDB Connection Error:');
@@ -110,9 +131,13 @@ app.use('/api/email-logs', emailLogRoutes);
 const whatsappWebhookRoutes = require('./src/routes/whatsappWebhookRoutes');
 app.use('/webhook/whatsapp', whatsappWebhookRoutes);
 
-// WhatsApp API (authenticated)
-app.use('/api/whatsapp', whatsappRoutes);
+// WhatsApp API (authenticated) - SPECIFIC ROUTES FIRST
 app.use('/api/whatsapp/templates', whatsappTemplateRoutes);
+const whatsappBroadcastRoutes = require('./src/routes/whatsappBroadcastRoutes');
+app.use('/api/whatsapp/broadcasts', whatsappBroadcastRoutes);
+
+// General WhatsApp Routes AFTER specific ones
+app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/whatsapp-logs', whatsAppLogRoutes);
 
 // Chatbot flows

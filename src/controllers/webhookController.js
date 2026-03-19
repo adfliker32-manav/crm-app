@@ -2,6 +2,8 @@ require('dotenv').config();
 const axios = require('axios'); // 👈 IMPORT KIYA
 const Lead = require('../models/Lead');
 const User = require('../models/User');
+const WhatsAppConversation = require('../models/WhatsAppConversation');
+const WhatsAppMessage = require('../models/WhatsAppMessage');
 
 // 1. Verification
 // src/controllers/webhookController.js
@@ -75,9 +77,17 @@ const handleWebhook = async (req, res) => {
                         
                         // Handle status updates (message delivery status, read receipts, etc.)
                         if (value.statuses && Array.isArray(value.statuses)) {
-                            for (const status of value.statuses) {
-                                console.log(`📊 Status update: ${status.status} for ${status.id}`);
-                                // You can handle status updates here if needed
+                            for (const statusObj of value.statuses) {
+                                console.log(`📊 Status update: ${statusObj.status} for ${statusObj.id}`);
+                                try {
+                                    // Update the message status in the database
+                                    await WhatsAppMessage.findOneAndUpdate(
+                                        { waMessageId: statusObj.id },
+                                        { $set: { status: statusObj.status, updatedAt: new Date() } }
+                                    );
+                                } catch (err) {
+                                    console.error('Error updating message status:', err.message);
+                                }
                             }
                         }
                     }
@@ -180,6 +190,66 @@ async function processIncomingMessage(messageObj, value) {
             await lead.save();
             console.log(`✅ Created new lead: ${name} (${normalizedPhone})`);
         }
+
+        // ============================================
+        // Sync to New Conversation Data Model
+        // ============================================
+        const waMessageId = messageObj.id;
+
+        let conversation = await WhatsAppConversation.findOne({
+            phone: normalizedPhone,
+            userId: ownerUser._id
+        });
+
+        if (!conversation) {
+            conversation = new WhatsAppConversation({
+                userId: ownerUser._id,
+                leadId: lead._id,
+                phone: normalizedPhone,
+                displayName: name,
+                status: 'active',
+                unreadCount: 0,
+                metadata: { totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
+            });
+        }
+
+        // Ensure leadId is attached if it wasn't before
+        if (!conversation.leadId && lead._id) {
+            conversation.leadId = lead._id;
+        }
+
+        // Create Message
+        const messageRecord = new WhatsAppMessage({
+            conversationId: conversation._id,
+            userId: ownerUser._id,
+            waMessageId: waMessageId,
+            direction: 'inbound',
+            type: messageType,
+            content: { text: msgBody },
+            status: 'delivered',  // Inbound is delivered by definition
+            timestamp: new Date(),
+            isAutomated: false
+        });
+
+        // Avoid duplicate saves if Meta sends the same webhook
+        const existingMsg = await WhatsAppMessage.findOne({ waMessageId: waMessageId });
+        if (!existingMsg) {
+            await messageRecord.save();
+
+            // Update Conversation
+            conversation.lastMessage = msgBody.substring(0, 100);
+            conversation.lastMessageAt = new Date();
+            conversation.lastMessageDirection = 'inbound';
+            conversation.unreadCount = (conversation.unreadCount || 0) + 1;
+            conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
+            conversation.metadata.totalInbound = (conversation.metadata.totalInbound || 0) + 1;
+            
+            await conversation.save();
+            console.log(`✅ Synced into WhatsAppConversation DB: ${conversation._id}`);
+        } else {
+            console.log(`⚠️ Duplicate webhook message id ${waMessageId} ignored.`);
+        }
+
     } catch (error) {
         console.error("❌ Error processing message:", error.message);
         console.error("Stack:", error.stack);

@@ -283,7 +283,17 @@ exports.sendTemplateEmail = async (req, res) => {
         if (leadId) {
             const Lead = require('../models/Lead');
             const User = require('../models/User');
-            const lead = await Lead.findById(leadId);
+            
+            // SECURITY FIX: Enforce Tenant Isolation (IDOR Patch)
+            let ownerId = userId;
+            if (req.user && req.user.role === 'agent') {
+                const agentUser = await User.findById(userId).select('parentId').lean();
+                if (agentUser && agentUser.parentId) {
+                    ownerId = agentUser.parentId;
+                }
+            }
+            
+            const lead = await Lead.findOne({ _id: leadId, userId: ownerId });
             if (lead) {
                 const user = await User.findById(lead.userId);
                 leadData = {

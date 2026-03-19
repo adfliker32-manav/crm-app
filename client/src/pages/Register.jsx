@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { GoogleLogin } from '@react-oauth/google';
 
 const Register = () => {
     const navigate = useNavigate();
-    const { register } = useAuth();
+    const { register, googleLogin } = useAuth();
 
     const [formData, setFormData] = useState({
         name: '',
@@ -76,6 +77,24 @@ const Register = () => {
             setError(result.message);
             setIsLoading(false);
         }
+    };
+
+    const handleGoogleSuccess = async (credentialResponse) => {
+        setError('');
+        setIsLoading(true);
+
+        const result = await googleLogin(credentialResponse.credential);
+
+        if (result.success) {
+            navigate('/dashboard');
+        } else {
+            setError(result.message);
+            setIsLoading(false);
+        }
+    };
+
+    const handleGoogleError = () => {
+        setError('Google sign-up failed. Please try again.');
     };
 
     return (
@@ -160,6 +179,31 @@ const Register = () => {
                     <form onSubmit={handleSubmit} className="space-y-5">
                         {/* Step 1 */}
                         <div className={step === 1 ? 'block space-y-5' : 'hidden'}>
+                            {/* Google Sign-Up Button */}
+                            <div>
+                                <div className="flex justify-center">
+                                    <GoogleLogin
+                                        onSuccess={handleGoogleSuccess}
+                                        onError={handleGoogleError}
+                                        theme="outline"
+                                        size="large"
+                                        width="400"
+                                        text="signup_with"
+                                        shape="rectangular"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Divider */}
+                            <div className="relative">
+                                <div className="absolute inset-0 flex items-center">
+                                    <div className="w-full border-t border-neutral-200"></div>
+                                </div>
+                                <div className="relative flex justify-center text-sm">
+                                    <span className="px-4 bg-white text-neutral-400">or sign up with email</span>
+                                </div>
+                            </div>
+
                             <div>
                                 <label className="block text-sm font-medium text-neutral-700 mb-2">Full name</label>
                                 <input

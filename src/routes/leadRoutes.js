@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const leadController = require('../controllers/leadController');
+const sheetSyncController = require('../controllers/sheetSyncController');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
 
@@ -11,7 +12,11 @@ const checkPermission = require('../middleware/checkPermission');
 
 // ⚠️ IMPORTANT: Non-parameterized routes MUST come BEFORE parameterized routes!
 
-// 1. Sync Google Sheet (MUST BE BEFORE /:id routes!)
+// 0. Google Sheet Auto-Sync Config (MUST BE BEFORE /:id routes!)
+router.get('/sheet-sync-config', authMiddleware, sheetSyncController.getSheetSyncConfig);
+router.put('/sheet-sync-config', authMiddleware, sheetSyncController.updateSheetSyncConfig);
+
+// 1. Sync Google Sheet (Manual — MUST BE BEFORE /:id routes!)
 router.post('/sync-sheet', authMiddleware, checkPermission('createLeads'), leadController.syncLeads);
 
 // 2. Analytics (MUST BE BEFORE /:id routes!)

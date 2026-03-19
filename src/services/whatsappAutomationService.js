@@ -1,11 +1,80 @@
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const User = require('../models/User');
-const { sendWhatsAppTextMessage } = require('./whatsappService');
+const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+const User = require('../models/User');
+const { sendWhatsAppMessage } = require('./whatsappService');// Helper to resolve specific mapped variables
+const resolveVariable = (mappingObj, varNum, data) => {
+    // Handle Mongoose Map vs plain object
+    const mapType = (mappingObj && typeof mappingObj.get === 'function') 
+        ? mappingObj.get(varNum.toString()) 
+        : (mappingObj?.[varNum.toString()] || '');
+        
+    switch (mapType) {
+        case 'lead.name': return data.leadName || '';
+        case 'lead.phone': return data.leadPhone || '';
+        case 'lead.email': return data.leadEmail || '';
+        case 'lead.status': return data.stageName || '';
+        case 'company.name': return data.companyName || '';
+        case 'user.name': return data.userName || '';
+        case 'custom': 
+            const customVal = (mappingObj && typeof mappingObj.get === 'function') 
+                ? mappingObj.get(`${varNum}_custom`) 
+                : (mappingObj?.[`${varNum}_custom`] || '');
+            return customVal || '';
+        default: 
+            // Fallback to older static convention if unmapped
+            if (varNum === 1) return data.leadName || 'Customer';
+            if (varNum === 2) return data.stageName || 'New';
+            if (varNum === 3) return data.companyName || 'Our Company';
+            if (varNum === 4) return data.userName || 'Representative';
+            return '';
+    }
+};
+
+// Helper to build Meta API components from the database components
+const buildMetaComponents = (dbComponents, variableMapping, data) => {
+    const metaComponents = [];
+
+    for (const comp of dbComponents) {
+        // Meta requires components array payload for dynamic variables
+        if (comp.type === 'BODY' && comp.text) {
+            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+            if (matches && matches.length > 0) {
+                const parameters = [];
+                // Extract unique digits
+                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
+                
+                for (const n of nums) {
+                    parameters.push({
+                        type: 'text',
+                        text: resolveVariable(variableMapping, n, data)
+                    });
+                }
+                metaComponents.push({
+                    type: 'body',
+                    parameters: parameters
+                });
+            }
+        }
+        // If header text has variables, Meta requires them in header parameters
+        if (comp.type === 'HEADER' && comp.format === 'TEXT' && comp.text) {
+            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+            if (matches && matches.length > 0) {
+                const parameters = [];
+                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
+                for (const n of nums) {
+                    parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
+                }
+                metaComponents.push({ type: 'header', parameters: parameters });
+            }
+        }
+    }
+    return metaComponents;
+};
 
 // Send automated WhatsApp message when lead is created
 const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
     try {
-        // Find templates with automation enabled for lead creation
         const templates = await WhatsAppTemplate.find({
             userId: userId,
             isActive: true,
@@ -14,24 +83,12 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
         });
 
         if (!templates || templates.length === 0) {
-            console.log('No automated WhatsApp templates found for lead creation');
-            return;
+            return false;
         }
 
-        // Get user info
         const user = await User.findById(userId);
-        if (!user) {
-            console.error('User not found for WhatsApp automation');
-            return;
-        }
+        if (!user || !lead.phone) return false;
 
-        // If lead doesn't have phone, skip
-        if (!lead.phone) {
-            console.log('Lead has no phone number, skipping automated WhatsApp');
-            return;
-        }
-
-        // Prepare data for template replacement
         const templateData = {
             leadName: lead.name || '',
             leadEmail: lead.email || '',
@@ -41,56 +98,14 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
             stageName: lead.status || 'New'
         };
 
-        // Replace variables helper
-        const replaceVariables = (template, data) => {
-            let result = template;
-            const variables = {
-                '{{leadName}}': data.leadName || '',
-                '{{leadEmail}}': data.leadEmail || '',
-                '{{leadPhone}}': data.leadPhone || '',
-                '{{companyName}}': data.companyName || '',
-                '{{userName}}': data.userName || '',
-                '{{stageName}}': data.stageName || '',
-                '{{date}}': new Date().toLocaleDateString(),
-                '{{time}}': new Date().toLocaleTimeString()
-            };
-
-            Object.keys(variables).forEach(key => {
-                const regex = new RegExp(key.replace(/[{}]/g, '\\$&'), 'g');
-                result = result.replace(regex, variables[key]);
-            });
-
-            return result;
-        };
-
-        // Send message for each matching template
         for (const template of templates) {
             try {
-                // Replace variables in message
-                const message = replaceVariables(template.message, templateData);
-
-                // Send WhatsApp message
-                const result = await sendWhatsAppTextMessage(lead.phone, message, userId);
+                const metaComponents = buildMetaComponents(template.components || [], template.variableMapping, templateData);
+                const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents);
                 const messageId = result?.messages?.[0]?.id;
                 console.log(`✅ Automated WhatsApp sent to ${lead.phone} using template: ${template.name}`);
-
-                // Log successful message (non-blocking)
-                if (messageId) {
-                    logWhatsApp({
-                        userId,
-                        to: lead.phone,
-                        message: message,
-                        status: 'sent',
-                        messageId,
-                        isAutomated: true,
-                        triggerType: 'on_lead_create',
-                        templateId: template._id,
-                        leadId: lead._id
-                    }).catch(err => console.error('Error logging WhatsApp message:', err));
-                }
             } catch (error) {
                 console.error(`❌ Error sending automated WhatsApp for template ${template.name}:`, error.message);
-                // Continue with next template even if one fails
             }
         }
         return templates.length > 0;
@@ -140,40 +155,13 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
             stageName: newStage || ''
         };
 
-        // Replace variables helper
-        const replaceVariables = (template, data) => {
-            let result = template;
-            const variables = {
-                '{{leadName}}': data.leadName || '',
-                '{{leadEmail}}': data.leadEmail || '',
-                '{{leadPhone}}': data.leadPhone || '',
-                '{{companyName}}': data.companyName || '',
-                '{{userName}}': data.userName || '',
-                '{{stageName}}': data.stageName || '',
-                '{{date}}': new Date().toLocaleDateString(),
-                '{{time}}': new Date().toLocaleTimeString()
-            };
-
-            Object.keys(variables).forEach(key => {
-                const regex = new RegExp(key.replace(/[{}]/g, '\\$&'), 'g');
-                result = result.replace(regex, variables[key]);
-            });
-
-            return result;
-        };
-
-        // Send message for each matching template
         for (const template of templates) {
             try {
-                // Replace variables in message
-                const message = replaceVariables(template.message, templateData);
-
-                // Send WhatsApp message
-                const result = await sendWhatsAppTextMessage(lead.phone, message, userId);
-                console.log(`✅ Automated WhatsApp sent to ${lead.phone} for stage change to ${newStage}`);
+                const metaComponents = buildMetaComponents(template.components || [], templateData);
+                const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents);
+                console.log(`✅ Automated WhatsApp sent to ${lead.phone} for stage change to ${newStage} using template ${template.name}`);
             } catch (error) {
                 console.error(`❌ Error sending automated WhatsApp for template ${template.name}:`, error.message);
-                // Continue with next template even if one fails
             }
         }
         return templates.length > 0;

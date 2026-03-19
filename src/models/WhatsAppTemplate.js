@@ -117,6 +117,12 @@ const whatsappTemplateSchema = new mongoose.Schema({
     rejectedAt: {
         type: Date,
         default: null
+    },
+    // Dynamic variable mapping
+    variableMapping: {
+        type: Map,
+        of: String,
+        default: {}
     }
 }, {
     timestamps: true

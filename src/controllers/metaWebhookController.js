@@ -178,29 +178,19 @@ async function createLeadFromMeta(userId, leadDetails, formId) {
         const user = await User.findById(userId).select('customFieldDefinitions').lean();
         const customFieldDefs = user?.customFieldDefinitions || [];
 
-        // Create a map of lowercase label -> key for matching
-        const customFieldMap = {};
-        customFieldDefs.forEach(field => {
-            // Map both exact label and slug-style keys
-            customFieldMap[field.label.toLowerCase()] = field.key;
-            customFieldMap[field.key.toLowerCase()] = field.key;
-        });
 
-        // Standard Meta fields to exclude from custom mapping
-        const standardMetaFields = ['full_name', 'name', 'first_name', 'last_name', 'email', 'phone_number', 'phone', 'city', 'company_name', 'company'];
 
-        // Build customData from Meta's rawFields
+
+        // Build customData by iterating over CRM's custom fields only
+        // This safely skips any extra/unmapped Meta fields
         const customData = {};
         if (leadDetails.rawFields) {
-            Object.entries(leadDetails.rawFields).forEach(([fieldName, value]) => {
-                // Skip standard fields
-                if (standardMetaFields.includes(fieldName.toLowerCase())) {
-                    return;
-                }
-                // Check if field matches a custom field label or key
-                const matchedKey = customFieldMap[fieldName.toLowerCase()];
-                if (matchedKey && value) {
-                    customData[matchedKey] = value;
+            customFieldDefs.forEach(field => {
+                // Try matching by label (lowercase) or by key (lowercase) in rawFields
+                const value = leadDetails.rawFields[field.label.toLowerCase()]
+                           || leadDetails.rawFields[field.key.toLowerCase()];
+                if (value) {
+                    customData[field.key] = value;
                 }
             });
         }

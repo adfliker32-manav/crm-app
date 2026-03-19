@@ -6,6 +6,7 @@ const { authMiddleware } = require('../middleware/authMiddleware');
 // 1. Register & Login (Public)
 router.post('/register', authController.register);
 router.post('/login', authController.login);
+router.post('/google', authController.googleLogin); // Google OAuth Login
 
 // 2. Add New Agent (Manager Only)
 router.post('/add-agent', authMiddleware, authController.createAgent);
