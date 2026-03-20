@@ -42,6 +42,10 @@ const whatsAppConversationSchema = new mongoose.Schema({
         enum: ['inbound', 'outbound'],
         default: 'inbound'
     },
+    lastInboundMessageAt: {
+        type: Date,
+        default: null
+    },
     unreadCount: {
         type: Number,
         default: 0

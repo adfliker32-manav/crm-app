@@ -133,13 +133,10 @@ async function processIncomingMessage(messageObj, value) {
         if (!ownerUser && phoneNumberId) {
             const envPhoneId = process.env.Phone_Number_ID || process.env.WA_PHONE_NUMBER_ID;
             if (phoneNumberId === envPhoneId) {
-                // Find the first manager user (for single-tenant setup)
-                ownerUser = await User.findOne({ role: 'manager' });
+                // Find the first manager or superadmin user (for single-tenant setup fallback)
+                ownerUser = await User.findOne({ role: { $in: ['superadmin', 'manager'] } });
                 if (ownerUser) {
-                    // Update user with phone number ID for future lookups
-                    ownerUser.waPhoneNumberId = phoneNumberId;
-                    await ownerUser.save();
-                    console.log(`✅ Updated user ${ownerUser.email} with phone number ID`);
+                    console.log(`✅ Using fallback user ${ownerUser.email} for incoming message`);
                 }
             }
         }
@@ -333,8 +330,23 @@ const sendReply = async (req, res) => {
         res.status(200).json({ success: true, message: "Sent!" });
 
     } catch (error) {
-        console.error("❌ Send Error:", error.response ? error.response.data : error.message);
-        res.status(500).json({ success: false, message: "Failed to send" });
+        let errorMsg = error.message;
+        if (error.response && error.response.data && error.response.data.error) {
+            const metaError = error.response.data.error;
+            errorMsg = metaError.message || metaError.error_user_msg || 'WhatsApp API Error';
+            if (metaError.code === 131009) {
+                errorMsg = "User must register a valid template format before sending (Wait for approval)";
+            } else if (metaError.code === 131026) {
+                errorMsg = "Message undeliverable. User has not interacted with the business or is outside the 24h window.";
+            } else if (metaError.code) {
+                errorMsg = `Meta API Error (${metaError.code}): ${errorMsg}`;
+            }
+        }
+        console.error("❌ Send Error:", errorMsg);
+        res.status(error.response?.status || 500).json({ 
+            success: false, 
+            message: `Failed to send: ${errorMsg}` 
+        });
     }
 };
 

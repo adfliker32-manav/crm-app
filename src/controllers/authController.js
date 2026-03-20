@@ -1,4 +1,16 @@
 const User = require('../models/User');
+const Lead = require('../models/Lead');
+const WhatsAppConversation = require('../models/WhatsAppConversation');
+const WhatsAppMessage = require('../models/WhatsAppMessage');
+const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
+const WhatsAppLog = require('../models/WhatsAppLog');
+const EmailLog = require('../models/EmailLog');
+const EmailTemplate = require('../models/EmailTemplate');
+const ChatbotFlow = require('../models/ChatbotFlow');
+const ChatbotSession = require('../models/ChatbotSession');
+const Stage = require('../models/Stage');
+const ActivityLog = require('../models/ActivityLog');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
@@ -292,10 +304,26 @@ exports.deleteAgent = async (req, res) => {
             return res.status(404).json({ message: "Agent not found or does not belong to you" });
         }
 
+        // Cascade delete agent's data
+        await Promise.all([
+            Lead.deleteMany({ userId: agentId }),
+            WhatsAppConversation.deleteMany({ userId: agentId }),
+            WhatsAppMessage.deleteMany({ userId: agentId }),
+            WhatsAppTemplate.deleteMany({ userId: agentId }),
+            WhatsAppBroadcast.deleteMany({ userId: agentId }),
+            WhatsAppLog.deleteMany({ userId: agentId }),
+            EmailLog.deleteMany({ userId: agentId }),
+            EmailTemplate.deleteMany({ userId: agentId }),
+            ChatbotFlow.deleteMany({ userId: agentId }),
+            ChatbotSession.deleteMany({ userId: agentId }),
+            Stage.deleteMany({ userId: agentId }),
+            ActivityLog.deleteMany({ userId: agentId })
+        ]);
+
         // Delete the agent
         await User.findByIdAndDelete(agentId);
 
-        res.json({ success: true, message: "Agent deleted successfully" });
+        res.json({ success: true, message: "Agent and all associated data deleted successfully" });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });

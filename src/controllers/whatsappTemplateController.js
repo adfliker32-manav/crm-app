@@ -1,13 +1,30 @@
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+const User = require('../models/User');
 const { submitTemplateToMeta, syncTemplateFromMeta } = require('../services/whatsappService');
 
-// Get all templates
+// Get all templates (shared across users with same WhatsApp phone number)
 exports.getTemplates = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { status, category, search } = req.query;
 
-        const query = { userId };
+        // Find current user's WhatsApp phone number
+        const currentUser = await User.findById(userId).select('waPhoneNumberId').lean();
+        
+        // Build userId filter: include ALL users sharing the same WhatsApp phone number
+        let userFilter;
+        if (currentUser?.waPhoneNumberId) {
+            const sharedUsers = await User.find(
+                { waPhoneNumberId: currentUser.waPhoneNumberId },
+                { _id: 1 }
+            ).lean();
+            const sharedIds = sharedUsers.map(u => u._id);
+            userFilter = { userId: { $in: sharedIds } };
+        } else {
+            userFilter = { userId };
+        }
+
+        const query = { ...userFilter };
         if (status) query.status = status;
         if (category) query.category = category;
         if (search) {
@@ -276,8 +293,24 @@ exports.sendTemplateMessage = async (req, res) => {
 
         res.json({ success: true, message: 'Template sent successfully', data: result });
     } catch (error) {
-        console.error('Error sending template message:', error);
-        res.status(500).json({ message: 'Error sending template message', error: error.message });
+        let errorMsg = error.message;
+        if (error.response && error.response.data && error.response.data.error) {
+            const metaError = error.response.data.error;
+            errorMsg = metaError.message || metaError.error_user_msg || 'WhatsApp API Error';
+            if (metaError.code === 131009) {
+                errorMsg = "User must register a valid template format before sending (Wait for approval)";
+            } else if (metaError.code === 131026) {
+                errorMsg = "Message undeliverable. User has not interacted with the business or is outside the 24h window.";
+            } else if (metaError.code) {
+                errorMsg = `Meta API Error (${metaError.code}): ${errorMsg}`;
+            }
+        }
+        console.error('Error sending template message:', errorMsg);
+        res.status(error.response?.status || 500).json({ 
+            success: false, 
+            message: `Failed to send: ${errorMsg}`, 
+            error: errorMsg 
+        });
     }
 };
 

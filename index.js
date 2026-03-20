@@ -70,6 +70,21 @@ mongoose.connect(MONGO_URI)
       console.error('Server will continue, but Super Admin may not be available.');
     }
 
+    // Seed SuperAdmin WhatsApp credentials from .env into DB
+    try {
+      console.log('\n📱 Seeding SuperAdmin WhatsApp credentials...');
+      const seedSuperAdminWhatsApp = require('./scripts/seedWhatsApp');
+      await seedSuperAdminWhatsApp(
+        process.env.WHATSAPP_TOKEN,
+        process.env.Phone_Number_ID || process.env.WA_PHONE_NUMBER_ID,
+        process.env.WA_BUSINESS_ID
+      );
+    } catch (error) {
+      console.error('⚠️  Failed to seed WhatsApp credentials:', error.message);
+      console.error('Server will continue with .env fallback.');
+    }
+
+
     // Start Google Sheet Auto-Sync Scheduler
     try {
       const { startSheetSyncScheduler } = require('./src/services/sheetSyncQueue');

@@ -62,8 +62,8 @@ router.post('/conversations/:id/link', authMiddleware, whatsappConversationContr
 // Update conversation status (archive/unarchive/spam)
 router.put('/conversations/:id/status', authMiddleware, whatsappConversationController.updateStatus);
 
-// Send media in conversation
-router.post('/conversations/:id/send-media', authMiddleware, whatsappConversationController.sendMediaMessage);
+// Send media in conversation (file upload via multer)
+router.post('/conversations/:id/send-media', authMiddleware, upload.single('file'), whatsappConversationController.sendMediaMessage);
 
 // Download media proxy (frontend can't call Meta API directly)
 router.get('/media/:mediaId', authMiddleware, whatsappConversationController.downloadMediaProxy);

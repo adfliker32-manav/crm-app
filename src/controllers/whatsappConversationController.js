@@ -62,14 +62,25 @@ const buildMetaComponents = (dbComponents, variableMapping, data) => {
     return metaComponents;
 };
 
-// Get all conversations for the user
+// Get all conversations for the user (shared across same WhatsApp phone number)
 exports.getConversations = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { status = 'active', search, page = 1, limit = 50 } = req.query;
 
-        // Build query
-        const query = { userId: new mongoose.Types.ObjectId(userId) };
+        // Find all userIds sharing the same WhatsApp phone number
+        const currentUser = await User.findById(userId).select('waPhoneNumberId').lean();
+        let userIds = [new mongoose.Types.ObjectId(userId)];
+        if (currentUser?.waPhoneNumberId) {
+            const sharedUsers = await User.find(
+                { waPhoneNumberId: currentUser.waPhoneNumberId },
+                { _id: 1 }
+            ).lean();
+            userIds = sharedUsers.map(u => new mongoose.Types.ObjectId(u._id));
+        }
+
+        // Build query — include conversations from all shared users
+        const query = { userId: { $in: userIds } };
 
         if (status && status !== 'all') {
             query.status = status;
@@ -215,10 +226,28 @@ exports.sendMessage = async (req, res) => {
             waMessageId
         });
     } catch (error) {
-        console.error('Error sending message:', error);
-        res.status(500).json({
-            message: 'Error sending message',
-            error: error.response?.data?.error?.message || error.message
+        let errorMsg = error.message;
+        if (error.response && error.response.data && error.response.data.error) {
+            const metaError = error.response.data.error;
+            errorMsg = metaError.message || metaError.error_user_msg || 'WhatsApp API Error';
+            if (metaError.code === 131009) {
+                errorMsg = "User must register a valid template format before sending (Wait for approval)";
+            } else if (metaError.code === 131026) {
+                errorMsg = "Message undeliverable. User has not interacted with the business or is outside the 24h window.";
+            } else if (metaError.code) {
+                errorMsg = `Meta API Error (${metaError.code}): ${errorMsg}`;
+            }
+        }
+        console.error('Error sending message:', errorMsg);
+        
+        let statusCode = error.response?.status || 500;
+        // Prevent Meta's 401 Unauthorized from triggering frontend logout interceptor
+        if (statusCode === 401) statusCode = 400;
+
+        res.status(statusCode).json({
+            success: false,
+            message: `Failed to send message: ${errorMsg}`,
+            error: errorMsg
         });
     }
 };
@@ -427,31 +456,69 @@ exports.startConversation = async (req, res) => {
             message: message.toObject()
         });
     } catch (error) {
-        console.error('Error starting conversation:', error);
-        res.status(500).json({
-            message: 'Error starting conversation',
-            error: error.response?.data?.error?.message || error.message
+        let errorMsg = error.message;
+        if (error.response && error.response.data && error.response.data.error) {
+            const metaError = error.response.data.error;
+            errorMsg = metaError.message || metaError.error_user_msg || 'WhatsApp API Error';
+            if (metaError.code === 131009) {
+                errorMsg = "User must register a valid template format before sending (Wait for approval)";
+            } else if (metaError.code === 131026) {
+                errorMsg = "Message undeliverable. User has not interacted with the business or is outside the 24h window.";
+            } else if (metaError.code) {
+                errorMsg = `Meta API Error (${metaError.code}): ${errorMsg}`;
+            }
+        }
+        console.error('Error starting conversation:', errorMsg);
+        
+        let statusCode = error.response?.status || 500;
+        // Prevent Meta's 401 Unauthorized from triggering frontend logout interceptor
+        if (statusCode === 401) statusCode = 400;
+        
+        res.status(statusCode).json({
+            success: false,
+            message: `Failed to start conversation: ${errorMsg}`,
+            error: errorMsg
         });
     }
 };
 
-// Send media message in a conversation
+// Send media message in a conversation (file upload via multer)
 exports.sendMediaMessage = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { id } = req.params;
-        const { mediaType, mediaUrl, caption } = req.body;
+        const caption = req.body.caption || '';
 
         const conversation = await WhatsAppConversation.findOne({ _id: id, userId });
         if (!conversation) {
             return res.status(404).json({ message: 'Conversation not found' });
         }
 
-        const { sendMediaMessage: sendMedia } = require('../services/whatsappService');
+        if (!req.file) {
+            return res.status(400).json({ message: 'No file uploaded' });
+        }
 
-        // Upload media to WhatsApp first, then send
-        const axios = require('axios');
+        const { mimetype, buffer, originalname, size } = req.file;
+
+        // Determine media type and validate
+        let mediaType;
+        const MB = 1024 * 1024;
+
+        if (mimetype.startsWith('image/')) {
+            mediaType = 'image';
+            if (size > 5 * MB) return res.status(400).json({ message: 'Image must be under 5 MB' });
+        } else if (mimetype.startsWith('video/')) {
+            mediaType = 'video';
+            if (size > 16 * MB) return res.status(400).json({ message: 'Video must be under 16 MB' });
+        } else {
+            // Treat everything else as document (PDF, DOC, XLSX, etc.)
+            mediaType = 'document';
+            if (size > 100 * MB) return res.status(400).json({ message: 'Document must be under 100 MB' });
+        }
+
+        // Step 1: Upload file to Meta via Resumable Upload API
         const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
+        const axios = require('axios');
         let phoneNumberId, accessToken;
 
         const creds = await getUserWhatsAppCredentials(userId);
@@ -463,37 +530,69 @@ exports.sendMediaMessage = async (req, res) => {
             accessToken = process.env.WA_ACCESS_TOKEN;
         }
 
-        // If mediaUrl is a link, send by link
-        const url = `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`;
-        const data = {
-            messaging_product: "whatsapp",
+        // Upload media to WhatsApp
+        const uploadUrl = `https://graph.facebook.com/v17.0/${phoneNumberId}/media`;
+        const FormData = require('form-data');
+        const form = new FormData();
+        form.append('messaging_product', 'whatsapp');
+        form.append('file', buffer, { filename: originalname, contentType: mimetype });
+        form.append('type', mimetype);
+
+        const uploadRes = await axios.post(uploadUrl, form, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                ...form.getHeaders()
+            },
+            maxContentLength: 100 * MB,
+            maxBodyLength: 100 * MB
+        });
+
+        const mediaId = uploadRes.data.id;
+        console.log(`✅ Media uploaded to WhatsApp, ID: ${mediaId}`);
+
+        // Step 2: Send media message using the uploaded media ID
+        const sendUrl = `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`;
+        const msgData = {
+            messaging_product: 'whatsapp',
             to: conversation.phone,
             type: mediaType,
-            [mediaType]: { link: mediaUrl }
+            [mediaType]: { id: mediaId }
         };
-        if (caption) data[mediaType].caption = caption;
+        if (caption && ['image', 'video', 'document'].includes(mediaType)) {
+            msgData[mediaType].caption = caption;
+        }
+        if (mediaType === 'document') {
+            msgData[mediaType].filename = originalname;
+        }
 
-        const response = await axios.post(url, data, {
+        const sendRes = await axios.post(sendUrl, msgData, {
             headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
         });
 
-        const waMessageId = response.data.messages?.[0]?.id;
+        const waMessageId = sendRes.data.messages?.[0]?.id;
+        console.log(`✅ Media message sent (${mediaType}):`, waMessageId);
 
-        // Save message record
+        // Step 3: Save message record
         const message = new WhatsAppMessage({
             conversationId: conversation._id,
             userId,
             waMessageId,
             direction: 'outbound',
             type: mediaType,
-            content: { mediaUrl, caption, text: caption || '' },
+            content: {
+                mediaId: mediaId,
+                caption: caption || undefined,
+                fileName: originalname,
+                mimeType: mimetype,
+                text: caption || `📎 ${originalname}`
+            },
             status: waMessageId ? 'sent' : 'pending',
             timestamp: new Date(),
             isAutomated: false
         });
         await message.save();
 
-        conversation.lastMessage = caption || `📎 ${mediaType}`;
+        conversation.lastMessage = caption || `📎 ${originalname}`;
         conversation.lastMessageAt = new Date();
         conversation.lastMessageDirection = 'outbound';
         conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
@@ -502,8 +601,14 @@ exports.sendMediaMessage = async (req, res) => {
 
         res.json({ success: true, message: message.toObject() });
     } catch (error) {
-        console.error('Error sending media:', error);
-        res.status(500).json({ message: 'Error sending media', error: error.response?.data?.error?.message || error.message });
+        console.error('Error sending media:', error.response?.data || error.message);
+        const metaError = error.response?.data?.error?.message || error.message;
+        
+        let statusCode = error.response?.status || 500;
+        // Prevent Meta's 401 Unauthorized from triggering frontend logout interceptor
+        if (statusCode === 401) statusCode = 400;
+
+        res.status(statusCode).json({ message: `Error sending media: ${metaError}`, error: metaError });
     }
 };
 

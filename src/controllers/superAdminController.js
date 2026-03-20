@@ -3,6 +3,17 @@ const Lead = require('../models/Lead');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const GlobalSetting = require('../models/GlobalSetting');
+const WhatsAppConversation = require('../models/WhatsAppConversation');
+const WhatsAppMessage = require('../models/WhatsAppMessage');
+const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
+const WhatsAppLog = require('../models/WhatsAppLog');
+const EmailLog = require('../models/EmailLog');
+const EmailTemplate = require('../models/EmailTemplate');
+const ChatbotFlow = require('../models/ChatbotFlow');
+const ChatbotSession = require('../models/ChatbotSession');
+const Stage = require('../models/Stage');
+const ActivityLog = require('../models/ActivityLog');
 
 // Helper for Token Generation (match authController logic)
 const generateToken = (id, role) => {
@@ -204,13 +215,29 @@ const deleteCompany = async (req, res) => {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        // Delete all agents of this company
-        await User.deleteMany({ parentId: id, role: 'agent' });
+        // Get all agents to include them in cascade delete
+        const agents = await User.find({ parentId: id, role: 'agent' });
+        const agentIds = agents.map(a => a._id);
+        const allUserIds = [id, ...agentIds];
 
-        // Delete all leads of this company
-        await Lead.deleteMany({ userId: id });
+        // Cascade delete all associated data
+        await Promise.all([
+            Lead.deleteMany({ userId: { $in: allUserIds } }),
+            WhatsAppConversation.deleteMany({ userId: { $in: allUserIds } }),
+            WhatsAppMessage.deleteMany({ userId: { $in: allUserIds } }),
+            WhatsAppTemplate.deleteMany({ userId: { $in: allUserIds } }),
+            WhatsAppBroadcast.deleteMany({ userId: { $in: allUserIds } }),
+            WhatsAppLog.deleteMany({ userId: { $in: allUserIds } }),
+            EmailLog.deleteMany({ userId: { $in: allUserIds } }),
+            EmailTemplate.deleteMany({ userId: { $in: allUserIds } }),
+            ChatbotFlow.deleteMany({ userId: { $in: allUserIds } }),
+            ChatbotSession.deleteMany({ userId: { $in: allUserIds } }),
+            Stage.deleteMany({ userId: { $in: allUserIds } }),
+            ActivityLog.deleteMany({ $or: [{ userId: { $in: allUserIds } }, { companyId: id }] }),
+            User.deleteMany({ parentId: id, role: 'agent' })
+        ]);
 
-        // Delete the company
+        // Delete the company manager
         await User.findByIdAndDelete(id);
 
         res.json({
@@ -419,15 +446,28 @@ const deleteCompanyAgent = async (req, res) => {
             return res.status(404).json({ message: "Agent not found" });
         }
 
-        // Delete agent's leads
-        await Lead.deleteMany({ userId: agentId });
+        // Cascade delete agent's data
+        await Promise.all([
+            Lead.deleteMany({ userId: agentId }),
+            WhatsAppConversation.deleteMany({ userId: agentId }),
+            WhatsAppMessage.deleteMany({ userId: agentId }),
+            WhatsAppTemplate.deleteMany({ userId: agentId }),
+            WhatsAppBroadcast.deleteMany({ userId: agentId }),
+            WhatsAppLog.deleteMany({ userId: agentId }),
+            EmailLog.deleteMany({ userId: agentId }),
+            EmailTemplate.deleteMany({ userId: agentId }),
+            ChatbotFlow.deleteMany({ userId: agentId }),
+            ChatbotSession.deleteMany({ userId: agentId }),
+            Stage.deleteMany({ userId: agentId }),
+            ActivityLog.deleteMany({ userId: agentId })
+        ]);
 
         // Delete agent
         await User.findByIdAndDelete(agentId);
 
         res.json({
             success: true,
-            message: "Agent deleted successfully"
+            message: "Agent and all associated data deleted successfully"
         });
     } catch (error) {
         console.error("Delete Agent Error:", error);

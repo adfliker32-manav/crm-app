@@ -20,9 +20,15 @@ const WhatsAppInbox = () => {
     const [startingChat, setStartingChat] = useState(false);
     const [showTemplatePicker, setShowTemplatePicker] = useState(false);
     const [filter, setFilter] = useState('all'); // all, unread, archived
+    const [mediaPreview, setMediaPreview] = useState(null); // { file, previewUrl, type }
+    const [uploading, setUploading] = useState(false);
+    const [templateQuery, setTemplateQuery] = useState('');
+    const [showInlineTemplatePicker, setShowInlineTemplatePicker] = useState(false);
     const scrollRef = useRef(null);
     const fileInputRef = useRef(null);
     const attachRef = useRef(null);
+    const templatePickerRef = useRef(null);
+    const inputRef = useRef(null);
 
     const fetchConversations = useCallback(async () => {
         try {
@@ -66,14 +72,22 @@ const WhatsAppInbox = () => {
     // Check if the 24-hour messaging window is still open
     const isWindowOpen = (chat) => {
         if (!chat) return false;
-        // Window is open if the contact has sent us a message in the last 24 hours
+        
+        // Correct 24-hour logic: window is calculated from the LAST INBOUND message from the customer
+        if (chat.lastInboundMessageAt) {
+            const lastInbound = new Date(chat.lastInboundMessageAt);
+            const now = new Date();
+            return (now - lastInbound) < (24 * 60 * 60 * 1000);
+        }
+        
+        // Fallback for older chats before the DB update
         if (chat.lastMessageDirection === 'inbound') {
             const lastMsg = new Date(chat.lastMessageAt);
             const now = new Date();
             return (now - lastMsg) < (24 * 60 * 60 * 1000);
         }
-        // If they never messaged us, or last was outbound, check total inbound count
-        return (chat.metadata?.totalInbound || 0) > 0 && chat.lastMessageDirection === 'inbound';
+        
+        return false;
     };
 
     useEffect(() => {
@@ -88,10 +102,14 @@ const WhatsAppInbox = () => {
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }, [messages]);
 
-    // Close attach menu on outside click
+    // Close attach menu and template picker on outside click
     useEffect(() => {
         const handler = (e) => {
             if (attachRef.current && !attachRef.current.contains(e.target)) setShowAttachMenu(false);
+            if (templatePickerRef.current && !templatePickerRef.current.contains(e.target) && e.target !== inputRef.current) {
+                setShowInlineTemplatePicker(false);
+                setTemplateQuery('');
+            }
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
@@ -116,6 +134,85 @@ const WhatsAppInbox = () => {
             setSending(false);
         }
     };
+
+    // ── File Upload Handler ──
+    const handleFileSelect = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        e.target.value = '';
+
+        const MB = 1024 * 1024;
+        if (file.type.startsWith('image/') && file.size > 5 * MB) { showError('Image must be under 5 MB'); return; }
+        if (file.type.startsWith('video/') && file.size > 16 * MB) { showError('Video must be under 16 MB'); return; }
+        if (file.size > 100 * MB) { showError('File must be under 100 MB'); return; }
+
+        const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+        const type = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'document';
+        setMediaPreview({ file, previewUrl, type });
+    };
+
+    const handleSendMedia = async () => {
+        if (!mediaPreview || !selectedChat) return;
+        setUploading(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', mediaPreview.file);
+            if (newMessage.trim()) formData.append('caption', newMessage.trim());
+
+            const res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send-media`, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            setMessages(prev => [...prev, res.data.message]);
+            setMediaPreview(null);
+            setNewMessage('');
+            showSuccess('Media sent!');
+            fetchConversations();
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to send media');
+        } finally {
+            setUploading(false);
+        }
+    };
+
+    const handleCancelMedia = () => {
+        if (mediaPreview?.previewUrl) URL.revokeObjectURL(mediaPreview.previewUrl);
+        setMediaPreview(null);
+    };
+
+    // ── Inline Template Picker (@trigger) ──
+    const handleInputChange = (e) => {
+        const value = e.target.value;
+        setNewMessage(value);
+
+        // Detect @ trigger
+        const atIdx = value.lastIndexOf('@');
+        if (atIdx !== -1 && (atIdx === 0 || value[atIdx - 1] === ' ')) {
+            const query = value.substring(atIdx + 1);
+            setTemplateQuery(query);
+            setShowInlineTemplatePicker(true);
+        } else {
+            setShowInlineTemplatePicker(false);
+            setTemplateQuery('');
+        }
+    };
+
+    const handleInputKeyDown = (e) => {
+        if (e.key === 'Escape' && showInlineTemplatePicker) {
+            setShowInlineTemplatePicker(false);
+            setTemplateQuery('');
+        }
+    };
+
+    const handleSelectInlineTemplate = (template) => {
+        setShowInlineTemplatePicker(false);
+        setTemplateQuery('');
+        setNewMessage('');
+        handleSendTemplate(template.name);
+    };
+
+    const filteredInlineTemplates = templates.filter(t =>
+        !templateQuery || t.name.toLowerCase().includes(templateQuery.toLowerCase())
+    );
 
     const handleStartNewChat = async () => {
         if (!newChatPhone.trim() || !newChatTemplate) return;
@@ -516,7 +613,27 @@ const WhatsAppInbox = () => {
                             )}
 
                             <div className="px-4 py-2.5">
-                            <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+                            {/* ── Media Preview Bar ── */}
+                            {mediaPreview && (
+                                <div className="mb-2 bg-white rounded-xl p-3 shadow-sm border border-slate-100 flex items-center gap-3">
+                                    {mediaPreview.type === 'image' && mediaPreview.previewUrl ? (
+                                        <img src={mediaPreview.previewUrl} alt="Preview" className="w-16 h-16 rounded-lg object-cover" />
+                                    ) : (
+                                        <div className={`w-14 h-14 rounded-lg flex items-center justify-center ${mediaPreview.type === 'document' ? 'bg-blue-50 text-blue-500' : 'bg-purple-50 text-purple-500'}`}>
+                                            <i className={`fa-solid ${mediaPreview.type === 'document' ? 'fa-file-lines' : 'fa-video'} text-2xl`}></i>
+                                        </div>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-medium text-[#111b21] truncate">{mediaPreview.file.name}</p>
+                                        <p className="text-xs text-[#8696a0]">{(mediaPreview.file.size / 1024).toFixed(1)} KB • {mediaPreview.type}</p>
+                                    </div>
+                                    <button onClick={handleCancelMedia} className="w-8 h-8 rounded-full hover:bg-red-50 flex items-center justify-center text-red-400 hover:text-red-500 transition" title="Cancel">
+                                        <i className="fa-solid fa-xmark text-lg"></i>
+                                    </button>
+                                </div>
+                            )}
+
+                            <form onSubmit={mediaPreview ? (e) => { e.preventDefault(); handleSendMedia(); } : handleSendMessage} className="flex items-center gap-2">
                                 {/* Attach button */}
                                 <div className="relative" ref={attachRef}>
                                     <button type="button" onClick={() => setShowAttachMenu(!showAttachMenu)} className="w-10 h-10 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition">
@@ -547,33 +664,64 @@ const WhatsAppInbox = () => {
                                         </div>
                                     )}
                                 </div>
-                                <input ref={fileInputRef} type="file" className="hidden" onChange={(e) => {
-                                    const file = e.target.files[0];
-                                    if (file) showSuccess(`File "${file.name}" selected. File upload coming soon!`);
-                                    e.target.value = '';
-                                }} />
+                                <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelect} />
 
-                                {/* Text Input */}
-                                <div className="flex-1 bg-white rounded-lg shadow-sm">
+                                {/* Text Input + Inline Template Picker */}
+                                <div className="flex-1 bg-white rounded-lg shadow-sm relative">
                                     <input
+                                        ref={inputRef}
                                         type="text"
                                         value={newMessage}
-                                        onChange={(e) => setNewMessage(e.target.value)}
-                                        placeholder={isWindowOpen(selectedChat) ? 'Type a message' : 'Send a template to start messaging...'}
+                                        onChange={handleInputChange}
+                                        onKeyDown={handleInputKeyDown}
+                                        placeholder={mediaPreview ? 'Add a caption...' : isWindowOpen(selectedChat) ? 'Type a message — use @ to send a template' : 'Send a template to start messaging...'}
                                         className="w-full bg-transparent border-none focus:outline-none px-4 py-2.5 text-[15px] text-[#111b21]"
-                                        disabled={sending || !isWindowOpen(selectedChat)}
+                                        disabled={sending || uploading || (!mediaPreview && !isWindowOpen(selectedChat))}
                                     />
+
+                                    {/* @ Template Picker Dropdown */}
+                                    {showInlineTemplatePicker && filteredInlineTemplates.length > 0 && (
+                                        <div ref={templatePickerRef} className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-xl shadow-2xl border border-slate-200 max-h-[220px] overflow-y-auto z-50">
+                                            <div className="px-3 py-2 border-b border-slate-100 flex items-center gap-2">
+                                                <i className="fa-solid fa-file-lines text-[#00a884] text-xs"></i>
+                                                <span className="text-xs font-semibold text-[#8696a0] uppercase tracking-wider">Templates</span>
+                                                {templateQuery && <span className="text-xs text-slate-400 ml-auto">filtering: "{templateQuery}"</span>}
+                                            </div>
+                                            {filteredInlineTemplates.map(t => (
+                                                <button
+                                                    key={t._id}
+                                                    onClick={() => handleSelectInlineTemplate(t)}
+                                                    className="w-full text-left px-3 py-2.5 hover:bg-[#f0faf7] transition flex items-center gap-3 border-b border-slate-50 last:border-b-0"
+                                                >
+                                                    <div className="w-8 h-8 bg-[#e7fce3] rounded-lg flex items-center justify-center flex-shrink-0">
+                                                        <i className="fa-solid fa-file-lines text-[#00a884] text-sm"></i>
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-sm font-medium text-[#111b21] truncate">{t.name}</p>
+                                                        <p className="text-[11px] text-[#8696a0] truncate">{t.category} • {t.language}</p>
+                                                    </div>
+                                                    <i className="fa-solid fa-paper-plane text-[#00a884] text-xs opacity-0 group-hover:opacity-100"></i>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {showInlineTemplatePicker && filteredInlineTemplates.length === 0 && (
+                                        <div ref={templatePickerRef} className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-xl shadow-2xl border border-slate-200 z-50 p-4 text-center">
+                                            <i className="fa-solid fa-file-circle-xmark text-2xl text-slate-300 mb-1"></i>
+                                            <p className="text-xs text-[#8696a0]">No matching templates</p>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Send / Mic */}
                                 <button
                                     type="submit"
-                                    disabled={!newMessage.trim() || sending || !isWindowOpen(selectedChat)}
+                                    disabled={(!mediaPreview && !newMessage.trim()) || sending || uploading || (!mediaPreview && !isWindowOpen(selectedChat))}
                                     className="w-10 h-10 rounded-full flex items-center justify-center transition text-[#54656f] hover:bg-slate-200 disabled:opacity-40"
                                 >
-                                    {sending ? (
+                                    {sending || uploading ? (
                                         <i className="fa-solid fa-spinner fa-spin text-xl"></i>
-                                    ) : newMessage.trim() ? (
+                                    ) : mediaPreview || newMessage.trim() ? (
                                         <i className="fa-solid fa-paper-plane text-[#00a884] text-xl"></i>
                                     ) : (
                                         <i className="fa-solid fa-microphone text-xl"></i>

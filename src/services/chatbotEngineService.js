@@ -439,7 +439,3 @@ exports.handoffToAgent = async (sessionId, reason) => {
     }
 };
 
-module.exports = {
-    processIncomingMessage,
-    handoffToAgent
-};
