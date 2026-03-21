@@ -32,7 +32,7 @@ agenda.define('sheet-sync', async (job) => {
     try {
         // Fetch user with sync config + custom fields
         const user = await User.findById(userId)
-            .select('googleSheetSync customFieldDefinitions')
+            .select('googleSheetSync customFieldDefinitions role parentId')
             .lean();
 
         if (!user || !user.googleSheetSync?.syncEnabled || !user.googleSheetSync?.sheetUrl) {
@@ -40,6 +40,8 @@ agenda.define('sheet-sync', async (job) => {
             await agenda.cancel({ name: 'sheet-sync', 'data.userId': userId });
             return;
         }
+
+        const tenantOwnerId = user.role === 'agent' && user.parentId ? user.parentId : userId;
 
         const { sheetUrl } = user.googleSheetSync;
         const customFieldDefs = user.customFieldDefinitions || [];
@@ -80,10 +82,11 @@ agenda.define('sheet-sync', async (job) => {
             });
 
             if (finalEmail || finalPhone !== 'No Phone') {
-                const duplicates = await findDuplicates(userId, finalPhone, finalEmail);
+                const duplicates = await findDuplicates(tenantOwnerId, finalPhone, finalEmail);
                 if (duplicates.length === 0) {
                     const newLead = await Lead.create({
-                        userId: userId,
+                        userId: tenantOwnerId,
+                        assignedTo: user.role === 'agent' ? userId : null,
                         name: finalName,
                         email: finalEmail,
                         phone: finalPhone,
@@ -94,11 +97,11 @@ agenda.define('sheet-sync', async (job) => {
 
                     // Non-blocking automations
                     if (newLead.email) {
-                        sendAutomatedEmailOnLeadCreate(newLead, userId).catch(err =>
+                        sendAutomatedEmailOnLeadCreate(newLead, tenantOwnerId).catch(err =>
                             console.error('[Sheet Sync] Email automation error:', err.message));
                     }
                     if (newLead.phone) {
-                        sendAutomatedWhatsAppOnLeadCreate(newLead, userId).catch(err =>
+                        sendAutomatedWhatsAppOnLeadCreate(newLead, tenantOwnerId).catch(err =>
                             console.error('[Sheet Sync] WhatsApp automation error:', err.message));
                     }
 

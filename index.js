@@ -20,6 +20,9 @@ const superAdminRoutes = require('./src/routes/superAdminRoutes');
 const metaRoutes = require('./src/routes/metaRoutes'); // Meta Lead Sync
 const customFieldRoutes = require('./src/routes/customFieldRoutes'); // Custom Lead Fields
 const reportRoutes = require('./src/routes/reportRoutes'); // Reports & Analytics
+const taskRoutes = require('./src/routes/taskRoutes'); // Tasks & Reminders
+const analyticsRoutes = require('./src/routes/analyticsRoutes'); // Advanced Analytics
+const automationRoutes = require('./src/routes/automationRoutes'); // Visual Automation Engine
 
 const app = express();
 
@@ -94,16 +97,21 @@ mongoose.connect(MONGO_URI)
       console.error('Server will continue, but auto-sync will not be available.');
     }
     
-    // Initialize Agenda for Broadcasting
+    // Initialize Agenda for Broadcasting and Automations
     try {
       const Agenda = require('agenda');
       const agenda = new Agenda({ db: { address: MONGO_URI, collection: 'agendaJobs' } });
+      
       const { defineBroadcastJob } = require('./src/controllers/whatsappBroadcastController');
       defineBroadcastJob(agenda);
+      
+      const { defineAutomationJobs } = require('./src/services/AutomationService');
+      defineAutomationJobs(agenda);
+
       await agenda.start();
-      console.log('✅ Agenda Job Queue Started for Broadcasts');
+      console.log('✅ Agenda Job Queue Started for Broadcasts & Automations');
     } catch(error) {
-      console.error('⚠️ Failed to start Agenda (Broadcast Queue):', error.message);
+      console.error('⚠️ Failed to start Agenda Queues:', error.message);
     }
   })
   .catch(err => {
@@ -136,6 +144,9 @@ app.use('/api/superadmin', superAdminRoutes);
 app.use('/api/leads', leadRoutes);    // URL: /api/leads/
 app.use('/api/stages', stageRoutes);  // URL: /api/stages/
 app.use('/api/custom-fields', customFieldRoutes); // Custom Lead Fields
+app.use('/api/tasks', taskRoutes); // Tasks & Reminders
+app.use('/api/automations', automationRoutes); // Visual Automations
+app.use('/api/analytics', analyticsRoutes); // Advanced Analytics
 
 // 3. Communications
 app.use('/api/email', emailRoutes);

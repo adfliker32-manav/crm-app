@@ -42,6 +42,9 @@ router.post('/check-duplicates', authMiddleware, leadController.checkDuplicates)
 router.get('/duplicates', authMiddleware, leadController.getDuplicateGroups);
 router.post('/duplicates/auto-delete', authMiddleware, checkPermission('deleteLeads'), leadController.autoDeleteDuplicates);
 
+// 7.6 Bulk Import CSV (MUST BE BEFORE /:id routes!)
+router.post('/bulk-import', authMiddleware, checkPermission('createLeads'), leadController.bulkImportLeads);
+
 // 8. Get All Leads
 router.get('/', authMiddleware, checkPermission('viewLeads'), leadController.getLeads);
 

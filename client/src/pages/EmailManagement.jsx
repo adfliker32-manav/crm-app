@@ -1,16 +1,24 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import React, { useState, useEffect, useCallback } from 'react';
+import { Navigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import EmailTemplates from '../components/Email/EmailTemplates';
 import EmailInbox from '../components/Email/EmailInbox';
 import EmailSettings from '../components/Email/EmailSettings';
 
 const EmailManagement = () => {
+    const { user } = useAuth();
+    const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
+    const canViewEmails = canManageTeam || user?.permissions?.viewEmails === true;
+
     const [activeTab, setActiveTab] = useState('inbox');
     const [stats, setStats] = useState({
         today: { sent: 0, failed: 0, automated: { sent: 0 } },
         thisMonth: { sent: 0 }
     });
+
+    if (!canViewEmails) return <Navigate to="/dashboard" replace />;
 
     const fetchAnalytics = useCallback(async () => {
         try {

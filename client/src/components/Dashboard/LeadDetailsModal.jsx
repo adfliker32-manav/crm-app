@@ -9,6 +9,12 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
     const [loading, setLoading] = useState(false);
     const [customFields, setCustomFields] = useState([]);
 
+    // Tasks section states
+    const [tasks, setTasks] = useState([]);
+    const [taskTitle, setTaskTitle] = useState('');
+    const [taskDate, setTaskDate] = useState('');
+    const [tasksLoading, setTasksLoading] = useState(false);
+
     // Email section states
     const [showEmailSection, setShowEmailSection] = useState(false);
     const [emailTo, setEmailTo] = useState('');
@@ -17,10 +23,11 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
     const [emailLoading, setEmailLoading] = useState(false);
 
     useEffect(() => {
-        if (isOpen) {
+        if (isOpen && lead) {
             fetchCustomFields();
+            fetchTasks();
         }
-    }, [isOpen]);
+    }, [isOpen, lead]);
 
     useEffect(() => {
         if (lead) {
@@ -67,6 +74,48 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
             showError("Failed to update follow-up date");
         } finally {
             setLoading(false);
+        }
+    };
+
+    const fetchTasks = async () => {
+        if (!lead?._id) return;
+        try {
+            const res = await api.get(`/tasks/lead/${lead._id}`);
+            setTasks(res.data || []);
+        } catch (err) {
+            console.error('Failed to fetch tasks:', err);
+        }
+    };
+
+    const handleCreateTask = async () => {
+        if (!taskTitle || !taskDate) return showError("Task title and Date are required");
+        setTasksLoading(true);
+        try {
+            const res = await api.post('/tasks', {
+                leadId: lead._id,
+                title: taskTitle,
+                dueDate: taskDate
+            });
+            setTasks([...tasks, res.data]);
+            setTaskTitle('');
+            setTaskDate('');
+            showSuccess('Task created successfully');
+            if (onSuccess) onSuccess(); // To refresh dashboard if necessary
+        } catch(err) {
+            showError("Failed to create task");
+        } finally {
+            setTasksLoading(false);
+        }
+    };
+
+    const handleCompleteTask = async (taskId) => {
+        try {
+            await api.put(`/tasks/${taskId}`, { status: 'Completed' });
+            setTasks(tasks.map(t => t._id === taskId ? { ...t, status: 'Completed' } : t));
+            showSuccess('Task marked as completed');
+            if (onSuccess) onSuccess(); // To refresh dashboard
+        } catch(err) {
+            showError("Failed to complete task");
         }
     };
 
@@ -156,47 +205,76 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
                         </div>
                     )}
 
-                    {/* Follow-up Reminder Section */}
+                    {/* Tasks & Follow-ups Section */}
                     <div>
                         <h4 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
-                            <i className="fa-solid fa-calendar-check text-orange-500"></i> Follow-up Reminder
+                            <i className="fa-solid fa-list-check text-orange-500"></i> Tasks & Reminders
                         </h4>
-                        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4 shadow-sm">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Created Date</label>
-                                    <p className="text-sm text-slate-800 font-medium">{formatDate(lead.createdAt || lead.date)}</p>
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Last Follow-up</label>
-                                    <p className="text-sm text-slate-800 font-medium">{formatDate(lead.lastFollowUpDate)}</p>
-                                </div>
-                            </div>
-
-                            <hr className="border-slate-100" />
-
-                            <div>
-                                <label className="block text-sm font-bold text-slate-700 mb-2">Next Follow-up Date</label>
+                        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                            
+                            {/* Create Task Form */}
+                            <div className="flex flex-col sm:flex-row gap-2 mb-5 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                <input 
+                                    type="text" 
+                                    placeholder="e.g., Call back regarding pricing..."
+                                    value={taskTitle}
+                                    onChange={e => setTaskTitle(e.target.value)}
+                                    className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                                />
                                 <div className="flex gap-2">
-                                    <input
-                                        type="date"
-                                        value={nextFollowUpDate}
-                                        onChange={(e) => setNextFollowUpDate(e.target.value)}
-                                        className="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:outline-none text-sm transition"
+                                    <input 
+                                        type="date" 
+                                        value={taskDate}
+                                        onChange={e => setTaskDate(e.target.value)}
+                                        className="w-36 px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
                                     />
-                                    <button
-                                        onClick={handleUpdateFollowUp}
-                                        disabled={loading}
-                                        className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded-lg font-medium transition shadow-md text-sm disabled:opacity-70 flex items-center gap-2"
+                                    <button 
+                                        onClick={handleCreateTask}
+                                        disabled={tasksLoading || !taskTitle || !taskDate}
+                                        className="bg-orange-600 hover:bg-orange-700 text-white px-5 py-2 rounded-lg font-bold text-sm transition shadow-md disabled:opacity-50 disabled:shadow-none whitespace-nowrap"
                                     >
-                                        {loading ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-save"></i>}
-                                        Set
+                                        {tasksLoading ? <i className="fa-solid fa-spinner fa-spin"></i> : "Add Task"}
                                     </button>
                                 </div>
-                                <p className="text-xs text-slate-400 mt-2">
-                                    Setting a date will add this lead to the "Follow-up Today" list when due.
-                                </p>
                             </div>
+
+                            {/* Task List */}
+                            {tasks.length > 0 ? (
+                                <ul className="space-y-3">
+                                    {tasks.filter(t => t.status === 'Pending').map(task => {
+                                        const isDueToday = new Date(task.dueDate).toDateString() === new Date().toDateString();
+                                        const isOverdue = new Date(task.dueDate) < new Date() && !isDueToday;
+                                        
+                                        return (
+                                            <li key={task._id} className={`flex items-start justify-between p-4 rounded-xl border ${isOverdue ? 'border-red-200 bg-red-50/50' : isDueToday ? 'border-orange-200 bg-orange-50/50' : 'border-slate-200 bg-white'}`}>
+                                                <div>
+                                                    <p className={`font-bold text-sm ${isOverdue ? 'text-red-900' : 'text-slate-800'}`}>{task.title}</p>
+                                                    <div className="flex items-center gap-3 mt-1">
+                                                        <p className={`text-xs font-semibold ${isOverdue ? 'text-red-600' : isDueToday ? 'text-orange-600' : 'text-slate-500'}`}>
+                                                            <i className="fa-regular fa-calendar mr-1"></i>
+                                                            {isOverdue ? 'Overdue: ' : 'Due: '}
+                                                            {new Date(task.dueDate).toLocaleDateString()}
+                                                        </p>
+                                                        <span className="text-[10px] uppercase font-bold text-slate-400">Created by {task.createdBy === lead.userId ? 'You' : 'Team'}</span>
+                                                    </div>
+                                                </div>
+                                                <button 
+                                                    onClick={() => handleCompleteTask(task._id)}
+                                                    className="w-8 h-8 rounded-full bg-white border border-slate-300 text-slate-400 hover:border-green-500 hover:text-green-600 hover:bg-green-50 transition shadow-sm flex items-center justify-center shrink-0"
+                                                    title="Mark Complete"
+                                                >
+                                                    <i className="fa-solid fa-check"></i>
+                                                </button>
+                                            </li>
+                                        );
+                                    })}
+                                    {tasks.filter(t => t.status === 'Pending').length === 0 && (
+                                        <p className="text-sm text-slate-400 text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">No pending tasks for this lead! 🎉</p>
+                                    )}
+                                </ul>
+                            ) : (
+                                <p className="text-sm text-slate-400 text-center py-6 bg-slate-50 rounded-xl border border-dashed border-slate-200">No tasks created yet. Stay on top of this lead by adding a reminder above.</p>
+                            )}
                         </div>
                     </div>
 

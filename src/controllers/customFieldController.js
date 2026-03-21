@@ -40,8 +40,9 @@ exports.saveCustomFields = async (req, res) => {
         let userId = req.user.userId || req.user.id;
 
         // Agent cannot modify fields
-        if (req.user.role === 'agent') {
-            return res.status(403).json({ message: 'Agents cannot modify custom field settings' });
+        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
+        if (!canAccessSettings) {
+            return res.status(403).json({ message: 'Agents without settings permission cannot modify custom field settings' });
         }
 
         const { fields } = req.body;
@@ -89,8 +90,9 @@ exports.addCustomField = async (req, res) => {
     try {
         let userId = req.user.userId || req.user.id;
 
-        if (req.user.role === 'agent') {
-            return res.status(403).json({ message: 'Agents cannot modify custom field settings' });
+        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
+        if (!canAccessSettings) {
+            return res.status(403).json({ message: 'Agents without settings permission cannot modify custom field settings' });
         }
 
         const { label, type, options, required } = req.body;
@@ -140,8 +142,9 @@ exports.deleteCustomField = async (req, res) => {
     try {
         let userId = req.user.userId || req.user.id;
 
-        if (req.user.role === 'agent') {
-            return res.status(403).json({ message: 'Agents cannot modify custom field settings' });
+        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
+        if (!canAccessSettings) {
+            return res.status(403).json({ message: 'Agents without settings permission cannot modify custom field settings' });
         }
 
         const { key } = req.params;

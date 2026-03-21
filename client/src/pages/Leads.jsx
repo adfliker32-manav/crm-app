@@ -8,10 +8,14 @@ import EditLeadModal from '../components/Dashboard/EditLeadModal';
 import LeadDetailsModal from '../components/Dashboard/LeadDetailsModal';
 import NoteModal from '../components/Dashboard/NoteModal';
 import DuplicateLeadsModal from '../components/Dashboard/DuplicateLeadsModal';
+import ImportCSVModal from '../components/Dashboard/ImportCSVModal';
+import Papa from 'papaparse';
 import { useNotification } from '../context/NotificationContext';
 import { useConfirm } from '../context/ConfirmContext';
+import { useAuth } from '../context/AuthContext';
 
 const Leads = () => {
+    const { user } = useAuth();
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
 
@@ -43,6 +47,8 @@ const Leads = () => {
     const [isLeadDetailsModalOpen, setIsLeadDetailsModalOpen] = useState(false);
     const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
     const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
+    const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [selectedLead, setSelectedLead] = useState(null);
 
     const fetchData = useCallback(async () => {
@@ -191,6 +197,34 @@ const Leads = () => {
                 fetchData(); // Revert
             }
         }
+    };
+
+    const handleExportCSV = () => {
+        if (!filteredLeads || filteredLeads.length === 0) {
+            return showError("No leads to export in the current view.");
+        }
+
+        const dataToExport = filteredLeads.map(lead => ({
+            Name: lead.name || '',
+            Phone: lead.phone || '',
+            Email: lead.email || '',
+            Source: lead.source || 'Manual',
+            Status: lead.status || 'New',
+            CreatedAt: new Date(lead.createdAt || lead.date).toLocaleString(),
+            Notes: lead.notes?.length || 0,
+            CustomFields: Object.keys(lead.customData || {}).length > 0 ? JSON.stringify(lead.customData) : ''
+        }));
+
+        const csv = Papa.unparse(dataToExport);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `Leads_Export_${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setIsSettingsOpen(false);
     };
 
     // ---- Stage Rename (Edit) ----
@@ -403,27 +437,70 @@ const Leads = () => {
                     </div>
 
                     {/* Action Buttons */}
-                    <button
-                        onClick={() => setIsAddLeadModalOpen(true)}
-                        className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white w-8 h-8 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2 shrink-0"
-                        title="Add Lead"
-                    >
-                        <i className="fa-solid fa-plus"></i> <span className="hidden sm:inline">Add</span>
-                    </button>
-                    <button
-                        onClick={() => setIsAddStageModalOpen(true)}
-                        className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 w-8 h-8 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-xl text-sm font-bold transition-all shadow-sm flex items-center justify-center gap-2 shrink-0"
-                        title="Add Stage"
-                    >
-                        <i className="fa-solid fa-layer-group text-slate-400"></i> <span className="hidden sm:inline">Stage</span>
-                    </button>
-                    <button
-                        onClick={() => setIsDuplicateModalOpen(true)}
-                        className="bg-white hover:bg-orange-50 text-orange-600 border border-orange-200 w-8 h-8 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-xl text-sm font-bold transition-all shadow-sm flex items-center justify-center gap-2 shrink-0"
-                        title="Find Duplicates"
-                    >
-                        <i className="fa-solid fa-copy"></i> <span className="hidden sm:inline">Duplicates</span>
-                    </button>
+                    {(user?.role === 'superadmin' || user?.role === 'manager' || user?.permissions?.createLeads) && (
+                        <button
+                            onClick={() => setIsAddLeadModalOpen(true)}
+                            className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white w-8 h-8 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2 shrink-0"
+                            title="Add Lead"
+                        >
+                            <i className="fa-solid fa-plus"></i> <span className="hidden sm:inline">Add</span>
+                        </button>
+                    )}
+
+                    {/* Manage Lead Settings Dropdown */}
+                    <div className="relative isolate z-50">
+                        <button
+                            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+                            className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 w-8 h-8 sm:w-auto sm:h-auto sm:px-4 sm:py-2 rounded-xl text-sm font-bold transition-all shadow-sm flex items-center justify-center gap-2 shrink-0"
+                            title="Manage Lead Settings"
+                        >
+                            <i className="fa-solid fa-cog text-slate-500"></i> <span className="hidden sm:inline">Settings</span>
+                        </button>
+                        
+                        {isSettingsOpen && (
+                            <>
+                                <div className="fixed inset-0 z-40" onClick={() => setIsSettingsOpen(false)}></div>
+                                <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 overflow-hidden py-1 animate-in fade-in slide-in-from-top-2 duration-200">
+                                    <div className="px-4 py-2 border-b border-slate-50 bg-slate-50/50">
+                                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Manage Leads</p>
+                                    </div>
+                                    {(user?.role === 'superadmin' || user?.role === 'manager' || user?.permissions?.createLeads) && (
+                                        <button
+                                            onClick={() => { setIsSettingsOpen(false); setIsImportModalOpen(true); }}
+                                            className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-3 transition-colors"
+                                        >
+                                            <i className="fa-solid fa-file-import w-4 text-center"></i> Import CSV
+                                        </button>
+                                    )}
+                                    {(user?.role === 'superadmin' || user?.role === 'manager' || user?.permissions?.exportLeads) && (
+                                        <button
+                                            onClick={handleExportCSV}
+                                            className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-green-50 hover:text-green-600 flex items-center gap-3 transition-colors"
+                                        >
+                                            <i className="fa-solid fa-file-export w-4 text-center"></i> Export CSV
+                                        </button>
+                                    )}
+                                    {(user?.role === 'superadmin' || user?.role === 'manager') && (
+                                        <>
+                                            <div className="border-t border-slate-100 my-1"></div>
+                                            <button
+                                                onClick={() => { setIsSettingsOpen(false); setIsAddStageModalOpen(true); }}
+                                                className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 flex items-center gap-3 transition-colors"
+                                            >
+                                                <i className="fa-solid fa-layer-group w-4 text-center"></i> Add Pipeline Stage
+                                            </button>
+                                            <button
+                                                onClick={() => { setIsSettingsOpen(false); setIsDuplicateModalOpen(true); }}
+                                                className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-orange-50 hover:text-orange-600 flex items-center gap-3 transition-colors"
+                                            >
+                                                <i className="fa-solid fa-copy w-4 text-center"></i> Find Duplicates
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            </>
+                        )}
+                    </div>
                 </div>
             </div>
 
@@ -651,6 +728,13 @@ const Leads = () => {
                 isOpen={isDuplicateModalOpen}
                 onClose={() => setIsDuplicateModalOpen(false)}
                 onSuccess={fetchData}
+            />
+
+            <ImportCSVModal
+                isOpen={isImportModalOpen}
+                onClose={() => setIsImportModalOpen(false)}
+                onSuccess={fetchData}
+                stages={stages}
             />
         </div>
     );

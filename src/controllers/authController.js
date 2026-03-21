@@ -74,7 +74,8 @@ exports.register = async (req, res) => {
         const payload = {
             userId: user._id,
             role: user.role,
-            name: user.name
+            name: user.name,
+            tenantId: user._id // Naya user hamesha manager/superadmin banega, to khud hi tenant hai
         };
 
         // SECURITY FIX: Require JWT_SECRET from environment
@@ -128,7 +129,8 @@ exports.login = async (req, res) => {
             userId: user._id,
             role: user.role,
             name: user.name,
-            permissions: user.permissions // Include permissions for Agents
+            permissions: user.permissions, // Include permissions for Agents
+            tenantId: user.role === 'agent' ? user.parentId : user._id // Avoid DB lookups later!
         };
 
         // SECURITY FIX: Require JWT_SECRET from environment
@@ -147,7 +149,7 @@ exports.login = async (req, res) => {
         res.json({
             token,
             role: user.role,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role }
+            user: { id: user._id, name: user.name, email: user.email, role: user.role, permissions: user.permissions }
         });
 
     } catch (err) {
@@ -216,7 +218,8 @@ exports.googleLogin = async (req, res) => {
             userId: user._id,
             role: user.role,
             name: user.name,
-            permissions: user.permissions
+            permissions: user.permissions,
+            tenantId: user.role === 'agent' ? user.parentId : user._id
         };
 
         const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '1d' });
@@ -224,7 +227,7 @@ exports.googleLogin = async (req, res) => {
         res.json({
             token,
             role: user.role,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role }
+            user: { id: user._id, name: user.name, email: user.email, role: user.role, permissions: user.permissions }
         });
 
     } catch (err) {
@@ -243,10 +246,10 @@ exports.createAgent = async (req, res) => {
         const { name, email, password, permissions } = req.body;
         const { BASIC_AGENT } = require('../constants/permissionPresets');
 
-        // 1. Check permission (Sirf Manager hi Agent bana sakta hai)
-        // (Waise middleware bhi check karega, par double safety sahi hai)
-        if (req.user.role !== 'manager') {
-            return res.status(403).json({ message: "Only Managers can create Agents" });
+        // 1. Check permission
+        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
+        if (!canManageTeam) {
+            return res.status(403).json({ message: "Unauthorized to manage team" });
         }
 
         // 2. Check duplicate email
@@ -292,9 +295,10 @@ exports.deleteAgent = async (req, res) => {
     try {
         const agentId = req.params.id;
 
-        // Verify requester is a manager (Double check, although middleware handles role)
-        if (req.user.role !== 'manager') {
-            return res.status(403).json({ message: "Only Managers can delete Agents" });
+        // Verify requester is a manager or has manageTeam permission
+        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
+        if (!canManageTeam) {
+            return res.status(403).json({ message: "Unauthorized to manage team" });
         }
 
         // Find the agent and ensure they belong to this manager
@@ -336,9 +340,10 @@ exports.updateAgent = async (req, res) => {
         const { id } = req.params;
         const { name, permissions, password } = req.body;
 
-        // Only managers can update agents
-        if (req.user.role !== 'manager') {
-            return res.status(403).json({ message: "Only managers can update agents" });
+        // Only managers or users with permission can update agents
+        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
+        if (!canManageTeam) {
+            return res.status(403).json({ message: "Unauthorized to manage team" });
         }
 
         // Find agent and ensure they belong to this manager

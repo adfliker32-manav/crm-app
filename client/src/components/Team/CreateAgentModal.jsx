@@ -5,6 +5,7 @@ import { useNotification } from '../../context/NotificationContext';
 const PRESETS = {
     VIEW_ONLY: {
         viewDashboard: true,
+        viewReports: false,
         viewLeads: true,
         viewAllLeads: false,
         createLeads: false,
@@ -33,6 +34,7 @@ const PRESETS = {
     },
     BASIC_AGENT: {
         viewDashboard: true,
+        viewReports: false,
         viewLeads: true,
         viewAllLeads: false,
         createLeads: false,
@@ -61,6 +63,7 @@ const PRESETS = {
     },
     SENIOR_AGENT: {
         viewDashboard: true,
+        viewReports: true,
         viewLeads: true,
         viewAllLeads: true,
         createLeads: true,
@@ -144,7 +147,8 @@ const CreateAgentModal = ({ isOpen, onClose, onSuccess }) => {
         {
             title: '📊 Dashboard',
             permissions: [
-                { key: 'viewDashboard', label: 'View Dashboard' }
+                { key: 'viewDashboard', label: 'View Dashboard' },
+                { key: 'viewReports', label: 'View Reports & Goals' }
             ]
         },
         {
@@ -198,7 +202,7 @@ const CreateAgentModal = ({ isOpen, onClose, onSuccess }) => {
             title: '⚙️ Settings & Admin',
             permissions: [
                 { key: 'accessSettings', label: 'Access Settings' },
-                { key: 'viewBilling', label: 'View Billing' },
+                // HIDING BILLING FOR NOW: { key: 'viewBilling', label: 'View Billing' },
                 { key: 'manageTeam', label: 'Manage Team' }
             ]
         }

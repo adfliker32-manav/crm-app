@@ -3,11 +3,13 @@ import api from '../../services/api';
 
 const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
     const [formData, setFormData] = useState({ name: '', phone: '', email: '' });
+    const [customData, setCustomData] = useState({});
+    const [customFields, setCustomFields] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        if (lead) {
+        if (isOpen && lead) {
             setFormData({
                 name: lead.name || '',
                 phone: lead.phone || '',
@@ -15,11 +17,34 @@ const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
                 dealValue: lead.dealValue || '',
                 nextFollowUpDate: lead.nextFollowUpDate ? new Date(lead.nextFollowUpDate).toISOString().split('T')[0] : ''
             });
+
+            // Populate the custom fields layout and prefill with existing lead data
+            fetchCustomFields(lead.customData || {});
         }
-    }, [lead]);
+    }, [isOpen, lead]);
+
+    const fetchCustomFields = async (existingData) => {
+        try {
+            const res = await api.get('/custom-fields');
+            setCustomFields(res.data || []);
+            
+            // Map the initial customData combining definitions and existing lead data
+            const initialCustomData = {};
+            (res.data || []).forEach(field => {
+                initialCustomData[field.key] = existingData[field.key] || '';
+            });
+            setCustomData(initialCustomData);
+        } catch (err) {
+            console.error('Failed to fetch custom fields:', err);
+        }
+    };
 
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
+    };
+
+    const handleCustomFieldChange = (key, value) => {
+        setCustomData(prev => ({ ...prev, [key]: value }));
     };
 
     const handleSubmit = async (e) => {
@@ -27,14 +52,99 @@ const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
         setLoading(true);
         setError(null);
 
+        // Required fields validation
+        for (const field of customFields) {
+            if (field.required && !customData[field.key]) {
+                setError(`${field.label} is required`);
+                setLoading(false);
+                return;
+            }
+        }
+
         try {
-            await api.put(`/leads/${lead._id}`, formData);
+            const payload = { ...formData, customData };
+            await api.put(`/leads/${lead._id}`, payload);
             onSuccess();
             onClose();
         } catch (err) {
             setError(err.response?.data?.message || 'Failed to update lead');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const renderCustomField = (field) => {
+        const baseInputClass = "w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none";
+
+        switch (field.type) {
+            case 'dropdown':
+                return (
+                    <select
+                        value={customData[field.key] || ''}
+                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
+                        className={baseInputClass}
+                        required={field.required}
+                    >
+                        <option value="">Select {field.label}</option>
+                        {(field.options || []).map((opt, idx) => (
+                            <option key={idx} value={opt}>{opt}</option>
+                        ))}
+                    </select>
+                );
+            case 'date':
+                return (
+                    <input
+                        type="date"
+                        value={customData[field.key] || ''}
+                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
+                        className={baseInputClass}
+                        required={field.required}
+                    />
+                );
+            case 'number':
+                return (
+                    <input
+                        type="number"
+                        value={customData[field.key] || ''}
+                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
+                        className={baseInputClass}
+                        placeholder={`Enter ${field.label}`}
+                        required={field.required}
+                    />
+                );
+            case 'email':
+                return (
+                    <input
+                        type="email"
+                        value={customData[field.key] || ''}
+                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
+                        className={baseInputClass}
+                        placeholder={`Enter ${field.label}`}
+                        required={field.required}
+                    />
+                );
+            case 'phone':
+                return (
+                    <input
+                        type="tel"
+                        value={customData[field.key] || ''}
+                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
+                        className={baseInputClass}
+                        placeholder={`Enter ${field.label}`}
+                        required={field.required}
+                    />
+                );
+            default: // text
+                return (
+                    <input
+                        type="text"
+                        value={customData[field.key] || ''}
+                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
+                        className={baseInputClass}
+                        placeholder={`Enter ${field.label}`}
+                        required={field.required}
+                    />
+                );
         }
     };
 
@@ -109,6 +219,24 @@ const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
                             className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         />
                     </div>
+
+                    {/* Custom Fields */}
+                    {customFields.length > 0 && (
+                        <>
+                            <div className="border-t border-gray-200 pt-3 mt-3">
+                                <p className="text-xs text-gray-400 uppercase font-bold mb-2">Additional Information</p>
+                            </div>
+                            {customFields.map(field => (
+                                <div key={field.key}>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                                        {field.label}
+                                        {field.required && <span className="text-red-500"> *</span>}
+                                    </label>
+                                    {renderCustomField(field)}
+                                </div>
+                            ))}
+                        </>
+                    )}
 
                     <div className="flex justify-end gap-3 pt-4">
                         <button

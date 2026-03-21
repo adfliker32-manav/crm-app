@@ -17,9 +17,10 @@ async function startTunnel() {
     await new Promise(r => setTimeout(r, 2000));
 
     try {
+        console.log(`📡 Connecting to port ${PORT}...`);
         const url = await ngrok.connect({
-            addr: PORT,
-            authtoken: AUTH_TOKEN
+            proto: 'http',
+            addr: parseInt(PORT)
         });
 
         console.log('');

@@ -62,40 +62,35 @@ const buildMetaComponents = (dbComponents, variableMapping, data) => {
     return metaComponents;
 };
 
+// Helper: Get all user IDs within the same company tree
+const getCompanyUserIds = async (userId) => {
+    const currentUser = await User.findById(userId).select('waPhoneNumberId role parentId').lean();
+    const companyManagerId = currentUser.role === 'agent' ? currentUser.parentId : userId;
+
+    let userIds = [new mongoose.Types.ObjectId(userId)];
+    if (currentUser?.waPhoneNumberId) {
+        const sharedUsers = await User.find(
+            {
+                waPhoneNumberId: currentUser.waPhoneNumberId,
+                $or: [{ _id: companyManagerId }, { parentId: companyManagerId }]
+            },
+            { _id: 1 }
+        ).lean();
+        userIds = sharedUsers.map(u => new mongoose.Types.ObjectId(u._id));
+    }
+    if (!userIds.some(id => id.equals(new mongoose.Types.ObjectId(userId)))) {
+        userIds.push(new mongoose.Types.ObjectId(userId));
+    }
+    return userIds;
+};
+
 // Get all conversations for the user (shared across same WhatsApp phone number within same company)
 exports.getConversations = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { status = 'active', search, page = 1, limit = 50 } = req.query;
 
-        // Determine the company boundary:
-        // - If the current user is a manager, their companyId IS their own _id
-        // - If the current user is an agent, their companyId is their parentId
-        const currentUser = await User.findById(userId).select('waPhoneNumberId role parentId').lean();
-        const companyManagerId = currentUser.role === 'agent' ? currentUser.parentId : userId;
-
-        // Collect all userIds in the same company that share the same WhatsApp phone number.
-        // SECURITY: We scope this query to users within the same company tree ONLY,
-        // preventing cross-company data leaks even if two companies configure the same phone number.
-        let userIds = [new mongoose.Types.ObjectId(userId)];
-        if (currentUser?.waPhoneNumberId) {
-            const sharedUsers = await User.find(
-                {
-                    waPhoneNumberId: currentUser.waPhoneNumberId,
-                    // Restrict to users within the SAME company
-                    $or: [
-                        { _id: companyManagerId },             // the manager themselves
-                        { parentId: companyManagerId }         // agents under this manager
-                    ]
-                },
-                { _id: 1 }
-            ).lean();
-            userIds = sharedUsers.map(u => new mongoose.Types.ObjectId(u._id));
-        }
-        // Always ensure current user is included (edge case: agent with no waPhoneNumberId)
-        if (!userIds.some(id => id.equals(new mongoose.Types.ObjectId(userId)))) {
-            userIds.push(new mongoose.Types.ObjectId(userId));
-        }
+        const userIds = await getCompanyUserIds(userId);
 
         // Build query — include conversations from all shared users
         const query = { userId: { $in: userIds } };
@@ -147,9 +142,11 @@ exports.getConversation = async (req, res) => {
         const { id } = req.params;
         const { page = 1, limit = 50 } = req.query;
 
+        const companyUserIds = await getCompanyUserIds(userId);
+
         const conversation = await WhatsAppConversation.findOne({
             _id: id,
-            userId: userId
+            userId: { $in: companyUserIds }
         })
             .populate('leadId', 'name email phone status source dealValue')
             .populate('assignedTo', 'name email')
@@ -201,10 +198,12 @@ exports.sendMessage = async (req, res) => {
             return res.status(400).json({ message: 'Message text is required' });
         }
 
+        const companyUserIds = await getCompanyUserIds(userId);
+
         // Find conversation
         const conversation = await WhatsAppConversation.findOne({
             _id: id,
-            userId: userId
+            userId: { $in: companyUserIds }
         });
 
         if (!conversation) {
@@ -276,8 +275,10 @@ exports.markAsRead = async (req, res) => {
         const userId = req.user.userId || req.user.id;
         const { id } = req.params;
 
+        const companyUserIds = await getCompanyUserIds(userId);
+
         const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { _id: id, userId: userId },
+            { _id: id, userId: { $in: companyUserIds } },
             { $set: { unreadCount: 0 } },
             { new: true }
         );
@@ -302,14 +303,16 @@ exports.linkToLead = async (req, res) => {
 
         // Verify lead belongs to user
         if (leadId) {
-            const lead = await Lead.findOne({ _id: leadId, userId: userId });
+            const lead = await Lead.findOne({ _id: leadId, ...req.dataScope });
             if (!lead) {
                 return res.status(404).json({ message: 'Lead not found' });
             }
         }
 
+        const companyUserIds = await getCompanyUserIds(userId);
+
         const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { _id: id, userId: userId },
+            { _id: id, userId: { $in: companyUserIds } },
             { $set: { leadId: leadId || null } },
             { new: true }
         ).populate('leadId', 'name email phone status source dealValue');
@@ -336,8 +339,10 @@ exports.updateStatus = async (req, res) => {
             return res.status(400).json({ message: 'Invalid status' });
         }
 
+        const companyUserIds = await getCompanyUserIds(userId);
+
         const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { _id: id, userId: userId },
+            { _id: id, userId: { $in: companyUserIds } },
             { $set: { status } },
             { new: true }
         );
@@ -357,9 +362,10 @@ exports.updateStatus = async (req, res) => {
 exports.getUnreadCount = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
+        const companyUserIds = await getCompanyUserIds(userId);
 
         const result = await WhatsAppConversation.aggregate([
-            { $match: { userId: new mongoose.Types.ObjectId(userId), status: 'active' } },
+            { $match: { userId: { $in: companyUserIds }, status: 'active' } },
             { $group: { _id: null, totalUnread: { $sum: '$unreadCount' } } }
         ]);
 
@@ -389,9 +395,11 @@ exports.startConversation = async (req, res) => {
         // Normalize phone number
         const normalizedPhone = phone.replace(/[^0-9]/g, '');
 
+        const companyUserIds = await getCompanyUserIds(userId);
+
         // Check if conversation already exists
         let conversation = await WhatsAppConversation.findOne({
-            userId: userId,
+            userId: { $in: companyUserIds },
             waContactId: normalizedPhone
         });
 
@@ -507,7 +515,9 @@ exports.sendMediaMessage = async (req, res) => {
         const { id } = req.params;
         const caption = req.body.caption || '';
 
-        const conversation = await WhatsAppConversation.findOne({ _id: id, userId });
+        const companyUserIds = await getCompanyUserIds(userId);
+
+        const conversation = await WhatsAppConversation.findOne({ _id: id, userId: { $in: companyUserIds } });
         if (!conversation) {
             return res.status(404).json({ message: 'Conversation not found' });
         }

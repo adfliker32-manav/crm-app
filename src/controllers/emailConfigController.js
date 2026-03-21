@@ -49,8 +49,8 @@ function decrypt(text) {
 // Get email configuration
 exports.getEmailConfig = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const user = await User.findById(userId).select('emailUser emailPassword emailFromName');
+        const ownerId = req.tenantId;
+        const user = await User.findById(ownerId).select('emailUser emailPassword emailFromName');
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -75,7 +75,10 @@ exports.getEmailConfig = async (req, res) => {
 // Update email configuration
 exports.updateEmailConfig = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
+        if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify email settings' });
+
+        const ownerId = req.tenantId;
         const { emailUser, emailPassword, emailFromName } = req.body;
 
         // Validation
@@ -100,7 +103,7 @@ exports.updateEmailConfig = async (req, res) => {
         }
 
         const user = await User.findByIdAndUpdate(
-            userId,
+            ownerId,
             { $set: updateData },
             { new: true, select: 'emailUser emailFromName' }
         );
@@ -125,7 +128,7 @@ exports.updateEmailConfig = async (req, res) => {
 // Test email configuration
 exports.testEmailConfig = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const ownerId = req.tenantId;
         const { emailUser, emailPassword } = req.body;
 
         // Use provided credentials or get from user
@@ -133,7 +136,7 @@ exports.testEmailConfig = async (req, res) => {
         let userPassword = emailPassword;
 
         if (!userEmail || !userPassword) {
-            const user = await User.findById(userId).select('emailUser emailPassword');
+            const user = await User.findById(ownerId).select('emailUser emailPassword');
             if (!user || !user.emailUser || !user.emailPassword) {
                 return res.status(400).json({
                     message: 'Email configuration not found. Please configure your email settings first.'

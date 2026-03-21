@@ -47,8 +47,8 @@ function decrypt(text) {
 // Get WhatsApp configuration
 exports.getWhatsAppConfig = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const user = await User.findById(userId).select('waBusinessId waPhoneNumberId waAccessToken');
+        const ownerId = req.tenantId;
+        const user = await User.findById(ownerId).select('waBusinessId waPhoneNumberId waAccessToken');
         
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -69,7 +69,10 @@ exports.getWhatsAppConfig = async (req, res) => {
 // Update WhatsApp configuration
 exports.updateWhatsAppConfig = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
+        if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify WhatsApp settings' });
+
+        const ownerId = req.tenantId;
         const { waBusinessId, waPhoneNumberId, waAccessToken } = req.body;
         
         // Validation
@@ -97,7 +100,7 @@ exports.updateWhatsAppConfig = async (req, res) => {
         }
         
         const user = await User.findByIdAndUpdate(
-            userId,
+            ownerId,
             { $set: updateData },
             { new: true, select: 'waBusinessId waPhoneNumberId' }
         );
@@ -122,7 +125,7 @@ exports.updateWhatsAppConfig = async (req, res) => {
 // Test WhatsApp configuration
 exports.testWhatsAppConfig = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const ownerId = req.tenantId;
         const { waPhoneNumberId, waAccessToken } = req.body;
         
         // Use provided credentials or get from user
@@ -130,7 +133,7 @@ exports.testWhatsAppConfig = async (req, res) => {
         let accessToken = waAccessToken;
         
         if (!phoneNumberId || !accessToken) {
-            const user = await User.findById(userId).select('waPhoneNumberId waAccessToken');
+            const user = await User.findById(ownerId).select('waPhoneNumberId waAccessToken');
             if (!user || !user.waPhoneNumberId || !user.waAccessToken) {
                 return res.status(400).json({ 
                     message: 'WhatsApp configuration not found. Please configure your WhatsApp settings first.' 
@@ -194,8 +197,8 @@ exports.testWhatsAppConfig = async (req, res) => {
 
 exports.getWhatsAppSettings = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const user = await User.findById(userId).select('whatsappSettings');
+        const ownerId = req.tenantId;
+        const user = await User.findById(ownerId).select('whatsappSettings');
         if (!user) return res.status(404).json({ message: 'User not found' });
         
         res.json({
@@ -210,7 +213,10 @@ exports.getWhatsAppSettings = async (req, res) => {
 
 exports.updateWhatsAppSettings = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
+        if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify WhatsApp settings' });
+
+        const ownerId = req.tenantId;
         const { businessHours, autoReply } = req.body;
         
         const updateData = {};
@@ -218,7 +224,7 @@ exports.updateWhatsAppSettings = async (req, res) => {
         if (autoReply) updateData['whatsappSettings.autoReply'] = autoReply;
         
         const user = await User.findByIdAndUpdate(
-            userId,
+            ownerId,
             { $set: updateData },
             { new: true, select: 'whatsappSettings' }
         );

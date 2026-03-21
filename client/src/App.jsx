@@ -19,6 +19,7 @@ import Register from './pages/Register';
 import SuperAdmin from './pages/SuperAdmin';
 import Settings from './pages/Settings';
 import Reports from './pages/Reports';
+import Automations from './pages/Automations';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -51,6 +52,7 @@ function App() {
                     <Route path="/email" element={<EmailManagement />} />
                     <Route path="/whatsapp" element={<WhatsAppManagement />} />
                     <Route path="/team" element={<Team />} />
+                    <Route path="/automations" element={<Automations />} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/reports" element={<Reports />} />
                   </Route>

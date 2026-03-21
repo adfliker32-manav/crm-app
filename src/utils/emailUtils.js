@@ -30,7 +30,13 @@ function decrypt(text) {
 // Get user email credentials
 async function getUserEmailCredentials(userId) {
     try {
-        const user = await User.findById(userId).select('emailUser emailPassword emailFromName name');
+        let user = await User.findById(userId).select('emailUser emailPassword emailFromName name role parentId');
+        
+        // Agent inheritance: Agents use their Manager's configuration
+        if (user && user.role === 'agent' && user.parentId) {
+            user = await User.findById(user.parentId).select('emailUser emailPassword emailFromName name');
+        }
+
         if (!user || !user.emailUser || !user.emailPassword) {
             return null;
         }

@@ -30,7 +30,13 @@ function decrypt(text) {
 // Get user WhatsApp credentials
 async function getUserWhatsAppCredentials(userId) {
     try {
-        const user = await User.findById(userId).select('waBusinessId waPhoneNumberId waAccessToken');
+        let user = await User.findById(userId).select('waBusinessId waPhoneNumberId waAccessToken role parentId');
+        
+        // Agent inheritance: Agents use their Manager's configuration
+        if (user && user.role === 'agent' && user.parentId) {
+            user = await User.findById(user.parentId).select('waBusinessId waPhoneNumberId waAccessToken');
+        }
+
         if (!user || !user.waPhoneNumberId || !user.waAccessToken) {
             return null;
         }

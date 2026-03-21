@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import api from '../services/api';
@@ -10,6 +11,11 @@ import SheetSyncSettings from '../components/Settings/SheetSyncSettings';
 const Settings = () => {
     const { user, updateUser } = useAuth();
     const { showSuccess, showError } = useNotification();
+    
+    const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
+    const canAccessSettings = canManageTeam || user?.permissions?.accessSettings === true;
+
+    if (!canAccessSettings) return <Navigate to="/dashboard" replace />;
 
     const [activeTab, setActiveTab] = useState('profile');
     const [name, setName] = useState('');
@@ -68,8 +74,8 @@ const Settings = () => {
         { id: 'profile', label: 'Profile', icon: 'fa-user' },
         { id: 'customFields', label: 'Custom Fields', icon: 'fa-list-check' },
         { id: 'sheetSync', label: 'Sheet Sync', icon: 'fa-table' },
-        { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' },
-        { id: 'billing', label: 'Billing', icon: 'fa-credit-card' }
+        { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' }
+        // HIDING BILLING FOR NOW: { id: 'billing', label: 'Billing', icon: 'fa-credit-card' }
     ];
 
     return (

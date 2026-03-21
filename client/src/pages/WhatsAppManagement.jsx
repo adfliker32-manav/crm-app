@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { Navigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import WhatsAppInbox from '../components/WhatsApp/WhatsAppInbox';
 import WhatsAppTemplates from '../components/WhatsApp/WhatsAppTemplates';
 import WhatsAppBroadcasts from '../components/WhatsApp/WhatsAppBroadcasts';
@@ -6,6 +8,10 @@ import WhatsAppSettings from '../components/WhatsApp/WhatsAppSettings';
 import WhatsAppAnalytics from '../components/WhatsApp/WhatsAppAnalytics';
 
 const WhatsAppManagement = () => {
+    const { user } = useAuth();
+    const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
+    const canViewWhatsApp = canManageTeam || user?.permissions?.viewWhatsApp === true;
+
     const [activeTab, setActiveTab] = useState('inbox');
 
     const tabs = [
@@ -15,6 +21,8 @@ const WhatsAppManagement = () => {
         { id: 'analytics', label: 'Analytics', icon: 'fa-solid fa-chart-line' },
         { id: 'settings', label: 'Settings', icon: 'fa-solid fa-cog' }
     ];
+
+    if (!canViewWhatsApp) return <Navigate to="/dashboard" replace />;
 
     const renderContent = () => {
         switch (activeTab) {

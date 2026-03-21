@@ -4,131 +4,174 @@ import { useConfirm } from '../context/ConfirmContext';
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 
+const NavItem = ({ to, icon, label, collapsed, badgeCount = 0 }) => {
+    const location = useLocation();
+    const isActive = location.pathname.startsWith(to);
+
+    return (
+        <Link
+            to={to}
+            className={`relative flex items-center ${collapsed ? "justify-center" : "gap-3"} 
+            px-4 py-2.5 text-sm font-medium transition rounded-md
+            ${isActive
+                    ? "text-white"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800"
+                }`}
+        >
+            {isActive && (
+                <span className="absolute left-0 top-1 bottom-1 w-1 bg-blue-500 rounded-r"></span>
+            )}
+
+            <i className={`${icon} text-base w-5 text-center`} />
+
+            {!collapsed && label}
+
+            {badgeCount > 0 && !collapsed && (
+                <span className="ml-auto bg-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse shadow-lg shadow-orange-500/30">
+                    {badgeCount}
+                </span>
+            )}
+            {badgeCount > 0 && collapsed && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-orange-500 rounded-full animate-pulse"></span>
+            )}
+        </Link>
+    );
+};
 
 const Sidebar = () => {
-    const location = useLocation();
     const { logout, user } = useAuth();
     const { showDanger } = useConfirm();
-    const currentPath = location.pathname;
+    const [collapsed, setCollapsed] = useState(true);
     const [appName, setAppName] = useState('CRM Pro');
+    const [dueTaskCount, setDueTaskCount] = useState(0);
+
+    const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
 
     useEffect(() => {
-        // Fetch app name from Global Settings
         const fetchAppName = async () => {
             try {
-                const response = await api.get('/auth/app-name');
-                if (response.data.success && response.data.appName) {
-                    setAppName(response.data.appName);
-                }
-            } catch (error) {
-                console.error('Failed to fetch app name:', error);
-                // Keep default 'CRM Pro'
-            }
+                const res = await api.get('/auth/app-name');
+                if (res.data?.success) setAppName(res.data.appName);
+            } catch { }
         };
+
+        const fetchDueTasks = async () => {
+            try {
+                const res = await api.get('/tasks?status=Pending&dateFilter=today');
+                setDueTaskCount(res.data?.length || 0);
+            } catch { }
+        };
+
         fetchAppName();
-    }, []);
+        if (user) fetchDueTasks();
 
-    // Helper to get classes for active/inactive links
-    const getLinkClass = (path) => {
-        const baseClass = "flex items-center px-4 py-3 rounded-lg transition font-medium duration-200";
-        const activeClass = "bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg shadow-blue-900/50 transform scale-[1.02]";
-        const inactiveClass = "text-slate-400 hover:text-white hover:bg-slate-800 hover:pl-5";
+        // Optional: refresh notification every 5 minutes
+        const interval = setInterval(() => {
+            if (user) fetchDueTasks();
+        }, 5 * 60 * 1000);
 
-        // Check if current path matches
-        const isActive = currentPath === path;
-        return isActive ? `${baseClass} ${activeClass}` : `${baseClass} ${inactiveClass}`;
-    };
+        return () => clearInterval(interval);
+    }, [user]);
 
     const handleLogout = async () => {
         const confirmed = await showDanger("Are you sure you want to logout?", "Confirm Logout");
-        if (confirmed) {
-            logout();
-        }
+        if (confirmed) logout();
     };
 
     return (
-        <aside className="w-56 bg-slate-900 text-white flex flex-col shadow-2xl z-50 h-full relative">
-            {/* Logo Header */}
-            <div className="h-16 flex items-center justify-center border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm">
-                <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-blue-400 text-transparent bg-clip-text bg-300% animate-gradient">
-                    <i className="fa-solid fa-rocket mr-2 text-blue-400"></i>
-                    {appName}
-                </h1>
+        <aside
+            className={`${collapsed ? "w-16" : "w-64"} 
+            bg-slate-950 border-r border-slate-800 flex flex-col h-screen 
+            transition-all duration-300`}
+            onMouseEnter={() => setCollapsed(false)}
+            onMouseLeave={() => setCollapsed(true)}
+        >
+
+            {/* Logo */}
+            <div className="h-16 flex items-center justify-between px-4 border-b border-slate-800">
+                {!collapsed && (
+                    <h1 className="text-lg font-bold text-white tracking-wide">
+                        🚀 {appName}
+                    </h1>
+                )}
             </div>
 
-            {/* Navigation Links */}
-            <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto custom-scrollbar">
+            {/* NAV */}
+            <nav className="flex-1 overflow-y-auto py-4 space-y-1">
 
-                {user?.permissions?.viewDashboard !== false && (
-                    <Link to="/dashboard" className={getLinkClass('/dashboard')}>
-                        <i className="fa-solid fa-chart-line w-8 text-center"></i>
-                        <span>Dashboard</span>
-                    </Link>
+                {(canManageTeam || user?.permissions?.viewDashboard !== false) && (
+                    <NavItem collapsed={collapsed} to="/dashboard" icon="fa-solid fa-chart-line" label="Dashboard" badgeCount={dueTaskCount} />
                 )}
 
-                {user?.permissions?.viewLeads !== false && (
-                    <Link to="/leads" className={getLinkClass('/leads')}>
-                        <i className="fa-solid fa-users w-8 text-center"></i>
-                        <span>Leads</span>
-                    </Link>
+                {!collapsed && (
+                    <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Sales</p>
                 )}
 
-                {(user?.permissions?.viewEmails !== false || user?.permissions?.viewWhatsApp !== false) && (
-                    <div className="pt-3 pb-1">
-                        <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Communication</p>
-                    </div>
+                {(canManageTeam || user?.permissions?.viewLeads !== false) && (
+                    <NavItem collapsed={collapsed} to="/leads" icon="fa-solid fa-users" label="Leads" />
                 )}
 
-                {user?.permissions?.viewEmails !== false && (
-                    <Link to="/email" className={getLinkClass('/email')}>
-                        <i className="fa-solid fa-envelope w-8 text-center"></i>
-                        <span>Email Management</span>
-                    </Link>
+                {(canManageTeam || user?.permissions?.viewEmails === true || user?.permissions?.viewWhatsApp === true) && !collapsed && (
+                    <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Inbox</p>
                 )}
 
-                {user?.permissions?.viewWhatsApp !== false && (
-                    <Link to="/whatsapp" className={getLinkClass('/whatsapp')}>
-                        <i className="fa-brands fa-whatsapp w-8 text-center"></i>
-                        <span>WhatsApp</span>
-                    </Link>
+                {(canManageTeam || user?.permissions?.viewWhatsApp === true) && (
+                    <NavItem collapsed={collapsed} to="/whatsapp" icon="fa-brands fa-whatsapp" label="WhatsApp" />
                 )}
 
-                {user?.permissions?.manageTeam !== false && (
-                    <>
-                        <div className="pt-3 pb-1">
-                            <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Admin</p>
-                        </div>
-
-                        <Link to="/team" className={getLinkClass('/team')}>
-                            <i className="fa-solid fa-users w-8 text-center"></i>
-                            <span>Team</span>
-                        </Link>
-
-                        <Link to="/reports" className={getLinkClass('/reports')}>
-                            <i className="fa-solid fa-chart-pie w-8 text-center"></i>
-                            <span>Reports</span>
-                        </Link>
-                    </>
+                {(canManageTeam || user?.permissions?.viewEmails === true) && (
+                    <NavItem collapsed={collapsed} to="/email" icon="fa-solid fa-envelope" label="Email" />
                 )}
+
+                {(canManageTeam || user?.permissions?.viewReports) && !collapsed && (
+                    <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Analytics</p>
+                )}
+
+                {(canManageTeam || user?.permissions?.viewReports) && (
+                    <NavItem collapsed={collapsed} to="/reports" icon="fa-solid fa-chart-pie" label="Reports" />
+                )}
+
+                {canManageTeam && !collapsed && (
+                    <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Admin</p>
+                )}
+
+                {canManageTeam && (
+                    <NavItem collapsed={collapsed} to="/team" icon="fa-solid fa-user-group" label="Team" />
+                )}
+
+                {canManageTeam && (
+                    <NavItem collapsed={collapsed} to="/automations" icon="fa-solid fa-robot" label="Automations" />
+                )}
+
             </nav>
-            <div className="p-3 border-t border-slate-800 bg-slate-900/50 backdrop-blur-sm">
-                <Link to="/settings" className="flex items-center gap-2 mb-3 p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 hover:bg-slate-800 transition cursor-pointer group">
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-base font-bold shadow-md group-hover:shadow-blue-500/20 transition">
-                        👤
+
+            {/* PROFILE */}
+            <div className="border-t border-slate-800 p-4">
+
+                <Link to="/settings" className={`flex items-center ${collapsed ? "justify-center" : "gap-3"}`}>
+                    <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold text-white">
+                        {user?.name?.charAt(0) || 'U'}
                     </div>
-                    <div className="overflow-hidden flex-1">
-                        <p className="text-xs font-bold text-white truncate">{user?.name || 'User'}</p>
-                        <p className="text-[10px] text-blue-300 flex items-center gap-1">
-                            {user?.role || 'Admin'}
-                            <i className="fa-solid fa-gear text-slate-500 text-[8px] group-hover:text-blue-400 group-hover:rotate-90 transition ml-auto"></i>
-                        </p>
-                    </div>
+
+                    {!collapsed && (
+                        <div>
+                            <p className="text-sm font-semibold text-white">{user?.name}</p>
+                            <p className="text-xs text-slate-400">{user?.role}</p>
+                        </div>
+                    )}
                 </Link>
-                <button onClick={handleLogout} className="w-full group bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white py-2 rounded-lg transition shadow-lg flex items-center justify-center gap-2 font-medium text-sm">
-                    <i className="fa-solid fa-right-from-bracket group-hover:translate-x-1 transition-transform text-xs"></i> Logout
+
+                <button
+                    onClick={handleLogout}
+                    className={`w-full mt-3 text-sm text-slate-400 hover:text-red-400 transition 
+                    ${collapsed ? "text-center" : "text-left"}`}
+                >
+                    <i className="fa-solid fa-right-from-bracket mr-2"></i>
+                    {!collapsed && "Logout"}
                 </button>
+
             </div>
-        </aside >
+        </aside>
     );
 };
 

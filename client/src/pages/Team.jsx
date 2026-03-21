@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
+import { Navigate } from 'react-router-dom';
 import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { useConfirm } from '../context/ConfirmContext';
 import { useNotification } from '../context/NotificationContext';
 import CreateAgentModal from '../components/Team/CreateAgentModal';
 import EditAgentModal from '../components/Team/EditAgentModal';
 
 const Team = () => {
+    const { user } = useAuth();
     const { showDanger } = useConfirm();
     const { showSuccess, showError } = useNotification();
     const [team, setTeam] = useState([]);
@@ -46,6 +49,10 @@ const Team = () => {
         }
     };
 
+    const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
+
+    if (!canManageTeam) return <Navigate to="/dashboard" replace />;
+    
     if (loading) return <div className="p-10 text-center text-slate-500">Loading Team...</div>;
 
     return (
@@ -56,13 +63,15 @@ const Team = () => {
                     <h1 className="text-2xl font-bold text-slate-800">Team Management</h1>
                     <p className="text-sm text-slate-500 mt-1">Manage your team members and their permissions</p>
                 </div>
-                <button
-                    onClick={() => setIsModalOpen(true)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold shadow-md transition flex items-center gap-2"
-                >
-                    <i className="fa-solid fa-user-plus"></i>
-                    Add Agent
-                </button>
+                {canManageTeam && (
+                    <button
+                        onClick={() => setIsModalOpen(true)}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold shadow-md transition flex items-center gap-2"
+                    >
+                        <i className="fa-solid fa-user-plus"></i>
+                        Add Agent
+                    </button>
+                )}
             </div>
 
             {/* Team List */}
@@ -75,7 +84,7 @@ const Team = () => {
                             <th className="px-6 py-4">Role</th>
                             <th className="px-6 py-4">Permissions</th>
                             <th className="px-6 py-4">Created</th>
-                            <th className="px-6 py-4 text-right">Actions</th>
+                            {canManageTeam && <th className="px-6 py-4 text-right">Actions</th>}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -112,25 +121,27 @@ const Team = () => {
                                         <td className="px-6 py-4 text-slate-500 text-sm">
                                             {new Date(agent.createdAt).toLocaleDateString()}
                                         </td>
-                                        <td className="px-6 py-4 text-right space-x-2">
-                                            <button
-                                                onClick={() => {
-                                                    setSelectedAgent(agent);
-                                                    setIsEditModalOpen(true);
-                                                }}
-                                                className="text-slate-400 hover:text-blue-600 transition p-2 rounded-full hover:bg-blue-50"
-                                                title="Edit Agent"
-                                            >
-                                                <i className="fa-solid fa-pen-to-square"></i>
-                                            </button>
-                                            <button
-                                                onClick={() => handleDelete(agent._id, agent.name)}
-                                                className="text-slate-400 hover:text-red-600 transition p-2 rounded-full hover:bg-red-50"
-                                                title="Delete Agent"
-                                            >
-                                                <i className="fa-solid fa-trash-can"></i>
-                                            </button>
-                                        </td>
+                                        {canManageTeam && (
+                                            <td className="px-6 py-4 text-right space-x-2">
+                                                <button
+                                                    onClick={() => {
+                                                        setSelectedAgent(agent);
+                                                        setIsEditModalOpen(true);
+                                                    }}
+                                                    className="text-slate-400 hover:text-blue-600 transition p-2 rounded-full hover:bg-blue-50"
+                                                    title="Edit Agent"
+                                                >
+                                                    <i className="fa-solid fa-pen-to-square"></i>
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDelete(agent._id, agent.name)}
+                                                    className="text-slate-400 hover:text-red-600 transition p-2 rounded-full hover:bg-red-50"
+                                                    title="Delete Agent"
+                                                >
+                                                    <i className="fa-solid fa-trash-can"></i>
+                                                </button>
+                                            </td>
+                                        )}
                                     </tr>
                                 );
                             })

@@ -166,15 +166,17 @@ const LeadsTable = ({ leads, stages = [], searchQuery = "", onEdit, onDelete, on
                                 <option key={stage._id} value={stage.name}>{stage.name}</option>
                             ))}
                         </select>
-                        <button
-                            onClick={() => {
-                                onBulkDelete(selectedIds);
-                                setSelectedIds([]);
-                            }}
-                            className="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-2"
-                        >
-                            <i className="fa-solid fa-trash-can"></i> Delete
-                        </button>
+                        {(user?.role === 'superadmin' || user?.role === 'manager' || user?.permissions?.deleteLeads) && (
+                            <button
+                                onClick={() => {
+                                    onBulkDelete(selectedIds);
+                                    setSelectedIds([]);
+                                }}
+                                className="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-2"
+                            >
+                                <i className="fa-solid fa-trash-can"></i> Delete
+                            </button>
+                        )}
                         <button
                             onClick={() => setSelectedIds([])}
                             className="text-white hover:text-blue-200 px-3"
@@ -301,20 +303,24 @@ const LeadsTable = ({ leads, stages = [], searchQuery = "", onEdit, onDelete, on
                                             >
                                                 <i className="fa-regular fa-note-sticky text-xs"></i>
                                             </button>
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); onEdit(lead); }}
-                                                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-100 hover:text-blue-600 transition flex items-center justify-center text-slate-400"
-                                                title="Edit Lead"
-                                            >
-                                                <i className="fa-solid fa-pen text-xs"></i>
-                                            </button>
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); onDelete(lead._id); }}
-                                                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-red-100 hover:text-red-600 transition flex items-center justify-center text-slate-400"
-                                                title="Delete Lead"
-                                            >
-                                                <i className="fa-solid fa-trash text-xs"></i>
-                                            </button>
+                                            {(user?.role === 'manager' || user?.role === 'superadmin' || user?.permissions?.editLeads !== false) && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); onEdit(lead); }}
+                                                    className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-100 hover:text-blue-600 transition flex items-center justify-center text-slate-400"
+                                                    title="Edit Lead"
+                                                >
+                                                    <i className="fa-solid fa-pen text-xs"></i>
+                                                </button>
+                                            )}
+                                            {(user?.role === 'manager' || user?.role === 'superadmin' || user?.permissions?.deleteLeads) && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); onDelete(lead._id); }}
+                                                    className="w-8 h-8 rounded-full bg-slate-100 hover:bg-red-100 hover:text-red-600 transition flex items-center justify-center text-slate-400"
+                                                    title="Delete Lead"
+                                                >
+                                                    <i className="fa-solid fa-trash text-xs"></i>
+                                                </button>
+                                            )}
                                         </div>
                                     </td>
                                 </tr>

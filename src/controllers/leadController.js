@@ -10,33 +10,14 @@ const { sendMetaEvent } = require('../services/metaConversionService');
 const { sendEmail } = require('../services/emailService');
 const { logActivity } = require('../services/auditService');
 const { findDuplicates, findAllDuplicateGroups, normalizePhone } = require('../services/duplicateService');
+const { evaluateLead } = require('../services/AutomationService');
 
 // ==========================================
-// 1. GET LEADS (With Agent/Manager Logic + Permission Filtering)
+// 1. GET LEADS (With Enterprise ABAC Scope injection)
 // ==========================================
 const getLeads = async (req, res) => {
     try {
-        // Default to current user
-        let ownerId = req.user.userId || req.user.id;
-        let query = {};
-
-        // 👇 AGENT LOGIC CHECK
-        // Agar user 'agent' hai, to hum uske 'parentId' (Manager) ka data dikhayenge
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId);
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId; // Maalik (Manager) ka ID use karo
-
-                // 🔒 PERMISSION CHECK: viewAllLeads
-                // If agent doesn't have viewAllLeads permission, show only assigned leads
-                if (!agentUser.permissions || !agentUser.permissions.viewAllLeads) {
-                    query.assignedTo = agentUser._id;
-                }
-            }
-        }
-
-        // Set base query filter
-        query.userId = ownerId;
+        const query = { ...req.dataScope };
 
         const leads = await Lead.find(query)
             .populate('assignedTo', 'name email')
@@ -54,14 +35,7 @@ const getLeads = async (req, res) => {
 const createLead = async (req, res) => {
     try {
         const { name, email, phone, status, source, customData, force } = req.body;
-
-        let ownerId = req.user.userId || req.user.id;
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId);
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
+        const ownerId = req.tenantId;
 
         // 🔍 DUPLICATE CHECK — unless force=true
         if (!force) {
@@ -84,6 +58,11 @@ const createLead = async (req, res) => {
             source: source || 'Manual Entry',
             customData: customData || {}
         });
+
+        // Enterprise ABAC: Auto-assign lead to agent if they created it
+        if (req.user.role === 'agent') {
+            newLead.assignedTo = req.user.userId || req.user.id;
+        }
 
         await newLead.save();
 
@@ -147,6 +126,13 @@ const createLead = async (req, res) => {
             }, 0);
         }
 
+        // Evaluate Automation Builder Rules
+        setTimeout(() => {
+            evaluateLead(newLead, 'LEAD_CREATED').catch(err => {
+                console.error('Automation Service Error (LEAD_CREATED):', err);
+            });
+        }, 0);
+
         res.json(newLead);
     } catch (err) {
         console.error(err);
@@ -167,17 +153,7 @@ const sendManualEmail = async (req, res) => {
             return res.status(400).json({ message: "To, Subject, and Message are required" });
         }
 
-        // SECURITY FIX: Tenant isolation check
-        let ownerId = userId;
-        if (req.user && req.user.role === 'agent') {
-            const User = require('../models/User');
-            const agentUser = await User.findById(userId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
-
-        const leadToUpdate = await Lead.findOne({ _id: leadId, userId: ownerId });
+        const leadToUpdate = await Lead.findOne({ _id: leadId, ...req.dataScope });
         if (!leadToUpdate) {
             return res.status(404).json({ message: "Lead not found or access denied" });
         }
@@ -225,18 +201,11 @@ const updateLead = async (req, res) => {
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
 
-        // SECURITY FIX: Check authorization - user can only update their own leads
-        let ownerId = req.user.userId || req.user.id;
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-                console.log('🔄 [DEBUG updateLead] Agent detected, using parent ownerId:', ownerId);
-            }
-        }
+        // SECURITY FIX: Data scope check preventing IDOR
+        const ownerId = req.tenantId;
 
-        console.log('🔄 [DEBUG updateLead] Looking for lead with _id:', req.params.id, 'userId:', ownerId);
-        const lead = await Lead.findOne({ _id: req.params.id, userId: ownerId });
+        console.log('🔄 [DEBUG updateLead] Looking for lead in dataScope:', req.params.id);
+        const lead = await Lead.findOne({ _id: req.params.id, ...req.dataScope });
 
         if (!lead) {
             console.log('❌ [DEBUG updateLead] Lead not found or access denied');
@@ -373,6 +342,12 @@ const updateLead = async (req, res) => {
             } catch (err) {
                 console.error('Error fetching user for Meta CAPI (non-blocking):', err);
             }
+
+            // Evaluate Automation Builder Rules
+            setTimeout(() => {
+                evaluateLead(lead, 'STAGE_CHANGED').catch(err => console.error('Auto Error (STAGE_CHANGED):', err));
+                evaluateLead(lead, 'TIME_IN_STAGE').catch(err => console.error('Auto Error (TIME_IN_STAGE):', err));
+            }, 0);
         }
 
         res.json({ success: true, lead });
@@ -392,16 +367,9 @@ const deleteLead = async (req, res) => {
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
 
-        // SECURITY FIX: Check authorization - user can only delete their own leads
-        let ownerId = req.user.userId || req.user.id;
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
-
-        const deletedLead = await Lead.findOneAndDelete({ _id: req.params.id, userId: ownerId });
+        // SECURITY FIX: Data scope check preventing IDOR
+        const ownerId = req.tenantId;
+        const deletedLead = await Lead.findOneAndDelete({ _id: req.params.id, ...req.dataScope });
 
         if (!deletedLead) {
             return res.status(404).json({ message: "Lead not found or access denied" });
@@ -441,17 +409,11 @@ const addNote = async (req, res) => {
             return res.status(400).json({ message: "Note text is required" });
         }
 
-        // SECURITY FIX: Check authorization
-        let ownerId = req.user.userId || req.user.id;
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
+        // SECURITY FIX: Data scope check preventing IDOR
+        const ownerId = req.tenantId;
 
         const updatedLead = await Lead.findOneAndUpdate(
-            { _id: req.params.id, userId: ownerId },
+            { _id: req.params.id, ...req.dataScope },
             {
                 $push: {
                     notes: { text: text.trim(), date: new Date() },
@@ -491,14 +453,14 @@ const addNote = async (req, res) => {
 // ==========================================
 const getStages = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        let stages = await Stage.find({ userId: userId }).sort('order');
+        const ownerId = req.tenantId;
+        let stages = await Stage.find({ userId: ownerId }).sort('order');
 
         if (stages.length === 0) {
             const defaults = [
-                { name: 'New', order: 1, userId: userId },
-                { name: 'Contacted', order: 2, userId: userId },
-                { name: 'Won', order: 3, userId: userId }
+                { name: 'New', order: 1, userId: ownerId },
+                { name: 'Contacted', order: 2, userId: ownerId },
+                { name: 'Won', order: 3, userId: ownerId }
             ];
             await Stage.insertMany(defaults);
             return res.json(defaults);
@@ -511,11 +473,14 @@ const getStages = async (req, res) => {
 
 const createStage = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
+        if (!canManageTeam) return res.status(403).json({ message: "Unauthorized to modify pipeline stages" });
+
+        const ownerId = req.tenantId;
         const newStage = await Stage.create({
             name: req.body.name,
             order: Date.now(),
-            userId: userId
+            userId: ownerId
         });
         res.json(newStage);
     } catch (err) {
@@ -525,8 +490,11 @@ const createStage = async (req, res) => {
 
 const deleteStage = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const stage = await Stage.findOne({ _id: req.params.id, userId: userId });
+        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
+        if (!canManageTeam) return res.status(403).json({ message: "Unauthorized to modify pipeline stages" });
+
+        const ownerId = req.tenantId;
+        const stage = await Stage.findOne({ _id: req.params.id, userId: ownerId });
 
         if (!stage) return res.status(404).json({ message: 'Stage not found' });
         if (stage.name === 'New') return res.status(400).json({ message: "Cannot delete 'New' stage" });
@@ -535,7 +503,7 @@ const deleteStage = async (req, res) => {
 
         // Move leads to 'New'
         await Lead.updateMany(
-            { userId: userId, status: stage.name },
+            { userId: ownerId, status: stage.name },
             { $set: { status: 'New' } }
         );
 
@@ -547,14 +515,17 @@ const deleteStage = async (req, res) => {
 
 const updateStage = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
+        if (!canManageTeam) return res.status(403).json({ message: "Unauthorized to modify pipeline stages" });
+
+        const ownerId = req.tenantId;
         const { name } = req.body;
 
         if (!name || !name.trim()) {
             return res.status(400).json({ message: 'Stage name is required' });
         }
 
-        const stage = await Stage.findOne({ _id: req.params.id, userId: userId });
+        const stage = await Stage.findOne({ _id: req.params.id, userId: ownerId });
         if (!stage) return res.status(404).json({ message: 'Stage not found' });
         if (stage.name === 'New') return res.status(400).json({ message: "Cannot rename the 'New' stage" });
 
@@ -564,7 +535,7 @@ const updateStage = async (req, res) => {
 
         // Bulk-update all leads that had the old stage name
         await Lead.updateMany(
-            { userId: userId, status: oldName },
+            { userId: ownerId, status: oldName },
             { $set: { status: name.trim() } }
         );
 
@@ -582,7 +553,7 @@ const syncLeads = async (req, res) => {
     if (!sheetUrl) return res.status(400).json({ message: "Link required" });
 
     try {
-        const userId = req.user.userId || req.user.id;
+        const userId = req.tenantId; // Enterprise ABAC Fix: Sync goes to correct tenant DB
 
         // Extract sheet ID from Google Sheets URL
         const sheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
@@ -638,7 +609,8 @@ const syncLeads = async (req, res) => {
                         phone: finalPhone,
                         source: 'Google Sheet',
                         status: 'New',
-                        customData: customData
+                        customData: customData,
+                        assignedTo: req.user.role === 'agent' ? (req.user.userId || req.user.id) : undefined
                     });
 
                     // Send automated email if configured
@@ -671,26 +643,19 @@ const syncLeads = async (req, res) => {
 // ==========================================
 const getAnalytics = async (req, res) => {
     try {
-        // Note: For Agents, this should technically fetch Manager's analytics
-        // But for now, we keep it simple based on ID
-        let ownerId = req.user.userId || req.user.id;
-
-        // Agent Logic Check
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
+        // Setup match query using ABAC scope
+        const matchQuery = { ...req.dataScope };
+        
+        // Mongoose Aggregate $match requires strict ObjectIds for string fields that are ObjectIds in DB
+        if (matchQuery.userId && typeof matchQuery.userId === 'string' && mongoose.Types.ObjectId.isValid(matchQuery.userId)) {
+            matchQuery.userId = new mongoose.Types.ObjectId(matchQuery.userId);
+        }
+        if (matchQuery.assignedTo && typeof matchQuery.assignedTo === 'string' && mongoose.Types.ObjectId.isValid(matchQuery.assignedTo)) {
+            matchQuery.assignedTo = new mongoose.Types.ObjectId(matchQuery.assignedTo);
         }
 
-        // Optimized: Use aggregation pipeline instead of fetching all leads into memory
-        // This is much more efficient for large datasets
-        const ownerIdObjectId = mongoose.Types.ObjectId.isValid(ownerId)
-            ? new mongoose.Types.ObjectId(ownerId)
-            : ownerId;
-
         const statsArray = await Lead.aggregate([
-            { $match: { userId: ownerIdObjectId } },
+            { $match: matchQuery },
             {
                 $group: {
                     _id: { $ifNull: ['$status', 'New'] },
@@ -715,7 +680,7 @@ const getAnalytics = async (req, res) => {
 
         // Follow-ups due today
         const followUpToday = await Lead.countDocuments({
-            userId: ownerIdObjectId,
+            ...req.dataScope,
             nextFollowUpDate: {
                 $gte: today,
                 $lt: tomorrow
@@ -724,7 +689,7 @@ const getAnalytics = async (req, res) => {
 
         // Overdue follow-ups (before today)
         const followUpOverdue = await Lead.countDocuments({
-            userId: ownerIdObjectId,
+            ...req.dataScope,
             nextFollowUpDate: {
                 $lt: today
             }
@@ -732,7 +697,7 @@ const getAnalytics = async (req, res) => {
 
         // Upcoming follow-ups (next 7 days, excluding today)
         const followUpUpcoming = await Lead.countDocuments({
-            userId: ownerIdObjectId,
+            ...req.dataScope,
             nextFollowUpDate: {
                 $gte: tomorrow,
                 $lt: nextWeek
@@ -758,22 +723,11 @@ const getAnalytics = async (req, res) => {
 // ==========================================
 const getAnalyticsData = async (req, res) => {
     try {
-        let ownerId = req.user.userId || req.user.id;
+        // Enterprise ABAC Replacement
+        const query = { ...req.dataScope };
 
-        // Agent Logic Check
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
-
-        const ownerIdObjectId = mongoose.Types.ObjectId.isValid(ownerId)
-            ? new mongoose.Types.ObjectId(ownerId)
-            : ownerId;
-
-        // Get all leads for this user
-        const allLeads = await Lead.find({ userId: ownerIdObjectId }).lean();
+        // Get all leads for this user based on their scope
+        const allLeads = await Lead.find(query).lean();
         const totalLeads = allLeads.length;
 
         // Calculate today's leads
@@ -873,16 +827,6 @@ const getAnalyticsData = async (req, res) => {
 // ==========================================
 const getFollowUpLeads = async (req, res) => {
     try {
-        let ownerId = req.user.userId || req.user.id;
-
-        // Agent Logic Check
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId);
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
-
         // Get today's date (start and end of day)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -891,7 +835,7 @@ const getFollowUpLeads = async (req, res) => {
 
         // Find leads with nextFollowUpDate between today 00:00 and tomorrow 00:00
         const followUpLeads = await Lead.find({
-            userId: ownerId,
+            ...req.dataScope,
             nextFollowUpDate: {
                 $gte: today,
                 $lt: tomorrow
@@ -916,17 +860,8 @@ const updateFollowUpDate = async (req, res) => {
             return res.status(400).json({ message: "Lead ID and follow-up date are required" });
         }
 
-        let ownerId = req.user.userId || req.user.id;
-
-        // Agent Logic Check
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId);
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
-
-        const lead = await Lead.findOne({ _id: leadId, userId: ownerId });
+        const ownerId = req.tenantId;
+        const lead = await Lead.findOne({ _id: leadId, ...req.dataScope });
 
         if (!lead) {
             return res.status(404).json({ message: "Lead not found" });
@@ -964,17 +899,8 @@ const completeFollowUp = async (req, res) => {
             return res.status(400).json({ message: "Either next follow-up date or 'Mark as Dead Lead' must be selected" });
         }
 
-        let ownerId = req.user.userId || req.user.id;
-
-        // Agent Logic Check
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId);
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
-
-        const lead = await Lead.findOne({ _id: leadId, userId: ownerId });
+        const ownerId = req.tenantId;
+        const lead = await Lead.findOne({ _id: leadId, ...req.dataScope });
 
         if (!lead) {
             return res.status(404).json({ message: "Lead not found" });
@@ -1047,18 +973,8 @@ const completeFollowUp = async (req, res) => {
 // ==========================================
 const getFollowUpDoneLeads = async (req, res) => {
     try {
-        let ownerId = req.user.userId || req.user.id;
-
-        // Agent Logic Check
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId);
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
-
-        // Get all leads for the user first
-        const allLeads = await Lead.find({ userId: ownerId });
+        // Get all leads for the user based on ABAC scope
+        const allLeads = await Lead.find({ ...req.dataScope });
 
         // Filter to only include leads with at least one follow-up history entry
         const filteredDoneLeads = allLeads.filter(lead =>
@@ -1098,16 +1014,9 @@ const assignLead = async (req, res) => {
         const { id } = req.params;
         const { agentId } = req.body;
 
-        let ownerId = req.user.userId || req.user.id;
+        let ownerId = req.tenantId;
 
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId);
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
-
-        const lead = await Lead.findOne({ _id: id, userId: ownerId });
+        const lead = await Lead.findOne({ _id: id, ...req.dataScope });
         if (!lead) {
             return res.status(404).json({ message: "Lead not found" });
         }
@@ -1153,14 +1062,7 @@ const bulkAssignLeads = async (req, res) => {
             return res.status(400).json({ message: "Lead IDs array required" });
         }
 
-        let ownerId = req.user.userId || req.user.id;
-
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId);
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
+        let ownerId = req.tenantId;
 
         if (agentId) {
             const agent = await User.findOne({ _id: agentId, parentId: ownerId, role: 'agent' });
@@ -1169,8 +1071,9 @@ const bulkAssignLeads = async (req, res) => {
             }
         }
 
+        // Use req.dataScope to ensure we only affect allowed leads
         const result = await Lead.updateMany(
-            { _id: { $in: leadIds }, userId: ownerId },
+            { _id: { $in: leadIds }, ...req.dataScope },
             { $set: { assignedTo: agentId || null } }
         );
 
@@ -1188,13 +1091,7 @@ const checkDuplicates = async (req, res) => {
     try {
         const { phone, email } = req.body;
 
-        let ownerId = req.user.userId || req.user.id;
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
+        let ownerId = req.tenantId;
 
         const duplicates = await findDuplicates(ownerId, phone, email);
         res.json({ hasDuplicates: duplicates.length > 0, duplicates });
@@ -1209,13 +1106,7 @@ const checkDuplicates = async (req, res) => {
 // ==========================================
 const getDuplicateGroups = async (req, res) => {
     try {
-        let ownerId = req.user.userId || req.user.id;
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
+        let ownerId = req.tenantId;
 
         const groups = await findAllDuplicateGroups(ownerId);
         const totalDuplicates = groups.reduce((sum, g) => sum + g.duplicates.length, 0);
@@ -1236,13 +1127,7 @@ const getDuplicateGroups = async (req, res) => {
 // ==========================================
 const autoDeleteDuplicates = async (req, res) => {
     try {
-        let ownerId = req.user.userId || req.user.id;
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
-        }
+        let ownerId = req.tenantId;
 
         const groups = await findAllDuplicateGroups(ownerId);
         let deletedCount = 0;
@@ -1281,6 +1166,83 @@ const autoDeleteDuplicates = async (req, res) => {
     }
 };
 
+// ==========================================
+// 20. BULK IMPORT LEADS (CSV)
+// ==========================================
+const bulkImportLeads = async (req, res) => {
+    try {
+        let ownerId = req.tenantId;
+
+        const { leads } = req.body; // Expects an array: [{name, email, phone, source, status, customData}]
+
+        if (!leads || !Array.isArray(leads) || leads.length === 0) {
+            return res.status(400).json({ message: "No leads provided for import." });
+        }
+
+        // Fetch user's existing leads phones/emails to avoid DB roundtrips for duplicates
+        const existingLeads = await Lead.find({ userId: ownerId }).select('phone email').lean();
+        const existingPhones = new Set(existingLeads.map(l => l.phone).filter(Boolean).map(normalizePhone));
+        const existingEmails = new Set(existingLeads.map(l => l.email?.toLowerCase()).filter(Boolean));
+
+        const newLeadsToInsert = [];
+        let duplicateCount = 0;
+
+        for (const lead of leads) {
+            const normPhone = lead.phone ? normalizePhone(lead.phone) : null;
+            const normEmail = lead.email ? lead.email.toLowerCase() : null;
+
+            // Simple duplicate check against Sets
+            const isPhoneDup = normPhone && existingPhones.has(normPhone);
+            const isEmailDup = normEmail && existingEmails.has(normEmail);
+
+            if (isPhoneDup || isEmailDup) {
+                duplicateCount++;
+            } else {
+                newLeadsToInsert.push({
+                    userId: ownerId,
+                    name: lead.name || 'Unknown',
+                    email: lead.email || null,
+                    phone: lead.phone || 'No Phone',
+                    source: lead.source || 'CSV Import',
+                    status: lead.status || 'New',
+                    customData: lead.customData || {},
+                    assignedTo: req.user.role === 'agent' ? (req.user.userId || req.user.id) : undefined
+                });
+
+                // Add to Sets so we don't insert duplicates within the same batch!
+                if (normPhone) existingPhones.add(normPhone);
+                if (normEmail) existingEmails.add(normEmail);
+            }
+        }
+
+        if (newLeadsToInsert.length > 0) {
+            await Lead.insertMany(newLeadsToInsert);
+
+            // Log activity
+            logActivity({
+                userId: req.user.userId || req.user.id,
+                userName: req.user.name || 'Unknown',
+                actionType: 'LEAD_CREATED',
+                entityType: 'Lead',
+                entityName: 'Bulk Import',
+                metadata: { importedCount: newLeadsToInsert.length, skippedDuplicates: duplicateCount },
+                companyId: ownerId
+            }).catch(err => console.error('Audit log error:', err));
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Import complete", 
+            importedCount: newLeadsToInsert.length, 
+            duplicateCount 
+        });
+
+    } catch (err) {
+        console.error("Bulk Import Error:", err);
+        res.status(500).json({ message: "Error importing leads: " + (err.message || "Unknown error") });
+    }
+};
+
 module.exports = {
     getLeads,
     createLead,
@@ -1303,5 +1265,6 @@ module.exports = {
     bulkAssignLeads,
     checkDuplicates,
     getDuplicateGroups,
-    autoDeleteDuplicates
+    autoDeleteDuplicates,
+    bulkImportLeads
 };

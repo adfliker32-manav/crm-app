@@ -250,6 +250,7 @@ const userSchema = new mongoose.Schema({
     permissions: {
         // Dashboard
         viewDashboard: { type: Boolean, default: true },
+        viewReports: { type: Boolean, default: false }, // New: Allows agents to view their metrics
 
         // Leads
         viewLeads: { type: Boolean, default: true },
