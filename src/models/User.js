@@ -67,7 +67,9 @@ const userSchema = new mongoose.Schema({
     },
     waPhoneNumberId: {
         type: String,
-        default: null
+        default: null,
+        sparse: true,   // allows multiple nulls
+        unique: true    // prevents two companies claiming same phone number
     },
     waAccessToken: {
         type: String,
@@ -165,13 +167,15 @@ const userSchema = new mongoose.Schema({
     // Billing & Subscription Info (for managers/companies)
     subscriptionPlan: {
         type: String,
-        enum: ['free', 'basic', 'premium', 'enterprise'],
-        default: 'free'
+        // Support both lowercase (DB standard) and capitalized (superadmin panel sends these)
+        enum: ['free', 'basic', 'premium', 'enterprise', 'Free', 'Basic', 'Premium', 'Enterprise'],
+        default: 'Free'
     },
     subscriptionStatus: {
         type: String,
-        enum: ['active', 'expired', 'cancelled', 'trial'],
-        default: 'trial'
+        // Support both lowercase (DB standard) and capitalized (superadmin panel sends these)
+        enum: ['active', 'expired', 'cancelled', 'trial', 'Active', 'Expired', 'Cancelled', 'Trial'],
+        default: 'Trial'
     },
     planExpiryDate: {
         type: Date,

@@ -62,21 +62,39 @@ const buildMetaComponents = (dbComponents, variableMapping, data) => {
     return metaComponents;
 };
 
-// Get all conversations for the user (shared across same WhatsApp phone number)
+// Get all conversations for the user (shared across same WhatsApp phone number within same company)
 exports.getConversations = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { status = 'active', search, page = 1, limit = 50 } = req.query;
 
-        // Find all userIds sharing the same WhatsApp phone number
-        const currentUser = await User.findById(userId).select('waPhoneNumberId').lean();
+        // Determine the company boundary:
+        // - If the current user is a manager, their companyId IS their own _id
+        // - If the current user is an agent, their companyId is their parentId
+        const currentUser = await User.findById(userId).select('waPhoneNumberId role parentId').lean();
+        const companyManagerId = currentUser.role === 'agent' ? currentUser.parentId : userId;
+
+        // Collect all userIds in the same company that share the same WhatsApp phone number.
+        // SECURITY: We scope this query to users within the same company tree ONLY,
+        // preventing cross-company data leaks even if two companies configure the same phone number.
         let userIds = [new mongoose.Types.ObjectId(userId)];
         if (currentUser?.waPhoneNumberId) {
             const sharedUsers = await User.find(
-                { waPhoneNumberId: currentUser.waPhoneNumberId },
+                {
+                    waPhoneNumberId: currentUser.waPhoneNumberId,
+                    // Restrict to users within the SAME company
+                    $or: [
+                        { _id: companyManagerId },             // the manager themselves
+                        { parentId: companyManagerId }         // agents under this manager
+                    ]
+                },
                 { _id: 1 }
             ).lean();
             userIds = sharedUsers.map(u => new mongoose.Types.ObjectId(u._id));
+        }
+        // Always ensure current user is included (edge case: agent with no waPhoneNumberId)
+        if (!userIds.some(id => id.equals(new mongoose.Types.ObjectId(userId)))) {
+            userIds.push(new mongoose.Types.ObjectId(userId));
         }
 
         // Build query — include conversations from all shared users
