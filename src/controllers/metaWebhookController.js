@@ -37,6 +37,27 @@ const handleLeadWebhook = async (req, res) => {
 
     try {
         const body = req.body;
+
+        // Security Validation
+        const signature = req.headers['x-hub-signature-256'];
+        const APP_SECRET = process.env.META_APP_SECRET;
+
+        // Only validate if APP_SECRET is available
+        if (APP_SECRET) {
+            if (!signature) {
+                console.warn("⛔ 401 Unauthorized - Missing Meta Signature");
+                return;
+            }
+            const crypto = require('crypto');
+            const payload = JSON.stringify(body);
+            const expectedSignature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(payload).digest('hex');
+            
+            if (signature !== expectedSignature) {
+                console.warn("⛔ 401 Unauthorized - Invalid Meta Signature");
+                return;
+            }
+        }
+
         console.log("---------------------------------");
         console.log("📨 Meta Lead Webhook Received");
         console.log("📦 Object:", body.object);
@@ -75,38 +96,41 @@ async function processLeadgenWebhook(pageId, leadgenData) {
 
         console.log(`📋 Processing lead: ${leadgen_id} from form: ${form_id}`);
 
-        // Find user with this page connected and sync enabled
-        const user = await User.findOne({
+        // Find ALL users with this page connected and sync enabled
+        const users = await User.find({
             metaPageId: pageId,
             metaLeadSyncEnabled: true
         });
 
-        if (!user) {
-            console.log(`⚠️ No user found with page ${pageId} or sync disabled`);
+        if (!users || users.length === 0) {
+            console.log(`⚠️ No users found with page ${pageId} or sync disabled`);
             return;
         }
 
-        // Optional: Check if form matches (if user wants specific form only)
-        if (user.metaFormId && user.metaFormId !== form_id) {
-            console.log(`⚠️ Form ${form_id} doesn't match user's selected form ${user.metaFormId}`);
-            return;
-        }
-
-        // Fetch full lead details from Meta
-        const leadDetails = await fetchLeadDetails(leadgen_id, user.metaPageAccessToken);
+        // Fetch full lead details from Meta using the first user's token (since they all track the same page)
+        const leadDetails = await fetchLeadDetails(leadgen_id, users[0].metaPageAccessToken);
 
         if (!leadDetails) {
             console.log(`⚠️ Could not fetch lead details for ${leadgen_id}`);
             return;
         }
 
-        // Create lead in CRM
-        await createLeadFromMeta(user._id, leadDetails, form_id);
+        // Distribute the lead to all matching tenants/users
+        for (const user of users) {
+             // Check if form matches (if user wants specific form only)
+             if (user.metaFormId && user.metaFormId !== form_id) {
+                 console.log(`⚠️ Form ${form_id} doesn't match User ${user._id}'s selected form ${user.metaFormId}`);
+                 continue;
+             }
 
-        // Update last sync time
-        await User.findByIdAndUpdate(user._id, {
-            metaLastSyncAt: new Date()
-        });
+             // Create lead in CRM for this specific user
+             await createLeadFromMeta(user._id, leadDetails, form_id);
+
+             // Update last sync time for this user
+             await User.findByIdAndUpdate(user._id, {
+                 metaLastSyncAt: new Date()
+             });
+        }
 
     } catch (error) {
         console.error("❌ processLeadgenWebhook Error:", error.message);
@@ -136,7 +160,7 @@ async function fetchLeadDetails(leadgenId, accessToken) {
         return {
             id: leadData.id,
             createdTime: leadData.created_time,
-            name: fields.full_name || fields.name || fields.first_name || 'Unknown',
+            name: fields.full_name || fields.name || (fields.first_name ? fields.first_name + (fields.last_name ? ' ' + fields.last_name : '') : 'Unknown'),
             email: fields.email || null,
             phone: fields.phone_number || fields.phone || null,
             city: fields.city || null,
