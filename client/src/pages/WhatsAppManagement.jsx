@@ -6,6 +6,8 @@ import WhatsAppTemplates from '../components/WhatsApp/WhatsAppTemplates';
 import WhatsAppBroadcasts from '../components/WhatsApp/WhatsAppBroadcasts';
 import WhatsAppSettings from '../components/WhatsApp/WhatsAppSettings';
 import WhatsAppAnalytics from '../components/WhatsApp/WhatsAppAnalytics';
+import ChatbotFlows from '../components/WhatsApp/ChatbotFlows';
+import ChatbotFlowBuilder from '../components/WhatsApp/ChatbotFlowBuilder';
 
 const WhatsAppManagement = () => {
     const { user } = useAuth();
@@ -13,9 +15,11 @@ const WhatsAppManagement = () => {
     const canViewWhatsApp = canManageTeam || user?.permissions?.viewWhatsApp === true;
 
     const [activeTab, setActiveTab] = useState('inbox');
+    const [editingFlowId, setEditingFlowId] = useState(null);
 
     const tabs = [
         { id: 'inbox', label: 'Inbox', icon: 'fa-solid fa-inbox' },
+        { id: 'chatbot', label: 'Chatbot', icon: 'fa-solid fa-robot' },
         { id: 'templates', label: 'Templates', icon: 'fa-solid fa-file-lines' },
         { id: 'broadcasts', label: 'Broadcasts', icon: 'fa-solid fa-tower-broadcast' },
         { id: 'analytics', label: 'Analytics', icon: 'fa-solid fa-chart-line' },
@@ -27,6 +31,11 @@ const WhatsAppManagement = () => {
     const renderContent = () => {
         switch (activeTab) {
             case 'inbox': return <WhatsAppInbox />;
+            case 'chatbot': 
+                if (editingFlowId) {
+                    return <ChatbotFlowBuilder flowId={editingFlowId} onBack={() => setEditingFlowId(null)} />;
+                }
+                return <ChatbotFlows onEditFlow={(id) => setEditingFlowId(id)} />;
             case 'templates': return <WhatsAppTemplates />;
             case 'broadcasts': return <WhatsAppBroadcasts />;
             case 'analytics': return <WhatsAppAnalytics />;
@@ -36,9 +45,10 @@ const WhatsAppManagement = () => {
     };
 
     return (
-        <div className="h-[calc(100vh-100px)] flex flex-col bg-[#f0f2f5]">
+        <div className={`${activeTab === 'chatbot' && editingFlowId ? 'h-screen' : 'h-[calc(100vh-100px)]'} flex flex-col bg-[#f0f2f5]`}>
             {/* Premium Header */}
-            <div className="bg-gradient-to-r from-[#008069] to-[#00a884] text-white shadow-lg">
+            {!(activeTab === 'chatbot' && editingFlowId) && (
+            <div className="bg-gradient-to-r from-[#008069] to-[#00a884] text-white shadow-lg z-20">
                 <div className="px-6 py-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-white/15 rounded-xl flex items-center justify-center backdrop-blur-sm">
@@ -68,6 +78,7 @@ const WhatsAppManagement = () => {
                     </div>
                 </div>
             </div>
+            )}
 
             {/* Content */}
             <div className="flex-1 overflow-hidden">

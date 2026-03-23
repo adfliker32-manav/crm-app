@@ -10,7 +10,7 @@ const SortIcon = ({ sortConfig, column }) => {
         : <i className="fa-solid fa-sort-down text-blue-600 ml-1"></i>;
 };
 
-const LeadsTable = ({ leads, stages = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onRefresh }) => {
+const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onBulkTag, onRefresh }) => {
     const { user } = useAuth();
     const [selectedIds, setSelectedIds] = useState([]);
     const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
@@ -166,6 +166,23 @@ const LeadsTable = ({ leads, stages = [], searchQuery = "", onEdit, onDelete, on
                                 <option key={stage._id} value={stage.name}>{stage.name}</option>
                             ))}
                         </select>
+                        {userTags && userTags.length > 0 && (
+                            <select
+                                onChange={(e) => {
+                                    if (e.target.value) {
+                                        onBulkTag(selectedIds, JSON.parse(e.target.value));
+                                        setSelectedIds([]);
+                                    }
+                                }}
+                                className="text-gray-800 text-sm rounded-lg px-3 py-1.5 outline-none border-none cursor-pointer"
+                                defaultValue=""
+                            >
+                                <option value="" disabled>Apply Tag...</option>
+                                {userTags.map(tag => (
+                                    <option key={tag._id} value={JSON.stringify([tag.name])}>{tag.name}</option>
+                                ))}
+                            </select>
+                        )}
                         {(user?.role === 'superadmin' || user?.role === 'manager' || user?.permissions?.deleteLeads) && (
                             <button
                                 onClick={() => {
@@ -247,6 +264,18 @@ const LeadsTable = ({ leads, stages = [], searchQuery = "", onEdit, onDelete, on
                                             <div>
                                                 <div className="font-bold text-slate-700 group-hover:text-blue-600 transition">{lead.name}</div>
                                                 <div className="text-xs text-slate-500">{lead.phone || '-'}</div>
+                                                {lead.tags && lead.tags.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1 mt-1">
+                                                        {lead.tags.map(tagName => {
+                                                            const tagObj = userTags?.find(t => t.name === tagName);
+                                                            return (
+                                                                <span key={tagName} className="text-[10px] px-1.5 py-0.5 rounded border font-medium whitespace-nowrap" style={{ backgroundColor: tagObj ? `${tagObj.color}20` : '#f1f5f9', color: tagObj ? tagObj.color : '#64748b', borderColor: tagObj ? `${tagObj.color}40` : '#cbd5e1' }}>
+                                                                    {tagName}
+                                                                </span>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     </td>

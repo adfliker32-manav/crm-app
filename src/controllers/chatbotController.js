@@ -1,5 +1,6 @@
 const ChatbotFlow = require('../models/ChatbotFlow');
 const mongoose = require('mongoose');
+const { invalidateFlowCache } = require('../services/chatbotEngineService');
 
 // Get all flows for user
 exports.getFlows = async (req, res) => {
@@ -68,6 +69,7 @@ exports.createFlow = async (req, res) => {
         });
 
         await flow.save();
+        invalidateFlowCache(userId);
 
         res.json({ success: true, flow: flow.toObject() });
     } catch (error) {
@@ -101,6 +103,7 @@ exports.updateFlow = async (req, res) => {
         if (startNodeId !== undefined) flow.startNodeId = startNodeId;
 
         await flow.save();
+        invalidateFlowCache(userId);
 
         res.json({ success: true, flow: flow.toObject() });
     } catch (error) {
@@ -120,6 +123,8 @@ exports.deleteFlow = async (req, res) => {
         if (!flow) {
             return res.status(404).json({ message: 'Flow not found' });
         }
+
+        invalidateFlowCache(userId);
 
         res.json({ success: true, message: 'Flow deleted successfully' });
     } catch (error) {
@@ -142,6 +147,7 @@ exports.toggleFlow = async (req, res) => {
 
         flow.isActive = !flow.isActive;
         await flow.save();
+        invalidateFlowCache(userId);
 
         res.json({ success: true, flow: flow.toObject() });
     } catch (error) {
@@ -178,6 +184,7 @@ exports.duplicateFlow = async (req, res) => {
         });
 
         await duplicate.save();
+        invalidateFlowCache(userId);
 
         res.json({ success: true, flow: duplicate.toObject() });
     } catch (error) {

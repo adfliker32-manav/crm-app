@@ -37,6 +37,9 @@ router.post('/complete-followup', authMiddleware, checkPermission('manageFollowU
 // 7. Bulk Assign Leads (MUST BE BEFORE /:id routes!)
 router.post('/bulk-assign', authMiddleware, checkPermission('assignLeads'), leadController.bulkAssignLeads);
 
+// 7.2 Bulk Add Tags (MUST BE BEFORE /:id routes!)
+router.post('/bulk-tags', authMiddleware, checkPermission('editLeads'), leadController.bulkAddTags);
+
 // 7.5. Duplicate Detection Routes (MUST BE BEFORE /:id routes!)
 router.post('/check-duplicates', authMiddleware, leadController.checkDuplicates);
 router.get('/duplicates', authMiddleware, leadController.getDuplicateGroups);

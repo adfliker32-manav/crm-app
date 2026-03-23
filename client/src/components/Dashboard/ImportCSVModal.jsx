@@ -6,7 +6,8 @@ const requiredFields = [
     { key: 'phone', label: 'Phone Number *', required: true },
     { key: 'email', label: 'Email Address', required: false },
     { key: 'source', label: 'Lead Source', required: false },
-    { key: 'status', label: 'Stage/Status', required: false }
+    { key: 'status', label: 'Stage/Status', required: false },
+    { key: 'tags', label: 'Tags (comma separated)', required: false }
 ];
 
 const ImportCSVModal = ({ isOpen, onClose, onSuccess, stages = [] }) => {

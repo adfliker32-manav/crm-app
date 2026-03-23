@@ -4,6 +4,23 @@ const WhatsAppConversation = require('../models/WhatsAppConversation');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
 const { sendWhatsAppTextMessage, sendInteractiveMessage } = require('./whatsappService');
+const NodeCache = require('node-cache');
+const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+
+exports.invalidateFlowCache = (userId) => {
+    flowCache.del(`flows_${userId}`);
+    console.log(`🧹 Cleared chatbot flow cache for user ${userId}`);
+};
+
+const getActiveFlows = async (userId) => {
+    const cacheKey = `flows_${userId}`;
+    let flows = flowCache.get(cacheKey);
+    if (!flows) {
+        flows = await ChatbotFlow.find({ userId: userId, isActive: true }).lean();
+        flowCache.set(cacheKey, flows);
+    }
+    return flows;
+};
 
 // Helper to evaluate if currently within business hours
 const isWithinBusinessHours = (settings) => {
@@ -96,26 +113,22 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             return await continueSession(session, messageText, conversationId, userId);
         }
 
-        // Check for keyword triggers
-        const flows = await ChatbotFlow.find({
-            userId: userId,
-            isActive: true,
-            triggerType: 'keyword',
-            triggerKeywords: { $in: [messageText] }
-        });
+        // Check for keyword triggers using memory cache
+        const allActiveFlows = await getActiveFlows(userId);
+        const keywordFlows = allActiveFlows.filter(f => 
+            f.triggerType === 'keyword' && 
+            f.triggerKeywords && 
+            f.triggerKeywords.some(k => k.toLowerCase() === messageText)
+        );
 
-        if (flows.length > 0) {
+        if (keywordFlows.length > 0) {
             // Start new session with first matching flow
-            return await startSession(flows[0], conversationId, userId);
+            return await startSession(keywordFlows[0], conversationId, userId);
         }
 
         // Check for first_message trigger (Chatbots)
         if (conversation.metadata.totalInbound === 1) {
-            const firstMessageFlows = await ChatbotFlow.find({
-                userId: userId,
-                isActive: true,
-                triggerType: 'first_message'
-            });
+            const firstMessageFlows = allActiveFlows.filter(f => f.triggerType === 'first_message');
 
             if (firstMessageFlows.length > 0) {
                 return await startSession(firstMessageFlows[0], conversationId, userId);

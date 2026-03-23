@@ -208,6 +208,12 @@ const userSchema = new mongoose.Schema({
         order: { type: Number, default: 0 }
     }],
 
+    // Lead Tags Configuration
+    tags: [{
+        name: { type: String, required: true },
+        color: { type: String, default: '#e2e8f0' }
+    }],
+
     // Google Sheet Auto-Sync Configuration
     googleSheetSync: {
         sheetUrl: { type: String, default: null },

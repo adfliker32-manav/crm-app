@@ -289,8 +289,8 @@ const changeCompanyPassword = async (req, res) => {
         const { id } = req.params;
         const { newPassword } = req.body;
 
-        if (!newPassword || newPassword.length < 6) {
-            return res.status(400).json({ message: "Password must be at least 6 characters" });
+        if (!newPassword || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(newPassword)) {
+            return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
         }
 
         const company = await User.findOne({ _id: id, role: 'manager' });
@@ -415,8 +415,8 @@ const updateCompanyAgent = async (req, res) => {
             updateData.email = email.toLowerCase();
         }
         if (password) {
-            if (password.length < 6) {
-                return res.status(400).json({ message: "Password must be at least 6 characters" });
+            if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)) {
+                return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
             }
             updateData.password = await bcrypt.hash(password, 10);
         }

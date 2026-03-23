@@ -7,11 +7,12 @@ import MetaConfigSection from '../components/Settings/MetaConfigSection';
 import CustomFieldsSettings from '../components/Settings/CustomFieldsSettings';
 import BillingSettings from '../components/Settings/BillingSettings';
 import SheetSyncSettings from '../components/Settings/SheetSyncSettings';
+import TagsSettings from '../components/Settings/TagsSettings';
 
 const Settings = () => {
     const { user, updateUser } = useAuth();
     const { showSuccess, showError } = useNotification();
-    
+
     const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
     const canAccessSettings = canManageTeam || user?.permissions?.accessSettings === true;
 
@@ -72,6 +73,7 @@ const Settings = () => {
 
     const tabs = [
         { id: 'profile', label: 'Profile', icon: 'fa-user' },
+        { id: 'tags', label: 'Lead Tags', icon: 'fa-tags' },
         { id: 'customFields', label: 'Custom Fields', icon: 'fa-list-check' },
         { id: 'sheetSync', label: 'Sheet Sync', icon: 'fa-table' },
         { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' }
@@ -79,94 +81,97 @@ const Settings = () => {
     ];
 
     return (
-        <div className="max-w-4xl mx-auto animate-fade-in-up">
-            <h1 className="text-2xl font-bold text-slate-800 mb-8">Settings</h1>
+        <div className="max-w-5xl mx-auto p-4 md:p-8 animate-fade-in-up">
+            <h1 className="text-3xl font-extrabold text-slate-900 mb-8 tracking-tight">Organization Settings</h1>
 
-            {/* Tabs */}
-            <div className="flex gap-2 mb-6">
+            {/* Tabs - Segmented Control Style */}
+            <div className="flex flex-wrap gap-2 mb-8 bg-slate-100/70 p-1.5 rounded-2xl border border-slate-200/60 w-fit">
                 {tabs.map(tab => (
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
-                        className={`px-5 py-2.5 rounded-lg font-semibold text-sm flex items-center gap-2 transition ${activeTab === tab.id
-                            ? 'bg-blue-600 text-white shadow-md'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
+                        className={`px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2.5 transition-all duration-200 ${
+                            activeTab === tab.id
+                            ? 'bg-white text-blue-600 shadow-sm ring-1 ring-slate-200/50'
+                            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+                        }`}
                     >
-                        <i className={`fa-solid ${tab.icon}`}></i>
+                        <i className={`fa-solid ${tab.icon} ${activeTab === tab.id ? 'text-blue-500' : 'text-slate-400'}`}></i>
                         {tab.label}
                     </button>
                 ))}
             </div>
 
-            {/* Tab Content */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            {/* Tab Content - Elevated Card Style */}
+            <div className="bg-white rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] ring-1 ring-slate-100 overflow-hidden min-h-[600px]">
                 {activeTab === 'profile' && (
-                    <>
-                        <div className="p-6 border-b border-slate-100">
-                            <h2 className="text-lg font-bold text-slate-700">Profile Settings</h2>
-                            <p className="text-sm text-slate-500">Update your personal information and password.</p>
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
+                            <h2 className="text-xl font-bold text-slate-800">Profile Configuration</h2>
+                            <p className="text-sm text-slate-500 mt-1">Update your personal information and account security.</p>
                         </div>
 
-                        <div className="p-6">
-                            <form onSubmit={handleSubmit} className="space-y-6">
+                        <div className="p-8">
+                            <form onSubmit={handleSubmit} className="space-y-6 max-w-2xl">
                                 {/* Email - Read Only */}
                                 <div>
-                                    <label className="block text-sm font-semibold text-slate-700 mb-2">Email Address</label>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Email Address</label>
                                     <input
                                         type="email"
                                         value={user?.email || ''}
                                         disabled
-                                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-500 cursor-not-allowed"
+                                        className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-500 cursor-not-allowed shadow-sm"
                                     />
-                                    <p className="text-xs text-slate-400 mt-1">Email address cannot be changed.</p>
+                                    <p className="text-xs text-slate-400 mt-2"><i className="fa-solid fa-lock mr-1"></i> Email address is permanent and cannot be modified.</p>
                                 </div>
 
                                 {/* Name */}
                                 <div>
-                                    <label className="block text-sm font-semibold text-slate-700 mb-2">Full Name</label>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Full Name</label>
                                     <input
                                         type="text"
                                         value={name}
                                         onChange={(e) => setName(e.target.value)}
                                         required
-                                        className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
+                                        className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition shadow-sm"
                                     />
                                 </div>
 
-                                <hr className="border-slate-100 my-6" />
+                                <hr className="border-slate-100 my-8" />
 
                                 <div>
-                                    <h3 className="text-md font-bold text-slate-700 mb-4">Change Password</h3>
+                                    <h3 className="text-lg font-bold text-slate-800 mb-5 flex items-center gap-2">
+                                        <i className="fa-solid fa-shield-halved text-blue-500"></i> Change Password
+                                    </h3>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                         <div>
-                                            <label className="block text-sm font-semibold text-slate-700 mb-2">New Password (Optional)</label>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">New Password (Optional)</label>
                                             <input
                                                 type="password"
                                                 value={password}
                                                 onChange={(e) => setPassword(e.target.value)}
                                                 placeholder="Min. 6 characters"
-                                                className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
+                                                className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition shadow-sm"
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Confirm New Password</label>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Confirm New Password</label>
                                             <input
                                                 type="password"
                                                 value={confirmPassword}
                                                 onChange={(e) => setConfirmPassword(e.target.value)}
                                                 placeholder="Re-enter new password"
-                                                className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
+                                                className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition shadow-sm"
                                             />
                                         </div>
                                     </div>
                                 </div>
 
-                                <div className="pt-4 flex justify-end">
+                                <div className="pt-6 flex justify-end border-t border-slate-100 mt-8">
                                     <button
                                         type="submit"
                                         disabled={loading}
-                                        className={`bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg font-bold shadow-md transition flex items-center gap-2 ${loading ? 'opacity-70 cursor-wait' : ''}`}
+                                        className={`bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-blue-500/30 transition-all flex items-center gap-2 ${loading ? 'opacity-70 cursor-wait' : 'hover:-translate-y-0.5'}`}
                                     >
                                         {loading ? (
                                             <>
@@ -181,41 +186,61 @@ const Settings = () => {
                                 </div>
                             </form>
                         </div>
-                    </>
+                    </div>
                 )}
 
                 {activeTab === 'meta' && (
-                    <>
-                        <div className="p-6 border-b border-slate-100">
-                            <h2 className="text-lg font-bold text-slate-700">Meta Lead Sync</h2>
-                            <p className="text-sm text-slate-500">Connect Facebook to automatically sync your Lead Ads.</p>
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
+                            <h2 className="text-xl font-bold text-slate-800">Meta Lead Sync</h2>
+                            <p className="text-sm text-slate-500 mt-1">Connect your Facebook pages to automatically sync incoming Lead Ads.</p>
                         </div>
-                        <div className="p-6">
+                        <div className="p-8">
                             <MetaConfigSection />
                         </div>
-                    </>
+                    </div>
                 )}
 
                 {activeTab === 'customFields' && (
-                    <div className="p-6">
-                        <CustomFieldsSettings />
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
+                            <h2 className="text-xl font-bold text-slate-800">Custom Fields</h2>
+                            <p className="text-sm text-slate-500 mt-1">Define additional data fields to capture for your leads.</p>
+                        </div>
+                        <div className="p-8 bg-slate-50 min-h-[500px]">
+                            <CustomFieldsSettings />
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'tags' && (
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
+                            <h2 className="text-xl font-bold text-slate-800">Lead Tags</h2>
+                            <p className="text-sm text-slate-500 mt-1">Create and manage color-coded tags for organizing leads.</p>
+                        </div>
+                        <div className="p-8 bg-slate-50 min-h-[500px]">
+                            <TagsSettings />
+                        </div>
                     </div>
                 )}
 
                 {activeTab === 'sheetSync' && (
-                    <SheetSyncSettings />
+                    <div className="animate-in fade-in duration-300">
+                        <SheetSyncSettings />
+                    </div>
                 )}
 
                 {activeTab === 'billing' && (
-                    <>
-                        <div className="p-6 border-b border-slate-100">
-                            <h2 className="text-lg font-bold text-slate-700">Billing & Subscription</h2>
-                            <p className="text-sm text-slate-500">Manage your subscription plan and billing details.</p>
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
+                            <h2 className="text-xl font-bold text-slate-800">Billing & Subscription</h2>
+                            <p className="text-sm text-slate-500 mt-1">Manage your subscription plan and billing details.</p>
                         </div>
-                        <div className="p-6">
+                        <div className="p-8">
                             <BillingSettings />
                         </div>
-                    </>
+                    </div>
                 )}
             </div>
         </div>

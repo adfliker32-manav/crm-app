@@ -9,6 +9,7 @@ import LeadDetailsModal from '../components/Dashboard/LeadDetailsModal';
 import NoteModal from '../components/Dashboard/NoteModal';
 import DuplicateLeadsModal from '../components/Dashboard/DuplicateLeadsModal';
 import ImportCSVModal from '../components/Dashboard/ImportCSVModal';
+import ExportCSVModal from '../components/Dashboard/ExportCSVModal';
 import Papa from 'papaparse';
 import { useNotification } from '../context/NotificationContext';
 import { useConfirm } from '../context/ConfirmContext';
@@ -26,6 +27,7 @@ const Leads = () => {
     const [loading, setLoading] = useState(true);
     const [leads, setLeads] = useState([]);
     const [stages, setStages] = useState([]);
+    const [userTags, setUserTags] = useState([]);
     const [searchQuery, setSearchQuery] = useState("");
 
     // Filter & Sort State
@@ -48,18 +50,21 @@ const Leads = () => {
     const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
     const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+    const [isExportModalOpen, setIsExportModalOpen] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [selectedLead, setSelectedLead] = useState(null);
 
     const fetchData = useCallback(async () => {
         try {
-            const [leadsRes, stagesRes] = await Promise.all([
+            const [leadsRes, stagesRes, tagsRes] = await Promise.all([
                 api.get('/leads'),
-                api.get('/stages')
+                api.get('/stages'),
+                api.get('/tags')
             ]);
 
             const fetchedLeads = leadsRes.data;
             let fetchedStages = stagesRes.data;
+            let fetchedTags = tagsRes.data;
 
             if (fetchedStages.length === 0) {
                 fetchedStages = [{ _id: 'new', name: 'New' }];
@@ -67,6 +72,7 @@ const Leads = () => {
 
             setLeads(fetchedLeads);
             setStages(fetchedStages);
+            setUserTags(fetchedTags);
         } catch (error) {
             console.error("Error loading data", error);
             showError("Failed to load leads data");
@@ -200,31 +206,8 @@ const Leads = () => {
     };
 
     const handleExportCSV = () => {
-        if (!filteredLeads || filteredLeads.length === 0) {
-            return showError("No leads to export in the current view.");
-        }
-
-        const dataToExport = filteredLeads.map(lead => ({
-            Name: lead.name || '',
-            Phone: lead.phone || '',
-            Email: lead.email || '',
-            Source: lead.source || 'Manual',
-            Status: lead.status || 'New',
-            CreatedAt: new Date(lead.createdAt || lead.date).toLocaleString(),
-            Notes: lead.notes?.length || 0,
-            CustomFields: Object.keys(lead.customData || {}).length > 0 ? JSON.stringify(lead.customData) : ''
-        }));
-
-        const csv = Papa.unparse(dataToExport);
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.setAttribute("href", url);
-        link.setAttribute("download", `Leads_Export_${new Date().toISOString().split('T')[0]}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
         setIsSettingsOpen(false);
+        setIsExportModalOpen(true);
     };
 
     // ---- Stage Rename (Edit) ----
@@ -347,6 +330,17 @@ const Leads = () => {
         } catch (err) {
             console.error("Failed to update leads", err);
             showError("Failed to update leads");
+        }
+    };
+
+    const handleBulkTag = async (ids, tagNamesArray) => {
+        try {
+            await api.post('/leads/bulk-tags', { leadIds: ids, tags: tagNamesArray });
+            showSuccess(`${ids.length} leads tagged successfully`);
+            fetchData();
+        } catch (err) {
+            console.error("Failed to tag leads", err);
+            showError("Failed to apply tags");
         }
     };
 
@@ -674,6 +668,7 @@ const Leads = () => {
                         <LeadsTable
                             leads={filteredLeads}
                             stages={stages}
+                            userTags={userTags}
                             searchQuery={searchQuery}
                             onEdit={handleEditLead}
                             onDelete={handleDeleteLead}
@@ -682,6 +677,7 @@ const Leads = () => {
                             onNoteClick={handleNoteClick}
                             onBulkDelete={handleBulkDelete}
                             onBulkStatusUpdate={handleBulkStatusUpdate}
+                            onBulkTag={handleBulkTag}
                             onRefresh={fetchData}
                         />
                     </div>
@@ -705,6 +701,7 @@ const Leads = () => {
                 isOpen={isEditLeadModalOpen}
                 onClose={() => setIsEditLeadModalOpen(false)}
                 lead={selectedLead}
+                userTags={userTags}
                 onSuccess={fetchData}
             />
 
@@ -712,6 +709,7 @@ const Leads = () => {
                 isOpen={isLeadDetailsModalOpen}
                 onClose={() => setIsLeadDetailsModalOpen(false)}
                 lead={selectedLead}
+                userTags={userTags}
                 onSuccess={fetchData}
             />
 
@@ -735,6 +733,14 @@ const Leads = () => {
                 onClose={() => setIsImportModalOpen(false)}
                 onSuccess={fetchData}
                 stages={stages}
+            />
+
+            <ExportCSVModal
+                isOpen={isExportModalOpen}
+                onClose={() => setIsExportModalOpen(false)}
+                leads={leads}
+                stages={stages}
+                userTags={userTags}
             />
         </div>
     );

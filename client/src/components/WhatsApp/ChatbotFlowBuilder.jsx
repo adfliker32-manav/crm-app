@@ -1,23 +1,101 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+    ReactFlow,
+    Controls,
+    Background,
+    applyNodeChanges,
+    applyEdgeChanges,
+    addEdge,
+    Handle,
+    Position,
+    ReactFlowProvider
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 
-const ChatbotFlowBuilder = ({ flowId, onBack }) => {
+// --- Custom Node Implementation ---
+const CompactFlowNode = ({ data, id, selected }) => {
+    const type = data.blockType || 'message';
+    const icon = {
+        message: '💬', media: '🖼️', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀'
+    }[type] || '💬';
+
+    return (
+        <div className={`w-64 bg-white rounded-xl shadow-sm border-2 transition-all ${selected ? 'border-teal-500 shadow-md ring-2 ring-teal-500/20' : 'border-slate-200 hover:border-teal-300'}`}>
+            {/* Input Handle */}
+            {type !== 'start' && (
+                <Handle type="target" position={Position.Left} className="w-4 h-4 bg-slate-300 border-2 border-white -ml-2" />
+            )}
+            
+            {/* Node Header */}
+            <div className="bg-slate-50 border-b border-slate-100 px-3 py-2 rounded-t-xl flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                    <span className="text-sm">{icon}</span>
+                    <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{type}</span>
+                </div>
+            </div>
+
+            {/* Node Body */}
+            <div className="p-3">
+                <p className="text-sm text-slate-600 mb-2 line-clamp-3 whitespace-pre-wrap leading-snug">
+                    {data.text || `Configure ${type} block...`}
+                </p>
+
+                {/* Content Previews */}
+                {type === 'media' && data.mediaUrl && (
+                    <div className="h-24 bg-slate-100 rounded-lg border border-slate-200 flex items-center justify-center overflow-hidden mb-2">
+                        <img src={data.mediaUrl} alt="media" className="object-cover w-full h-full opacity-80" />
+                    </div>
+                )}
+
+                {data.buttons && data.buttons.length > 0 && (
+                    <div className="mt-2 space-y-1.5 flex flex-col">
+                        {data.buttons.map((btn, i) => (
+                            <div key={i} className="relative w-full bg-blue-50/50 border border-blue-100 text-blue-700 py-1.5 px-3 rounded-md text-[11px] font-semibold text-center truncate">
+                                {btn.text}
+                                <Handle 
+                                    type="source" 
+                                    position={Position.Right} 
+                                    id={btn.id}
+                                    style={{ right: -8, top: '50%', transform: 'translateY(-50%)', width: '12px', height: '12px' }}
+                                    className="bg-blue-500 border-2 border-white absolute cursor-crosshair"
+                                />
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Output Handle */}
+            {type !== 'handoff' && (!data.buttons || data.buttons.length === 0) && (
+                <Handle type="source" position={Position.Right} className="w-4 h-4 bg-teal-500 border-2 border-white -mr-2" />
+            )}
+        </div>
+    );
+};
+
+// --- Main Component ---
+const FlowBuilder = ({ flowId, onBack }) => {
     const { showSuccess, showError } = useNotification();
-    const canvasRef = useRef(null);
-    const [flow, setFlow] = useState(null);
+    const [flow, setFlow] = useState({ name: 'New Flow', description: '', isActive: false });
     const [nodes, setNodes] = useState([]);
     const [edges, setEdges] = useState([]);
-    const [selectedNode, setSelectedNode] = useState(null);
-    const [draggingNode, setDraggingNode] = useState(null);
-    const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-    const [connecting, setConnecting] = useState(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [zoom, setZoom] = useState(0.8);
-    const [pan, setPan] = useState({ x: 50, y: 50 });
+    const [selectedNode, setSelectedNode] = useState(null);
 
-    // Content blocks matching reference image
+    const nodeTypes = useMemo(() => ({
+        message: CompactFlowNode,
+        media: CompactFlowNode,
+        list: CompactFlowNode,
+        product: CompactFlowNode,
+        products: CompactFlowNode,
+        template: CompactFlowNode,
+        handoff: CompactFlowNode,
+        start: CompactFlowNode // Fallback for old custom types
+    }), []);
+
     const contentBlocks = [
         { type: 'message', icon: '💬', label: 'Text + Buttons', desc: 'Send text with button options' },
         { type: 'media', icon: '🖼️', label: 'Media', desc: 'Send image, video, or file' },
@@ -32,23 +110,15 @@ const ChatbotFlowBuilder = ({ flowId, onBack }) => {
         if (flowId && flowId !== 'new') {
             fetchFlow();
         } else {
-            setFlow({
-                name: 'Ecommerce',
-                description: '',
-                triggerType: 'keyword',
-                triggerKeywords: ['shop', 'buy'],
-                isActive: false
-            });
+            // New Flow defaults
             setNodes([{
                 id: 'start-1',
                 type: 'message',
-                position: { x: 100, y: 100 },
+                position: { x: 250, y: 100 },
                 data: {
+                    blockType: 'message',
                     text: 'Welcome! 👋\n\nHow can I help you today?',
-                    buttons: [
-                        { text: 'Browse Products', id: 'browse' },
-                        { text: 'Track Order', id: 'track' }
-                    ]
+                    buttons: [{ text: 'Browse Products', id: 'browse' }, { text: 'Track Order', id: 'track' }]
                 }
             }]);
             setEdges([]);
@@ -60,7 +130,17 @@ const ChatbotFlowBuilder = ({ flowId, onBack }) => {
         try {
             const res = await api.get(`/chatbot/flows/${flowId}`);
             setFlow(res.data.flow);
-            setNodes(res.data.flow.nodes || []);
+            
+            // Map existing DB nodes to React Flow format safely
+            const dbNodes = res.data.flow.nodes || [];
+            const mappedNodes = dbNodes.map(n => ({
+                ...n,
+                // Ensure custom DB node types map to our registered types, passing the original type to data
+                type: n.type,
+                data: { ...n.data, blockType: n.type }
+            }));
+            
+            setNodes(mappedNodes);
             setEdges(res.data.flow.edges || []);
         } catch (error) {
             showError('Failed to load flow');
@@ -94,6 +174,43 @@ const ChatbotFlowBuilder = ({ flowId, onBack }) => {
         }
     };
 
+    const onNodesChange = useCallback((changes) => {
+        setNodes((nds) => applyNodeChanges(changes, nds));
+    }, []);
+
+    const onEdgesChange = useCallback((changes) => {
+        setEdges((eds) => applyEdgeChanges(changes, eds));
+    }, []);
+
+    const onConnect = useCallback((connection) => {
+        setEdges((eds) => addEdge(connection, eds));
+        
+        // Map standard DB requirement -> `nextNodeId` on source node data OR specific button
+        setNodes((nds) => nds.map(n => {
+            if (n.id === connection.source) {
+                if (connection.sourceHandle && n.data.buttons) {
+                    // Edge originated from a specific button handle
+                    const newButtons = n.data.buttons.map(btn => 
+                        btn.id === connection.sourceHandle ? { ...btn, nextNodeId: connection.target } : btn
+                    );
+                    return { ...n, data: { ...n.data, buttons: newButtons } };
+                } else {
+                    // Edge originated from the general node handle
+                    return { ...n, data: { ...n.data, nextNodeId: connection.target } };
+                }
+            }
+            return n;
+        }));
+    }, []);
+
+    const onNodeClick = useCallback((_, node) => {
+        setSelectedNode(node);
+    }, []);
+
+    const onPaneClick = useCallback(() => {
+        setSelectedNode(null);
+    }, []);
+
     const addNode = (type) => {
         const templates = {
             message: { text: 'Hello! How can I help?', buttons: [{ text: 'Continue', id: 'next' }] },
@@ -105,220 +222,46 @@ const ChatbotFlowBuilder = ({ flowId, onBack }) => {
 
         const newNode = {
             id: `${type}-${Date.now()}`,
-            type,
-            position: { x: 150 + (nodes.length * 40), y: 150 + (nodes.length * 40) },
-            data: templates[type] || { text: `New ${type}` }
+            type: type,
+            position: { x: 250 + (nodes.length * 50), y: 150 + (nodes.length * 50) },
+            data: { ...templates[type], blockType: type }
         };
-        setNodes([...nodes, newNode]);
+        
+        setNodes((nds) => [...nds, newNode]);
         setSelectedNode(newNode);
     };
 
-    const handleNodeMouseDown = (e, node) => {
-        e.stopPropagation();
-        setSelectedNode(node);
-        setDraggingNode(node);
-        const rect = e.currentTarget.getBoundingClientRect();
-        setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const updateSelectedNodeData = (updates) => {
+        if (!selectedNode) return;
+        setNodes((nds) => nds.map(n => {
+            if (n.id === selectedNode.id) {
+                const updatedNode = { ...n, data: { ...n.data, ...updates } };
+                setSelectedNode(updatedNode);
+                return updatedNode;
+            }
+            return n;
+        }));
     };
 
-    const handleMouseMove = (e) => {
-        if (draggingNode && canvasRef.current) {
-            const rect = canvasRef.current.getBoundingClientRect();
-            const newX = (e.clientX - rect.left - dragOffset.x - pan.x) / zoom;
-            const newY = (e.clientY - rect.top - dragOffset.y - pan.y) / zoom;
-
-            setNodes(nodes.map(n =>
-                n.id === draggingNode.id ? { ...n, position: { x: Math.max(0, newX), y: Math.max(0, newY) } } : n
-            ));
-        }
-    };
-
-    const handleMouseUp = () => setDraggingNode(null);
-
-    const deleteNode = (nodeId) => {
-        if (window.confirm('Delete this node?')) {
-            setNodes(nodes.filter(n => n.id !== nodeId));
-            setEdges(edges.filter(e => e.source !== nodeId && e.target !== nodeId));
-            setSelectedNode(null);
-        }
-    };
-
-    const updateNodeData = (nodeId, data) => {
-        setNodes(nodes.map(n => n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n));
-    };
-
-    const startConnection = (nodeId) => setConnecting(nodeId);
-
-    const completeConnection = (targetNodeId) => {
-        if (connecting && connecting !== targetNodeId) {
-            setEdges([...edges, { id: `edge-${Date.now()}`, source: connecting, target: targetNodeId }]);
-            setNodes(nodes.map(n => n.id === connecting ? { ...n, data: { ...n.data, nextNodeId: targetNodeId } } : n));
-        }
-        setConnecting(null);
-    };
-
-    const deleteEdge = (edgeId) => setEdges(edges.filter(e => e.id !== edgeId));
-
-    // Phone mockup node renderer
-    const PhoneMockup = ({ node, isSelected }) => {
-        const { type, data } = node;
-
-        return (
-            <div className={`relative transition-all duration-200 ${isSelected ? 'scale-105' : ''}`}>
-                {/* iPhone Frame */}
-                <div className="w-64 h-[480px] bg-gradient-to-b from-slate-800 to-slate-900 rounded-[2.5rem] p-3 shadow-2xl border-8 border-slate-800">
-                    {/* Notch */}
-                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-slate-900 rounded-b-2xl"></div>
-
-                    {/* Screen */}
-                    <div className="w-full h-full bg-gradient-to-b from-slate-100 to-white rounded-[1.8rem] overflow-hidden relative">
-                        {/* WhatsApp Header */}
-                        <div className="bg-[#075e54] text-white px-4 py-3 flex items-center gap-3">
-                            <div className="w-8 h-8 bg-white/20 rounded-full"></div>
-                            <div className="flex-1">
-                                <div className="font-semibold text-sm">Customer</div>
-                                <div className="text-xs opacity-75">online</div>
-                            </div>
-                        </div>
-
-                        {/* Messages */}
-                        <div className="p-3 space-y-2 h-[calc(100%-60px)] overflow-y-auto bg-[#ece5dd]" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cpath d=\'M0 0h100v100H0z\' fill=\'%23ece5dd\'/%3E%3Cpath d=\'M20 20h60v60H20z\' fill=\'%23fff\' opacity=\'.05\'/%3E%3C/svg%3E")' }}>
-                            {/* Bot Message */}
-                            <div className="flex justify-start">
-                                <div className="bg-white rounded-lg rounded-tl-none p-3 max-w-[85%] shadow-sm">
-                                    <p className="text-sm text-slate-800 whitespace-pre-wrap">{data.text}</p>
-
-                                    {/* Media */}
-                                    {type === 'media' && data.mediaUrl && (
-                                        <img src={data.mediaUrl} alt="" className="mt-2 rounded-lg w-full" />
-                                    )}
-
-                                    {/* Product */}
-                                    {type === 'product' && (
-                                        <div className="mt-2 border-t pt-2">
-                                            {data.image && <img src={data.image} alt="" className="rounded-lg mb-2" />}
-                                            <div className="font-semibold text-sm">{data.text}</div>
-                                            <div className="text-green-600 font-bold">{data.price}</div>
-                                        </div>
-                                    )}
-
-                                    {/* Buttons */}
-                                    {data.buttons && data.buttons.length > 0 && (
-                                        <div className="mt-2 space-y-1">
-                                            {data.buttons.map((btn, i) => (
-                                                <button key={i} className="w-full bg-blue-50 hover:bg-blue-100 text-blue-600 py-2 px-3 rounded-lg text-sm font-medium transition">
-                                                    {btn.text}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    {/* List */}
-                                    {type === 'list' && data.items && (
-                                        <div className="mt-2 space-y-1">
-                                            {data.items.map((item, i) => (
-                                                <div key={i} className="bg-slate-50 p-2 rounded text-sm">{item}</div>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    <div className="text-[10px] text-slate-400 mt-1 text-right">12:00 PM</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Connection Handles */}
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <button
-                        onClick={(e) => { e.stopPropagation(); completeConnection(node.id); }}
-                        className="w-6 h-6 bg-blue-500 hover:bg-blue-600 rounded-full shadow-lg flex items-center justify-center text-white transition"
-                    >
-                        <i className="fa-solid fa-arrow-down text-xs"></i>
-                    </button>
-                </div>
-                <div className="absolute -bottom-3 left-1/2 -translate-x-1/2">
-                    <button
-                        onClick={(e) => { e.stopPropagation(); startConnection(node.id); }}
-                        className={`w-6 h-6 rounded-full shadow-lg flex items-center justify-center text-white transition ${connecting === node.id ? 'bg-yellow-500 animate-pulse' : 'bg-green-500 hover:bg-green-600'
-                            }`}
-                    >
-                        <i className="fa-solid fa-arrow-down text-xs"></i>
-                    </button>
-                </div>
-
-                {/* Delete Button */}
-                <button
-                    onClick={(e) => { e.stopPropagation(); deleteNode(node.id); }}
-                    className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 hover:bg-red-600 rounded-full shadow-lg flex items-center justify-center text-white transition"
-                >
-                    <i className="fa-solid fa-times text-xs"></i>
-                </button>
-
-                {/* Node Type Badge */}
-                <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-sm px-2 py-1 rounded-full text-xs font-semibold text-slate-700 shadow">
-                    {contentBlocks.find(b => b.type === type)?.icon} {type}
-                </div>
-            </div>
-        );
-    };
-
-    // Render bezier connections
-    const renderEdges = () => {
-        return edges.map(edge => {
-            const sourceNode = nodes.find(n => n.id === edge.source);
-            const targetNode = nodes.find(n => n.id === edge.target);
-            if (!sourceNode || !targetNode) return null;
-
-            const startX = sourceNode.position.x * zoom + pan.x + (128 * zoom);
-            const startY = sourceNode.position.y * zoom + pan.y + (480 * zoom);
-            const endX = targetNode.position.x * zoom + pan.x + (128 * zoom);
-            const endY = targetNode.position.y * zoom + pan.y;
-
-            const controlY1 = startY + Math.abs(endY - startY) * 0.5;
-            const controlY2 = endY - Math.abs(endY - startY) * 0.5;
-
-            return (
-                <g key={edge.id}>
-                    <path
-                        d={`M ${startX} ${startY} C ${startX} ${controlY1}, ${endX} ${controlY2}, ${endX} ${endY}`}
-                        stroke="#3b82f6"
-                        strokeWidth={3}
-                        fill="none"
-                        markerEnd="url(#arrowhead)"
-                        className="hover:stroke-blue-600 cursor-pointer transition"
-                    />
-                    <circle
-                        cx={(startX + endX) / 2}
-                        cy={(startY + endY) / 2}
-                        r={8}
-                        fill="white"
-                        stroke="#3b82f6"
-                        strokeWidth={2}
-                        className="cursor-pointer hover:fill-red-100"
-                        onClick={() => deleteEdge(edge.id)}
-                    />
-                </g>
-            );
-        });
+    const deleteSelectedNode = () => {
+        if (!selectedNode) return;
+        setNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
+        setEdges((eds) => eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
+        setSelectedNode(null);
     };
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-screen bg-white">
-                <div className="text-center">
-                    <div className="w-16 h-16 border-4 border-teal-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                    <p className="text-slate-600 font-medium">Loading flow...</p>
-                </div>
+            <div className="flex items-center justify-center h-full bg-slate-50">
+                <div className="w-16 h-16 border-4 border-teal-600 border-t-transparent rounded-full animate-spin"></div>
             </div>
         );
     }
 
     return (
-        <div className="h-screen flex flex-col bg-white">
-            {/* Header */}
-            <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+        <div className="h-full flex flex-col bg-white">
+            {/* Header Toolbar */}
+            <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
                 <div className="flex items-center gap-4">
                     <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg transition">
                         <i className="fa-solid fa-arrow-left text-slate-600"></i>
@@ -327,43 +270,38 @@ const ChatbotFlowBuilder = ({ flowId, onBack }) => {
                         type="text"
                         value={flow.name}
                         onChange={(e) => setFlow({ ...flow, name: e.target.value })}
-                        className="text-xl font-bold text-slate-800 border-none focus:ring-2 focus:ring-teal-500 rounded px-2 py-1"
+                        className="text-xl font-bold text-slate-800 border-none focus:ring-2 focus:ring-teal-500 rounded px-2 py-1 w-64"
+                        placeholder="Flow Name"
                     />
-                    <button className="text-slate-400 hover:text-slate-600">
-                        <i className="fa-solid fa-pen text-sm"></i>
-                    </button>
                 </div>
                 <div className="flex items-center gap-3">
-                    <button className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50">
-                        Fallback & Intents
-                    </button>
                     <button
                         onClick={handleSave}
                         disabled={saving}
-                        className="px-6 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition disabled:opacity-50"
+                        className="px-6 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition disabled:opacity-50 shadow-sm"
                     >
-                        {saving ? 'Saving...' : 'Save Changes'}
+                        {saving ? 'Saving...' : 'Save Flow'}
                     </button>
                 </div>
             </div>
 
             <div className="flex-1 flex overflow-hidden">
-                {/* Left Sidebar - Content Blocks */}
-                <div className="w-64 bg-slate-50 border-r border-slate-200 overflow-y-auto">
+                {/* Left Sidebar - Blocks Array */}
+                <div className="w-72 bg-slate-50 border-r border-slate-200 overflow-y-auto shadow-sm z-10 relative">
                     <div className="p-4">
-                        <h3 className="text-sm font-bold text-slate-700 mb-4">Content Block</h3>
-                        <div className="space-y-2">
+                        <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-4">Content Blocks</h3>
+                        <div className="space-y-3">
                             {contentBlocks.map(block => (
                                 <button
                                     key={block.type}
                                     onClick={() => addNode(block.type)}
-                                    className="w-full p-3 bg-white hover:bg-slate-100 rounded-lg text-left transition border border-slate-200 hover:border-teal-300 group"
+                                    className="w-full p-4 bg-white hover:bg-teal-50 rounded-xl text-left transition border border-slate-200 hover:border-teal-400 shadow-sm group"
                                 >
-                                    <div className="flex items-center gap-3">
-                                        <div className="text-2xl">{block.icon}</div>
+                                    <div className="flex items-center gap-4">
+                                        <div className="text-3xl group-hover:scale-110 transition-transform">{block.icon}</div>
                                         <div className="flex-1 min-w-0">
-                                            <div className="font-medium text-sm text-slate-800 truncate">{block.label}</div>
-                                            <div className="text-xs text-slate-500 truncate">{block.desc}</div>
+                                            <div className="font-bold text-sm text-slate-800">{block.label}</div>
+                                            <div className="text-xs text-slate-500 line-clamp-2 leading-snug mt-1">{block.desc}</div>
                                         </div>
                                     </div>
                                 </button>
@@ -372,112 +310,90 @@ const ChatbotFlowBuilder = ({ flowId, onBack }) => {
                     </div>
                 </div>
 
-                {/* Canvas */}
-                <div className="flex-1 relative bg-white overflow-hidden">
-                    {/* Zoom Controls */}
-                    <div className="absolute top-4 right-4 z-20 bg-white rounded-lg shadow-lg border border-slate-200 flex flex-col">
-                        <button onClick={() => setZoom(z => Math.min(z + 0.1, 1.5))} className="p-3 hover:bg-slate-50 border-b">
-                            <i className="fa-solid fa-plus text-slate-600"></i>
-                        </button>
-                        <button onClick={() => setZoom(z => Math.max(z - 0.1, 0.3))} className="p-3 hover:bg-slate-50 border-b">
-                            <i className="fa-solid fa-minus text-slate-600"></i>
-                        </button>
-                        <button onClick={() => { setZoom(0.8); setPan({ x: 50, y: 50 }); }} className="p-3 hover:bg-slate-50 border-b">
-                            <i className="fa-solid fa-expand text-slate-600"></i>
-                        </button>
-                        <button className="p-3 hover:bg-slate-50">
-                            <i className="fa-solid fa-download text-slate-600"></i>
-                        </button>
-                    </div>
-
-                    <div
-                        ref={canvasRef}
-                        className="w-full h-full overflow-auto"
-                        onMouseMove={handleMouseMove}
-                        onMouseUp={handleMouseUp}
-                        onClick={() => setSelectedNode(null)}
+                {/* Main React Flow Canvas */}
+                <div className="flex-1 relative bg-slate-50">
+                    <ReactFlow
+                        nodes={nodes}
+                        edges={edges}
+                        nodeTypes={nodeTypes}
+                        onNodesChange={onNodesChange}
+                        onEdgesChange={onEdgesChange}
+                        onConnect={onConnect}
+                        onNodeClick={onNodeClick}
+                        onPaneClick={onPaneClick}
+                        fitView
+                        className="bg-slate-100"
+                        defaultEdgeOptions={{ type: 'smoothstep', animated: true, style: { stroke: '#0d9488', strokeWidth: 2.5 } }}
                     >
-                        <svg className="absolute inset-0 pointer-events-none" style={{ width: '100%', height: '100%' }}>
-                            <defs>
-                                <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-                                    <polygon points="0 0, 10 3, 0 6" fill="#3b82f6" />
-                                </marker>
-                            </defs>
-                            <g className="pointer-events-auto">{renderEdges()}</g>
-                        </svg>
-
-                        <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }} className="relative">
-                            {nodes.map(node => (
-                                <div
-                                    key={node.id}
-                                    className="absolute cursor-move"
-                                    style={{ left: node.position.x, top: node.position.y }}
-                                    onMouseDown={(e) => handleNodeMouseDown(e, node)}
-                                >
-                                    <PhoneMockup node={node} isSelected={selectedNode?.id === node.id} />
-                                </div>
-                            ))}
-                        </div>
-
-                        {nodes.length === 0 && (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="text-center">
-                                    <div className="text-6xl mb-4">📱</div>
-                                    <h3 className="text-xl font-bold text-slate-700 mb-2">Start Building Your Flow</h3>
-                                    <p className="text-slate-500">Click content blocks from the left to add messages</p>
-                                </div>
-                            </div>
-                        )}
-
-                        {connecting && (
-                            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-yellow-400 text-yellow-900 px-6 py-3 rounded-full shadow-lg font-medium animate-bounce z-30">
-                                Click a node to connect
-                            </div>
-                        )}
-                    </div>
+                        <Background color="#94a3b8" gap={20} size={1.5} />
+                        <Controls className="bg-white shadow-lg border border-slate-200 rounded-lg overflow-hidden flex-col" />
+                    </ReactFlow>
                 </div>
 
-                {/* Right Sidebar - Properties */}
+                {/* Right Sidebar - Properties Editor */}
                 {selectedNode && (
-                    <div className="w-80 bg-white border-l border-slate-200 overflow-y-auto p-6">
-                        <h3 className="text-lg font-bold text-slate-800 mb-4">Edit Message</h3>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">Message Text</label>
-                                <textarea
-                                    value={selectedNode.data.text || ''}
-                                    onChange={(e) => updateNodeData(selectedNode.id, { text: e.target.value })}
-                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
-                                    rows="4"
-                                />
+                    <div className="w-80 bg-white border-l border-slate-200 overflow-y-auto shadow-lg z-10">
+                        <div className="p-6">
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-lg font-bold text-slate-800">Edit Node</h3>
+                                <button onClick={deleteSelectedNode} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition" title="Delete Node">
+                                    <i className="fa-solid fa-trash"></i>
+                                </button>
                             </div>
-
-                            {selectedNode.type === 'message' && (
+                            
+                            <div className="space-y-5">
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-2">Buttons</label>
-                                    {selectedNode.data.buttons?.map((btn, i) => (
-                                        <input
-                                            key={i}
-                                            value={btn.text}
-                                            onChange={(e) => {
-                                                const newButtons = [...selectedNode.data.buttons];
-                                                newButtons[i].text = e.target.value;
-                                                updateNodeData(selectedNode.id, { buttons: newButtons });
-                                            }}
-                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-2"
-                                        />
-                                    ))}
-                                    <button
-                                        onClick={() => {
-                                            const newButtons = [...(selectedNode.data.buttons || []), { text: 'New Button', id: `btn-${Date.now()}` }];
-                                            updateNodeData(selectedNode.id, { buttons: newButtons });
-                                        }}
-                                        className="text-sm text-teal-600 hover:text-teal-700 font-medium"
-                                    >
-                                        + Add Button
-                                    </button>
+                                    <label className="block text-sm font-semibold text-slate-700 mb-2">Message Text</label>
+                                    <textarea
+                                        value={selectedNode.data.text || ''}
+                                        onChange={(e) => updateSelectedNodeData({ text: e.target.value })}
+                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500 shadow-sm bg-slate-50"
+                                        rows="4"
+                                        placeholder="Type your message here..."
+                                    />
                                 </div>
-                            )}
+
+                                {selectedNode.data.blockType === 'message' && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                        <label className="block text-sm font-semibold text-slate-700 mb-3">Interactive Buttons</label>
+                                        {selectedNode.data.buttons?.map((btn, i) => (
+                                            <div key={i} className="flex gap-2 mb-2">
+                                                <input
+                                                    value={btn.text}
+                                                    onChange={(e) => {
+                                                        const newButtons = [...selectedNode.data.buttons];
+                                                        newButtons[i].text = e.target.value;
+                                                        updateSelectedNodeData({ buttons: newButtons });
+                                                    }}
+                                                    className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                    placeholder="Button Label"
+                                                />
+                                                <button 
+                                                    onClick={() => {
+                                                        const newButtons = selectedNode.data.buttons.filter((_, idx) => idx !== i);
+                                                        updateSelectedNodeData({ buttons: newButtons });
+                                                    }}
+                                                    className="w-10 h-10 flex items-center justify-center bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition"
+                                                >
+                                                    <i className="fa-solid fa-times"></i>
+                                                </button>
+                                            </div>
+                                        ))}
+                                        {(!selectedNode.data.buttons || selectedNode.data.buttons.length < 3) && (
+                                            <button
+                                                onClick={() => {
+                                                    const newButtons = [...(selectedNode.data.buttons || []), { text: 'New Button', id: `btn-${Date.now()}` }];
+                                                    updateSelectedNodeData({ buttons: newButtons });
+                                                }}
+                                                className="w-full mt-2 py-2 border-2 border-dashed border-teal-300 text-teal-600 hover:bg-teal-50 hover:border-teal-400 rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
+                                            >
+                                                <i className="fa-solid fa-plus"></i> Add Button
+                                            </button>
+                                        )}
+                                        <p className="text-xs text-slate-400 mt-2 text-center">Max 3 buttons allowed by WhatsApp</p>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
                 )}
@@ -486,4 +402,10 @@ const ChatbotFlowBuilder = ({ flowId, onBack }) => {
     );
 };
 
-export default ChatbotFlowBuilder;
+export default function ChatbotFlowBuilderWrapper(props) {
+    return (
+        <ReactFlowProvider>
+            <FlowBuilder {...props} />
+        </ReactFlowProvider>
+    );
+}

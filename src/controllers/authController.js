@@ -31,9 +31,9 @@ exports.register = async (req, res) => {
             console.log("Validation failed: Email required");
             return res.status(400).json({ message: "Email is required" });
         }
-        if (!password || password.length < 6) {
-            console.log("Validation failed: Password length");
-            return res.status(400).json({ message: "Password must be at least 6 characters" });
+        if (!password || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)) {
+            console.log("Validation failed: Password complexity");
+            return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
         }
 
         // SECURITY FIX: Email format validation
@@ -92,7 +92,16 @@ exports.register = async (req, res) => {
             { expiresIn: '1d' }
         );
 
-        res.json({ token, role: user.role, user: { id: user._id, name: user.name } });
+        res.json({ 
+            token, 
+            role: user.role, 
+            user: { 
+                id: user._id, 
+                name: user.name,
+                role: user.role,
+                permissions: user.permissions 
+            } 
+        });
 
     } catch (err) {
         console.error("Registration error:", err);
@@ -360,8 +369,8 @@ exports.updateAgent = async (req, res) => {
 
         // Handle password update
         if (password) {
-            if (password.length < 6) {
-                return res.status(400).json({ message: "Password must be at least 6 characters" });
+            if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)) {
+                return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
             }
             const salt = await bcrypt.genSalt(10);
             updateData.password = await bcrypt.hash(password, salt);
@@ -408,8 +417,8 @@ exports.updateProfile = async (req, res) => {
         }
 
         if (password && password.trim()) {
-            if (password.length < 6) {
-                return res.status(400).json({ message: "Password must be at least 6 characters" });
+            if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)) {
+                return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
             }
             const salt = await bcrypt.genSalt(10);
             user.password = await bcrypt.hash(password, salt);

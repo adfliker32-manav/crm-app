@@ -16,7 +16,8 @@ export const useCSVImport = (stages = [], onSuccess, onClose) => {
         phone: '',
         email: '',
         source: '',
-        status: ''
+        status: '',
+        tags: ''
     });
     const [isProcessing, setIsProcessing] = useState(false);
     
@@ -33,7 +34,7 @@ export const useCSVImport = (stages = [], onSuccess, onClose) => {
                     setCsvData(results.data);
                     
                     // Auto-mapping heuristics
-                    const autoMap = { name: '', phone: '', email: '', source: '', status: '' };
+                    const autoMap = { name: '', phone: '', email: '', source: '', status: '', tags: '' };
                     results.meta.fields.forEach(header => {
                         const matchedField = autoMapColumn(header, autoMap);
                         if (matchedField) {
@@ -70,7 +71,7 @@ export const useCSVImport = (stages = [], onSuccess, onClose) => {
         setFile(null);
         setHeaders([]);
         setCsvData([]);
-        setMappings({ name: '', phone: '', email: '', source: '', status: '' });
+        setMappings({ name: '', phone: '', email: '', source: '', status: '', tags: '' });
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 

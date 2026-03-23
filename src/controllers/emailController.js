@@ -70,6 +70,49 @@ const sendEmailController = async (req, res) => {
                 triggerType: 'manual',
                 attachments: []
             });
+
+            // NEW: 2-Way Sync Tracking
+            try {
+                const Lead = require('../models/Lead');
+                const EmailConversation = require('../models/EmailConversation');
+                const EmailMessage = require('../models/EmailMessage');
+                
+                let lead = await Lead.findOne({ email: to, userId: userId });
+                if (!lead) {
+                    lead = new Lead({ userId, email: to, name: to.split('@')[0], source: 'Email', status: 'New' });
+                    await lead.save();
+                }
+                
+                let conversation = await EmailConversation.findOne({ userId, leadId: lead._id });
+                if (!conversation) {
+                    conversation = new EmailConversation({ userId, leadId: lead._id, email: to, displayName: lead.name });
+                }
+                
+                const messageRecord = new EmailMessage({
+                    conversationId: conversation._id,
+                    userId: userId,
+                    leadId: lead._id,
+                    messageId: result.messageId,
+                    direction: 'outbound',
+                    from: 'CRM',
+                    to: to,
+                    subject: subject,
+                    text: text,
+                    html: html,
+                    status: 'sent',
+                    timestamp: new Date()
+                });
+                await messageRecord.save();
+                
+                conversation.lastMessage = subject || 'Outgoing Email';
+                conversation.lastMessageAt = new Date();
+                conversation.lastMessageDirection = 'outbound';
+                conversation.metadata.totalMessages += 1;
+                conversation.metadata.totalOutbound += 1;
+                await conversation.save();
+            } catch (err) {
+                console.error("Error saving outbound to EmailMessage sync:", err);
+            }
         }
 
         console.log("✅ Email sent successfully to:", to);

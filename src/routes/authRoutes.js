@@ -2,11 +2,18 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const rateLimit = require('express-rate-limit');
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // Limit each IP to 10 requests per windowMs
+    message: { message: 'Too many authentication attempts, please try again after 15 minutes' }
+});
 
 // 1. Register & Login (Public)
-router.post('/register', authController.register);
-router.post('/login', authController.login);
-router.post('/google', authController.googleLogin); // Google OAuth Login
+router.post('/register', authLimiter, authController.register);
+router.post('/login', authLimiter, authController.login);
+router.post('/google', authLimiter, authController.googleLogin); // Google OAuth Login
 
 // 2. Add New Agent (Manager Only)
 router.post('/add-agent', authMiddleware, authController.createAgent);

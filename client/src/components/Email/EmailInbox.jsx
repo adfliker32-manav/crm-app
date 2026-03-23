@@ -1,351 +1,456 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../../services/api';
+import { useNotification } from '../../context/NotificationContext';
+import DOMPurify from 'dompurify';
 
 const EmailInbox = () => {
-    const [logs, setLogs] = useState([]);
+    const { showSuccess, showError } = useNotification();
+    const [conversations, setConversations] = useState([]);
+    const [selectedChat, setSelectedChat] = useState(null);
+    const [messages, setMessages] = useState([]);
+    const [newMessage, setNewMessage] = useState('');
+    const [newSubject, setNewSubject] = useState('');
+    const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
-    const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
-    const [filters, setFilters] = useState({
-        page: 1,
-        limit: 50,
-        status: '',
-        isAutomated: '',
-        search: ''
-    });
-    const [selectedLog, setSelectedLog] = useState(null);
+    const [sending, setSending] = useState(false);
+    const [showContactPanel, setShowContactPanel] = useState(false);
+    const [showNewChatModal, setShowNewChatModal] = useState(false);
+    const [newChatEmail, setNewChatEmail] = useState('');
+    const [filter, setFilter] = useState('all'); 
+    
+    const scrollRef = useRef(null);
 
-    const fetchLogs = async () => {
-        setLoading(true);
+    const fetchConversations = useCallback(async () => {
         try {
-            const params = new URLSearchParams({
-                page: filters.page,
-                limit: filters.limit,
-                ...(filters.status && { status: filters.status }),
-                ...(filters.isAutomated && { isAutomated: filters.isAutomated }),
-                ...(filters.search && { search: filters.search })
+            const status = filter === 'archived' ? 'archived' : 'active';
+            const res = await api.get('/email-conversations', {
+                params: { status, search: searchTerm }
             });
-
-            const res = await api.get(`/email-logs/logs?${params}`);
-            setLogs(res.data.logs || []);
-            setPagination(res.data.pagination || { page: 1, pages: 1, total: 0 });
+            setConversations(res.data.conversations || []);
         } catch (error) {
-            console.error("Error fetching email logs:", error);
+            console.error('Error fetching conversations:', error);
         } finally {
             setLoading(false);
         }
-    };
+    }, [searchTerm, filter]);
+
+    const fetchMessages = useCallback(async (conversationId) => {
+        try {
+            const res = await api.get(`/email-conversations/${conversationId}`);
+            setMessages(res.data.messages || []);
+            setSelectedChat(res.data.conversation);
+            await api.put(`/email-conversations/${conversationId}/read`);
+            setConversations(prev => prev.map(c =>
+                c._id === conversationId ? { ...c, unreadCount: 0 } : c
+            ));
+        } catch (error) {
+            console.error('Error fetching messages:', error);
+            showError('Failed to load messages');
+        }
+    }, [showError]);
+
+    useEffect(() => { 
+        fetchConversations(); 
+    }, [fetchConversations]);
+
+    // Poll for new emails
+    useEffect(() => {
+        const interval = setInterval(() => {
+            fetchConversations();
+            if (selectedChat) fetchMessages(selectedChat._id);
+        }, 10000);
+        return () => clearInterval(interval);
+    }, [selectedChat, fetchConversations, fetchMessages]);
 
     useEffect(() => {
-        fetchLogs();
-    }, [filters.page, filters.status, filters.isAutomated, filters.search]);
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }, [messages]);
 
-    const handleSearch = (e) => {
-        if (e.key === 'Enter') {
-            setFilters(prev => ({ ...prev, page: 1, search: e.target.value }));
+    const handleSendMessage = async (e) => {
+        e.preventDefault();
+        if (!newMessage.trim() || !selectedChat) return;
+        setSending(true);
+        
+        try {
+            const payload = {
+                to: selectedChat.email,
+                subject: newSubject.trim() || `Re: ${selectedChat.lastMessage || 'Conversation'}`,
+                html: newMessage.trim(), // Send as HTML or Text
+                text: newMessage.trim()
+            };
+            
+            await api.post('/email/send', payload);
+            
+            // Re-fetch to get the newly mapped message from the DB
+            await fetchMessages(selectedChat._id);
+            fetchConversations();
+            
+            setNewMessage('');
+            setNewSubject('');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to send email');
+        } finally {
+            setSending(false);
         }
     };
 
-
-    const handlePageChange = (newPage) => {
-        if (newPage >= 1 && newPage <= pagination.pages) {
-            setFilters(prev => ({ ...prev, page: newPage }));
+    const handleStartNewChat = async (e) => {
+        e.preventDefault();
+        if (!newChatEmail.trim()) return;
+        
+        setSending(true);
+        try {
+            const payload = {
+                to: newChatEmail.trim(),
+                subject: newSubject.trim() || 'New Message',
+                html: newMessage.trim(),
+                text: newMessage.trim()
+            };
+            await api.post('/email/send', payload);
+            setShowNewChatModal(false);
+            setNewChatEmail('');
+            setNewMessage('');
+            setNewSubject('');
+            
+            await fetchConversations();
+            showSuccess('Email sent successfully!');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to start conversation');
+        } finally {
+            setSending(false);
         }
     };
 
-    const formatDate = (dateString) => {
-        return new Date(dateString).toLocaleString(undefined, {
-            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-        });
+    const handleSelectChat = (chat) => {
+        setSelectedChat(chat);
+        setNewSubject(`Re: ${chat.lastMessage || 'Conversation'}`);
+        fetchMessages(chat._id);
+        setShowContactPanel(false);
     };
 
-    const formatFileSize = (bytes) => {
-        if (bytes === 0) return '0 Bytes';
-        const k = 1024;
-        const prices = ['Bytes', 'KB', 'MB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + prices[i];
+    const formatTime = (date) => {
+        if (!date) return '';
+        const d = new Date(date);
+        const now = new Date();
+        const diffDays = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+        if (diffDays === 0) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (diffDays === 1) return 'Yesterday';
+        if (diffDays < 7) return d.toLocaleDateString([], { weekday: 'short' });
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
     };
+
+    const filteredConversations = filter === 'unread'
+        ? conversations.filter(c => c.unreadCount > 0)
+        : conversations;
+
+    const totalUnread = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+
+    if (loading) {
+        return (
+            <div className="flex flex-col items-center justify-center h-full bg-[#f0f2f5]">
+                <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                <p className="text-slate-500 font-medium">Loading inbox...</p>
+            </div>
+        );
+    }
 
     return (
-        <div className="flex h-full bg-white rounded-xl overflow-hidden relative">
-            {/* Main List Section */}
-            <div className={`flex-1 flex flex-col transition-all duration-300 ${selectedLog ? 'mr-[450px]' : ''}`}>
-
-                {/* Filters Header */}
-                <div className="p-4 border-b border-slate-100 flex flex-wrap gap-4 items-center justify-between bg-white sticky top-0 z-10">
-                    <div className="flex items-center gap-3 flex-1 min-w-[200px]">
-                        <div className="relative w-full max-w-md group">
-                            <i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors"></i>
-                            <input
-                                type="text"
-                                placeholder="Search emails..."
-                                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:bg-white transition-all text-sm font-medium text-slate-700 placeholder:text-slate-400"
-                                onKeyDown={handleSearch}
-                                onBlur={(e) => setFilters(prev => ({ ...prev, page: 1, search: e.target.value }))}
-                            />
+        <div className="flex h-full bg-[#f0f2f5] w-full">
+            {/* ═══════════ LEFT SIDEBAR ═══════════ */}
+            <div className="w-[380px] bg-white border-r border-[#e9edef] flex flex-col flex-shrink-0 z-10">
+                {/* Sidebar Header */}
+                <div className="p-3 bg-slate-50 flex items-center justify-between border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white shadow-sm">
+                            <i className="fa-solid fa-envelope text-lg"></i>
+                        </div>
+                        <div>
+                            <span className="font-bold text-slate-800 text-sm">Email Inbox</span>
+                            {totalUnread > 0 && (
+                                <span className="ml-2 bg-blue-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{totalUnread}</span>
+                            )}
                         </div>
                     </div>
+                    <button
+                        onClick={() => { setShowNewChatModal(true); setNewMessage(''); setNewSubject(''); setSelectedChat(null); }}
+                        className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 transition"
+                        title="Compose Email"
+                    >
+                        <i className="fa-solid fa-pen-to-square"></i>
+                    </button>
+                </div>
 
-                    <div className="flex items-center gap-3">
-                        <select
-                            className="px-4 py-2.5 bg-slate-50 border-none rounded-xl text-sm font-medium text-slate-600 outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer hover:bg-slate-100 transition-colors appearance-none"
-                            value={filters.status}
-                            onChange={(e) => setFilters(prev => ({ ...prev, page: 1, status: e.target.value }))}
-                        >
-                            <option value="">All Status</option>
-                            <option value="sent">Sent</option>
-                            <option value="failed">Failed</option>
-                        </select>
-
-                        <select
-                            className="px-4 py-2.5 bg-slate-50 border-none rounded-xl text-sm font-medium text-slate-600 outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer hover:bg-slate-100 transition-colors appearance-none"
-                            value={filters.isAutomated}
-                            onChange={(e) => setFilters(prev => ({ ...prev, page: 1, isAutomated: e.target.value }))}
-                        >
-                            <option value="">All Types</option>
-                            <option value="true">Automated</option>
-                            <option value="false">Manual</option>
-                        </select>
-
-                        <button
-                            onClick={fetchLogs}
-                            className="p-2.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
-                            title="Refresh"
-                        >
-                            <i className="fa-solid fa-rotate-right"></i>
-                        </button>
+                {/* Search */}
+                <div className="p-3 bg-white">
+                    <div className="relative">
+                        <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                        <input
+                            type="text"
+                            placeholder="Search emails or contacts"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full pl-11 pr-4 py-2 bg-slate-100 border-transparent focus:border-blue-500 focus:ring-2 focus:ring-blue-200 rounded-xl text-sm transition"
+                        />
                     </div>
                 </div>
 
-                {/* Table Content */}
-                <div className="flex-1 overflow-auto custom-scrollbar">
-                    <table className="w-full text-left border-collapse">
-                        <thead className="bg-white sticky top-0 z-10 shadow-sm">
-                            <tr>
-                                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Recipient</th>
-                                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider w-1/3">Subject</th>
-                                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Status</th>
-                                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Type</th>
-                                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Time</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                            {loading ? (
-                                <tr>
-                                    <td colSpan="5" className="px-6 py-20 text-center text-slate-400">
-                                        <div className="flex flex-col items-center gap-3">
-                                            <i className="fa-solid fa-circle-notch fa-spin text-2xl text-blue-500"></i>
-                                            <p className="text-sm font-medium">Syncing mail log...</p>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ) : logs.length === 0 ? (
-                                <tr>
-                                    <td colSpan="5" className="px-6 py-20 text-center text-slate-400">
-                                        <div className="flex flex-col items-center gap-3">
-                                            <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center">
-                                                <i className="fa-regular fa-envelope-open text-2xl text-slate-300"></i>
-                                            </div>
-                                            <p className="text-sm font-medium">No emails found</p>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ) : (
-                                logs.map(log => (
-                                    <tr
-                                        key={log._id}
-                                        onClick={() => setSelectedLog(log)}
-                                        className={`
-                                            group cursor-pointer transition-all duration-200 border-l-4
-                                            ${selectedLog?._id === log._id
-                                                ? 'bg-blue-50/50 border-blue-500'
-                                                : 'hover:bg-slate-50 border-transparent hover:border-slate-200'}
-                                        `}
-                                    >
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-3">
-                                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${log.status === 'sent' ? 'bg-gradient-to-br from-emerald-400 to-emerald-600' : 'bg-gradient-to-br from-rose-400 to-rose-600'
-                                                    }`}>
-                                                    {log.to.charAt(0).toUpperCase()}
-                                                </div>
-                                                <span className="text-sm font-semibold text-slate-700">{log.to}</span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <p className="text-sm font-medium text-slate-800 truncate max-w-xs group-hover:text-blue-600 transition-colors">
-                                                {log.subject || '(No Subject)'}
-                                            </p>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-2">
-                                                <span className={`w-2 h-2 rounded-full ${log.status === 'sent' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.4)]'
-                                                    }`}></span>
-                                                <span className={`text-xs font-medium ${log.status === 'sent' ? 'text-emerald-700' : 'text-rose-700'
-                                                    }`}>
-                                                    {log.status === 'sent' ? 'Delivered' : 'Failed'}
-                                                </span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <span className={`px-2.5 py-1 rounded-md text-xs font-medium border ${log.isAutomated
-                                                ? 'bg-violet-50 text-violet-700 border-violet-100'
-                                                : 'bg-slate-50 text-slate-600 border-slate-200'
-                                                }`}>
-                                                {log.isAutomated ? 'Automated' : 'Manual'}
+                {/* Filter Tabs */}
+                <div className="px-3 pb-3 border-b border-slate-50 flex gap-2">
+                    {[
+                        { id: 'all', label: 'All' },
+                        { id: 'unread', label: 'Unread', count: totalUnread }
+                    ].map(tab => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setFilter(tab.id)}
+                            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${filter === tab.id
+                                ? 'bg-blue-100 text-blue-700'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                        >
+                            {tab.label}
+                            {tab.count > 0 && <span className="ml-1.5 bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{tab.count}</span>}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Conversations List */}
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                    {filteredConversations.map(chat => (
+                        <div
+                            key={chat._id}
+                            onClick={() => handleSelectChat(chat)}
+                            className={`px-4 py-3 border-b border-slate-50 cursor-pointer transition-colors ${selectedChat?._id === chat._id
+                                ? 'bg-blue-50/50 border-l-4 border-l-blue-500'
+                                : 'hover:bg-slate-50 border-l-4 border-l-transparent'}`}
+                        >
+                            <div className="flex gap-3">
+                                <div className="flex-shrink-0 mt-1">
+                                    <div className={`w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-sm ${chat.unreadCount > 0 ? 'bg-gradient-to-br from-blue-500 to-indigo-500' : 'bg-slate-300'}`}>
+                                        {(chat.displayName || chat.email).charAt(0).toUpperCase()}
+                                    </div>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex justify-between items-start mb-1">
+                                        <h3 className={`text-[15px] truncate w-4/5 ${chat.unreadCount > 0 ? 'font-bold text-slate-900' : 'font-semibold text-slate-700'}`}>
+                                            {chat.displayName || chat.email.split('@')[0]}
+                                        </h3>
+                                        <span className={`text-[11px] flex-shrink-0 ${chat.unreadCount > 0 ? 'text-blue-600 font-bold' : 'text-slate-400'}`}>
+                                            {formatTime(chat.lastMessageAt)}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <p className={`text-[13px] truncate ${chat.unreadCount > 0 ? 'text-slate-800 font-medium' : 'text-slate-500'}`}>
+                                            {chat.lastMessageDirection === 'outbound' && (
+                                                <i className="fa-solid fa-reply text-[10px] mr-1 text-slate-400"></i>
+                                            )}
+                                            {chat.lastMessage || 'No messages'}
+                                        </p>
+                                        {chat.unreadCount > 0 && (
+                                            <span className="bg-blue-500 text-white text-[11px] font-bold min-w-[20px] h-5 px-1.5 rounded-full flex items-center justify-center flex-shrink-0 ml-2">
+                                                {chat.unreadCount}
                                             </span>
-                                        </td>
-                                        <td className="px-6 py-4 text-right text-xs font-medium text-slate-500">
-                                            {formatDate(log.sentAt)}
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-
-                {/* Pagination */}
-                <div className="p-4 border-t border-slate-100 flex justify-between items-center bg-white">
-                    <span className="text-xs font-medium text-slate-500">
-                        Showing {((pagination.page - 1) * filters.limit) + 1} - {Math.min(pagination.page * filters.limit, pagination.total)} of {pagination.total}
-                    </span>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={() => handlePageChange(filters.page - 1)}
-                            disabled={filters.page <= 1}
-                            className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        >
-                            <i className="fa-solid fa-chevron-left text-xs"></i>
-                        </button>
-                        <button
-                            onClick={() => handlePageChange(filters.page + 1)}
-                            disabled={filters.page >= pagination.pages}
-                            className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        >
-                            <i className="fa-solid fa-chevron-right text-xs"></i>
-                        </button>
-                    </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                    {filteredConversations.length === 0 && (
+                        <div className="p-10 text-center flex flex-col items-center">
+                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+                                <i className="fa-solid fa-envelope-open text-2xl text-slate-300"></i>
+                            </div>
+                            <p className="text-sm font-medium text-slate-500">No conversations found</p>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            {/* Slide-over Drawer Details */}
-            <div className={`
-                absolute top-0 right-0 h-full w-[450px] bg-white border-l border-slate-200 shadow-2xl transform transition-transform duration-300 z-20 flex flex-col
-                ${selectedLog ? 'translate-x-0' : 'translate-x-full'}
-            `}>
-                {selectedLog && (
+            {/* ═══════════ CHAT WINDOW ═══════════ */}
+            <div className="flex-1 flex flex-col min-w-0 bg-white relative">
+                {selectedChat ? (
                     <>
-                        <div className="p-6 border-b border-slate-100 flex justify-between items-start bg-slate-50/50">
-                            <div>
-                                <h3 className="text-lg font-bold text-slate-800">Email Details</h3>
-                                <p className="text-xs text-slate-500 mt-1 font-mono">{selectedLog._id}</p>
+                        {/* Chat Header */}
+                        <div className="h-[70px] px-6 bg-white border-b border-slate-100 flex items-center justify-between shadow-sm z-10 flex-shrink-0">
+                            <div className="flex items-center gap-4 cursor-pointer" onClick={() => setShowContactPanel(!showContactPanel)}>
+                                <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center text-slate-600 font-bold text-xl">
+                                    {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-[16px] text-slate-800">{selectedChat.displayName || selectedChat.email}</h3>
+                                    <p className="text-xs text-slate-500 font-medium">{selectedChat.email}</p>
+                                </div>
                             </div>
-                            <button
-                                onClick={() => setSelectedLog(null)}
-                                className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors"
-                            >
-                                <i className="fa-solid fa-xmark"></i>
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setShowContactPanel(!showContactPanel)} className="w-10 h-10 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-500 transition" title="Contact Info">
+                                    <i className="fa-solid fa-circle-info text-lg"></i>
+                                </button>
+                            </div>
                         </div>
 
-                        <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                            {/* Status Banner */}
-                            <div className={`p-4 rounded-xl border ${selectedLog.status === 'sent'
-                                ? 'bg-emerald-50 border-emerald-100'
-                                : 'bg-rose-50 border-rose-100'
-                                }`}>
-                                <div className="flex items-center gap-3">
-                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedLog.status === 'sent' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'
-                                        }`}>
-                                        <i className={`fa-solid ${selectedLog.status === 'sent' ? 'fa-check' : 'fa-circle-exclamation'}`}></i>
-                                    </div>
-                                    <div>
-                                        <p className={`text-sm font-bold ${selectedLog.status === 'sent' ? 'text-emerald-800' : 'text-rose-800'
-                                            }`}>
-                                            {selectedLog.status === 'sent' ? 'Email Delivered' : 'Delivery Failed'}
-                                        </p>
-                                        <p className={`text-xs ${selectedLog.status === 'sent' ? 'text-emerald-600' : 'text-rose-600'
-                                            }`}>
-                                            {formatDate(selectedLog.sentAt)}
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Main Info */}
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Recipient</label>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-xs text-slate-500">
-                                            <i className="fa-solid fa-user"></i>
-                                        </div>
-                                        <span className="text-sm font-medium text-slate-700">{selectedLog.to}</span>
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Subject</label>
-                                    <p className="text-base font-semibold text-slate-800 leading-snug">{selectedLog.subject}</p>
-                                </div>
-                            </div>
-
-                            {/* Error Box */}
-                            {selectedLog.error && (
-                                <div className="p-4 bg-slate-900 rounded-xl text-slate-200">
-                                    <div className="flex items-center gap-2 mb-2 text-rose-400">
-                                        <i className="fa-solid fa-bug text-xs"></i>
-                                        <span className="text-xs font-bold uppercase tracking-wider">Error Log</span>
-                                    </div>
-                                    <p className="text-sm font-mono break-all opacity-80">{selectedLog.error}</p>
-                                </div>
-                            )}
-
-                            {/* Attachments */}
-                            <div>
-                                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 block flex items-center gap-2">
-                                    <i className="fa-solid fa-paperclip"></i> Attachments
-                                </label>
-                                {selectedLog.attachments && selectedLog.attachments.length > 0 ? (
-                                    <div className="grid grid-cols-1 gap-2">
-                                        {selectedLog.attachments.map((att, index) => (
-                                            <div key={index} className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50/30 transition-colors group cursor-default">
-                                                <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-500 flex items-center justify-center group-hover:scale-110 transition-transform">
-                                                    <i className="fa-solid fa-file-lines"></i>
+                        {/* Messages Area */}
+                        <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50" ref={scrollRef}>
+                            <div className="space-y-6 max-w-4xl mx-auto">
+                                {messages.map((msg, index) => {
+                                    const showDate = index === 0 || new Date(msg.timestamp).toDateString() !== new Date(messages[index - 1].timestamp).toDateString();
+                                    
+                                    return (
+                                        <React.Fragment key={msg._id}>
+                                            {showDate && (
+                                                <div className="flex justify-center my-6">
+                                                    <span className="bg-slate-200/50 text-slate-500 tracking-wide text-[11px] font-bold uppercase px-3 py-1 rounded-full">
+                                                        {new Date(msg.timestamp).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
+                                                    </span>
                                                 </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-sm font-medium text-slate-700 truncate">{att.originalName || att.filename}</p>
-                                                    <p className="text-xs text-slate-400 group-hover:text-blue-400">{formatFileSize(att.size || 0)}</p>
+                                            )}
+                                            
+                                            <div className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}>
+                                                <div className={`max-w-[75%] rounded-2xl p-4 shadow-sm relative group
+                                                    ${msg.direction === 'outbound' 
+                                                        ? 'bg-blue-600 text-white rounded-br-sm' 
+                                                        : 'bg-white border border-slate-100 text-slate-800 rounded-bl-sm'}`}
+                                                >
+                                                    {/* Email Subject Header */}
+                                                    <div className={`text-xs font-bold mb-2 pb-2 border-b uppercase tracking-wide
+                                                        ${msg.direction === 'outbound' ? 'border-blue-500/50 text-blue-200' : 'border-slate-100 text-slate-400'}`}>
+                                                        {msg.subject || '(No Subject)'}
+                                                    </div>
+                                                    
+                                                    {/* Email Body */}
+                                                    <div className={`text-[14px] leading-relaxed whitespace-pre-wrap max-h-[400px] overflow-y-auto custom-scrollbar pr-2
+                                                        ${msg.direction === 'outbound' ? 'text-white/90' : 'text-slate-700'}`}
+                                                        dangerouslySetInnerHTML={msg.html ? { __html: DOMPurify.sanitize(msg.html) } : undefined}
+                                                    >
+                                                        {!msg.html && msg.text}
+                                                    </div>
+                                                    
+                                                    {/* Footer Metadata */}
+                                                    <div className={`flex items-center justify-end gap-2 mt-3 text-[11px] font-medium
+                                                        ${msg.direction === 'outbound' ? 'text-blue-200' : 'text-slate-400'}`}>
+                                                        <span>{formatTime(msg.timestamp)}</span>
+                                                        {msg.direction === 'outbound' && (
+                                                            <i className={`fa-solid ${msg.status === 'failed' ? 'fa-circle-exclamation text-rose-300' : 'fa-check text-blue-300'}`}></i>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="text-center py-8 border-2 border-dashed border-slate-100 rounded-xl">
-                                        <p className="text-xs text-slate-400">No attachments included</p>
-                                    </div>
-                                )}
+                                        </React.Fragment>
+                                    );
+                                })}
                             </div>
                         </div>
 
-                        {/* Drawer Actions */}
-                        <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-                            <button
-                                className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-100 transition shadow-sm hover:shadow"
-                                onClick={() => {/* Resend logic could go here */ }}
-                            >
-                                <i className="fa-solid fa-reply mr-2"></i>Resend
-                            </button>
-                            <button
-                                onClick={() => setSelectedLog(null)}
-                                className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium hover:bg-slate-900 transition shadow-lg shadow-slate-200"
-                            >
-                                Close Panel
-                            </button>
+                        {/* Compose Bar */}
+                        <div className="bg-white border-t border-slate-200 p-4 shadow-[0_-4px_20px_-15px_rgba(0,0,0,0.1)] z-10 flex-shrink-0">
+                            <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto">
+                                <div className="mb-2">
+                                    <input 
+                                        type="text" 
+                                        value={newSubject}
+                                        onChange={(e) => setNewSubject(e.target.value)}
+                                        placeholder="Subject"
+                                        className="w-full text-sm font-semibold text-slate-700 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 transition"
+                                        disabled={sending}
+                                    />
+                                </div>
+                                <div className="flex items-end gap-3 bg-slate-50 border border-slate-200 rounded-2xl p-2 focus-within:border-blue-400 focus-within:bg-white transition-all">
+                                    <textarea
+                                        value={newMessage}
+                                        onChange={(e) => setNewMessage(e.target.value)}
+                                        placeholder="Type your email reply..."
+                                        className="w-full bg-transparent border-none focus:outline-none px-3 py-2 text-[15px] text-slate-800 resize-none min-h-[60px] max-h-[200px] custom-scrollbar"
+                                        disabled={sending}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                e.preventDefault();
+                                                handleSendMessage(e);
+                                            }
+                                        }}
+                                    />
+                                    <button
+                                        type="submit"
+                                        disabled={!newMessage.trim() || sending}
+                                        className="w-12 h-12 rounded-xl flex items-center justify-center transition-all flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed
+                                            bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                                    >
+                                        {sending ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-paper-plane"></i>}
+                                    </button>
+                                </div>
+                                <p className="text-[10px] text-slate-400 text-right mt-2 font-medium">Press Enter to send, Shift+Enter for new line</p>
+                            </form>
                         </div>
                     </>
+                ) : (
+                    /* Empty State */
+                    <div className="flex-1 flex flex-col items-center justify-center bg-slate-50">
+                        <div className="w-32 h-32 bg-white rounded-full shadow-sm flex items-center justify-center mb-6 border border-slate-100 cursor-pointer hover:shadow-md transition" onClick={() => setShowNewChatModal(true)}>
+                            <i className="fa-solid fa-envelope-open-text text-5xl text-blue-500/80"></i>
+                        </div>
+                        <h2 className="text-2xl font-bold text-slate-700 mb-2">Email Command Center</h2>
+                        <p className="text-slate-500 text-center max-w-sm">
+                            Select a thread from the left or start a new conversation to communicate with leads via Email.
+                        </p>
+                    </div>
                 )}
             </div>
+
+            {/* Compose New Email Modal */}
+            {showNewChatModal && !selectedChat && (
+                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-fade-in-up">
+                        <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+                            <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                                <i className="fa-solid fa-pen-to-square text-blue-600"></i> Compose New Email
+                            </h3>
+                            <button onClick={() => setShowNewChatModal(false)} className="text-slate-400 hover:text-slate-600">
+                                <i className="fa-solid fa-xmark text-xl"></i>
+                            </button>
+                        </div>
+                        <form onSubmit={handleStartNewChat} className="p-6 space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">To: Email Address</label>
+                                <input
+                                    type="email"
+                                    required
+                                    value={newChatEmail}
+                                    onChange={(e) => setNewChatEmail(e.target.value)}
+                                    placeholder="lead@example.com"
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Subject</label>
+                                <input
+                                    type="text"
+                                    required
+                                    value={newSubject}
+                                    onChange={(e) => setNewSubject(e.target.value)}
+                                    placeholder="Enter subject..."
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Message</label>
+                                <textarea
+                                    required
+                                    value={newMessage}
+                                    onChange={(e) => setNewMessage(e.target.value)}
+                                    placeholder="Write your email here..."
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none min-h-[150px] resize-y"
+                                ></textarea>
+                            </div>
+                            <div className="pt-4 flex justify-end gap-3">
+                                <button type="button" onClick={() => setShowNewChatModal(false)} className="px-5 py-2.5 text-slate-600 font-medium hover:bg-slate-100 rounded-xl transition">
+                                    Cancel
+                                </button>
+                                <button type="submit" disabled={sending} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition shadow-md flex items-center gap-2">
+                                    {sending ? <><i className="fa-solid fa-spinner fa-spin"></i> Sending...</> : <><i className="fa-solid fa-paper-plane"></i> Send Email</>}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

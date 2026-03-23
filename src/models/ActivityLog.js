@@ -80,8 +80,7 @@ const activityLogSchema = new mongoose.Schema({
     // When it happened
     timestamp: {
         type: Date,
-        default: Date.now,
-        index: true
+        default: Date.now
     },
 
     // Optional: IP address for security audit

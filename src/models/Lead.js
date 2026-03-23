@@ -83,6 +83,9 @@ const LeadSchema = new mongoose.Schema({
         default: {}
     },
 
+    // Assigned Tags
+    tags: [{ type: String }],
+
     // Deal Value for Revenue Tracking
     dealValue: {
         type: Number,

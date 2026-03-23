@@ -3,7 +3,7 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import ActivityTimeline from './ActivityTimeline';
 
-const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
+const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) => {
     const { showSuccess, showError } = useNotification();
     const [nextFollowUpDate, setNextFollowUpDate] = useState('');
     const [loading, setLoading] = useState(false);
@@ -174,6 +174,18 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess }) => {
                                     <i className="fa-solid fa-indian-rupee-sign text-emerald-400"></i>
                                     <span className="font-semibold text-emerald-300">₹{lead.dealValue.toLocaleString()}</span>
                                 </span>
+                            )}
+                            {lead.tags && lead.tags.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 items-center ml-2 border-l border-slate-700 pl-4">
+                                    {lead.tags.map(tagName => {
+                                        const tagObj = userTags?.find(t => t.name === tagName);
+                                        return (
+                                            <span key={tagName} className="text-xs px-2 py-0.5 rounded-full border font-bold shadow-sm" style={{ backgroundColor: tagObj ? `${tagObj.color}20` : '#f1f5f9', color: tagObj ? tagObj.color : '#64748b', borderColor: tagObj ? `${tagObj.color}40` : '#cbd5e1' }}>
+                                                {tagName}
+                                            </span>
+                                        )
+                                    })}
+                                </div>
                             )}
                         </div>
                     </div>

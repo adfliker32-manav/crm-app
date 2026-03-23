@@ -11,6 +11,7 @@ const authRoutes = require('./src/routes/authRoutes');
 const leadRoutes = require('./src/routes/leadRoutes');   // ✅ Leads ke liye
 const stageRoutes = require('./src/routes/stageRoutes'); // ✅ Stages ke liye (NEW)
 const emailRoutes = require('./src/routes/emailRoutes');
+const emailConversationRoutes = require('./src/routes/emailConversationRoutes');
 const emailTemplateRoutes = require('./src/routes/emailTemplateRoutes');
 const emailLogRoutes = require('./src/routes/emailLogRoutes');
 const whatsappRoutes = require('./src/routes/whatsappRoutes');
@@ -113,6 +114,14 @@ mongoose.connect(MONGO_URI)
     } catch(error) {
       console.error('⚠️ Failed to start Agenda Queues:', error.message);
     }
+    
+    // Start IMAP Email Polling Service
+    try {
+      const { startEmailSyncPolling } = require('./src/services/imapService');
+      startEmailSyncPolling();
+    } catch (error) {
+      console.error('⚠️ Failed to start IMAP Polling Service:', error.message);
+    }
   })
   .catch(err => {
     console.error('\n❌ MongoDB Connection Error:');
@@ -144,12 +153,14 @@ app.use('/api/superadmin', superAdminRoutes);
 app.use('/api/leads', leadRoutes);    // URL: /api/leads/
 app.use('/api/stages', stageRoutes);  // URL: /api/stages/
 app.use('/api/custom-fields', customFieldRoutes); // Custom Lead Fields
+app.use('/api/tags', require('./src/routes/tagRoutes')); // Lead Tags Configuration
 app.use('/api/tasks', taskRoutes); // Tasks & Reminders
 app.use('/api/automations', automationRoutes); // Visual Automations
 app.use('/api/analytics', analyticsRoutes); // Advanced Analytics
 
 // 3. Communications
 app.use('/api/email', emailRoutes);
+app.use('/api/email-conversations', emailConversationRoutes);
 app.use('/api/email-templates', emailTemplateRoutes);
 app.use('/api/email-logs', emailLogRoutes);
 

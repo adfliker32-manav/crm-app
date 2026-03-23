@@ -6,6 +6,7 @@ import api from '../services/api';
 import EmailTemplates from '../components/Email/EmailTemplates';
 import EmailInbox from '../components/Email/EmailInbox';
 import EmailSettings from '../components/Email/EmailSettings';
+import EmailAnalytics from '../components/Email/EmailAnalytics';
 
 const EmailManagement = () => {
     const { user } = useAuth();
@@ -69,50 +70,53 @@ const EmailManagement = () => {
                 </div>
             </div>
 
-            {/* Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <StatCard
-                    title="Sent Today"
-                    value={stats.today.sent}
-                    label="+2.5% vs yesterday"
-                    icon="fa-paper-plane"
-                    color="text-emerald-600"
-                    bgColor="bg-emerald-50"
-                />
-                <StatCard
-                    title="Failed Delivery"
-                    value={stats.today.failed}
-                    label="Needs attention"
-                    icon="fa-circle-exclamation"
-                    color="text-rose-500"
-                    bgColor="bg-rose-50"
-                />
-                <StatCard
-                    title="Monthly Volume"
-                    value={stats.thisMonth.sent}
-                    label="Current billing period"
-                    icon="fa-chart-line"
-                    color="text-blue-600"
-                    bgColor="bg-blue-50"
-                />
-                <StatCard
-                    title="Auto-Responses"
-                    value={stats.today.automated.sent}
-                    label="Triggered automatically"
-                    icon="fa-robot"
-                    color="text-violet-600"
-                    bgColor="bg-violet-50"
-                />
-            </div>
+            {/* Stats Grid - Only show on Inbox and Templates */}
+            {['inbox', 'templates'].includes(activeTab) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <StatCard
+                        title="Sent Today"
+                        value={stats.today.sent}
+                        label="+2.5% vs yesterday"
+                        icon="fa-paper-plane"
+                        color="text-emerald-600"
+                        bgColor="bg-emerald-50"
+                    />
+                    <StatCard
+                        title="Failed Delivery"
+                        value={stats.today.failed}
+                        label="Needs attention"
+                        icon="fa-circle-exclamation"
+                        color="text-rose-500"
+                        bgColor="bg-rose-50"
+                    />
+                    <StatCard
+                        title="Monthly Volume"
+                        value={stats.thisMonth.sent}
+                        label="Current billing period"
+                        icon="fa-chart-line"
+                        color="text-blue-600"
+                        bgColor="bg-blue-50"
+                    />
+                    <StatCard
+                        title="Auto-Responses"
+                        value={stats.today.automated.sent}
+                        label="Triggered automatically"
+                        icon="fa-robot"
+                        color="text-violet-600"
+                        bgColor="bg-violet-50"
+                    />
+                </div>
+            )}
 
             {/* Main Content Area */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden h-[calc(100vh-200px)] flex flex-col">
+            <div className={`bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col ${['inbox', 'templates'].includes(activeTab) ? 'h-[calc(100vh-200px)]' : 'h-[calc(100vh-100px)]'}`}>
                 {/* Modern Tab Navigation */}
                 <div className="border-b border-slate-100 px-6 py-4">
                     <div className="flex items-center gap-1 bg-slate-100/50 p-1 rounded-xl w-fit">
                         {[
                             { id: 'templates', label: 'Templates', icon: 'fa-layer-group' },
                             { id: 'inbox', label: 'Inbox & Logs', icon: 'fa-inbox' },
+                            { id: 'analytics', label: 'Analytics', icon: 'fa-chart-pie' },
                             { id: 'settings', label: 'Configuration', icon: 'fa-sliders' }
                         ].map((tab) => (
                             <button
@@ -138,6 +142,7 @@ const EmailManagement = () => {
                     <div className="h-full">
                         {activeTab === 'templates' && <EmailTemplates />}
                         {activeTab === 'inbox' && <EmailInbox />}
+                        {activeTab === 'analytics' && <EmailAnalytics />}
                         {activeTab === 'settings' && <EmailSettings />}
                     </div>
                 </div>

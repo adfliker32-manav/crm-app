@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 
-const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
+const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
     const [formData, setFormData] = useState({ name: '', phone: '', email: '' });
     const [customData, setCustomData] = useState({});
+    const [selectedTags, setSelectedTags] = useState([]);
     const [customFields, setCustomFields] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -17,6 +18,7 @@ const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
                 dealValue: lead.dealValue || '',
                 nextFollowUpDate: lead.nextFollowUpDate ? new Date(lead.nextFollowUpDate).toISOString().split('T')[0] : ''
             });
+            setSelectedTags(lead.tags || []);
 
             // Populate the custom fields layout and prefill with existing lead data
             fetchCustomFields(lead.customData || {});
@@ -62,7 +64,7 @@ const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
         }
 
         try {
-            const payload = { ...formData, customData };
+            const payload = { ...formData, customData, tags: selectedTags };
             await api.put(`/leads/${lead._id}`, payload);
             onSuccess();
             onClose();
@@ -219,6 +221,31 @@ const EditLeadModal = ({ isOpen, onClose, lead, onSuccess }) => {
                             className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         />
                     </div>
+
+                    {/* Tags */}
+                    {userTags && userTags.length > 0 && (
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Tags</label>
+                            <div className="flex flex-wrap gap-2 p-3 border border-gray-300 rounded-lg bg-gray-50 max-h-32 overflow-y-auto">
+                                {userTags.map(tag => (
+                                    <label key={tag._id} className="flex items-center gap-2 cursor-pointer text-sm">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedTags.includes(tag.name)}
+                                            onChange={(e) => {
+                                                if (e.target.checked) setSelectedTags([...selectedTags, tag.name]);
+                                                else setSelectedTags(selectedTags.filter(t => t !== tag.name));
+                                            }}
+                                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        <span className="px-2 py-0.5 rounded border text-xs" style={{ backgroundColor: `${tag.color}20`, color: tag.color, borderColor: `${tag.color}40` }}>
+                                            {tag.name}
+                                        </span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Custom Fields */}
                     {customFields.length > 0 && (

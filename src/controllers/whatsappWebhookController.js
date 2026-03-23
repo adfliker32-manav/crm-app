@@ -299,11 +299,16 @@ const processIncomingMessage = async (message, contacts, userId) => {
 
         console.log(`✅ Received message from ${from}: ${messagePreview.substring(0, 50)}...`);
 
-        // Trigger chatbot/auto-reply logic
-        debug('🤖 Running chatbot engine...');
+        // Trigger chatbot/auto-reply logic asynchronously (decoupled)
+        debug('🤖 Queuing chatbot engine safely in background...');
         const chatbotEngine = require('../services/chatbotEngineService');
-        await chatbotEngine.processIncomingMessage(messageDoc, conversation._id, userId);
-        debug('🤖 Chatbot engine done');
+        
+        // Execute in next tick of event loop without blocking current execution
+        setImmediate(() => {
+            chatbotEngine.processIncomingMessage(messageDoc, conversation._id, userId)
+                .then(() => debug('🤖 Chatbot engine finished in background'))
+                .catch(err => console.error('❌ Background chatbot error:', err));
+        });
 
     } catch (error) {
         console.error('❌ Error processing incoming message:', error);

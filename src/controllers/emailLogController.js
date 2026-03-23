@@ -1,4 +1,5 @@
 const EmailLog = require('../models/EmailLog');
+const EmailMessage = require('../models/EmailMessage');
 const mongoose = require('mongoose');
 
 // Get email analytics - Optimized with single aggregation pipeline
@@ -12,66 +13,65 @@ exports.getAnalytics = async (req, res) => {
         
         // This month's start
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+        // 7 Days ago for volume charts
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+        sevenDaysAgo.setHours(0, 0, 0, 0);
         
-        // Convert userId to ObjectId if it's a string
         const userIdObjectId = mongoose.Types.ObjectId.isValid(userId) 
             ? new mongoose.Types.ObjectId(userId) 
             : userId;
         
-        // Use aggregation pipeline to get all counts in a single database query
-        // This reduces 10+ separate queries to just 1 query
         const results = await EmailLog.aggregate([
             { $match: { userId: userIdObjectId } },
             {
                 $facet: {
-                    // Today's stats
                     today: [
-                        {
-                            $match: {
-                                sentAt: { $gte: todayStart }
-                            }
-                        },
-                        {
-                            $group: {
-                                _id: {
-                                    status: '$status',
-                                    isAutomated: '$isAutomated'
-                                },
-                                count: { $sum: 1 }
-                            }
-                        }
+                        { $match: { sentAt: { $gte: todayStart } } },
+                        { $group: { _id: { status: '$status', isAutomated: '$isAutomated' }, count: { $sum: 1 } } }
                     ],
-                    // This month's stats
                     thisMonth: [
-                        {
-                            $match: {
-                                sentAt: { $gte: monthStart }
-                            }
-                        },
-                        {
-                            $group: {
-                                _id: {
-                                    status: '$status',
-                                    isAutomated: '$isAutomated'
-                                },
-                                count: { $sum: 1 }
-                            }
-                        }
+                        { $match: { sentAt: { $gte: monthStart } } },
+                        { $group: { _id: { status: '$status', isAutomated: '$isAutomated' }, count: { $sum: 1 } } }
                     ],
-                    // All time stats
                     allTime: [
-                        {
-                            $group: {
-                                _id: '$status',
-                                count: { $sum: 1 }
-                            }
-                        }
+                        { $group: { _id: '$status', count: { $sum: 1 } } }
+                    ],
+                    volume7Days: [
+                         { $match: { sentAt: { $gte: sevenDaysAgo } } },
+                         { $group: { 
+                             _id: { $dateToString: { format: "%Y-%m-%d", date: "$sentAt" } }, 
+                             sent: { $sum: { $cond: [{ $eq: ["$status", "sent"] }, 1, 0] } },
+                             failed: { $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] } } 
+                         } },
+                         { $sort: { _id: 1 } }
                     ]
                 }
             }
         ]);
 
-        // Helper function to extract counts from aggregation results
+        const inboundResults = await EmailMessage.aggregate([
+            { $match: { userId: userIdObjectId, direction: 'inbound', timestamp: { $gte: sevenDaysAgo } } },
+            {
+                $group: {
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp" } },
+                    received: { $sum: 1 }
+                }
+            },
+            { $sort: { _id: 1 } }
+        ]);
+
+        const totalInbound = await EmailMessage.countDocuments({ userId: userIdObjectId, direction: 'inbound' });
+
+        // Get recent activity (last 5 emails)
+        const recentActivity = await EmailLog.find({ userId: userIdObjectId })
+            .sort({ sentAt: -1 })
+            .limit(5)
+            .populate('leadId', 'name email')
+            .lean();
+
+        // Helper function
         const getCount = (data, status, isAutomated = null) => {
             const match = data.find(item => {
                 if (isAutomated !== null) {
@@ -85,6 +85,25 @@ exports.getAnalytics = async (req, res) => {
         const todayData = results[0]?.today || [];
         const monthData = results[0]?.thisMonth || [];
         const allTimeData = results[0]?.allTime || [];
+        const volume7DaysRaw = results[0]?.volume7Days || [];
+
+        // Build 7-day array
+        const volumeChart = [];
+        for (let i = 0; i < 7; i++) {
+             const d = new Date(sevenDaysAgo);
+             d.setDate(d.getDate() + i);
+             const dateStr = d.toISOString().split('T')[0];
+             
+             const outStat = volume7DaysRaw.find(x => x._id === dateStr) || { sent: 0, failed: 0 };
+             const inStat = inboundResults.find(x => x._id === dateStr) || { received: 0 };
+             
+             volumeChart.push({
+                  date: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+                  sent: outStat.sent,
+                  failed: outStat.failed,
+                  received: inStat.received
+             });
+        }
 
         res.json({
             today: {
@@ -97,16 +116,15 @@ exports.getAnalytics = async (req, res) => {
             },
             thisMonth: {
                 sent: getCount(monthData, 'sent'),
-                failed: getCount(monthData, 'failed'),
-                automated: {
-                    sent: getCount(monthData, 'sent', true),
-                    failed: getCount(monthData, 'failed', true)
-                }
+                failed: getCount(monthData, 'failed')
             },
             allTime: {
                 sent: getCount(allTimeData, 'sent'),
-                failed: getCount(allTimeData, 'failed')
-            }
+                failed: getCount(allTimeData, 'failed'),
+                received: totalInbound
+            },
+            chartData: volumeChart,
+            recentActivity: recentActivity
         });
     } catch (error) {
         console.error('Error fetching email analytics:', error);

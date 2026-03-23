@@ -236,9 +236,10 @@ const updateLead = async (req, res) => {
         const oldStatus = lead.status;
         console.log('🔄 [DEBUG updateLead] Old status:', oldStatus, '-> New status:', req.body.status);
 
-        // Update other fields
+        // SECURITY FIX: Prevent Mass Assignment by whitelisting fields
+        const allowedFields = ['name', 'email', 'phone', 'status', 'source', 'customData', 'dealValue', 'tags'];
         Object.keys(req.body).forEach(key => {
-            if (req.body[key] !== undefined) {
+            if (allowedFields.includes(key) && req.body[key] !== undefined) {
                 lead[key] = req.body[key];
             }
         });
@@ -1205,6 +1206,7 @@ const bulkImportLeads = async (req, res) => {
                     phone: lead.phone || 'No Phone',
                     source: lead.source || 'CSV Import',
                     status: lead.status || 'New',
+                    tags: Array.isArray(lead.tags) ? lead.tags : [],
                     customData: lead.customData || {},
                     assignedTo: req.user.role === 'agent' ? (req.user.userId || req.user.id) : undefined
                 });
@@ -1243,6 +1245,47 @@ const bulkImportLeads = async (req, res) => {
     }
 };
 
+// ==========================================
+// NEW: BULK ADD TAGS
+// ==========================================
+const bulkAddTags = async (req, res) => {
+    try {
+        const { leadIds, tags } = req.body;
+        
+        if (!Array.isArray(leadIds) || leadIds.length === 0) {
+            return res.status(400).json({ message: "No leads selected" });
+        }
+        
+        if (!Array.isArray(tags) || tags.length === 0) {
+            return res.status(400).json({ message: "No tags provided" });
+        }
+
+        const query = { _id: { $in: leadIds }, ...req.dataScope };
+        
+        // $addToSet prevents duplicate tags on the same lead
+        const result = await Lead.updateMany(
+            query,
+            { $addToSet: { tags: { $each: tags } } }
+        );
+        
+        // Audit log
+        logActivity({
+            userId: req.user.userId || req.user.id,
+            userName: req.user.name || 'Unknown',
+            actionType: 'LEAD_EDITED',
+            entityType: 'Lead',
+            entityName: 'Bulk Tag Update',
+            metadata: { count: leadIds.length, tags },
+            companyId: req.tenantId
+        }).catch(err => console.error('Audit log error:', err));
+        
+        res.json({ success: true, message: `${result.modifiedCount} leads tagged successfully` });
+    } catch (err) {
+        console.error("Bulk Add Tags Error:", err);
+        res.status(500).json({ message: "Error updating tags", error: err.message });
+    }
+};
+
 module.exports = {
     getLeads,
     createLead,
@@ -1266,5 +1309,6 @@ module.exports = {
     checkDuplicates,
     getDuplicateGroups,
     autoDeleteDuplicates,
-    bulkImportLeads
+    bulkImportLeads,
+    bulkAddTags
 };

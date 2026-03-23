@@ -7,6 +7,7 @@ export const autoMapColumn = (header, currentMappings) => {
     if ((h.includes('email') || h.includes('e-mail')) && !currentMappings.email) return 'email';
     if (h.includes('source') && !currentMappings.source) return 'source';
     if ((h.includes('status') || h.includes('stage')) && !currentMappings.status) return 'status';
+    if ((h.includes('tag') || h.includes('label')) && !currentMappings.tags) return 'tags';
     
     return null;
 };
@@ -29,8 +30,13 @@ export const transformLeadRow = (row, mappings, stages = []) => {
         email: mappings.email && row[mappings.email] ? row[mappings.email].trim() : '',
         source: mappings.source && row[mappings.source] ? row[mappings.source].trim() : 'CSV Import',
         status: mappings.status && row[mappings.status] ? row[mappings.status].trim() : 'New',
+        tags: [],
         customData: {} // Future stub for custom field mapped extraction
     };
+
+    if (mappings.tags && row[mappings.tags]) {
+        lead.tags = row[mappings.tags].split(',').map(t => t.trim()).filter(Boolean);
+    }
 
     lead.phone = normalizePhoneNumber(lead.phone);
 
