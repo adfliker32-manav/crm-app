@@ -9,7 +9,8 @@ const CreateCompanyModal = ({ isOpen, onClose, onSuccess }) => {
         name: '',
         email: '',
         password: '',
-        phone: ''
+        phone: '',
+        role: 'manager'
     });
     const [loading, setLoading] = useState(false);
 
@@ -25,14 +26,15 @@ const CreateCompanyModal = ({ isOpen, onClose, onSuccess }) => {
             await api.post('/superadmin/companies', formData);
             showSuccess('Company created successfully');
             if (onSuccess) onSuccess();
-            onClose();
             setFormData({
                 companyName: '',
                 name: '',
                 email: '',
                 password: '',
-                phone: ''
+                phone: '',
+                role: 'manager'
             });
+            onClose();
         } catch (error) {
             console.error('Error creating company:', error);
             showError(error.response?.data?.message || 'Failed to create company');
@@ -56,7 +58,22 @@ const CreateCompanyModal = ({ isOpen, onClose, onSuccess }) => {
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
                         <label className="block text-sm font-medium text-slate-700 mb-2">
-                            Company Name <span className="text-red-500">*</span>
+                            Account Type <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                            name="role"
+                            value={formData.role}
+                            onChange={handleChange}
+                            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none bg-white cursor-pointer"
+                        >
+                            <option value="manager">Standard CRM Client</option>
+                            <option value="agency">Agency Reseller</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">
+                            Company / Agency Name <span className="text-red-500">*</span>
                         </label>
                         <input
                             type="text"

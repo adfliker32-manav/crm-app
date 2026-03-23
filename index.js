@@ -18,6 +18,8 @@ const whatsappRoutes = require('./src/routes/whatsappRoutes');
 const whatsappTemplateRoutes = require('./src/routes/whatsappTemplateRoutes');
 const whatsAppLogRoutes = require('./src/routes/whatsAppLogRoutes');
 const superAdminRoutes = require('./src/routes/superAdminRoutes');
+const billingRoutes = require('./src/routes/billingRoutes'); // Billing & Subscriptions
+const agencyRoutes = require('./src/routes/agencyRoutes'); // Reseller actions
 const metaRoutes = require('./src/routes/metaRoutes'); // Meta Lead Sync
 const customFieldRoutes = require('./src/routes/customFieldRoutes'); // Custom Lead Fields
 const reportRoutes = require('./src/routes/reportRoutes'); // Reports & Analytics
@@ -145,9 +147,11 @@ mongoose.connect(MONGO_URI)
 // 🛣️ ROUTES SETUP
 // ===========================
 
-// 1. Auth & Super Admin
+// 1. Auth & Super Admin & Billing
 app.use('/api/auth', authRoutes);
 app.use('/api/superadmin', superAdminRoutes);
+app.use('/api/billing', billingRoutes);
+app.use('/api/agency', agencyRoutes);
 
 // 2. Leads System (FIXED PATHS) 🛠️
 app.use('/api/leads', leadRoutes);    // URL: /api/leads/

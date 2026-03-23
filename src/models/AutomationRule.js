@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const ActionSchema = new mongoose.Schema({
     type: { type: String, required: true, enum: ['SEND_WHATSAPP', 'SEND_EMAIL', 'CHANGE_STAGE', 'ASSIGN_USER'] },
@@ -39,5 +40,7 @@ const AutomationRuleSchema = new mongoose.Schema({
     lastFiredAt: { type: Date },
     executionCount: { type: Number, default: 0 }
 }, { timestamps: true });
+
+AutomationRuleSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('AutomationRule', AutomationRuleSchema);

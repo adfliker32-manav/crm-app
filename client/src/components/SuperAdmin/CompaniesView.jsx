@@ -16,6 +16,7 @@ const CompaniesView = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
     const [selectedCompany, setSelectedCompany] = useState(null);
+    const [activeTab, setActiveTab] = useState('all'); // 'all' | 'agency' | 'client'
 
     // Modal states
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -29,13 +30,15 @@ const CompaniesView = () => {
     }, []);
 
     useEffect(() => {
-        const filtered = companies.filter(company =>
+        let filtered = companies.filter(company =>
             company.companyName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
             company.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
             company.contactPerson?.toLowerCase().includes(searchTerm.toLowerCase())
         );
+        if (activeTab === 'agency') filtered = filtered.filter(c => c.role === 'agency');
+        if (activeTab === 'client') filtered = filtered.filter(c => c.role === 'manager');
         setFilteredCompanies(filtered);
-    }, [searchTerm, companies]);
+    }, [searchTerm, companies, activeTab]);
 
     const fetchCompanies = async () => {
         setLoading(true);
@@ -155,6 +158,26 @@ const CompaniesView = () => {
                         Refresh
                     </button>
                 </div>
+            </div>
+
+            {/* Account Type Tabs */}
+            <div className="flex gap-2 bg-white rounded-xl shadow-sm border border-slate-200 p-1 w-fit">
+                {[['all', 'All Accounts'], ['agency', '🏢 Agencies'], ['client', '👤 CRM Clients']].map(([key, label]) => (
+                    <button
+                        key={key}
+                        onClick={() => setActiveTab(key)}
+                        className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                            activeTab === key ? 'bg-purple-600 text-white shadow' : 'text-slate-600 hover:bg-slate-100'
+                        }`}
+                    >
+                        {label}
+                        <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${
+                            activeTab === key ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                            {key === 'all' ? companies.length : companies.filter(c => key === 'agency' ? c.role === 'agency' : c.role === 'manager').length}
+                        </span>
+                    </button>
+                ))}
             </div>
 
             {/* Search Bar */}

@@ -44,6 +44,14 @@ export const AuthProvider = ({ children }) => {
         window.location.href = '/login';
     };
 
+    const loginWithToken = (token, userObj) => {
+        const userWithRole = { ...userObj, role: userObj.role };
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(userWithRole));
+        setUser(userWithRole);
+        return { success: true };
+    };
+
     const register = async (userData) => {
         try {
             // userData object should contain: { name, email, password, companyName, industry, teamSize, phone }
@@ -91,7 +99,7 @@ export const AuthProvider = ({ children }) => {
     };
 
     return (
-        <AuthContext.Provider value={{ user, login, register, logout, updateUser, googleLogin, loading }}>
+        <AuthContext.Provider value={{ user, login, register, logout, loginWithToken, updateUser, googleLogin, loading }}>
             {!loading && children}
         </AuthContext.Provider>
     );

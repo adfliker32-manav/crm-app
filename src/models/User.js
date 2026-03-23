@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const userSchema = new mongoose.Schema({
     name: {
@@ -48,10 +49,10 @@ const userSchema = new mongoose.Schema({
         default: null
     },
 
-    // 👇 3-LAYER ROLE SYSTEM
+    // 👇 4-LAYER SAAS ROLE SYSTEM
     role: {
         type: String,
-        enum: ['superadmin', 'manager', 'agent'],
+        enum: ['superadmin', 'agency', 'manager', 'agent'],
         default: 'manager'
     },
     parentId: {
@@ -303,5 +304,7 @@ const userSchema = new mongoose.Schema({
         default: Date.now
     }
 });
+
+userSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('User', userSchema);

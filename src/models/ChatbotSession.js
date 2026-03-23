@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const chatbotSessionSchema = new mongoose.Schema({
     conversationId: {
@@ -63,5 +64,7 @@ chatbotSessionSchema.index({ userId: 1, flowId: 1 });
 
 // Auto-abandon sessions after 24 hours of inactivity
 chatbotSessionSchema.index({ lastInteractionAt: 1 }, { expireAfterSeconds: 86400 });
+
+chatbotSessionSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('ChatbotSession', chatbotSessionSchema);

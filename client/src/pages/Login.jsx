@@ -19,7 +19,9 @@ const Login = () => {
         const result = await login(email, password);
 
         if (result.success) {
-            navigate(result.role === 'superadmin' ? '/super-admin' : '/dashboard');
+            if (result.role === 'superadmin') navigate('/super-admin');
+            else if (result.role === 'agency') navigate('/agency/dashboard');
+            else navigate('/dashboard');
         } else {
             setError(result.message);
             setIsLoading(false);
@@ -31,7 +33,9 @@ const Login = () => {
         setIsLoading(true);
         const result = await googleLogin(credentialResponse.credential);
         if (result.success) {
-            navigate(result.role === 'superadmin' ? '/super-admin' : '/dashboard');
+            if (result.role === 'superadmin') navigate('/super-admin');
+            else if (result.role === 'agency') navigate('/agency/dashboard');
+            else navigate('/dashboard');
         } else {
             setError(result.message);
             setIsLoading(false);

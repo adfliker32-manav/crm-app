@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const emailMessageSchema = new mongoose.Schema({
     conversationId: {
@@ -68,5 +69,7 @@ const emailMessageSchema = new mongoose.Schema({
 
 emailMessageSchema.index({ conversationId: 1, timestamp: 1 });
 emailMessageSchema.index({ messageId: 1 });
+
+emailMessageSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('EmailMessage', emailMessageSchema);

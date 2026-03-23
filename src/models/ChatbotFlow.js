@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const chatbotFlowSchema = new mongoose.Schema({
     userId: {
@@ -111,5 +112,7 @@ const chatbotFlowSchema = new mongoose.Schema({
 // Index for efficient queries
 chatbotFlowSchema.index({ userId: 1, isActive: 1 });
 chatbotFlowSchema.index({ userId: 1, triggerKeywords: 1 });
+
+chatbotFlowSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('ChatbotFlow', chatbotFlowSchema);

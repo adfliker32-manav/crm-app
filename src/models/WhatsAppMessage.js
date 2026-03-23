@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const whatsAppMessageSchema = new mongoose.Schema({
     conversationId: {
@@ -95,5 +96,7 @@ const whatsAppMessageSchema = new mongoose.Schema({
 // Index for efficient message retrieval
 whatsAppMessageSchema.index({ conversationId: 1, timestamp: -1 });
 whatsAppMessageSchema.index({ userId: 1, timestamp: -1 });
+
+whatsAppMessageSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('WhatsAppMessage', whatsAppMessageSchema);

@@ -68,4 +68,15 @@ const requireSuperAdmin = (req, res, next) => {
     next();
 };
 
-module.exports = { authMiddleware, requireSuperAdmin };
+// AGENCY ONLY MIDDLEWARE (Resellers)
+const requireAgency = (req, res, next) => {
+    if (!req.user) {
+        return res.status(401).json({ message: "Authentication required" });
+    }
+    if (!['superadmin', 'agency'].includes(req.user.role)) {
+        return res.status(403).json({ message: "Access Denied: Agency/Reseller Administrative Access Required" });
+    }
+    next();
+};
+
+module.exports = { authMiddleware, requireSuperAdmin, requireAgency };

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const emailConversationSchema = new mongoose.Schema({
     userId: {
@@ -49,5 +50,7 @@ emailConversationSchema.index({ userId: 1, leadId: 1 }, { unique: true });
 emailConversationSchema.index({ userId: 1, email: 1 });
 emailConversationSchema.index({ userId: 1, lastMessageAt: -1 });
 emailConversationSchema.index({ userId: 1, status: 1 });
+
+emailConversationSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('EmailConversation', emailConversationSchema);

@@ -43,7 +43,7 @@ const createCompany = async (req, res) => {
             email: email.toLowerCase(),
             password: hashedPassword,
             phone,
-            role: 'manager',
+            role: req.body.role === 'agency' ? 'agency' : 'manager',
             subscriptionStatus: 'Trial', // Default to Trial
             subscriptionPlan: 'Free',
             planExpiryDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) // 14 days trial
@@ -70,10 +70,10 @@ const getSaaSAnalytics = async (req, res) => {
         // Optimized: Use Promise.all to run queries in parallel instead of sequentially
         // This reduces total query time significantly
         const [totalCompanies, totalAgents, totalLeads, recentUsers] = await Promise.all([
-            User.countDocuments({ role: 'manager' }),
+            User.countDocuments({ role: { $in: ['manager', 'agency'] } }),
             User.countDocuments({ role: 'agent' }),
             Lead.countDocuments(),
-            User.find({ role: 'manager' })
+            User.find({ role: { $in: ['manager', 'agency'] } })
                 .select('name email createdAt')
                 .sort({ createdAt: -1 })
                 .limit(5)
@@ -97,7 +97,7 @@ const getSaaSAnalytics = async (req, res) => {
 // Get all companies (managers)
 const getAllCompanies = async (req, res) => {
     try {
-        const companies = await User.find({ role: 'manager' })
+        const companies = await User.find({ role: { $in: ['manager', 'agency'] } })
             .select('-password')
             .populate('parentId', 'name email')
             .sort({ createdAt: -1 });
@@ -131,7 +131,7 @@ const getCompanyById = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const company = await User.findOne({ _id: id, role: 'manager' })
+        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } })
             .select('-password')
             .populate('parentId', 'name email');
 
@@ -167,7 +167,7 @@ const updateCompany = async (req, res) => {
         const { name, email, companyName, contactPerson, phone } = req.body;
 
         // Check if company exists
-        const company = await User.findOne({ _id: id, role: 'manager' });
+        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -210,7 +210,7 @@ const deleteCompany = async (req, res) => {
         const { id } = req.params;
 
         // Check if company exists
-        const company = await User.findOne({ _id: id, role: 'manager' });
+        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -257,7 +257,7 @@ const getCompanyLeads = async (req, res) => {
         const { page = 1, limit = 50 } = req.query;
 
         // Check if company exists
-        const company = await User.findOne({ _id: id, role: 'manager' });
+        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -293,7 +293,7 @@ const changeCompanyPassword = async (req, res) => {
             return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
         }
 
-        const company = await User.findOne({ _id: id, role: 'manager' });
+        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -316,7 +316,7 @@ const getCompanyAgents = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const company = await User.findOne({ _id: id, role: 'manager' });
+        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -347,7 +347,7 @@ const createCompanyAgent = async (req, res) => {
             return res.status(400).json({ message: "Name, email, and password are required" });
         }
 
-        const company = await User.findOne({ _id: id, role: 'manager' });
+        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -485,7 +485,7 @@ const updateAgentLimit = async (req, res) => {
             return res.status(400).json({ message: "Valid agent limit is required" });
         }
 
-        const company = await User.findOne({ _id: id, role: 'manager' });
+        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -511,7 +511,7 @@ const updateAgentLimit = async (req, res) => {
 const getBillingData = async (req, res) => {
     try {
         // Get all companies with billing info
-        const companies = await User.find({ role: 'manager' })
+        const companies = await User.find({ role: { $in: ['manager', 'agency'] } })
             .select('name email companyName subscriptionPlan subscriptionStatus planExpiryDate lastPaymentDate monthlyRevenue createdAt')
             .sort({ createdAt: -1 });
 
@@ -582,7 +582,7 @@ const updateCompanyBilling = async (req, res) => {
             lastPaymentDate
         } = req.body;
 
-        const company = await User.findOne({ _id: id, role: 'manager' });
+        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -617,7 +617,7 @@ const updateCompanyBilling = async (req, res) => {
 const getDashboardStats = async (req, res) => {
     try {
         const [totalCompanies, totalLeads, totalAgents] = await Promise.all([
-            User.countDocuments({ role: 'manager' }),
+            User.countDocuments({ role: { $in: ['manager', 'agency'] } }),
             Lead.countDocuments(),
             User.countDocuments({ role: 'agent' })
         ]);
@@ -644,7 +644,7 @@ const getRecentSignups = async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 10;
 
-        const recentCompanies = await User.find({ role: 'manager' })
+        const recentCompanies = await User.find({ role: { $in: ['manager', 'agency'] } })
             .select('companyName email createdAt')
             .sort({ createdAt: -1 })
             .limit(limit)
@@ -721,7 +721,7 @@ const getGrowthData = async (req, res) => {
 // Get billing stats (separate from full billing data)
 const getBillingStats = async (req, res) => {
     try {
-        const companies = await User.find({ role: 'manager' })
+        const companies = await User.find({ role: { $in: ['manager', 'agency'] } })
             .select('monthlyRevenue subscriptionStatus planExpiryDate lastPaymentDate')
             .lean();
 
@@ -760,7 +760,7 @@ const getBillingStats = async (req, res) => {
 // Get all subscriptions (for billing view table)
 const getSubscriptions = async (req, res) => {
     try {
-        const companies = await User.find({ role: 'manager' })
+        const companies = await User.find({ role: { $in: ['manager', 'agency'] } })
             .select('companyName email subscriptionPlan subscriptionStatus monthlyRevenue planExpiryDate lastPaymentDate createdAt')
             .sort({ createdAt: -1 })
             .lean();

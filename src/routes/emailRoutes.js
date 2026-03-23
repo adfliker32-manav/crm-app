@@ -2,8 +2,9 @@
 
 const express = require('express');
 const router = express.Router();
-const emailController = require('../controllers/emailController'); // Controller Import
-const { authMiddleware } = require('../middleware/authMiddleware'); // Auth Import
+const emailController = require('../controllers/emailController');
+const { authMiddleware } = require('../middleware/authMiddleware');
+const { meterUsage } = require('../middleware/usageMeter');
 
 // Debugging line (Agar controller function load nahi hua to error dikhayega)
 if (!emailController.sendEmail) {
@@ -12,7 +13,7 @@ if (!emailController.sendEmail) {
 
 // Route Definition
 // Path: /api/email/send
-router.post('/send', authMiddleware, emailController.sendEmail);
+router.post('/send', authMiddleware, meterUsage('email'), emailController.sendEmail);
 
 // Email Configuration Routes
 const emailConfigController = require('../controllers/emailConfigController');

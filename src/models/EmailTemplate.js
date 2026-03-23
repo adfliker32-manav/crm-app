@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const emailTemplateSchema = new mongoose.Schema({
     userId: {
@@ -48,5 +49,7 @@ const emailTemplateSchema = new mongoose.Schema({
         type: String // e.g., {{leadName}}, {{leadEmail}}, {{companyName}}
     }]
 }, { timestamps: true });
+
+emailTemplateSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('EmailTemplate', emailTemplateSchema);

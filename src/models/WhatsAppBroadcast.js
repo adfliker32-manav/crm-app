@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const whatsappBroadcastSchema = new mongoose.Schema({
     userId: {
@@ -79,5 +80,7 @@ const whatsappBroadcastSchema = new mongoose.Schema({
 // Indexes for faster querying
 whatsappBroadcastSchema.index({ userId: 1, status: 1 });
 whatsappBroadcastSchema.index({ scheduledFor: 1, status: 1 });
+
+whatsappBroadcastSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('WhatsAppBroadcast', whatsappBroadcastSchema);

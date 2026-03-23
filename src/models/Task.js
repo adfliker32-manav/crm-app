@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const taskSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -10,5 +11,7 @@ const taskSchema = new mongoose.Schema({
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // The person who created the task
     date: { type: Date, default: Date.now },
 });
+
+taskSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('Task', taskSchema);

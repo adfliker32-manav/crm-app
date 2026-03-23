@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const emailLogSchema = new mongoose.Schema({
     userId: {
@@ -63,5 +64,7 @@ const emailLogSchema = new mongoose.Schema({
 emailLogSchema.index({ userId: 1, sentAt: -1 });
 emailLogSchema.index({ userId: 1, status: 1 });
 emailLogSchema.index({ userId: 1, isAutomated: 1 });
+
+emailLogSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('EmailLog', emailLogSchema);

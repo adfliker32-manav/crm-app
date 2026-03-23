@@ -45,7 +45,7 @@ const Sidebar = () => {
     const [appName, setAppName] = useState('CRM Pro');
     const [dueTaskCount, setDueTaskCount] = useState(0);
 
-    const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
+    const canManageTeam = ['superadmin', 'agency', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
 
     useEffect(() => {
         const fetchAppName = async () => {

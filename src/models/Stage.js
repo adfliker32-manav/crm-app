@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const stageSchema = new mongoose.Schema({
     // 🔥 NEW: Ye stage kis user ka hai?
@@ -18,5 +19,7 @@ const stageSchema = new mongoose.Schema({
         default: 0 
     }
 });
+
+stageSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('Stage', stageSchema);

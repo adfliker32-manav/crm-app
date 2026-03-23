@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 // 👇 Chota Schema sirf Messages ke liye
 const messageSchema = new mongoose.Schema({
@@ -106,5 +107,7 @@ const LeadSchema = new mongoose.Schema({
     }
 
 }, { timestamps: true });
+
+LeadSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('Lead', LeadSchema);

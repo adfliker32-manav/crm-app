@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const globalSettingSchema = new mongoose.Schema({
     // Store as key-value pairs for flexibility
@@ -28,5 +29,7 @@ const globalSettingSchema = new mongoose.Schema({
 
 // Pre-define some common keys to avoid typos in code usage
 // 'maintenance_mode', 'app_name', 'support_email', 'trial_days_default'
+
+globalSettingSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('GlobalSetting', globalSettingSchema);

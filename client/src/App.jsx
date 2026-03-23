@@ -1,6 +1,7 @@
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { BrandingProvider } from './context/BrandingContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { ConfirmProvider } from './context/ConfirmContext';
 import { PromptProvider } from './context/PromptContext';
@@ -9,6 +10,11 @@ import ConfirmDialog from './components/ConfirmDialog';
 import PromptDialog from './components/PromptDialog';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './layouts/Layout';
+import AgencyLayout from './layouts/AgencyLayout';
+import AgencyDashboard from './pages/Agency/AgencyDashboard';
+import AgencyClients from './pages/Agency/AgencyClients';
+import AgencyWhiteLabel from './pages/Agency/AgencyWhiteLabel';
+import AgencyMarkupPricing from './pages/Agency/AgencyMarkupPricing';
 import Dashboard from './pages/Dashboard';
 import EmailManagement from './pages/EmailManagement';
 import Team from './pages/Team';
@@ -26,49 +32,59 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 function App() {
   return (
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-    <AuthProvider>
-      <NotificationProvider>
-        <ConfirmProvider>
-          <PromptProvider>
-            <BrowserRouter>
-              <Routes>
-                <Route path="/login" element={<Login />} />
-                <Route path="/register" element={<Register />} />
+      <AuthProvider>
+        <BrandingProvider>
+        <NotificationProvider>
+          <ConfirmProvider>
+            <PromptProvider>
+              <BrowserRouter>
+                <Routes>
+                  <Route path="/login" element={<Login />} />
+                  <Route path="/register" element={<Register />} />
 
-                <Route element={<ProtectedRoute />}>
-                  <Route path="/super-admin" element={<SuperAdmin />} />
+                  <Route element={<ProtectedRoute />}>
+                    <Route path="/super-admin" element={<SuperAdmin />} />
 
-                  {/* Dashboard Layout Routes */}
-                  <Route element={<Layout />}>
-                    <Route path="/dashboard" element={<Dashboard />} />
+                    {/* Agency Reseller Layout Routes */}
+                    <Route path="/agency" element={<AgencyLayout />}>
+                      <Route path="dashboard" element={<AgencyDashboard />} />
+                      <Route path="clients" element={<AgencyClients />} />
+                      <Route path="white-label" element={<AgencyWhiteLabel />} />
+                      <Route path="billing" element={<AgencyMarkupPricing />} />
+                    </Route>
 
-                    {/* Preserve other routes as siblings if you want them accessible strictly under layout, 
+                    {/* Dashboard Layout Routes */}
+                    <Route element={<Layout />}>
+                      <Route path="/dashboard" element={<Dashboard />} />
+
+                      {/* Preserve other routes as siblings if you want them accessible strictly under layout, 
                         BUT originally they were at root. Since Layout uses <Outlet>, nesting them under a 
                         pathless layout route keeps their paths but wraps them. 
                         However, we want to start organizing better. 
                         If we keeping old paths:
                     */}
-                    <Route path="/leads" element={<Leads />} />
-                    <Route path="/email" element={<EmailManagement />} />
-                    <Route path="/whatsapp" element={<WhatsAppManagement />} />
-                    <Route path="/team" element={<Team />} />
-                    <Route path="/automations" element={<Automations />} />
-                    <Route path="/settings" element={<Settings />} />
-                    <Route path="/reports" element={<Reports />} />
+                      <Route path="/leads" element={<Leads />} />
+                      <Route path="/email" element={<EmailManagement />} />
+                      <Route path="/whatsapp" element={<WhatsAppManagement />} />
+                      <Route path="/team" element={<Team />} />
+                      <Route path="/automations" element={<Automations />} />
+                      <Route path="/settings" element={<Settings />} />
+                      <Route path="/reports" element={<Reports />} />
+                    </Route>
                   </Route>
-                </Route>
 
-                {/* Default root redirects to login for now (no Landing Page) */}
-                <Route path="/" element={<Navigate to="/login" replace />} />
-              </Routes>
-              <NotificationContainer />
-              <ConfirmDialog />
-              <PromptDialog />
-            </BrowserRouter>
-          </PromptProvider>
-        </ConfirmProvider>
-      </NotificationProvider>
-    </AuthProvider>
+                  {/* Default root redirects to login for now (no Landing Page) */}
+                  <Route path="/" element={<Navigate to="/login" replace />} />
+                </Routes>
+                <NotificationContainer />
+                <ConfirmDialog />
+                <PromptDialog />
+              </BrowserRouter>
+            </PromptProvider>
+          </ConfirmProvider>
+        </NotificationProvider>
+        </BrandingProvider>
+      </AuthProvider>
     </GoogleOAuthProvider>
   );
 }

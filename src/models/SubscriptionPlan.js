@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const subscriptionPlanSchema = new mongoose.Schema({
     name: {
@@ -38,5 +39,7 @@ const subscriptionPlanSchema = new mongoose.Schema({
         default: Date.now
     }
 });
+
+subscriptionPlanSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('SubscriptionPlan', subscriptionPlanSchema);

@@ -4,6 +4,7 @@ const router = express.Router();
 const webhookController = require('../controllers/webhookController');
 const whatsappConversationController = require('../controllers/whatsappConversationController');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { meterUsage } = require('../middleware/usageMeter');
 const multer = require('multer');
 
 // Multer config: store in memory for Meta upload relay
@@ -18,7 +19,7 @@ router.post('/webhook', webhookController.handleWebhook);
 
 // Legacy Frontend API Routes
 router.get('/leads', authMiddleware, webhookController.getWhatsAppLeads);
-router.post('/send', authMiddleware, webhookController.sendReply);
+router.post('/send', authMiddleware, meterUsage('whatsapp'), webhookController.sendReply);
 
 // WhatsApp Configuration Routes
 const whatsappConfigController = require('../controllers/whatsappConfigController');

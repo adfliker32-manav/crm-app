@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const whatsAppLogSchema = new mongoose.Schema({
     userId: {
@@ -54,5 +55,7 @@ const whatsAppLogSchema = new mongoose.Schema({
 whatsAppLogSchema.index({ userId: 1, sentAt: -1 });
 whatsAppLogSchema.index({ userId: 1, status: 1 });
 whatsAppLogSchema.index({ userId: 1, isAutomated: 1 });
+
+whatsAppLogSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('WhatsAppLog', whatsAppLogSchema);

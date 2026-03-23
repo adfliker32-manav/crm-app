@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const whatsappTemplateSchema = new mongoose.Schema({
     userId: {
@@ -142,5 +143,7 @@ whatsappTemplateSchema.methods.getComponent = function (type) {
 whatsappTemplateSchema.methods.isReadyToUse = function () {
     return this.status === 'APPROVED' && this.isActive;
 };
+
+whatsappTemplateSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('WhatsAppTemplate', whatsappTemplateSchema);

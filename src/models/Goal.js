@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const goalSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // tenant (manager)
@@ -13,5 +14,7 @@ const goalSchema = new mongoose.Schema({
 });
 
 goalSchema.index({ userId: 1, agentId: 1, month: 1 }, { unique: true });
+
+goalSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('Goal', goalSchema);

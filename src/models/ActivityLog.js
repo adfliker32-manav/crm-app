@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const saasPlugin = require('./plugins/saasPlugin');
 
 const activityLogSchema = new mongoose.Schema({
     // Who performed the action
@@ -99,5 +100,7 @@ activityLogSchema.index({ userId: 1, timestamp: -1 });
 
 // Auto-delete logs older than 90 days (optional, can be configured)
 activityLogSchema.index({ timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
+
+activityLogSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('ActivityLog', activityLogSchema);
