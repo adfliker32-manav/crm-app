@@ -338,7 +338,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
 
         const messageDoc = new WhatsAppMessage({
             conversationId: conversation._id,
-            userId: userId,
+            userId: targetUserId,
             waMessageId: waMessageId,
             direction: 'inbound',
             type: messageType,
@@ -359,7 +359,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         
         // Execute in next tick of event loop without blocking current execution
         setImmediate(() => {
-            chatbotEngine.processIncomingMessage(messageDoc, conversation._id, userId)
+            chatbotEngine.processIncomingMessage(messageDoc, conversation._id, targetUserId)
                 .then(() => debug('🤖 Chatbot engine finished in background'))
                 .catch(err => console.error('❌ Background chatbot error:', err));
         });
