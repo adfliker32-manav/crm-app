@@ -265,13 +265,36 @@ const processIncomingMessage = async (message, contacts, userId) => {
 
         const messagePreview = extractMessagePreview(message);
 
-        // --- 3. ATOMIC UPSERT ---
+        // --- 3. FIX: FIND REAL CONVERSATION OWNER ---
+        // Webhooks often resolve to the Agency `userId`, but an Agent might have 
+        // sent the outbound template creating the conversation under the Agent's `userId`.
+        // If we strictly upsert on the Agency `userId`, it creates a duplicate.
+        // We must search the entire company tree to find if this contact already exists.
+        const User = require('../models/User'); // Ensure imported
+        const currentUser = await User.findById(userId).select('role parentId').lean();
+        const companyId = currentUser?.role === 'agent' ? currentUser.parentId : userId;
+        
+        const companyUsers = await User.find({
+            $or: [{ _id: companyId }, { parentId: companyId }]
+        }).select('_id').lean();
+        const companyUserIds = companyUsers.map(u => u._id);
+
+        // Find if any agent/admin in the company already has a conversation with this contact
+        const existingConversation = await WhatsAppConversation.findOne({
+            userId: { $in: companyUserIds },
+            waContactId: from
+        }).sort({ lastMessageAt: -1 }).lean();
+
+        // If found, append to that specific user's conversation. If not, default to the webhook's userId.
+        const targetUserId = existingConversation ? existingConversation.userId : userId;
+
+        // --- 4. ATOMIC UPSERT ---
         // Guaranteed to never throw duplicate key exceptions on concurrent inserts
-        debug(`🔎 Upserting conversation: userId=${userId}, waContactId=${from}`);
+        debug(`🔎 Upserting conversation: targetUserId=${targetUserId}, waContactId=${from}`);
 
         const updatePayload = {
             $setOnInsert: {
-                userId: userId,
+                userId: targetUserId,
                 waContactId: from,
                 phone: from,
                 leadId: lead?._id || null,
@@ -295,7 +318,7 @@ const processIncomingMessage = async (message, contacts, userId) => {
         }
 
         const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { userId: userId, waContactId: from },
+            { userId: targetUserId, waContactId: from },
             updatePayload,
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
