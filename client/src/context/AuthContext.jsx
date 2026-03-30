@@ -52,25 +52,6 @@ export const AuthProvider = ({ children }) => {
         return { success: true };
     };
 
-    const register = async (userData) => {
-        try {
-            // userData object should contain: { name, email, password, companyName, industry, teamSize, phone }
-            const res = await api.post('/auth/register', userData);
-            const { token, user } = res.data;
-
-            localStorage.setItem('token', token);
-            localStorage.setItem('user', JSON.stringify(user));
-            setUser(user);
-            return { success: true };
-        } catch (error) {
-            console.error("Registration failed", error);
-            return {
-                success: false,
-                message: error.response?.data?.message || 'Registration failed'
-            };
-        }
-    };
-
     // Update user data in state and localStorage
     const updateUser = (updatedUserData) => {
         const updatedUser = { ...user, ...updatedUserData };
@@ -78,9 +59,9 @@ export const AuthProvider = ({ children }) => {
         setUser(updatedUser);
     };
 
-    const googleLogin = async (credential) => {
+    const googleLogin = async (credential, allowNewUser = true) => {
         try {
-            const res = await api.post('/auth/google', { credential });
+            const res = await api.post('/auth/google', { credential, allowNewUser });
             const { token, role, user } = res.data;
 
             const userWithRole = { ...user, role: user.role || role };
@@ -99,7 +80,7 @@ export const AuthProvider = ({ children }) => {
     };
 
     return (
-        <AuthContext.Provider value={{ user, login, register, logout, loginWithToken, updateUser, googleLogin, loading }}>
+        <AuthContext.Provider value={{ user, login, logout, loginWithToken, updateUser, googleLogin, loading }}>
             {!loading && children}
         </AuthContext.Provider>
     );

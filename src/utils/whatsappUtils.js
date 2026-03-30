@@ -30,20 +30,24 @@ function decrypt(text) {
 // Get user WhatsApp credentials
 async function getUserWhatsAppCredentials(userId) {
     try {
-        let user = await User.findById(userId).select('waBusinessId waPhoneNumberId waAccessToken role parentId');
+        const User = require('../models/User'); // Ensure it's required if moved
+        const IntegrationConfig = require('../models/IntegrationConfig');
         
-        // Agent inheritance: Agents use their Manager's configuration
-        if (user && user.role === 'agent' && user.parentId) {
-            user = await User.findById(user.parentId).select('waBusinessId waPhoneNumberId waAccessToken');
-        }
+        let user = await User.findById(userId).select('role parentId');
+        if (!user) return null;
 
-        if (!user || !user.waPhoneNumberId || !user.waAccessToken) {
+        // Agent inheritance: Agents use their Manager's configuration
+        const tenantId = (user.role === 'agent' && user.parentId) ? user.parentId : userId;
+
+        const config = await IntegrationConfig.findOne({ userId: tenantId }).select('whatsapp');
+
+        if (!config || !config.whatsapp?.waPhoneNumberId || !config.whatsapp?.waAccessToken) {
             return null;
         }
         return {
-            phoneNumberId: user.waPhoneNumberId,
-            accessToken: decrypt(user.waAccessToken),
-            businessId: user.waBusinessId
+            phoneNumberId: config.whatsapp.waPhoneNumberId,
+            accessToken: decrypt(config.whatsapp.waAccessToken),
+            businessId: config.whatsapp.waBusinessId
         };
     } catch (error) {
         console.error('Error getting user WhatsApp credentials:', error);

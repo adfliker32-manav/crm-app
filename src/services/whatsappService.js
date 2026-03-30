@@ -2,6 +2,7 @@ const axios = require('axios');
 require('dotenv').config(); // Ensure env vars are loaded
 const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
 const { logWhatsApp } = require('./whatsAppLogService');
+const { isFeatureDisabled } = require('../utils/systemConfig');
 
 // Internal Helper: Get valid credentials for Meta API
 const getCredentials = async (userId = null) => {
@@ -25,8 +26,30 @@ const getCredentials = async (userId = null) => {
     return { phoneNumberId, accessToken };
 };
 
+// Internal Helper: Cancel active chatbot sessions for a phone number
+const cancelActiveChatbots = async (phone) => {
+    try {
+        const WhatsAppConversation = require('../models/WhatsAppConversation');
+        const ChatbotSession = require('../models/ChatbotSession');
+        const conv = await WhatsAppConversation.findOne({ phone: phone });
+        if (conv) {
+            await ChatbotSession.updateMany(
+                { conversationId: conv._id, status: 'active' },
+                { $set: { status: 'handoff', handoffReason: 'Agent manually replied', completedAt: new Date() } }
+            );
+        }
+    } catch (e) {
+        console.error('Error cancelling chatbot sessions:', e);
+    }
+};
+
 const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null) => {
     try {
+        if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
+            console.log(`🛑 WHATSAPP KILL SWITCH ACTIVE. Blocked template '${templateName}' to ${to}`);
+            throw new Error("Emergency: WhatsApp sending is temporarily disabled platform-wide.");
+        }
+
         let phoneNumberId, accessToken;
 
         // Get user credentials if userId provided
@@ -58,7 +81,7 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
             throw new Error(errorMsg);
         }
 
-        const url = `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -86,6 +109,7 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
         const response = await axios.post(url, data, config);
 
         console.log(`✅ SUCCESS: Message Sent! Response ID: ${response.data.messages[0].id}`);
+        await cancelActiveChatbots(to);
         return response.data;
 
     } catch (error) {
@@ -105,6 +129,11 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
 // Send WhatsApp text message (for templates)
 const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
     try {
+        if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
+            console.log(`🛑 WHATSAPP KILL SWITCH ACTIVE. Blocked text message to ${to}`);
+            throw new Error("Emergency: WhatsApp sending is temporarily disabled platform-wide.");
+        }
+
         let phoneNumberId, accessToken;
 
         // Get user credentials if userId provided
@@ -129,7 +158,7 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
             throw new Error(errorMsg);
         }
 
-        const url = `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -151,6 +180,7 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
 
         const messageId = response.data.messages?.[0]?.id;
         console.log(`✅ SUCCESS: WhatsApp text message sent! Response ID: ${messageId}`);
+        await cancelActiveChatbots(to);
 
         // Log successful message (non-blocking)
         if (userId && messageId) {
@@ -196,8 +226,13 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
 // Send media message (image, document, audio, video)
 const sendMediaMessage = async (to, mediaType, mediaId, caption = null, userId = null) => {
     try {
+        if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
+            console.log(`🛑 WHATSAPP KILL SWITCH ACTIVE. Blocked media message to ${to}`);
+            throw new Error("Emergency: WhatsApp sending is temporarily disabled platform-wide.");
+        }
+        
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -222,6 +257,7 @@ const sendMediaMessage = async (to, mediaType, mediaId, caption = null, userId =
 
         const response = await axios.post(url, data, config);
         console.log(`✅ Media message sent (${mediaType}):`, response.data.messages[0].id);
+        await cancelActiveChatbots(to);
         return response.data;
     } catch (error) {
         console.error(`❌ Failed to send ${mediaType} message:`, error.response?.data || error.message);
@@ -232,8 +268,13 @@ const sendMediaMessage = async (to, mediaType, mediaId, caption = null, userId =
 // Send interactive message with buttons
 const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
     try {
+        if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
+            console.log(`🛑 WHATSAPP KILL SWITCH ACTIVE. Blocked interactive message to ${to}`);
+            throw new Error("Emergency: WhatsApp sending is temporarily disabled platform-wide.");
+        }
+
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -265,9 +306,82 @@ const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
 
         const response = await axios.post(url, data, config);
         console.log(`✅ Interactive message sent:`, response.data.messages[0].id);
+        await cancelActiveChatbots(to);
         return response.data;
     } catch (error) {
         console.error('❌ Failed to send interactive message:', error.response?.data || error.message);
+        throw error;
+    }
+};
+
+// Send a predefined WhatsApp Template Message
+const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en', componentsData = [], userId = null) => {
+    try {
+        if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
+            console.log(`🛑 WHATSAPP KILL SWITCH ACTIVE. Blocked template message to ${to}`);
+            throw new Error("Emergency: WhatsApp sending is temporarily disabled platform-wide.");
+        }
+
+        const { phoneNumberId, accessToken } = await getCredentials(userId);
+        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+
+        const data = {
+            messaging_product: "whatsapp",
+            to: to,
+            type: "template",
+            template: {
+                name: templateName,
+                language: {
+                    code: languageCode
+                }
+            }
+        };
+
+        // Attach components only if they exist
+        if (componentsData && componentsData.length > 0) {
+            data.template.components = componentsData;
+        }
+
+        const config = {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        };
+
+        const response = await axios.post(url, data, config);
+        
+        const messageId = response.data.messages?.[0]?.id;
+        console.log(`✅ SUCCESS: WhatsApp template sent! Response ID: ${messageId}`);
+        await cancelActiveChatbots(to);
+
+        // Log successful message
+        if (userId && messageId) {
+            logWhatsApp({
+                userId,
+                to,
+                message: `[Template: ${templateName}]`,
+                status: 'sent',
+                messageId,
+                isAutomated: true,
+                triggerType: 'manual'
+            }).catch(err => console.error('Error logging WhatsApp message:', err));
+        }
+
+        return response.data;
+    } catch (error) {
+        console.error(`❌ Failed to send template ${templateName}:`, error.response?.data || error.message);
+        if (userId) {
+            logWhatsApp({
+                userId,
+                to,
+                message: `[Template: ${templateName}]`,
+                status: 'failed',
+                error: error.response?.data?.error?.message || error.message,
+                isAutomated: true,
+                triggerType: 'manual'
+            }).catch(err => console.error('Error logging failed WhatsApp message:', err));
+        }
         throw error;
     }
 };
@@ -278,7 +392,7 @@ const downloadMedia = async (mediaId, userId = null) => {
         const { accessToken } = await getCredentials(userId);
 
         // Step 1: Get media URL
-        const mediaInfoUrl = `https://graph.facebook.com/v17.0/${mediaId}`;
+        const mediaInfoUrl = `https://graph.facebook.com/v21.0/${mediaId}`;
         const mediaInfoResponse = await axios.get(mediaInfoUrl, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
         });
@@ -307,15 +421,15 @@ const downloadMedia = async (mediaId, userId = null) => {
 const submitTemplateToMeta = async (userId, template) => {
     try {
         const { accessToken } = await getCredentials(userId);
-        const User = require('../models/User');
-        const user = await User.findById(userId);
-        const wabaId = user?.waBusinessId || process.env.WA_BUSINESS_ID;
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const config = await IntegrationConfig.findOne({ userId });
+        const wabaId = config?.whatsapp?.waBusinessId || process.env.WA_BUSINESS_ID;
 
         if (!wabaId) {
             return { success: false, error: 'WhatsApp Business Account ID not configured. Please set it in WhatsApp Settings.' };
         }
 
-        const url = `https://graph.facebook.com/v17.0/${wabaId}/message_templates`;
+        const url = `https://graph.facebook.com/v21.0/${wabaId}/message_templates`;
 
         // Build components for Meta API
         const metaComponents = [];
@@ -375,7 +489,7 @@ const submitTemplateToMeta = async (userId, template) => {
 const syncTemplateFromMeta = async (userId, metaTemplateId) => {
     try {
         const { accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v17.0/${metaTemplateId}`;
+        const url = `https://graph.facebook.com/v21.0/${metaTemplateId}`;
 
         const response = await axios.get(url, {
             headers: { 'Authorization': `Bearer ${accessToken}` },
@@ -401,16 +515,16 @@ const syncTemplateFromMeta = async (userId, metaTemplateId) => {
 const uploadMediaForTemplate = async (userId, fileBuffer, mimeType, fileName) => {
     try {
         const { accessToken } = await getCredentials(userId);
-        const User = require('../models/User');
-        const user = await User.findById(userId);
-        const appId = user?.waAppId || process.env.WA_APP_ID || process.env.META_APP_ID;
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const config = await IntegrationConfig.findOne({ userId });
+        const appId = config?.whatsapp?.waAppId || process.env.WA_APP_ID || process.env.META_APP_ID;
 
         if (!appId) {
             throw new Error('Meta App ID not configured. Please set WA_APP_ID or META_APP_ID in your settings.');
         }
 
         // Step 1: Create upload session
-        const sessionUrl = `https://graph.facebook.com/v17.0/${appId}/uploads`;
+        const sessionUrl = `https://graph.facebook.com/v21.0/${appId}/uploads`;
         const sessionRes = await axios.post(sessionUrl, null, {
             params: {
                 file_length: fileBuffer.length,
@@ -424,7 +538,7 @@ const uploadMediaForTemplate = async (userId, fileBuffer, mimeType, fileName) =>
         console.log('📤 Upload session created:', uploadSessionId);
 
         // Step 2: Upload the file binary
-        const uploadUrl = `https://graph.facebook.com/v17.0/${uploadSessionId}`;
+        const uploadUrl = `https://graph.facebook.com/v21.0/${uploadSessionId}`;
         const uploadRes = await axios.post(uploadUrl, fileBuffer, {
             headers: {
                 'Authorization': `OAuth ${accessToken}`,
@@ -452,5 +566,6 @@ module.exports = {
     downloadMedia,
     submitTemplateToMeta,
     syncTemplateFromMeta,
-    uploadMediaForTemplate
-};
+    uploadMediaForTemplate,
+    sendWhatsAppTemplateMessage
+};

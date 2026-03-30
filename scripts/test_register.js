@@ -6,7 +6,7 @@ const registerUser = async () => {
         const response = await axios.post('http://localhost:5000/api/auth/register', {
             name: "Test User",
             email: "testuser" + Date.now() + "@example.com",
-            password: "password123"
+            password: "Password123!"
         });
         console.log("Registration Success:", response.data);
     } catch (error) {

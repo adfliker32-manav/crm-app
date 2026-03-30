@@ -3,6 +3,8 @@ const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
+const IntegrationConfig = require('../models/IntegrationConfig');
+const telemetryService = require('../services/telemetryService');
 
 // ============================================================
 // 🐛 DEBUG MODE - controlled via WA_WEBHOOK_DEBUG env variable
@@ -70,9 +72,14 @@ const verifySignature = (req) => {
         return true; // Skip verification if no secret configured
     }
 
+    // FIX: Use req.rawBody (the exact bytes Meta signed) instead of JSON.stringify(req.body).
+    // JSON.stringify strips/changes whitespace, making the hash always mismatch.
+    // The rawBody Buffer is attached in index.js via express.json({ verify: (req,res,buf) => req.rawBody=buf })
+    const payloadToSign = req.rawBody || Buffer.from(JSON.stringify(req.body));
+
     const expectedSignature = 'sha256=' + crypto
         .createHmac('sha256', appSecret)
-        .update(JSON.stringify(req.body))
+        .update(payloadToSign)
         .digest('hex');
 
     debug(`🔐 Expected signature: ${expectedSignature}`);
@@ -88,47 +95,58 @@ const verifySignature = (req) => {
 
 // Handle incoming webhook
 exports.handleWebhook = async (req, res) => {
-    try {
-        console.log('📥 [WEBHOOK] POST /webhook/whatsapp received');
-        debug('📋 Request headers:', JSON.stringify(req.headers, null, 2));
-        debugJSON('📦 Request body (raw)', req.body);
+    // 1. Respond immediately to acknowledge receipt and prevent Meta timeouts/retries
+    res.sendStatus(200);
+    debug('✅ Sent 200 OK to Meta immediately');
 
-        // Verify signature (optional but recommended)
-        if (process.env.META_APP_SECRET && !verifySignature(req)) {
-            console.error('❌ Invalid webhook signature - rejecting request');
-            return res.sendStatus(403);
-        }
+    // 2. Process everything else in the background
+    setImmediate(async () => {
+        const start = process.hrtime();
+        let isSuccess = false;
 
-        const body = req.body;
+        try {
+            console.log('📥 [WEBHOOK] POST /webhook/whatsapp received (Async processing)');
+            debug('📋 Request headers:', JSON.stringify(req.headers, null, 2));
+            debugJSON('📦 Request body (raw)', req.body);
 
-        // Check if this is a WhatsApp webhook
-        debug(`🔍 body.object = "${body.object}"`);
-        if (body.object !== 'whatsapp_business_account') {
-            debug(`❌ Not a whatsapp_business_account event. Got: "${body.object}". Ignoring.`);
-            return res.sendStatus(404);
-        }
-
-        // Respond immediately to acknowledge receipt
-        res.sendStatus(200);
-        debug('✅ Sent 200 OK to Meta immediately');
-
-        // Process entries asynchronously
-        if (body.entry && body.entry.length > 0) {
-            debug(`📋 Processing ${body.entry.length} entry/entries...`);
-            for (const entry of body.entry) {
-                await processEntry(entry);
+            // Verify signature (optional but recommended)
+            if (process.env.META_APP_SECRET && !verifySignature(req)) {
+                console.error('❌ Invalid webhook signature - dropping request');
+                telemetryService.recordWebhook(false, false, 0);
+                return; // Exits the setImmediate block, response already sent
             }
-        } else {
-            debug('⚠️  No entries found in webhook body');
+
+            const body = req.body;
+
+            // Check if this is a WhatsApp webhook
+            debug(`🔍 body.object = "${body.object}"`);
+            if (body.object !== 'whatsapp_business_account') {
+                debug(`❌ Not a whatsapp_business_account event. Got: "${body.object}". Ignoring.`);
+                telemetryService.recordWebhook(false, false, 0);
+                return;
+            }
+
+            // Process entries asynchronously
+            if (body.entry && body.entry.length > 0) {
+                debug(`📋 Processing ${body.entry.length} entry/entries...`);
+                // Process entries safely without blocking the main event loop for too long
+                for (const entry of body.entry) {
+                    await processEntry(entry);
+                }
+            } else {
+                debug('⚠️  No entries found in webhook body');
+            }
+
+            isSuccess = true;
+        } catch (error) {
+            console.error('❌ Webhook background processing error:', error);
+            debug('❌ Full error stack:', error.stack);
+        } finally {
+            const diff = process.hrtime(start);
+            const timeInMs = (diff[0] * 1e3) + (diff[1] * 1e-6);
+            telemetryService.recordWebhook(isSuccess, false, timeInMs);
         }
-    } catch (error) {
-        console.error('❌ Webhook processing error:', error);
-        debug('❌ Full error stack:', error.stack);
-        // Still return 200 to prevent Meta from retrying
-        if (!res.headersSent) {
-            res.sendStatus(200);
-        }
-    }
+    });
 };
 
 // Process a single entry from the webhook
@@ -148,14 +166,18 @@ const processEntry = async (entry) => {
             debug(`📱 Display Phone Number:          ${displayPhoneNumber}`);
             debugJSON('📋 Change value', value);
 
-            // Find the user who owns this phone number
-            debug(`🔎 Looking for user with waPhoneNumberId = "${phoneNumberId}"...`);
-            let user = await User.findOne({ waPhoneNumberId: phoneNumberId });
-
-            if (user) {
-                debug(`✅ Found user by waPhoneNumberId: ${user.email} (${user._id})`);
+            // Find the user who owns this phone number via IntegrationConfig
+            debug(`🔎 Looking for tenant with waPhoneNumberId = "${phoneNumberId}" via IntegrationConfig...`);
+            const config = await IntegrationConfig.findOne({ "whatsapp.waPhoneNumberId": phoneNumberId });
+            
+            let user = null;
+            if (config) {
+                user = await User.findById(config.userId).select('email role parentId').lean();
+                if (user) {
+                    debug(`✅ Found user by waPhoneNumberId: ${user.email} (${user._id})`);
+                }
             } else {
-                debug(`⚠️  No user found by waPhoneNumberId. Trying environment fallback...`);
+                debug(`⚠️  No IntegrationConfig found by waPhoneNumberId. Trying environment fallback...`);
             }
 
             // FALLBACK: If no user found by ID, check if it matches the global environment ID
@@ -166,9 +188,10 @@ const processEntry = async (entry) => {
 
                 if (phoneNumberId && globalPhoneId && phoneNumberId === globalPhoneId) {
                     debug(`✅ Match! Falling back to Super Admin user`);
-                    user = await User.findOne({ role: 'superadmin' });
+                    // Sort by createdAt to ensure we always get the primary root admin, not a random sub-admin
+                    user = await User.findOne({ role: 'superadmin' }).sort({ createdAt: 1 });
                     if (user) {
-                        debug(`✅ Found superadmin: ${user.email} (${user._id})`);
+                        debug(`✅ Found primary superadmin: ${user.email} (${user._id})`);
                     } else {
                         debug('❌ No superadmin user found in DB!');
                     }
@@ -220,61 +243,64 @@ const processIncomingMessage = async (message, contacts, userId) => {
         debug(`💬 processIncomingMessage: from=${from}, msgId=${waMessageId}, ts=${timestamp.toISOString()}`);
         debugJSON('💬 Full message object', message);
 
-        // Get contact info
+        // --- 1. IDEMPOTENCY CHECK ---
+        // Prevent crashing from Meta's duplicate webhooks (E11000 duplicate key error)
+        const isDuplicate = await WhatsAppMessage.exists({ waMessageId: waMessageId });
+        if (isDuplicate) {
+            console.log(`⚠️  Idempotency caught duplicate Meta webhook for message ${waMessageId}. Ignoring softly.`);
+            return;
+        }
+
+        // --- 2. CONTACT PIPELINE ---
         const contact = contacts?.find(c => c.wa_id === from);
         const displayName = contact?.profile?.name || null;
         debug(`   Contact display name: ${displayName || '(none)'}`);
 
-        // Find or create conversation
-        debug(`🔎 Looking for conversation: userId=${userId}, waContactId=${from}`);
-        let conversation = await WhatsAppConversation.findOne({
+        // Try to link to existing lead by phone if creating a new conversation
+        const phoneLastTen = from.slice(-10);
+        const lead = await Lead.findOne({
             userId: userId,
-            waContactId: from
+            phone: { $regex: phoneLastTen, $options: 'i' }
         });
 
-        if (conversation) {
-            debug(`✅ Existing conversation found: ${conversation._id}`);
-        } else {
-            debug('ℹ️  No existing conversation — creating new one');
-            // Try to link to existing lead by phone
-            const phoneLastTen = from.slice(-10);
-            debug(`🔎 Looking for lead with phone ending in: ${phoneLastTen}`);
-            const lead = await Lead.findOne({
-                userId: userId,
-                phone: { $regex: phoneLastTen, $options: 'i' }
-            });
+        const messagePreview = extractMessagePreview(message);
 
-            if (lead) {
-                debug(`✅ Linked to existing lead: ${lead.name} (${lead._id})`);
-            } else {
-                debug('ℹ️  No matching lead found — conversation will be unlinked');
-            }
+        // --- 3. ATOMIC UPSERT ---
+        // Guaranteed to never throw duplicate key exceptions on concurrent inserts
+        debug(`🔎 Upserting conversation: userId=${userId}, waContactId=${from}`);
 
-            conversation = new WhatsAppConversation({
+        const updatePayload = {
+            $setOnInsert: {
                 userId: userId,
                 waContactId: from,
                 phone: from,
-                displayName: displayName,
                 leadId: lead?._id || null,
-                metadata: {
-                    firstMessageAt: timestamp
-                }
-            });
+                'metadata.firstMessageAt': timestamp
+            },
+            $set: {
+                lastMessage: messagePreview,
+                lastMessageAt: timestamp,
+                lastInboundMessageAt: timestamp,
+                lastMessageDirection: 'inbound'
+            },
+            $inc: {
+                unreadCount: 1,
+                'metadata.totalMessages': 1,
+                'metadata.totalInbound': 1
+            }
+        };
+
+        if (displayName) {
+            updatePayload.$set.displayName = displayName;
         }
 
-        // Update conversation
-        const messagePreview = extractMessagePreview(message);
-        conversation.lastMessage = messagePreview;
-        conversation.lastMessageAt = timestamp;
-        conversation.lastInboundMessageAt = timestamp;
-        conversation.lastMessageDirection = 'inbound';
-        conversation.unreadCount = (conversation.unreadCount || 0) + 1;
-        conversation.displayName = displayName || conversation.displayName;
-        conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
-        conversation.metadata.totalInbound = (conversation.metadata.totalInbound || 0) + 1;
+        const conversation = await WhatsAppConversation.findOneAndUpdate(
+            { userId: userId, waContactId: from },
+            updatePayload,
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
 
-        await conversation.save();
-        debug(`✅ Conversation saved: ${conversation._id}, unread: ${conversation.unreadCount}`);
+        debug(`✅ Conversation upserted: ${conversation._id}, unread: ${conversation.unreadCount}`);
 
         // Create message record
         const messageType = getMessageType(message);
@@ -325,31 +351,36 @@ const processStatusUpdate = async (status, userId) => {
 
         debug(`📊 processStatusUpdate: msgId=${waMessageId}, status=${statusType}, ts=${timestamp.toISOString()}`);
 
-        const message = await WhatsAppMessage.findOne({ waMessageId: waMessageId });
-        if (!message) {
-            console.log(`⚠️ Message not found for status update: ${waMessageId}`);
-            debug('   The message may not have been saved by this server (e.g., sent via another tool)');
-            return;
-        }
-
-        // Update message status
-        message.status = statusType;
-        message.statusTimestamps = message.statusTimestamps || {};
-        message.statusTimestamps[statusType] = timestamp;
+        const updatePayload = {
+            $set: {
+                status: statusType,
+                [`statusTimestamps.${statusType}`]: timestamp
+            }
+        };
 
         if (statusType === 'failed' && status.errors) {
             const errCode = status.errors[0]?.code;
             const errMsg = status.errors[0]?.title || status.errors[0]?.message;
             debug(`❌ Message failed! Code: ${errCode}, Reason: ${errMsg}`);
-            message.error = {
+            updatePayload.$set.error = {
                 code: errCode,
                 message: errMsg
             };
         }
 
-        await message.save();
+        const result = await WhatsAppMessage.updateOne(
+            { waMessageId: waMessageId },
+            updatePayload
+        );
+
+        if (result.matchedCount === 0) {
+            console.log(`⚠️ Message not found for status update: ${waMessageId}`);
+            debug('   The message may not have been saved by this server (e.g., sent via another tool)');
+            return;
+        }
+
         console.log(`📬 Message ${waMessageId} status: ${statusType}`);
-        debug(`✅ Status saved for message ${message._id}`);
+        debug(`✅ Status atomic update completed`);
 
     } catch (error) {
         console.error('❌ Error processing status update:', error);

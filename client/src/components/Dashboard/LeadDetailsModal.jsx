@@ -8,6 +8,10 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
     const [nextFollowUpDate, setNextFollowUpDate] = useState('');
     const [loading, setLoading] = useState(false);
     const [customFields, setCustomFields] = useState([]);
+    
+    // Lazy loaded full lead details
+    const [fullLead, setFullLead] = useState(null);
+    const [fullLeadLoading, setFullLeadLoading] = useState(false);
 
     // Tasks section states
     const [tasks, setTasks] = useState([]);
@@ -24,10 +28,24 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
 
     useEffect(() => {
         if (isOpen && lead) {
+            setFullLead(null); // Reset on new open
             fetchCustomFields();
             fetchTasks();
+            fetchFullLead();
         }
     }, [isOpen, lead]);
+
+    const fetchFullLead = async () => {
+        setFullLeadLoading(true);
+        try {
+            const res = await api.get(`/leads/${lead._id}`);
+            setFullLead(res.data);
+        } catch (error) {
+            console.error('Failed to fetch full lead details:', error);
+        } finally {
+            setFullLeadLoading(false);
+        }
+    };
 
     useEffect(() => {
         if (lead) {
@@ -147,9 +165,9 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
 
     // Helper to get custom field value safely
     const getCustomValue = (key) => {
-        if (!lead.customData) return '-';
-        // Handle both Map and Object structures which might come from backend
-        return lead.customData[key] || '-';
+        const dataSource = fullLead?.customData || lead.customData;
+        if (!dataSource) return '-';
+        return dataSource[key] || '-';
     };
 
     return (
@@ -168,6 +186,12 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                             )}
                             {lead.source && (
                                 <span className="flex items-center gap-1.5"><i className="fa-solid fa-code-branch text-green-400"></i> {lead.source}</span>
+                            )}
+                            {lead.qualificationLevel && lead.qualificationLevel !== 'None' && (
+                                <span className="flex items-center gap-1.5 bg-indigo-500/20 px-2 py-0.5 rounded-full border border-indigo-700/30">
+                                    <i className="fa-solid fa-ranking-star text-indigo-400"></i>
+                                    <span className="font-semibold text-indigo-300">{lead.qualificationLevel} Lead</span>
+                                </span>
                             )}
                             {lead.dealValue > 0 && (
                                 <span className="flex items-center gap-1.5 bg-emerald-500/20 px-2 py-0.5 rounded-full">
@@ -196,8 +220,8 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
 
                 <div className="p-6 bg-slate-50 flex-1 overflow-y-auto space-y-6">
 
-                    {/* Additional Information (Custom Fields) */}
-                    {customFields.length > 0 && (
+                    {/* Additional Information (Custom Fields + Chatbot Data) */}
+                    {(customFields.length > 0 || (fullLead?.customData || lead.customData)) && (
                         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
                             <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2 border-b border-slate-100 pb-2">
                                 <i className="fa-solid fa-list-ul text-indigo-500"></i> Additional Information
@@ -210,6 +234,17 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                                         </label>
                                         <p className="text-sm text-slate-800 font-medium truncate">
                                             {getCustomValue(field.key)}
+                                        </p>
+                                    </div>
+                                ))}
+                                {/* Render Any Extra Custom Data from Chatbots */}
+                                {Object.keys(fullLead?.customData || lead.customData || {}).filter(k => !customFields.find(f => f.key === k)).map(key => (
+                                    <div key={`extra-${key}`}>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                            {key.replace(/_/g, ' ')}
+                                        </label>
+                                        <p className="text-sm text-slate-800 font-medium truncate">
+                                            {getCustomValue(key)}
                                         </p>
                                     </div>
                                 ))}
@@ -366,7 +401,7 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                     </div>
 
                     {/* Legacy History Timeline (Optional - Can be removed if audit log is sufficient) */}
-                    {(lead.history || []).length > 0 && (
+                    {(fullLead?.history || lead.history || []).length > 0 && (
                         <div>
                             <h4 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
                                 <i className="fa-solid fa-list text-slate-500"></i> Legacy History
@@ -374,7 +409,8 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                             <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm max-h-64 overflow-y-auto">
                                 {(() => {
                                     // Map history items
-                                    const historyItems = (lead.history || []).map(h => {
+                                    const historySource = fullLead?.history || lead.history || [];
+                                    const historyItems = historySource.map(h => {
                                         let icon = 'fa-solid fa-circle-info';
                                         let color = 'text-gray-500';
                                         let bg = 'bg-gray-50';

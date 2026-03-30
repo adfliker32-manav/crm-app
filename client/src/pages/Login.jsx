@@ -31,13 +31,19 @@ const Login = () => {
     const handleGoogleSuccess = async (credentialResponse) => {
         setError('');
         setIsLoading(true);
-        const result = await googleLogin(credentialResponse.credential);
+        // allowNewUser: false — login only. New users are told to sign up separately.
+        const result = await googleLogin(credentialResponse.credential, false);
+        
         if (result.success) {
             if (result.role === 'superadmin') navigate('/super-admin');
             else if (result.role === 'agency') navigate('/agency/dashboard');
             else navigate('/dashboard');
         } else {
-            setError(result.message);
+            if (result.message?.includes("don't have an account") || result.message?.includes("not have an account")) {
+                setError("No account found with this Google email. Start a free trial to get started.");
+            } else {
+                setError(result.message);
+            }
             setIsLoading(false);
         }
     };
@@ -164,12 +170,7 @@ const Login = () => {
                             </button>
                         </form>
 
-                        <p className="text-center text-neutral-500 text-sm font-medium mt-8">
-                            New here?{' '}
-                            <Link to="/register" className="text-black font-bold hover:underline underline-offset-4">
-                                Create an account
-                            </Link>
-                        </p>
+                        {/* Trial CTA removed */}
                     </div>
                 </div>
             </div>

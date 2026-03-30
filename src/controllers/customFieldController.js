@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const WorkspaceSettings = require('../models/WorkspaceSettings');
 
 // Generate slug from label
 const generateKey = (label) => {
@@ -11,23 +12,16 @@ const generateKey = (label) => {
 // Get custom field definitions for current user
 exports.getCustomFields = async (req, res) => {
     try {
-        let userId = req.user.userId || req.user.id;
+        const ownerId = req.tenantId; // req.tenantId handles parentId for agents already in authMiddleware
+        
+        const settings = await WorkspaceSettings.findOne({ userId: ownerId }).select('customFieldDefinitions').lean();
 
-        // Agent uses manager's fields
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(userId).select('parentId').lean();
-            if (agentUser && agentUser.parentId) {
-                userId = agentUser.parentId;
-            }
+        if (!settings) {
+            // Provision empty settings if not found (fallback)
+            return res.json([]);
         }
 
-        const user = await User.findById(userId).select('customFieldDefinitions').lean();
-
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-
-        res.json(user.customFieldDefinitions || []);
+        res.json(settings.customFieldDefinitions || []);
     } catch (error) {
         console.error('Error fetching custom fields:', error);
         res.status(500).json({ message: 'Error fetching custom fields', error: error.message });
@@ -37,7 +31,7 @@ exports.getCustomFields = async (req, res) => {
 // Save custom field definitions
 exports.saveCustomFields = async (req, res) => {
     try {
-        let userId = req.user.userId || req.user.id;
+        const ownerId = req.tenantId;
 
         // Agent cannot modify fields
         const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
@@ -68,16 +62,16 @@ exports.saveCustomFields = async (req, res) => {
             return res.status(400).json({ message: 'Duplicate field keys detected' });
         }
 
-        const user = await User.findByIdAndUpdate(
-            userId,
+        const settings = await WorkspaceSettings.findOneAndUpdate(
+            { userId: ownerId },
             { customFieldDefinitions: processedFields },
-            { new: true }
+            { new: true, upsert: true }
         ).select('customFieldDefinitions');
 
         res.json({
             success: true,
             message: 'Custom fields saved successfully',
-            fields: user.customFieldDefinitions
+            fields: settings.customFieldDefinitions
         });
     } catch (error) {
         console.error('Error saving custom fields:', error);
@@ -88,7 +82,7 @@ exports.saveCustomFields = async (req, res) => {
 // Add single custom field
 exports.addCustomField = async (req, res) => {
     try {
-        let userId = req.user.userId || req.user.id;
+        const ownerId = req.tenantId;
 
         const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
         if (!canAccessSettings) {
@@ -104,8 +98,10 @@ exports.addCustomField = async (req, res) => {
         const key = generateKey(label);
 
         // Check if key already exists
-        const user = await User.findById(userId).select('customFieldDefinitions');
-        const existingField = user.customFieldDefinitions?.find(f => f.key === key);
+        const settings = await WorkspaceSettings.findOne({ userId: ownerId }).select('customFieldDefinitions');
+        if (!settings) return res.status(404).json({ message: 'Workspace settings not found' });
+
+        const existingField = settings.customFieldDefinitions?.find(f => f.key === key);
         if (existingField) {
             return res.status(400).json({ message: 'A field with this name already exists' });
         }
@@ -116,11 +112,11 @@ exports.addCustomField = async (req, res) => {
             type: type || 'text',
             options: type === 'dropdown' ? (options || []) : [],
             required: required || false,
-            order: (user.customFieldDefinitions?.length || 0)
+            order: (settings.customFieldDefinitions?.length || 0)
         };
 
-        const updated = await User.findByIdAndUpdate(
-            userId,
+        const updated = await WorkspaceSettings.findOneAndUpdate(
+            { userId: ownerId },
             { $push: { customFieldDefinitions: newField } },
             { new: true }
         ).select('customFieldDefinitions');
@@ -140,7 +136,7 @@ exports.addCustomField = async (req, res) => {
 // Delete custom field
 exports.deleteCustomField = async (req, res) => {
     try {
-        let userId = req.user.userId || req.user.id;
+        const ownerId = req.tenantId;
 
         const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
         if (!canAccessSettings) {
@@ -149,8 +145,8 @@ exports.deleteCustomField = async (req, res) => {
 
         const { key } = req.params;
 
-        const updated = await User.findByIdAndUpdate(
-            userId,
+        const updated = await WorkspaceSettings.findOneAndUpdate(
+            { userId: ownerId },
             { $pull: { customFieldDefinitions: { key: key } } },
             { new: true }
         ).select('customFieldDefinitions');

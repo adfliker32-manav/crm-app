@@ -24,7 +24,7 @@ module.exports = function saasPlugin(schema, options) {
     const typesToOverride = ['find', 'findOne', 'findOneAndUpdate', 'countDocuments', 'updateMany'];
     
     typesToOverride.forEach(type => {
-        schema.pre(type, function(next) {
+        schema.pre(type, function() {
             // Check if user specifically requested to ignore soft deletes via .setOptions({ includeDeleted: true })
             if (this.getOptions().includeDeleted !== true) {
                 // If they didn't explicitly query deletedAt, hide deleted documents to prevent data leakage
@@ -32,17 +32,19 @@ module.exports = function saasPlugin(schema, options) {
                     this.where({ deletedAt: null });
                 }
             }
-            next();
         });
     });
 
     // Pre-aggregate middleware to filter soft deletes from complex pipelines
-    schema.pre('aggregate', function(next) {
-        // Exclude soft-deleted records from standard aggregations if not explicitly included
-        if (!this.options.includeDeleted) {
+    schema.pre('aggregate', function() {
+        // FIX 4.2: In Mongoose 6.x/7.x, aggregate options live on `this._userOptions`, NOT `this.options`.
+        // The old check `this.options.includeDeleted` always evaluates to undefined/falsy,
+        // meaning soft-deleted records could leak into every analytics/report aggregation.
+        // We check both accessors for full backward compatibility.
+        const opts = this._userOptions || this.options || {};
+        if (!opts.includeDeleted) {
             this.pipeline().unshift({ $match: { deletedAt: null } });
         }
-        next();
     });
 
     // 3. Document Instance Methods

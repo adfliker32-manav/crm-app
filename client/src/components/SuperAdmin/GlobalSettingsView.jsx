@@ -6,7 +6,11 @@ const GlobalSettingsView = () => {
         app_name: '',
         support_email: '',
         maintenance_mode: false,
-        trial_days_default: 14
+        trial_days_default: 14,
+        whatsappSync: true,
+        emailMarketing: true,
+        automations: true,
+        apiAccess: true
     });
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -142,12 +146,45 @@ const GlobalSettingsView = () => {
                             <input
                                 type="checkbox"
                                 name="maintenance_mode"
-                                checked={settings.maintenance_mode}
+                                checked={settings.maintenance_mode || false}
                                 onChange={handleChange}
                                 className="sr-only peer"
                             />
                             <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                         </label>
+                    </div>
+                </div>
+
+                {/* Feature Flag Card */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                    <h2 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                        <i className="fa-solid fa-toggle-on text-purple-500"></i> Global Feature Flags
+                    </h2>
+                    
+                    <div className="space-y-4">
+                        {[
+                            { name: 'whatsappSync', label: 'Meta WhatsApp Cloud API', desc: 'Permit tenants to blast marketing broadcasts via Meta.' },
+                            { name: 'emailMarketing', label: 'Email Marketing Engine', desc: 'Activates the global IMAP/SMTP polling service.' },
+                            { name: 'automations', label: 'No-Code Automations Engine', desc: 'Determines if background Cron jobs and workflows execute.' },
+                            { name: 'apiAccess', label: 'Public REST API Keys', desc: 'Permits tenants to generate developer keys for inbound webhooks.' }
+                        ].map(feature => (
+                            <div key={feature.name} className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200">
+                                <div>
+                                    <h3 className="font-medium text-slate-900">{feature.label}</h3>
+                                    <p className="text-sm text-slate-500">{feature.desc}</p>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        name={feature.name}
+                                        checked={settings[feature.name] !== false}
+                                        onChange={handleChange}
+                                        className="sr-only peer"
+                                    />
+                                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                </label>
+                            </div>
+                        ))}
                     </div>
                 </div>
 

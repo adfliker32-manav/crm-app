@@ -4,6 +4,15 @@ const leadController = require('../controllers/leadController');
 const sheetSyncController = require('../controllers/sheetSyncController');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
+const { validate, schemas } = require('../middleware/validateRequest');
+const rateLimit = require('express-rate-limit');
+
+// Rate limit for bulk/sync actions (prevent abuse)
+const bulkLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5,
+    message: { success: false, error: 'rate_limit', message: 'Too many bulk requests. Please wait 15 minutes.' }
+});
 
 // ==========================
 // 📌 Lead Routes (With Permission Protection)
@@ -17,7 +26,7 @@ router.get('/sheet-sync-config', authMiddleware, sheetSyncController.getSheetSyn
 router.put('/sheet-sync-config', authMiddleware, sheetSyncController.updateSheetSyncConfig);
 
 // 1. Sync Google Sheet (Manual — MUST BE BEFORE /:id routes!)
-router.post('/sync-sheet', authMiddleware, checkPermission('createLeads'), leadController.syncLeads);
+router.post('/sync-sheet', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.syncLeads);
 
 // 2. Analytics (MUST BE BEFORE /:id routes!)
 router.get('/analytics-data', authMiddleware, leadController.getAnalyticsData);
@@ -46,19 +55,22 @@ router.get('/duplicates', authMiddleware, leadController.getDuplicateGroups);
 router.post('/duplicates/auto-delete', authMiddleware, checkPermission('deleteLeads'), leadController.autoDeleteDuplicates);
 
 // 7.6 Bulk Import CSV (MUST BE BEFORE /:id routes!)
-router.post('/bulk-import', authMiddleware, checkPermission('createLeads'), leadController.bulkImportLeads);
+router.post('/bulk-import', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.bulkImportLeads);
 
 // 8. Get All Leads
 router.get('/', authMiddleware, checkPermission('viewLeads'), leadController.getLeads);
 
+// 8.5 Get Single Lead
+router.get('/:id', authMiddleware, checkPermission('viewLeads'), leadController.getLeadById);
+
 // 9. Create Lead
-router.post('/', authMiddleware, checkPermission('createLeads'), leadController.createLead);
+router.post('/', authMiddleware, checkPermission('createLeads'), validate(schemas.createLead), leadController.createLead);
 
 // 10. Assign Lead (PARAMETERIZED ROUTE)
 router.put('/:id/assign', authMiddleware, checkPermission('assignLeads'), leadController.assignLead);
 
 // 11. Update Lead (PARAMETERIZED ROUTE)
-router.put('/:id', authMiddleware, checkPermission('editLeads'), leadController.updateLead);
+router.put('/:id', authMiddleware, checkPermission('editLeads'), validate(schemas.updateLead), leadController.updateLead);
 
 // 12. Delete Lead (PARAMETERIZED ROUTE)
 router.delete('/:id', authMiddleware, checkPermission('deleteLeads'), leadController.deleteLead);

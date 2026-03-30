@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "build": "npm install && cd client && npm install && npm run build",
-    "dev": "concurrently \"npm start\" \"cd client && npm run dev\"",
+    "dev": "concurrently \"nodemon index.js\" \"cd client && npm run dev\"",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -24,17 +24,20 @@
     "express-rate-limit": "^8.3.1",
     "google-auth-library": "^10.6.2",
     "imapflow": "^1.2.16",
+    "joi": "^18.1.1",
     "jsonwebtoken": "^9.0.3",
     "mailparser": "^3.9.4",
     "mongoose": "^9.0.2",
     "multer": "^2.1.1",
     "ngrok": "^5.0.0-beta.2",
     "node-cache": "^5.1.2",
+    "node-cron": "^4.2.1",
     "nodemailer": "^7.0.12",
     "papaparse": "^5.5.3",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "nodemon": "^3.1.14"
   }
 }

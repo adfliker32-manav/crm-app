@@ -207,8 +207,9 @@ const defineBroadcastJob = (agenda) => {
                         await broadcast.save();
                     }
 
-                    // Sleep 100ms to avoid brutalizing the Meta rate limits (approx 10 msg/sec limit for low tiers)
-                    await new Promise(r => setTimeout(r, 100));
+                    // Sleep 1000ms (1 second) to enforce a STRICT limit of ~60 messages per minute
+                    // This prevents Meta rate limits and API Lockups for clients.
+                    await new Promise(r => setTimeout(r, 1000));
                     
                 } catch (err) {
                     console.error(`[Broadcast ${broadcastId}] Failed for lead ${lead._id}:`, err.message);

@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const { getUserEmailCredentials } = require('../utils/emailUtils');
+const { isFeatureDisabled } = require('../utils/systemConfig');
 
 // Create reusable transporter for Gmail SMTP
 const createTransporter = (userCredentials = null) => {
@@ -85,6 +86,11 @@ const sendEmailWithRetry = async (options, maxRetries = 2) => {
 
 // Send Email Function
 const sendEmail = async (options) => {
+    if (await isFeatureDisabled('DISABLE_EMAILS')) {
+        console.log(`🛑 EMAIL KILL SWITCH ACTIVE. Blocked email to ${options.to}`);
+        throw new Error("Emergency: Email sending is temporarily disabled platform-wide.");
+    }
+
     const { to, subject, text, html, from, attachments, userId } = options;
 
     if (!to || !subject || (!text && !html)) {

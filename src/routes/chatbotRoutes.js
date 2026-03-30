@@ -2,9 +2,10 @@ const express = require('express');
 const router = express.Router();
 const chatbotController = require('../controllers/chatbotController');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const requireModule = require('../middleware/moduleMiddleware');
 
-// All routes require authentication
-router.use(authMiddleware);
+// All routes require authentication and the explicit chatbot module
+router.use(authMiddleware, requireModule('chatbot'));
 
 // Get all flows
 router.get('/', chatbotController.getFlows);

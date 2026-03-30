@@ -18,7 +18,6 @@ const whatsappRoutes = require('./src/routes/whatsappRoutes');
 const whatsappTemplateRoutes = require('./src/routes/whatsappTemplateRoutes');
 const whatsAppLogRoutes = require('./src/routes/whatsAppLogRoutes');
 const superAdminRoutes = require('./src/routes/superAdminRoutes');
-const billingRoutes = require('./src/routes/billingRoutes'); // Billing & Subscriptions
 const agencyRoutes = require('./src/routes/agencyRoutes'); // Reseller actions
 const metaRoutes = require('./src/routes/metaRoutes'); // Meta Lead Sync
 const customFieldRoutes = require('./src/routes/customFieldRoutes'); // Custom Lead Fields
@@ -26,11 +25,19 @@ const reportRoutes = require('./src/routes/reportRoutes'); // Reports & Analytic
 const taskRoutes = require('./src/routes/taskRoutes'); // Tasks & Reminders
 const analyticsRoutes = require('./src/routes/analyticsRoutes'); // Advanced Analytics
 const automationRoutes = require('./src/routes/automationRoutes'); // Visual Automation Engine
+const { authMiddleware } = require('./src/middleware/authMiddleware');
 
 const app = express();
 
 // Middleware
-app.use(express.json());
+// IMPORTANT: We use a verify callback to capture the raw request body buffer.
+// Meta signs the RAW bytes of the payload, not the re-serialized JSON.
+// Without this, verifySignature() will always fail when META_APP_SECRET is set.
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf; // Attach the raw Buffer to req for webhook signature verification
+  }
+}));
 app.use(cors());
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.url}`);
@@ -124,6 +131,22 @@ mongoose.connect(MONGO_URI)
     } catch (error) {
       console.error('⚠️ Failed to start IMAP Polling Service:', error.message);
     }
+
+    // Start Chatbot Followup Service
+    try {
+      const { initializeFollowupService } = require('./src/services/chatbotFollowupService');
+      initializeFollowupService();
+    } catch (error) {
+      console.error('⚠️ Failed to start Chatbot Followup Service:', error.message);
+    }
+
+    // 🕐 Start Trial Expiry Cron Job (Trial → free_limited auto-downgrade)
+    try {
+      const { startCronJobs } = require('./src/services/cronJobs');
+      startCronJobs();
+    } catch (error) {
+      console.error('⚠️ Failed to start Trial Expiry Cron:', error.message);
+    }
   })
   .catch(err => {
     console.error('\n❌ MongoDB Connection Error:');
@@ -144,29 +167,59 @@ mongoose.connect(MONGO_URI)
   });
 
 // ===========================
+// ⏱️ RED ALERT API TELEMETRY
+// ===========================
+const telemetryService = require('./src/services/telemetryService');
+
+app.use((req, res, next) => {
+    // Only track actual API calls
+    if (!req.path.startsWith('/api/') && !req.path.startsWith('/webhook/')) {
+        return next();
+    }
+    
+    const start = process.hrtime();
+    
+    res.on('finish', () => {
+        const diff = process.hrtime(start);
+        const timeInMs = (diff[0] * 1e3) + (diff[1] * 1e-6);
+        
+        // Extract tenant ID if auth middleware set it (for abuse tracking)
+        const tenantId = req.tenantId || req.user?.id || null;
+        
+        telemetryService.recordApiRequest(res.statusCode, tenantId, timeInMs);
+    });
+    
+    next();
+});
+
+// Flush Telemetry counts every 15 minutes to reset the 'rolling' window
+setInterval(() => {
+    telemetryService.flush();
+}, 15 * 60 * 1000);
+
+// ===========================
 // 🛣️ ROUTES SETUP
 // ===========================
 
-// 1. Auth & Super Admin & Billing
+// 1. Auth & Super Admin
 app.use('/api/auth', authRoutes);
 app.use('/api/superadmin', superAdminRoutes);
-app.use('/api/billing', billingRoutes);
 app.use('/api/agency', agencyRoutes);
 
-// 2. Leads System (FIXED PATHS) 🛠️
-app.use('/api/leads', leadRoutes);    // URL: /api/leads/
-app.use('/api/stages', stageRoutes);  // URL: /api/stages/
-app.use('/api/custom-fields', customFieldRoutes); // Custom Lead Fields
-app.use('/api/tags', require('./src/routes/tagRoutes')); // Lead Tags Configuration
-app.use('/api/tasks', taskRoutes); // Tasks & Reminders
-app.use('/api/automations', automationRoutes); // Visual Automations
-app.use('/api/analytics', analyticsRoutes); // Advanced Analytics
+// 2. Leads System
+app.use('/api/leads', authMiddleware, leadRoutes);
+app.use('/api/stages', authMiddleware, stageRoutes);
+app.use('/api/custom-fields', authMiddleware, customFieldRoutes);
+app.use('/api/tags', authMiddleware, require('./src/routes/tagRoutes'));
+app.use('/api/tasks', authMiddleware, taskRoutes);
+app.use('/api/automations', authMiddleware, automationRoutes);
+app.use('/api/analytics', authMiddleware, analyticsRoutes);
 
 // 3. Communications
-app.use('/api/email', emailRoutes);
-app.use('/api/email-conversations', emailConversationRoutes);
-app.use('/api/email-templates', emailTemplateRoutes);
-app.use('/api/email-logs', emailLogRoutes);
+app.use('/api/email', authMiddleware, emailRoutes);
+app.use('/api/email-conversations', authMiddleware, emailConversationRoutes);
+app.use('/api/email-templates', authMiddleware, emailTemplateRoutes);
+app.use('/api/email-logs', authMiddleware, emailLogRoutes);
 
 // WhatsApp Webhook (PUBLIC - no auth, Meta needs to access)
 const whatsappWebhookRoutes = require('./src/routes/whatsappWebhookRoutes');

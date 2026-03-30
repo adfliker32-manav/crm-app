@@ -14,14 +14,12 @@ import AgencyLayout from './layouts/AgencyLayout';
 import AgencyDashboard from './pages/Agency/AgencyDashboard';
 import AgencyClients from './pages/Agency/AgencyClients';
 import AgencyWhiteLabel from './pages/Agency/AgencyWhiteLabel';
-import AgencyMarkupPricing from './pages/Agency/AgencyMarkupPricing';
 import Dashboard from './pages/Dashboard';
 import EmailManagement from './pages/EmailManagement';
 import Team from './pages/Team';
 import WhatsAppManagement from './pages/WhatsAppManagement';
 import Leads from './pages/Leads';
 import Login from './pages/Login';
-import Register from './pages/Register';
 import SuperAdmin from './pages/SuperAdmin';
 import Settings from './pages/Settings';
 import Reports from './pages/Reports';
@@ -40,7 +38,6 @@ function App() {
               <BrowserRouter>
                 <Routes>
                   <Route path="/login" element={<Login />} />
-                  <Route path="/register" element={<Register />} />
 
                   <Route element={<ProtectedRoute />}>
                     <Route path="/super-admin" element={<SuperAdmin />} />
@@ -50,7 +47,6 @@ function App() {
                       <Route path="dashboard" element={<AgencyDashboard />} />
                       <Route path="clients" element={<AgencyClients />} />
                       <Route path="white-label" element={<AgencyWhiteLabel />} />
-                      <Route path="billing" element={<AgencyMarkupPricing />} />
                     </Route>
 
                     {/* Dashboard Layout Routes */}

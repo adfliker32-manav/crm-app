@@ -7,11 +7,14 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
     const { logout } = useAuth();
 
     const menuItems = [
-        { id: 'dashboard', icon: 'fa-chart-line', label: 'Dashboard', color: 'text-blue-600' },
-        { id: 'companies', icon: 'fa-building', label: 'Companies', color: 'text-purple-600' },
-        { id: 'billing', icon: 'fa-dollar-sign', label: 'Billing & Revenue', color: 'text-green-600' },
-        { id: 'plans', icon: 'fa-box-open', label: 'Plans', color: 'text-orange-600' },
-        { id: 'settings', icon: 'fa-cog', label: 'Global Settings', color: 'text-slate-600' },
+        { id: 'dashboard',          icon: 'fa-chart-line',             label: 'Dashboard',           color: 'text-blue-600'  },
+        { id: 'approvals',          icon: 'fa-shield-check',           label: 'Account Approvals',   color: 'text-amber-600 font-semibold' },
+        { id: 'agencies',           icon: 'fa-network-wired',          label: 'Agencies',            color: 'text-purple-600' },
+        { id: 'direct-clients',     icon: 'fa-user-tie',               label: 'Direct Clients',      color: 'text-emerald-600' },
+        { id: 'system-health',      icon: 'fa-heartbeat',              label: 'System Health',       color: 'text-cyan-500'  },
+        { id: 'audit-logs',         icon: 'fa-terminal',               label: 'Command Center',      color: 'text-rose-500'  },
+        { id: 'emergency-controls', icon: 'fa-triangle-exclamation',   label: 'Emergency Controls',  color: 'text-red-500 font-bold bg-red-900/20' },
+        { id: 'settings',           icon: 'fa-cog',                    label: 'Global Settings',     color: 'text-slate-600' },
     ];
 
 

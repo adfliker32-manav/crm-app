@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import SuperAdminSidebar from '../components/SuperAdmin/SuperAdminSidebar';
 import DashboardView from '../components/SuperAdmin/DashboardView';
-import CompaniesView from '../components/SuperAdmin/CompaniesView';
-import BillingView from '../components/SuperAdmin/BillingView';
-import PlansView from '../components/SuperAdmin/PlansView';
+import AgenciesView from '../components/SuperAdmin/AgenciesView';
+import DirectClientsView from '../components/SuperAdmin/DirectClientsView';
+import AccountApprovalsView from '../components/SuperAdmin/AccountApprovalsView';
 import GlobalSettingsView from '../components/SuperAdmin/GlobalSettingsView';
+import AuditLogsView from '../components/SuperAdmin/AuditLogsView';
+import EmergencyControlsView from '../components/SuperAdmin/EmergencyControlsView';
+import SystemHealthView from '../components/SuperAdmin/SystemHealthView';
 
 const SuperAdmin = () => {
     const [activeView, setActiveView] = useState('dashboard');
@@ -13,12 +16,18 @@ const SuperAdmin = () => {
         switch (activeView) {
             case 'dashboard':
                 return <DashboardView />;
-            case 'companies':
-                return <CompaniesView />;
-            case 'billing':
-                return <BillingView />;
-            case 'plans':
-                return <PlansView />;
+            case 'approvals':
+                return <AccountApprovalsView />;
+            case 'agencies':
+                return <AgenciesView />;
+            case 'direct-clients':
+                return <DirectClientsView />;
+            case 'system-health':
+                return <SystemHealthView />;
+            case 'audit-logs':
+                return <AuditLogsView />;
+            case 'emergency-controls':
+                return <EmergencyControlsView />;
             case 'settings':
                 return <GlobalSettingsView />;
             default:

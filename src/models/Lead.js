@@ -37,6 +37,11 @@ const LeadSchema = new mongoose.Schema({
         type: String,
         default: 'Web'
     },
+    qualificationLevel: {
+        type: String,
+        enum: ['None', 'Partial', 'Engaged', 'Qualified'],
+        default: 'None'
+    },
     notes: [{
         text: String,
         date: { type: Date, default: Date.now }
@@ -64,12 +69,12 @@ const LeadSchema = new mongoose.Schema({
     history: [{
         type: {
             type: String,
-            enum: ['Note', 'Follow-up', 'Email', 'WhatsApp', 'System'],
+            enum: ['Note', 'Follow-up', 'Email', 'WhatsApp', 'System', 'Task'],
             required: true
         },
         subType: {
             type: String,
-            enum: ['Manual', 'Auto', 'Stage Change'],
+            enum: ['Manual', 'Auto', 'Stage Change', 'Created', 'Completed', 'Deleted'],
             default: 'Manual'
         },
         content: { type: String }, // Text, Summary, or Note content

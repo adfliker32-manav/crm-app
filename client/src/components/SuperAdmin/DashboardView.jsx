@@ -24,6 +24,7 @@ const DashboardView = () => {
     });
     const [recentSignups, setRecentSignups] = useState([]);
     const [growthData, setGrowthData] = useState(null);
+    const [cloudUsage, setCloudUsage] = useState(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -32,15 +33,17 @@ const DashboardView = () => {
 
     const fetchDashboardData = async () => {
         try {
-            const [statsRes, signupsRes, growthRes] = await Promise.all([
+            const [statsRes, signupsRes, growthRes, cloudRes] = await Promise.all([
                 api.get('/superadmin/stats'),
                 api.get('/superadmin/recent-signups'),
-                api.get('/superadmin/growth-data')
+                api.get('/superadmin/growth-data'),
+                api.get('/superadmin/cloud-usage')
             ]);
 
             setStats(statsRes.data);
             setRecentSignups(signupsRes.data);
             setGrowthData(growthRes.data);
+            setCloudUsage(cloudRes.data?.usage || null);
         } catch (error) {
             console.error('Error fetching dashboard data:', error);
         } finally {
@@ -146,6 +149,62 @@ const DashboardView = () => {
                     iconBg="bg-orange-100 text-orange-600"
                 />
             </div>
+
+            {/* Global Cloud Usage Widget */}
+            {cloudUsage && (
+                <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
+                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-6">
+                        <i className="fa-solid fa-cloud text-blue-500"></i>
+                        Platform-Wide Cloud Usage (Current Cycle)
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        {/* WhatsApp Metric */}
+                        <div>
+                            <div className="flex justify-between items-end mb-2">
+                                <div>
+                                    <p className="text-sm font-bold text-slate-500 uppercase tracking-wider">WhatsApp Output</p>
+                                    <h4 className="text-2xl font-black text-slate-800">
+                                        {cloudUsage.whatsapp.sent.toLocaleString()} 
+                                        <span className="text-sm font-medium text-slate-400 ml-1">/ {cloudUsage.whatsapp.limit.toLocaleString()} msgs</span>
+                                    </h4>
+                                </div>
+                                <div className="text-green-500 bg-green-50 w-10 h-10 flex items-center justify-center rounded-lg shadow-sm">
+                                    <i className="fa-brands fa-whatsapp text-xl"></i>
+                                </div>
+                            </div>
+                            <div className="w-full bg-slate-100 rounded-full h-3 mb-1 overflow-hidden">
+                                <div 
+                                    className="bg-green-500 h-3 rounded-full" 
+                                    style={{ width: `${Math.min(100, (cloudUsage.whatsapp.sent / (cloudUsage.whatsapp.limit || 1)) * 100)}%` }}
+                                ></div>
+                            </div>
+                        </div>
+
+                        {/* Email Metric */}
+                        <div>
+                            <div className="flex justify-between items-end mb-2">
+                                <div>
+                                    <p className="text-sm font-bold text-slate-500 uppercase tracking-wider">Email Output</p>
+                                    <h4 className="text-2xl font-black text-slate-800">
+                                        {cloudUsage.email.sent.toLocaleString()} 
+                                        <span className="text-sm font-medium text-slate-400 ml-1">/ {cloudUsage.email.limit.toLocaleString()} emails</span>
+                                    </h4>
+                                </div>
+                                <div className="text-blue-500 bg-blue-50 w-10 h-10 flex items-center justify-center rounded-lg shadow-sm">
+                                    <i className="fa-regular fa-envelope text-xl"></i>
+                                </div>
+                            </div>
+                            <div className="w-full bg-slate-100 rounded-full h-3 mb-1 overflow-hidden">
+                                <div 
+                                    className="bg-blue-500 h-3 rounded-full" 
+                                    style={{ width: `${Math.min(100, (cloudUsage.email.sent / (cloudUsage.email.limit || 1)) * 100)}%` }}
+                                ></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
 
             {/* Growth Chart */}
             {chartData && (

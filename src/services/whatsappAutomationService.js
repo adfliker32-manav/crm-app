@@ -155,7 +155,10 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
 
         for (const template of templates) {
             try {
-                const metaComponents = buildMetaComponents(template.components || [], templateData);
+                // FIX 3.1: Was missing `template.variableMapping` as 2nd arg.
+                // buildMetaComponents(components, variableMapping, data) — variableMapping was skipped,
+                // so templateData was treated as variableMapping and all {{1}}...{{N}} resolved to ''.
+                const metaComponents = buildMetaComponents(template.components || [], template.variableMapping, templateData);
                 const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents);
                 console.log(`✅ Automated WhatsApp sent to ${lead.phone} for stage change to ${newStage} using template ${template.name}`);
             } catch (error) {

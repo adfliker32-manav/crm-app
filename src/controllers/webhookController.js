@@ -302,7 +302,7 @@ const sendReply = async (req, res) => {
             });
         }
         
-        const url = `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
         
         await axios.post(url, {
             messaging_product: "whatsapp",

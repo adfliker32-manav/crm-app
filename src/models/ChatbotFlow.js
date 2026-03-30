@@ -23,7 +23,7 @@ const chatbotFlowSchema = new mongoose.Schema({
     },
     triggerType: {
         type: String,
-        enum: ['keyword', 'first_message', 'stage_change', 'manual'],
+        enum: ['keyword', 'first_message', 'any_message', 'existing_contact_message', 'stage_change', 'manual'],
         default: 'keyword'
     },
     triggerKeywords: [{
@@ -34,6 +34,25 @@ const chatbotFlowSchema = new mongoose.Schema({
     triggerStage: {
         type: String,
         default: null
+    },
+    // Smart Lead Generation & Follow-ups
+    smartLeadSettings: {
+        enabled: { type: Boolean, default: false },
+        rules: [{
+            qualificationLevel: { type: String, enum: ['Partial', 'Engaged', 'Qualified'] },
+            minQuestionsAnswered: { type: Number, default: 0 },
+            requiredVariables: [{ type: String }],
+            assignTags: [{ type: String }],
+            changeStageTo: { type: String, default: null },
+            notifyAgent: { type: Boolean, default: false }
+        }],
+        followups: [{
+            delayHours: { type: Number, required: true },
+            messageType: { type: String, enum: ['text', 'template'], default: 'text' },
+            messageText: { type: String }, // Used if text
+            templateName: { type: String }, // Used if template
+            templateLanguage: { type: String, default: 'en' }
+        }]
     },
     // Visual flow data
     nodes: [{
@@ -98,6 +117,7 @@ const chatbotFlowSchema = new mongoose.Schema({
         triggered: { type: Number, default: 0 },
         completed: { type: Number, default: 0 },
         abandoned: { type: Number, default: 0 },
+        leadsGenerated: { type: Number, default: 0 },
         avgCompletionTime: { type: Number, default: 0 },
         dropoffs: {
             type: Map,

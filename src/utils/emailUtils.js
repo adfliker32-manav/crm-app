@@ -30,20 +30,31 @@ function decrypt(text) {
 // Get user email credentials
 async function getUserEmailCredentials(userId) {
     try {
-        let user = await User.findById(userId).select('emailUser emailPassword emailFromName name role parentId');
+        const User = require('../models/User'); 
+        const IntegrationConfig = require('../models/IntegrationConfig');
         
+        let user = await User.findById(userId).select('role parentId name');
+        if (!user) return null;
+
         // Agent inheritance: Agents use their Manager's configuration
-        if (user && user.role === 'agent' && user.parentId) {
-            user = await User.findById(user.parentId).select('emailUser emailPassword emailFromName name');
+        let tenantId = userId;
+        let tenantName = user.name;
+        
+        if (user.role === 'agent' && user.parentId) {
+            tenantId = user.parentId;
+            const parentUser = await User.findById(user.parentId).select('name');
+            if (parentUser) tenantName = parentUser.name;
         }
 
-        if (!user || !user.emailUser || !user.emailPassword) {
+        const config = await IntegrationConfig.findOne({ userId: tenantId }).select('email');
+
+        if (!config || !config.email?.emailUser || !config.email?.emailPassword) {
             return null;
         }
         return {
-            email: user.emailUser,
-            password: decrypt(user.emailPassword),
-            fromName: user.emailFromName || user.name || 'CRM Pro'
+            email: config.email.emailUser,
+            password: decrypt(config.email.emailPassword),
+            fromName: config.email.emailFromName || tenantName || 'CRM Pro'
         };
     } catch (error) {
         console.error('Error getting user email credentials:', error);

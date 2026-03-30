@@ -156,7 +156,7 @@ const TemplateBuilder = ({ templateId, onBack }) => {
     };
 
     // ────────── Header Format Handling ──────────
-    const setHeaderFormat = (format) => {
+    const handleHeaderFormatChange = (format) => {
         setMediaPreview(null);
         setTemplate(prev => {
             const components = prev.components.filter(c => c.type !== 'HEADER');
@@ -253,6 +253,45 @@ const TemplateBuilder = ({ templateId, onBack }) => {
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    };
+
+    const extractVariables = (text) => {
+        if (!text) return [];
+        const matches = text.match(/\{\{(\d+)\}\}/g);
+        if (!matches) return [];
+        return [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
+    };
+
+    const updateVariableExample = (type, num, value) => {
+        setTemplate(prev => {
+            const components = [...prev.components];
+            const comp = components.find(c => c.type === type);
+            if (comp) {
+                if (!comp.example) comp.example = {};
+                if (type === 'BODY') {
+                    if (!comp.example.body_text) comp.example.body_text = [[]];
+                    if (!comp.example.body_text[0]) comp.example.body_text[0] = [];
+                    comp.example.body_text[0][num - 1] = value;
+                } else if (type === 'HEADER' && comp.format === 'TEXT') {
+                    if (!comp.example.header_text) comp.example.header_text = [];
+                    comp.example.header_text[num - 1] = value;
+                }
+            }
+            return { ...prev, components };
+        });
+    };
+
+    const addVariable = (type) => {
+        setTemplate(prev => {
+            const components = [...prev.components];
+            const comp = components.find(c => c.type === type);
+            if (comp) {
+                const vars = extractVariables(comp.text);
+                const nextNum = vars.length > 0 ? Math.max(...vars) + 1 : 1;
+                comp.text = (comp.text || '') + `{{${nextNum}}}`;
+            }
+            return { ...prev, components };
+        });
     };
 
     // ────────── Derived State ──────────
@@ -367,33 +406,87 @@ const TemplateBuilder = ({ templateId, onBack }) => {
             <div className="flex-1 overflow-hidden flex">
                 {/* ──── Form Panel ──── */}
                 <div className="w-[55%] overflow-y-auto p-5 space-y-4">
-                    {/* Basic Info Card */}
-                    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                        <h3 className="text-sm font-bold text-[#111b21] uppercase tracking-wider mb-4 flex items-center gap-2">
-                            <i className="fa-solid fa-info-circle text-[#00a884]"></i> Basic Information
+                    {/* Basic Info Card - REDESIGNED */}
+                    <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-[#00a884]/5 rounded-full -mr-16 -mt-16 blur-2xl group-hover:bg-[#00a884]/10 transition-colors"></div>
+                        
+                        <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                             Basic Information
                         </h3>
-                        <div className="space-y-4">
+                        
+                        <div className="space-y-8 relative z-10">
+                            {/* Template Name */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1.5">Template Name <span className="text-red-500">*</span></label>
-                                <input type="text" value={template.name} onChange={(e) => setTemplate({ ...template, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })}
-                                    placeholder="e.g. welcome_message" disabled={!isDraft && templateId !== 'new'}
-                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00a884]/30 focus:border-[#00a884] outline-none text-sm font-mono bg-slate-50 disabled:opacity-60 transition" />
-                                <p className="text-[11px] text-slate-400 mt-1">Lowercase, numbers, underscores only</p>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Category</label>
-                                    <select value={template.category} onChange={(e) => setTemplate({ ...template, category: e.target.value })} disabled={!isDraft}
-                                        className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00a884]/30 focus:border-[#00a884] outline-none text-sm bg-slate-50 disabled:opacity-60 transition">
-                                        <option value="UTILITY">🔧 Utility</option>
-                                        <option value="MARKETING">📣 Marketing</option>
-                                        <option value="AUTHENTICATION">🔐 Authentication</option>
-                                    </select>
+                                <label className="block text-sm font-bold text-slate-700 mb-2 px-1">Template Name <span className="text-rose-500">*</span></label>
+                                <div className="relative group/input">
+                                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-[#00a884] transition-colors">
+                                        <i className="fa-solid fa-tag text-xs"></i>
+                                    </div>
+                                    <input 
+                                        type="text" 
+                                        value={template.name} 
+                                        onChange={(e) => setTemplate({ ...template, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })}
+                                        placeholder="e.g. order_confirmation" 
+                                        disabled={!isDraft && templateId !== 'new'}
+                                        className="w-full pl-11 pr-4 py-3.5 bg-slate-50 border-2 border-transparent focus:border-[#00a884]/20 focus:bg-white rounded-2xl focus:ring-4 focus:ring-[#00a884]/5 outline-none text-sm font-mono transition-all disabled:opacity-60 shadow-inner" 
+                                    />
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Language</label>
-                                    <select value={template.language} onChange={(e) => setTemplate({ ...template, language: e.target.value })} disabled={!isDraft}
-                                        className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00a884]/30 focus:border-[#00a884] outline-none text-sm bg-slate-50 disabled:opacity-60 transition">
+                                <div className="flex justify-between mt-2 px-1">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">a-z, 0-9, and underscores only</p>
+                                    <p className="text-[10px] font-bold text-slate-300">{(template.name || '').length}/512</p>
+                                </div>
+                            </div>
+
+                            {/* Category Selection - Visual Cards */}
+                            <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-3 px-1">Category <span className="text-slate-400 font-medium">(Select one)</span></label>
+                                <div className="grid grid-cols-3 gap-3">
+                                    {[
+                                        { id: 'UTILITY', label: 'Utility', desc: 'Confirmations, status updates', icon: 'fa-wrench', color: 'blue' },
+                                        { id: 'MARKETING', label: 'Marketing', desc: 'Promos, news, re-engagement', icon: 'fa-bullhorn', color: 'purple' },
+                                        { id: 'AUTHENTICATION', label: 'Auth', desc: 'OTP, security codes', icon: 'fa-shield-halved', color: 'amber' }
+                                    ].map(cat => (
+                                        <button
+                                            key={cat.id}
+                                            onClick={() => isDraft && setTemplate({ ...template, category: cat.id })}
+                                            disabled={!isDraft}
+                                            className={`p-4 rounded-2xl border-2 text-left transition-all duration-300 relative overflow-hidden group/cat ${
+                                                template.category === cat.id 
+                                                    ? `border-${cat.color}-500 bg-${cat.color}-50 shadow-md` 
+                                                    : 'border-slate-100 bg-slate-50 hover:bg-white hover:border-slate-200'
+                                            } ${!isDraft ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                        >
+                                            {template.category === cat.id && (
+                                                <div className={`absolute top-2 right-2 w-5 h-5 bg-${cat.color}-500 rounded-full flex items-center justify-center text-white text-[10px]`}>
+                                                    <i className="fa-solid fa-check"></i>
+                                                </div>
+                                            )}
+                                            <div className={`w-10 h-10 rounded-xl bg-white shadow-sm flex items-center justify-center mb-3 group-hover/cat:scale-110 transition-transform ${
+                                                template.category === cat.id ? `text-${cat.color}-600` : 'text-slate-400'
+                                            }`}>
+                                                <i className={`fa-solid ${cat.icon} text-lg`}></i>
+                                            </div>
+                                            <div className={`text-xs font-black ${template.category === cat.id ? `text-${cat.color}-900` : 'text-slate-700'}`}>{cat.label}</div>
+                                            <div className="text-[9px] text-slate-400 leading-tight mt-1 font-medium">{cat.desc}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Language Selection */}
+                            <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2 px-1">Language</label>
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400">
+                                        <i className="fa-solid fa-globe text-xs"></i>
+                                    </div>
+                                    <select 
+                                        value={template.language} 
+                                        onChange={(e) => setTemplate({ ...template, language: e.target.value })} 
+                                        disabled={!isDraft}
+                                        className="w-full pl-11 pr-10 py-3.5 bg-slate-50 border-2 border-transparent focus:border-[#00a884]/20 focus:bg-white rounded-2xl focus:ring-4 focus:ring-[#00a884]/5 outline-none text-sm font-bold text-slate-700 transition-all appearance-none cursor-pointer"
+                                        style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%23a1a1aa\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'/%3E%3C/svg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 1rem center', backgroundSize: '1.25rem' }}
+                                    >
                                         <option value="en">🇺🇸 English</option>
                                         <option value="en_US">🇺🇸 English (US)</option>
                                         <option value="hi">🇮🇳 Hindi</option>
@@ -408,345 +501,293 @@ const TemplateBuilder = ({ templateId, onBack }) => {
                         </div>
                     </div>
 
-                    {/* ════════ HEADER CARD (Fully Enhanced) ════════ */}
-                    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                        <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-sm font-bold text-[#111b21] uppercase tracking-wider flex items-center gap-2">
-                                <i className="fa-solid fa-heading text-[#00a884]"></i> Header <span className="text-slate-400 font-normal normal-case">(Optional)</span>
+                    {/* ════════ HEADER CARD ════════ */}
+                    <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full -mr-16 -mt-16 blur-2xl group-hover:bg-blue-500/10 transition-colors"></div>
+                        
+                        <div className="flex items-center justify-between mb-6 relative z-10">
+                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
+                                <span className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
+                                    <i className="fa-solid fa-heading text-xs"></i>
+                                </span>
+                                Header <span className="text-[10px] lowercase font-bold text-slate-300 ml-1">(Optional)</span>
                             </h3>
-                            {headerComp && (
-                                <button onClick={() => { removeComponent('HEADER'); setHeaderFormat('NONE'); }} disabled={!isDraft} className="text-xs text-red-500 hover:text-red-700 transition">
-                                    <i className="fa-solid fa-trash mr-1"></i>Remove
-                                </button>
-                            )}
-                        </div>
-
-                        {/* Format Picker Buttons */}
-                        <div className="grid grid-cols-5 gap-2 mb-4">
-                            {headerFormats.map(fmt => (
-                                <button
-                                    key={fmt.value}
-                                    onClick={() => setHeaderFormat(fmt.value)}
-                                    disabled={!isDraft}
-                                    className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl border-2 transition text-center disabled:opacity-50 ${
-                                        currentHeaderFormat === fmt.value
-                                            ? 'border-[#00a884] bg-[#00a884]/5'
-                                            : 'border-slate-200 hover:border-slate-300 bg-slate-50'
-                                    }`}
+                            <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase">Format:</span>
+                                <select 
+                                    value={currentHeaderFormat} 
+                                    onChange={(e) => handleHeaderFormatChange(e.target.value)}
+                                    className="bg-slate-50 border-none text-[11px] font-black text-blue-600 uppercase tracking-wider px-3 py-1.5 rounded-lg outline-none cursor-pointer hover:bg-blue-50 transition-colors"
                                 >
-                                    <i className={`fa-solid ${fmt.icon} text-lg ${currentHeaderFormat === fmt.value ? 'text-[#00a884]' : fmt.color}`}></i>
-                                    <span className={`text-xs font-semibold ${currentHeaderFormat === fmt.value ? 'text-[#00a884]' : 'text-slate-600'}`}>{fmt.label}</span>
-                                    {fmt.limit && <span className="text-[9px] text-slate-400 leading-tight">{fmt.limit}</span>}
-                                </button>
-                            ))}
+                                    <option value="NONE">None</option>
+                                    <option value="TEXT">Text</option>
+                                    <option value="IMAGE">Image</option>
+                                    <option value="VIDEO">Video</option>
+                                    <option value="DOCUMENT">Document</option>
+                                </select>
+                            </div>
                         </div>
 
-                        {/* TEXT Header Input */}
-                        {currentHeaderFormat === 'TEXT' && (
-                            <div>
-                                <input type="text" value={headerComp?.text || ''} onChange={(e) => updateComponent('HEADER', 'text', e.target.value)}
-                                    placeholder="e.g. 🎉 Special Offer!" disabled={!isDraft} maxLength={60}
-                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00a884]/30 focus:border-[#00a884] outline-none text-sm disabled:opacity-60 transition" />
-                                <p className="text-[11px] text-slate-400 mt-1 text-right">{(headerComp?.text || '').length}/60</p>
-                            </div>
-                        )}
-
-                        {/* MEDIA Header Upload Area */}
-                        {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(currentHeaderFormat) && (
-                            <div>
-                                <input
-                                    ref={fileInputRef}
-                                    type="file"
-                                    className="hidden"
-                                    accept={
-                                        currentHeaderFormat === 'IMAGE' ? 'image/jpeg,image/png' :
-                                        currentHeaderFormat === 'VIDEO' ? 'video/mp4,video/3gpp' :
-                                        '.pdf,application/pdf'
-                                    }
-                                    onChange={(e) => {
-                                        const file = e.target.files?.[0];
-                                        if (file) handleMediaUpload(file);
-                                        e.target.value = '';
-                                    }}
-                                />
-
-                                {/* Upload State: No file yet */}
-                                {!mediaPreview && !headerComp?.example?.header_handle?.length && !uploading && (
-                                    <div
-                                        onDrop={handleDrop}
-                                        onDragOver={handleDragOver}
+                        {currentHeaderFormat !== 'NONE' && (
+                            <div className="space-y-6 relative z-10 animate-in fade-in slide-in-from-top-2 duration-300">
+                                {currentHeaderFormat === 'TEXT' ? (
+                                    <div>
+                                        <div className="relative group/input">
+                                            <input 
+                                                type="text" 
+                                                value={headerComp?.text || ''} 
+                                                onChange={(e) => updateComponent('HEADER', 'text', e.target.value)}
+                                                placeholder="Enter header text..." 
+                                                className="w-full px-5 py-4 bg-slate-50 border-2 border-transparent focus:border-blue-500/20 focus:bg-white rounded-2xl focus:ring-4 focus:ring-blue-500/5 outline-none text-sm font-bold transition-all shadow-inner" 
+                                            />
+                                        </div>
+                                        <div className="flex justify-between mt-2 px-1">
+                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Supports variables like {'{{1}}'}</p>
+                                            <p className="text-[10px] font-bold text-slate-300">{(headerComp?.text || '').length}/60</p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div 
+                                        className="border-2 border-dashed border-slate-200 rounded-[2rem] p-10 bg-slate-50/50 hover:bg-blue-50/30 hover:border-blue-200 transition-all cursor-pointer group/upload text-center relative overflow-hidden"
                                         onClick={() => isDraft && fileInputRef.current?.click()}
-                                        className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition ${
-                                            isDraft ? 'border-slate-300 hover:border-[#00a884] hover:bg-[#00a884]/5' : 'border-slate-200 opacity-60 cursor-not-allowed'
-                                        }`}
                                     >
-                                        <div className="w-14 h-14 mx-auto mb-3 bg-gradient-to-br from-slate-100 to-slate-200 rounded-2xl flex items-center justify-center">
-                                            <i className={`fa-solid ${
-                                                currentHeaderFormat === 'IMAGE' ? 'fa-cloud-arrow-up' :
-                                                currentHeaderFormat === 'VIDEO' ? 'fa-film' : 'fa-file-arrow-up'
-                                            } text-2xl text-slate-400`}></i>
-                                        </div>
-                                        <p className="text-sm font-medium text-slate-600 mb-1">
-                                            {currentHeaderFormat === 'IMAGE' && 'Upload Image'}
-                                            {currentHeaderFormat === 'VIDEO' && 'Upload Video'}
-                                            {currentHeaderFormat === 'DOCUMENT' && 'Upload Document'}
-                                        </p>
-                                        <p className="text-xs text-slate-400 mb-3">
-                                            Drag & drop or <span className="text-[#00a884] font-semibold">browse</span>
-                                        </p>
-                                        <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-lg">
-                                            <i className="fa-solid fa-circle-info text-slate-400 text-xs"></i>
-                                            <span className="text-[11px] text-slate-500">
-                                                {currentHeaderFormat === 'IMAGE' && 'JPG, PNG · Max 5 MB'}
-                                                {currentHeaderFormat === 'VIDEO' && 'MP4, 3GPP · Max 16 MB'}
-                                                {currentHeaderFormat === 'DOCUMENT' && 'PDF · Max 10 MB'}
-                                            </span>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Upload State: Uploading */}
-                                {uploading && (
-                                    <div className="border-2 border-[#00a884] border-dashed rounded-xl p-8 text-center bg-[#00a884]/5">
-                                        <div className="w-14 h-14 mx-auto mb-3 relative">
-                                            <svg className="w-14 h-14 -rotate-90" viewBox="0 0 56 56">
-                                                <circle cx="28" cy="28" r="24" fill="none" stroke="#e2e8f0" strokeWidth="4" />
-                                                <circle cx="28" cy="28" r="24" fill="none" stroke="#00a884" strokeWidth="4"
-                                                    strokeDasharray={`${2 * Math.PI * 24}`}
-                                                    strokeDashoffset={`${2 * Math.PI * 24 * (1 - uploadProgress / 100)}`}
-                                                    strokeLinecap="round" className="transition-all duration-300" />
-                                            </svg>
-                                            <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-[#00a884]">{uploadProgress}%</span>
-                                        </div>
-                                        <p className="text-sm font-medium text-[#00a884]">Uploading to Meta...</p>
-                                        <p className="text-xs text-slate-400 mt-1">Please wait while the file is processed</p>
-                                    </div>
-                                )}
-
-                                {/* Upload State: Uploaded / Preview */}
-                                {!uploading && (mediaPreview || headerComp?.example?.header_handle?.length > 0) && (
-                                    <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50">
-                                        {/* Preview area */}
-                                        {currentHeaderFormat === 'IMAGE' && mediaPreview && (
-                                            <div className="relative group">
-                                                <img src={mediaPreview} alt="Header preview" className="w-full h-48 object-cover" />
-                                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                                                    {isDraft && (
-                                                        <button onClick={() => fileInputRef.current?.click()} className="px-4 py-2 bg-white rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100 transition shadow-lg">
-                                                            <i className="fa-solid fa-arrow-up-from-bracket mr-2"></i>Replace
-                                                        </button>
-                                                    )}
-                                                </div>
+                                        <input 
+                                            ref={fileInputRef}
+                                            type="file" 
+                                            className="hidden" 
+                                            accept={currentHeaderFormat === 'IMAGE' ? 'image/jpeg,image/png' : currentHeaderFormat === 'VIDEO' ? 'video/mp4' : '.pdf'}
+                                            onChange={(e) => {
+                                                const file = e.target.files?.[0];
+                                                if (file) handleMediaUpload(file);
+                                                e.target.value = '';
+                                            }}
+                                        />
+                                        <div className="relative z-10">
+                                            <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center mx-auto mb-4 group-hover/upload:scale-110 transition-transform text-blue-500 border border-slate-100">
+                                                <i className={`fa-solid ${currentHeaderFormat === 'IMAGE' ? 'fa-image' : currentHeaderFormat === 'VIDEO' ? 'fa-film' : 'fa-file-lines'} text-2xl`}></i>
                                             </div>
-                                        )}
-                                        {currentHeaderFormat === 'VIDEO' && mediaPreview && (
-                                            <div className="relative group">
-                                                <video src={mediaPreview} className="w-full h-48 object-cover bg-black" />
-                                                <div className="absolute inset-0 flex items-center justify-center">
-                                                    <div className="w-14 h-14 bg-white/90 rounded-full flex items-center justify-center shadow-lg">
-                                                        <i className="fa-solid fa-play text-xl text-slate-700 ml-1"></i>
+                                            <p className="text-sm font-black text-slate-700">{uploading ? 'Uploading...' : `Click to upload ${currentHeaderFormat.toLowerCase()}`}</p>
+                                            <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-wider">Max size 5MB • {currentHeaderFormat === 'IMAGE' ? 'JPG/PNG' : currentHeaderFormat === 'VIDEO' ? 'MP4' : 'PDF'}</p>
+                                        </div>
+                                        
+                                        {(mediaPreview || headerComp?.example?.header_handle?.length > 0) && !uploading && (
+                                            <div className="absolute inset-0 bg-white z-20 flex items-center justify-center p-2">
+                                                {currentHeaderFormat === 'IMAGE' ? (
+                                                    <img src={mediaPreview} className="h-full w-full object-cover rounded-2xl shadow-md" alt="Preview" />
+                                                ) : currentHeaderFormat === 'VIDEO' ? (
+                                                    <video src={mediaPreview} className="h-full w-full object-cover rounded-2xl shadow-md" />
+                                                ) : (
+                                                    <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100 w-full shadow-sm">
+                                                        <div className="w-12 h-12 bg-rose-500 rounded-xl flex items-center justify-center text-white shadow-lg"><i className="fa-solid fa-file-pdf text-xl"></i></div>
+                                                        <div className="text-left flex-1 min-w-0">
+                                                            <div className="text-sm font-black text-slate-800 truncate">{headerComp?._uploadedFileName || 'Document'}</div>
+                                                            <div className="text-[10px] font-bold text-slate-400">{headerComp?._uploadedFileSize ? formatFileSize(headerComp._uploadedFileSize) : 'Uploaded'}</div>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                                                    {isDraft && (
-                                                        <button onClick={() => fileInputRef.current?.click()} className="px-4 py-2 bg-white rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100 transition shadow-lg">
-                                                            <i className="fa-solid fa-arrow-up-from-bracket mr-2"></i>Replace
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
-                                        {currentHeaderFormat === 'DOCUMENT' && (
-                                            <div className="p-4 flex items-center gap-4">
-                                                <div className="w-12 h-12 bg-gradient-to-br from-red-500 to-red-600 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm">
-                                                    <i className="fa-solid fa-file-pdf text-white text-xl"></i>
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-sm font-medium text-slate-700 truncate">{headerComp?._uploadedFileName || mediaPreview || 'Document'}</p>
-                                                    <p className="text-xs text-slate-400">{headerComp?._uploadedFileSize ? formatFileSize(headerComp._uploadedFileSize) : 'PDF Document'}</p>
-                                                </div>
-                                                {isDraft && (
-                                                    <button onClick={() => fileInputRef.current?.click()} className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-100 transition">
-                                                        <i className="fa-solid fa-arrow-up-from-bracket mr-1"></i>Replace
-                                                    </button>
                                                 )}
+                                                <div className="absolute top-4 right-4 z-30 opacity-0 group-hover/upload:opacity-100 transition-opacity">
+                                                    <button onClick={(e) => { e.stopPropagation(); setMediaPreview(null); handleHeaderFormatChange('NONE'); }} className="w-8 h-8 bg-black/50 backdrop-blur-md rounded-full text-white flex items-center justify-center hover:bg-rose-500 transition-colors shadow-lg"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                                                </div>
                                             </div>
                                         )}
-                                        {/* Success badge */}
-                                        <div className="px-4 py-2.5 border-t border-slate-200 flex items-center justify-between bg-emerald-50/50">
-                                            <div className="flex items-center gap-2">
-                                                <i className="fa-solid fa-check-circle text-emerald-500"></i>
-                                                <span className="text-xs font-medium text-emerald-700">Uploaded to Meta</span>
+
+                                        {uploading && (
+                                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center">
+                                                <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+                                                <p className="text-xs font-black text-blue-600 uppercase tracking-widest">{uploadProgress}% Uploading</p>
                                             </div>
-                                            {isDraft && (
-                                                <button onClick={() => { setMediaPreview(null); updateComponent('HEADER', 'example', { header_handle: [] }); }}
-                                                    className="text-xs text-red-500 hover:text-red-700 transition">
-                                                    <i className="fa-solid fa-trash mr-1"></i>Remove
-                                                </button>
-                                            )}
-                                        </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
                         )}
                     </div>
 
-                    {/* Body Card */}
-                    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                        <h3 className="text-sm font-bold text-[#111b21] uppercase tracking-wider mb-3 flex items-center gap-2">
-                            <i className="fa-solid fa-align-left text-[#00a884]"></i> Body <span className="text-red-500">*</span>
+                    {/* ════════ BODY CARD ════════ */}
+                    <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full -mr-16 -mt-16 blur-2xl group-hover:bg-emerald-500/10 transition-colors"></div>
+                        
+                        <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                            <span className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
+                                <i className="fa-solid fa-align-left text-xs"></i>
+                            </span>
+                            Body Content <span className="text-rose-500">*</span>
                         </h3>
-                        <textarea ref={bodyRef} value={bodyComp?.text || ''} onChange={(e) => updateComponent('BODY', 'text', e.target.value)}
-                            placeholder="Hi {{1}}! Thank you for your interest in {{2}}. We'll get back to you shortly." rows={5} disabled={!isDraft} maxLength={1024}
-                            className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00a884]/30 focus:border-[#00a884] outline-none text-sm resize-none disabled:opacity-60 transition leading-relaxed" />
-                        <div className="flex items-center justify-between mt-2">
-                            <div className="flex items-center gap-1.5">
-                                <span className="text-[11px] text-slate-400 mr-1">Insert variable:</span>
-                                {[1, 2, 3, 4, 5].map(n => (
-                                    <button key={n} onClick={() => insertVariable(n)} disabled={!isDraft}
-                                        className="px-2 py-1 bg-blue-50 text-blue-600 rounded text-[11px] font-mono font-bold hover:bg-blue-100 transition disabled:opacity-50">{`{{${n}}}`}</button>
-                                ))}
-                            </div>
-                            <span className={`text-[11px] font-medium ${bodyCharCount > 900 ? 'text-red-500' : 'text-slate-400'}`}>{bodyCharCount}/1024</span>
-                        </div>
-                        {(() => {
-                            const textValues = [
-                                template.components.find(c => c.type === 'BODY')?.text || '',
-                                template.components.find(c => c.type === 'HEADER' && c.format === 'TEXT')?.text || ''
-                            ].join(' ');
-                            
-                            const matches = textValues.match(/\{\{(\d+)\}\}/g);
-                            if (!matches || matches.length === 0) return null;
-                            
-                            const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a,b)=>a-b);
-                            
-                            return (
-                                <div className="mt-4 pt-4 border-t border-slate-100">
-                                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Variable Mapping</h4>
-                                    <div className="space-y-3">
-                                        {nums.map(num => (
-                                            <div key={num} className="flex items-center gap-3">
-                                                <div className="w-12 text-center py-1.5 bg-blue-50 text-blue-700 font-mono text-xs font-bold rounded-lg border border-blue-100">
-                                                    {`{{${num}}}`}
-                                                </div>
-                                                <i className="fa-solid fa-arrow-right text-slate-300 text-xs"></i>
-                                                <select 
-                                                    value={template.variableMapping?.[num] || ''}
-                                                    onChange={(e) => setTemplate(prev => ({ 
-                                                        ...prev, 
-                                                        variableMapping: { ...(prev.variableMapping || {}), [num]: e.target.value } 
-                                                    }))}
-                                                    disabled={!isDraft}
-                                                    className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none bg-slate-50 disabled:opacity-60"
-                                                >
-                                                    <option value="" disabled>Select mapping mapping...</option>
-                                                    <option value="lead.name">Lead Name</option>
-                                                    <option value="lead.phone">Lead Phone</option>
-                                                    <option value="lead.email">Lead Email</option>
-                                                    <option value="lead.status">Lead Stage / Status</option>
-                                                    <option value="company.name">Company Name</option>
-                                                    <option value="user.name">Representative Name</option>
-                                                    <option value="custom">Static / Custom Text</option>
-                                                </select>
-                                                {template.variableMapping?.[num] === 'custom' && (
-                                                    <input 
-                                                        type="text" 
-                                                        placeholder="Enter static fallback text..."
-                                                        value={template.variableMapping?.[`${num}_custom`] || ''}
-                                                        onChange={(e) => setTemplate(prev => ({ 
-                                                            ...prev, 
-                                                            variableMapping: { ...(prev.variableMapping || {}), [`${num}_custom`]: e.target.value } 
-                                                        }))}
-                                                        disabled={!isDraft}
-                                                        className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none bg-white disabled:opacity-60"
-                                                    />
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <p className="text-[10px] text-slate-400 mt-2 italic">Select what CRM data fields these variables will be replaced with during Automations and Broadcasts.</p>
+                        
+                        <div className="relative z-10 space-y-4">
+                            <div className="relative group/input">
+                                    <textarea 
+                                        rows="6" 
+                                        value={bodyComp?.text || ''} 
+                                        onChange={(e) => updateComponent('BODY', 'text', e.target.value)}
+                                        className="w-full px-5 py-5 bg-slate-50 border-2 border-transparent focus:border-emerald-500/20 focus:bg-white rounded-[2rem] focus:ring-4 focus:ring-emerald-500/5 outline-none text-[15px] font-medium transition-all shadow-inner leading-relaxed resize-none"
+                                        placeholder="Enter the main content of your message... Use {{1}}, {{2}} for dynamic fields."
+                                    ></textarea>
+                                
+                                <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-focus-within/input:opacity-100 transition-opacity">
+                                    <button 
+                                        onClick={() => addVariable('BODY')}
+                                        className="px-3 py-1.5 bg-emerald-500 text-white text-[10px] font-black rounded-full shadow-lg hover:bg-emerald-600 transition-all flex items-center gap-1.5"
+                                    >
+                                        <i className="fa-solid fa-plus-circle"></i> ADD {'{{x}}'}
+                                    </button>
                                 </div>
-                            );
-                        })()}
+                            </div>
+                            
+                            <div className="flex justify-between px-1">
+                                <div className="flex gap-4">
+                                   <div className="flex items-center gap-1.5 text-slate-400">
+                                       <i className="fa-solid fa-circle-check text-[10px] text-emerald-500"></i>
+                                       <span className="text-[10px] font-bold uppercase tracking-wider">Variables</span>
+                                   </div>
+                                   <div className="flex items-center gap-1.5 text-slate-400">
+                                       <i className="fa-solid fa-circle-check text-[10px] text-emerald-500"></i>
+                                       <span className="text-[10px] font-bold uppercase tracking-wider">Emojis</span>
+                                   </div>
+                                </div>
+                                <p className="text-[10px] font-bold text-slate-300">{(bodyComp?.text || '').length}/1024</p>
+                            </div>
+                        </div>
+
+                        {/* Variable Mapping Section */}
+                        {bodyComp?.text?.includes('{{') && (
+                            <div className="mt-8 pt-8 border-t border-slate-100 animate-in fade-in zoom-in-95 duration-500">
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Sample Data for Variables</p>
+                                <div className="grid grid-cols-2 gap-4">
+                                    {extractVariables(bodyComp.text).map((num) => (
+                                        <div key={num} className="relative group/var">
+                                            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                                <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-[10px] font-black flex items-center justify-center">
+                                                    {num}
+                                                </span>
+                                            </div>
+                                            <input 
+                                                type="text" 
+                                                placeholder={`Value for {{${num}}}`}
+                                                value={bodyComp.example?.body_text?.[0]?.[num-1] || ''}
+                                                onChange={(e) => updateVariableExample('BODY', num, e.target.value)}
+                                                className="w-full pl-12 pr-4 py-3 bg-slate-50 border-2 border-transparent focus:border-emerald-500/20 focus:bg-white rounded-xl focus:ring-4 focus:ring-emerald-500/5 outline-none text-xs font-bold transition-all shadow-inner"
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
-                    {/* Footer Card */}
-                    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="text-sm font-bold text-[#111b21] uppercase tracking-wider flex items-center gap-2">
-                                <i className="fa-solid fa-shoe-prints text-[#00a884]"></i> Footer <span className="text-slate-400 font-normal normal-case">(Optional)</span>
+                    {/* ════════ FOOTER CARD ════════ */}
+                    <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-slate-500/5 rounded-full -mr-16 -mt-16 blur-2xl group-hover:bg-slate-500/10 transition-colors"></div>
+                        
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
+                                <span className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-600">
+                                    <i className="fa-solid fa-shoe-prints text-xs"></i>
+                                </span>
+                                Footer <span className="text-[10px] lowercase font-bold text-slate-300 ml-1">(Optional)</span>
                             </h3>
-                            {footerComp && <button onClick={() => removeComponent('FOOTER')} disabled={!isDraft} className="text-xs text-red-500 hover:text-red-700 transition"><i className="fa-solid fa-trash mr-1"></i>Remove</button>}
+                            {footerComp && <button onClick={() => removeComponent('FOOTER')} className="text-[10px] font-black text-rose-500 uppercase tracking-widest hover:text-rose-700 transition">Remove</button>}
                         </div>
+
                         {!footerComp ? (
-                            <button onClick={() => updateComponent('FOOTER', 'text', '')} disabled={!isDraft}
-                                className="w-full py-3 border-2 border-dashed border-slate-200 rounded-xl text-slate-500 hover:border-[#00a884] hover:text-[#00a884] transition text-sm font-medium disabled:opacity-50">
-                                <i className="fa-solid fa-plus mr-2"></i>Add Footer
+                            <button onClick={() => updateComponent('FOOTER', 'text', '')} className="w-full py-6 border-2 border-dashed border-slate-200 rounded-[2rem] text-slate-400 hover:border-slate-300 hover:bg-slate-50 transition-all text-xs font-black uppercase tracking-widest flex items-center justify-center gap-3">
+                                <i className="fa-solid fa-plus-circle"></i> Add Footer Text
                             </button>
                         ) : (
-                            <div>
-                                <input type="text" value={footerComp.text || ''} onChange={(e) => updateComponent('FOOTER', 'text', e.target.value)}
-                                    placeholder="e.g. Powered by ADFLIKER CRM" disabled={!isDraft} maxLength={60}
-                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00a884]/30 focus:border-[#00a884] outline-none text-sm disabled:opacity-60 transition" />
-                                <p className="text-[11px] text-slate-400 mt-1 text-right">{(footerComp.text || '').length}/60</p>
+                            <div className="relative animate-in fade-in slide-in-from-top-2">
+                                <input 
+                                    type="text" 
+                                    value={footerComp.text || ''} 
+                                    onChange={(e) => updateComponent('FOOTER', 'text', e.target.value)}
+                                    className="w-full px-5 py-4 bg-slate-50 border-2 border-transparent focus:border-slate-500/20 focus:bg-white rounded-2xl focus:ring-4 focus:ring-slate-500/5 outline-none text-sm font-bold transition-all shadow-inner"
+                                    placeholder="e.g. Reply STOP to opt out" 
+                                    maxLength={60}
+                                />
+                                <p className="text-[10px] font-bold text-slate-300 text-right mt-2 px-1">{(footerComp.text || '').length}/60</p>
                             </div>
                         )}
                     </div>
 
-                    {/* Buttons Card */}
-                    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="text-sm font-bold text-[#111b21] uppercase tracking-wider flex items-center gap-2">
-                                <i className="fa-solid fa-hand-pointer text-[#00a884]"></i> Interactive Buttons <span className="text-slate-400 font-normal normal-case">(Optional, max 3)</span>
+                    {/* ════════ BUTTONS CARD ════════ */}
+                    <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full -mr-16 -mt-16 blur-2xl group-hover:bg-blue-500/10 transition-colors"></div>
+                        
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
+                                <span className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
+                                    <i className="fa-solid fa-hand-pointer text-xs"></i>
+                                </span>
+                                Interactive Buttons <span className="text-[10px] lowercase font-bold text-slate-300 ml-1">(Optional, Max 3)</span>
                             </h3>
                             {btnComp?.buttons?.length > 0 && btnComp.buttons.length < 3 && (
-                                <button onClick={addButton} disabled={!isDraft} className="text-xs text-[#00a884] hover:text-[#008f6f] transition font-medium"><i className="fa-solid fa-plus mr-1"></i>Add</button>
+                                <button onClick={addButton} className="px-3 py-1 bg-blue-600 text-white text-[10px] font-black rounded-full shadow-lg hover:bg-blue-700 transition-all">
+                                    <i className="fa-solid fa-plus mr-1"></i> ADD
+                                </button>
                             )}
                         </div>
+
                         {!btnComp?.buttons?.length ? (
-                            <button onClick={addButton} disabled={!isDraft}
-                                className="w-full py-3 border-2 border-dashed border-slate-200 rounded-xl text-slate-500 hover:border-[#00a884] hover:text-[#00a884] transition text-sm font-medium disabled:opacity-50">
-                                <i className="fa-solid fa-plus mr-2"></i>Add Quick Reply / CTA Button
+                            <button onClick={addButton} className="w-full py-8 border-2 border-dashed border-slate-200 rounded-[2rem] text-slate-400 hover:border-blue-200 hover:bg-blue-50/30 transition-all text-xs font-black uppercase tracking-widest flex flex-col items-center justify-center gap-3">
+                                <div className="w-12 h-12 bg-white rounded-2xl shadow-sm flex items-center justify-center text-blue-500 border border-slate-100">
+                                    <i className="fa-solid fa-mouse-pointer text-xl"></i>
+                                </div>
+                                Add Quick Replies or CTA
                             </button>
                         ) : (
-                            <div className="space-y-3">
+                            <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-500">
                                 {btnComp.buttons.map((btn, idx) => (
-                                    <div key={idx} className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
-                                        <div className="flex items-center justify-between mb-3">
-                                            <span className="text-xs font-bold text-slate-600 uppercase">Button {idx + 1}</span>
-                                            <button onClick={() => removeButton(idx)} disabled={!isDraft} className="text-red-400 hover:text-red-600 transition"><i className="fa-solid fa-trash text-xs"></i></button>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-3">
+                                    <div key={idx} className="bg-slate-50/50 rounded-[2rem] p-6 border border-slate-100 relative group/btn-card">
+                                        <button onClick={() => removeButton(idx)} className="absolute top-4 right-4 w-8 h-8 bg-white text-rose-500 rounded-full flex items-center justify-center shadow-sm opacity-0 group-hover/btn-card:opacity-100 transition-all hover:bg-rose-50 border border-rose-100">
+                                            <i className="fa-solid fa-trash-can text-[10px]"></i>
+                                        </button>
+                                        
+                                        <div className="grid grid-cols-2 gap-6">
                                             <div>
-                                                <label className="block text-[11px] font-medium text-slate-500 mb-1">Type</label>
-                                                <select value={btn.type} onChange={(e) => updateButton(idx, 'type', e.target.value)} disabled={!isDraft}
-                                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none bg-white disabled:opacity-60">
+                                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Button Type</label>
+                                                <select 
+                                                    value={btn.type} 
+                                                    onChange={(e) => updateButton(idx, 'type', e.target.value)}
+                                                    className="w-full px-4 py-3 bg-white border-2 border-transparent focus:border-blue-500/20 rounded-xl outline-none text-xs font-black text-slate-700 shadow-sm"
+                                                >
                                                     <option value="QUICK_REPLY">💬 Quick Reply</option>
                                                     <option value="URL">🔗 URL Button</option>
                                                     <option value="PHONE_NUMBER">📞 Call Button</option>
                                                 </select>
                                             </div>
                                             <div>
-                                                <label className="block text-[11px] font-medium text-slate-500 mb-1">Label (max 20 chars)</label>
-                                                <input type="text" value={btn.text} onChange={(e) => updateButton(idx, 'text', e.target.value)}
-                                                    placeholder="e.g. Yes, I'm interested" disabled={!isDraft} maxLength={20}
-                                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none disabled:opacity-60" />
+                                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Label (Max 20)</label>
+                                                <input 
+                                                    type="text" 
+                                                    value={btn.text} 
+                                                    onChange={(e) => updateButton(idx, 'text', e.target.value)}
+                                                    className="w-full px-4 py-3 bg-white border-2 border-transparent focus:border-blue-500/20 rounded-xl outline-none text-xs font-black text-slate-700 shadow-sm"
+                                                    placeholder="e.g. Contact Us"
+                                                />
                                             </div>
                                         </div>
+
                                         {btn.type === 'URL' && (
-                                            <div className="mt-3">
-                                                <label className="block text-[11px] font-medium text-slate-500 mb-1">URL</label>
-                                                <input type="url" value={btn.url || ''} onChange={(e) => updateButton(idx, 'url', e.target.value)}
-                                                    placeholder="https://yoursite.com" disabled={!isDraft}
-                                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none disabled:opacity-60" />
+                                            <div className="mt-4 animate-in fade-in slide-in-from-top-2">
+                                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">URL Address</label>
+                                                <input 
+                                                    type="url" 
+                                                    value={btn.url || ''} 
+                                                    onChange={(e) => updateButton(idx, 'url', e.target.value)}
+                                                    className="w-full px-4 py-3 bg-white border-2 border-transparent focus:border-blue-500/20 rounded-xl outline-none text-xs font-bold text-blue-600 shadow-sm"
+                                                    placeholder="https://example.com"
+                                                />
                                             </div>
                                         )}
                                         {btn.type === 'PHONE_NUMBER' && (
-                                            <div className="mt-3">
-                                                <label className="block text-[11px] font-medium text-slate-500 mb-1">Phone Number</label>
-                                                <input type="tel" value={btn.phone_number || ''} onChange={(e) => updateButton(idx, 'phone_number', e.target.value)}
-                                                    placeholder="+919876543210" disabled={!isDraft}
-                                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none disabled:opacity-60" />
+                                            <div className="mt-4 animate-in fade-in slide-in-from-top-2">
+                                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Phone Number</label>
+                                                <input 
+                                                    type="tel" 
+                                                    value={btn.phone_number || ''} 
+                                                    onChange={(e) => updateButton(idx, 'phone_number', e.target.value)}
+                                                    className="w-full px-4 py-3 bg-white border-2 border-transparent focus:border-blue-500/20 rounded-xl outline-none text-xs font-bold text-slate-700 shadow-sm"
+                                                    placeholder="+1 234 567 890"
+                                                />
                                             </div>
                                         )}
                                     </div>
@@ -755,154 +796,195 @@ const TemplateBuilder = ({ templateId, onBack }) => {
                         )}
                     </div>
 
-                    {/* Automation Card */}
-                    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                        <h3 className="text-sm font-bold text-[#111b21] uppercase tracking-wider mb-4 flex items-center gap-2">
-                            <i className="fa-solid fa-robot text-[#00a884]"></i> Automation Settings
-                        </h3>
-                        <div className="space-y-4">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-sm font-medium text-slate-700">Auto-send this template</p>
-                                    <p className="text-[11px] text-slate-400">Trigger this template automatically based on CRM events</p>
-                                </div>
-                                <button onClick={() => setTemplate(prev => ({ ...prev, isAutomated: !prev.isAutomated }))}
-                                    className={`w-12 h-6 rounded-full transition-colors ${template.isAutomated ? 'bg-[#00a884]' : 'bg-slate-300'} relative`}>
-                                    <div className={`w-5 h-5 bg-white rounded-full shadow absolute top-0.5 transition-transform ${template.isAutomated ? 'translate-x-6' : 'translate-x-0.5'}`}></div>
-                                </button>
-                            </div>
-                            {template.isAutomated && (
-                                <div className="bg-slate-50 rounded-xl p-4 space-y-3 border border-slate-100">
-                                    <div>
-                                        <label className="block text-[11px] font-medium text-slate-500 mb-1">Trigger Event</label>
-                                        <select value={template.triggerType || 'manual'} onChange={(e) => setTemplate({ ...template, triggerType: e.target.value })}
-                                            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none bg-white">
-                                            <option value="on_lead_create">🆕 When new lead is created</option>
-                                            <option value="on_stage_change">🔄 When lead stage changes</option>
-                                        </select>
-                                    </div>
+                    {/* ════════ AUTOMATION CARD ════════ */}
+                    <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/5 rounded-full -mr-16 -mt-16 blur-2xl group-hover:bg-purple-500/10 transition-colors"></div>
+                        
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
+                                <span className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center text-purple-600">
+                                    <i className="fa-solid fa-robot text-xs"></i>
+                                </span>
+                                Intelligent Automation
+                            </h3>
+                            <button 
+                                onClick={() => setTemplate(prev => ({ ...prev, isAutomated: !prev.isAutomated }))}
+                                className={`w-12 h-6 rounded-full transition-all duration-300 relative ${template.isAutomated ? 'bg-purple-600' : 'bg-slate-200 shadow-inner'}`}
+                            >
+                                <div className={`w-5 h-5 bg-white rounded-full shadow-md absolute top-0.5 transition-all duration-300 transform ${template.isAutomated ? 'translate-x-[1.6rem]' : 'translate-x-0.5'}`}></div>
+                            </button>
+                        </div>
+
+                        {template.isAutomated && (
+                            <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                                <div className="bg-purple-50/50 rounded-2xl p-6 border border-purple-100">
+                                    <label className="block text-[10px] font-black text-purple-400 uppercase tracking-widest mb-3 px-1">Trigger Event</label>
+                                    <select 
+                                        value={template.triggerType || 'on_lead_create'} 
+                                        onChange={(e) => setTemplate({ ...template, triggerType: e.target.value })}
+                                        className="w-full px-4 py-3 bg-white border-2 border-transparent focus:border-purple-500/20 rounded-xl outline-none text-xs font-black text-slate-700 shadow-sm"
+                                    >
+                                        <option value="on_lead_create">🆕 New Lead Acquired</option>
+                                        <option value="on_stage_change">🔄 Pipeline Stage Updated</option>
+                                    </select>
+                                    
                                     {template.triggerType === 'on_stage_change' && (
-                                        <div>
-                                            <label className="block text-[11px] font-medium text-slate-500 mb-1">Target Stage</label>
-                                            <select value={template.stage || ''} onChange={(e) => setTemplate({ ...template, stage: e.target.value })}
-                                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none bg-white">
-                                                <option value="">Select a stage...</option>
-                                                {stages.map(s => (
-                                                    <option key={s._id} value={s.name}>{s.name}</option>
-                                                ))}
+                                        <div className="mt-4 animate-in fade-in slide-in-from-top-2">
+                                            <label className="block text-[10px] font-black text-purple-400 uppercase tracking-widest mb-3 px-1">Target Pipeline Stage</label>
+                                            <select 
+                                                value={template.stage || ''} 
+                                                onChange={(e) => setTemplate({ ...template, stage: e.target.value })}
+                                                className="w-full px-4 py-3 bg-white border-2 border-transparent focus:border-purple-500/20 rounded-xl outline-none text-xs font-bold text-slate-700 shadow-sm"
+                                            >
+                                                <option value="">Choose a stage...</option>
+                                                {stages.map(s => <option key={s._id} value={s.name}>{s.name}</option>)}
                                             </select>
-                                            {stages.length === 0 && <p className="text-xs text-amber-500 mt-1">No stages found. Create stages in your Lead Pipeline first.</p>}
                                         </div>
                                     )}
                                 </div>
-                            )}
-                        </div>
+                                <p className="text-[10px] font-bold text-slate-400 px-1 italic">This template will be sent automatically when the specified event occurs in your CRM.</p>
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                {/* ──── Preview Panel ──── */}
-                <div className="w-[45%] border-l border-slate-200 bg-gradient-to-br from-slate-100 to-slate-200 flex items-start justify-center p-8 overflow-y-auto">
-                    <div className="w-full max-w-[320px] sticky top-0">
-                        <div className="text-center mb-4">
-                            <h3 className="text-sm font-bold text-slate-700">Live Preview</h3>
-                            <p className="text-[11px] text-slate-500">How your template appears on WhatsApp</p>
+                {/* ──── Live Realistic Phone Preview ──── */}
+                <div className="w-[45%] border-l border-slate-200 bg-gradient-to-br from-slate-200 via-slate-100 to-white flex items-start justify-center p-10 overflow-y-auto">
+                    <div className="w-full max-w-[340px] sticky top-0">
+                        <div className="text-center mb-6">
+                             <div className="inline-flex items-center gap-2 px-3 py-1 bg-white rounded-full border border-slate-200 shadow-sm">
+                                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Real-time Preview</p>
+                             </div>
                         </div>
 
-                        {/* Phone Frame */}
-                        <div className="bg-black rounded-[2.5rem] p-2.5 shadow-2xl">
-                            <div className="bg-white rounded-[2rem] overflow-hidden">
-                                {/* Notch */}
-                                <div className="bg-slate-900 h-7 flex items-center justify-center">
-                                    <div className="bg-black w-28 h-5 rounded-full flex items-center justify-center">
-                                        <div className="w-2 h-2 bg-slate-700 rounded-full"></div>
+                        {/* High-Fidelity Phone Frame */}
+                        <div className="bg-[#1c1c1e] rounded-[3.5rem] p-3.5 shadow-[0_40px_100px_-20px_rgba(0,0,0,0.3)] border-4 border-[#3a3a3c] relative">
+                            {/* Side Buttons */}
+                            <div className="absolute -left-1.5 top-28 w-1 h-12 bg-[#2c2c2e] rounded-l-md"></div>
+                            <div className="absolute -left-1.5 top-44 w-1 h-16 bg-[#2c2c2e] rounded-l-md"></div>
+                            <div className="absolute -right-1.5 top-36 w-1 h-20 bg-[#2c2c2e] rounded-r-md"></div>
+                            
+                            <div className="bg-white rounded-[2.8rem] overflow-hidden shadow-inner border border-black/5 relative h-[620px] flex flex-col">
+                                {/* iOS Status Bar / Notch Area */}
+                                <div className="bg-white h-11 flex items-center justify-between px-8 relative">
+                                    <div className="text-[11px] font-bold">9:41</div>
+                                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-7 bg-black rounded-b-3xl flex items-center justify-center gap-1.5">
+                                        <div className="w-4 h-1 bg-[#1c1c1e] rounded-full"></div>
+                                        <div className="w-1.5 h-1.5 bg-[#1c1c1e] rounded-full"></div>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <i className="fa-solid fa-signal text-[10px]"></i>
+                                        <i className="fa-solid fa-wifi text-[10px]"></i>
+                                        <i className="fa-solid fa-battery-full text-[11px]"></i>
                                     </div>
                                 </div>
-                                {/* WA Header */}
-                                <div className="bg-[#008069] text-white px-3 py-2.5 flex items-center gap-2.5">
-                                    <i className="fa-solid fa-arrow-left text-xs"></i>
-                                    <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center"><i className="fa-solid fa-user text-slate-500 text-xs"></i></div>
-                                    <div className="flex-1"><div className="font-semibold text-sm">Lead Name</div><div className="text-[10px] text-white/80">online</div></div>
+
+                                {/* WhatsApp Header - Real Look */}
+                                <div className="bg-[#f0f2f5] border-b border-gray-200 px-4 py-3 flex items-center gap-3">
+                                    <i className="fa-solid fa-chevron-left text-[#007aff] text-sm"></i>
+                                    <div className="w-10 h-10 bg-gradient-to-br from-slate-200 to-slate-300 rounded-full flex items-center justify-center flex-shrink-0 border border-white shadow-sm overflow-hidden">
+                                        <i className="fa-solid fa-user text-slate-400 text-lg"></i>
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="font-extrabold text-sm text-[#111b21] truncate">AdfliKer Customer</div>
+                                        <div className="text-[10px] text-green-600 font-bold flex items-center gap-1">
+                                            <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                                            online
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-4 text-[#007aff]">
+                                        <i className="fa-solid fa-video"></i>
+                                        <i className="fa-solid fa-phone"></i>
+                                    </div>
                                 </div>
-                                {/* Chat */}
-                                <div className="bg-[#efeae2] p-3 min-h-[380px] flex flex-col justify-end"
-                                    style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='200' height='200' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M40 20 q10 15 0 30' fill='none' stroke='%23d4cfc4' stroke-width='.5' opacity='.4'/%3E%3Ccircle cx='120' cy='80' r='2' fill='%23d4cfc4' opacity='.2'/%3E%3C/svg%3E")` }}>
-                                    {/* Message Bubble */}
-                                    <div className="flex justify-end">
-                                        <div className="bg-[#d9fdd3] rounded-xl shadow-sm max-w-[90%] overflow-hidden">
+
+                                {/* Chat Wallpaper - Premium Pattern */}
+                                <div className="flex-1 bg-[#efeae2] p-4 flex flex-col justify-end relative overflow-hidden"
+                                    style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%23d4cfc4' fill-opacity='0.4' fill-rule='evenodd'/%3E%3C/svg%3E")` }}>
+                                    
+                                    {/* Glassy Background Overlay */}
+                                    <div className="absolute inset-0 bg-white/10 backdrop-blur-[1px]"></div>
+
+                                    {/* Message Bubble - Real WhatsApp iOS Style */}
+                                    <div className="relative z-10 flex flex-col items-start gap-1 max-w-[90%] drop-shadow-sm">
+                                        <div className="bg-white rounded-[1.2rem] rounded-tl-none shadow-sm overflow-hidden w-full border border-gray-100">
                                             {/* ─── Media Header Preview ─── */}
                                             {headerComp && currentHeaderFormat === 'IMAGE' && (
-                                                <div className="bg-gradient-to-br from-slate-200 to-slate-300 h-36 flex items-center justify-center relative">
+                                                <div className="bg-slate-100 h-44 flex items-center justify-center relative overflow-hidden">
                                                     {mediaPreview ? (
                                                         <img src={mediaPreview} alt="Header" className="w-full h-full object-cover" />
                                                     ) : (
-                                                        <div className="text-center">
-                                                            <i className="fa-solid fa-image text-3xl text-slate-400"></i>
-                                                            <p className="text-[10px] text-slate-400 mt-1">Image Header</p>
+                                                        <div className="text-center group-hover:scale-110 transition-transform">
+                                                            <i className="fa-solid fa-image text-4xl text-slate-300"></i>
+                                                            <p className="text-[9px] font-black text-slate-300 uppercase mt-2 tracking-widest">Image Header</p>
                                                         </div>
                                                     )}
                                                 </div>
                                             )}
                                             {headerComp && currentHeaderFormat === 'VIDEO' && (
-                                                <div className="bg-gradient-to-br from-slate-800 to-slate-900 h-36 flex items-center justify-center relative">
+                                                <div className="bg-slate-900 h-44 flex items-center justify-center relative">
                                                     {mediaPreview ? (
                                                         <>
                                                             <video src={mediaPreview} className="w-full h-full object-cover opacity-60" />
                                                             <div className="absolute inset-0 flex items-center justify-center">
-                                                                <div className="w-10 h-10 bg-white/90 rounded-full flex items-center justify-center">
-                                                                    <i className="fa-solid fa-play text-slate-700 ml-0.5"></i>
+                                                                <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center shadow-lg border border-white/30">
+                                                                    <i className="fa-solid fa-play text-white ml-0.5"></i>
                                                                 </div>
                                                             </div>
                                                         </>
                                                     ) : (
                                                         <div className="text-center">
-                                                            <i className="fa-solid fa-video text-3xl text-slate-400"></i>
-                                                            <p className="text-[10px] text-slate-400 mt-1">Video Header</p>
+                                                            <i className="fa-solid fa-video text-4xl text-slate-700"></i>
+                                                            <p className="text-[9px] font-black text-slate-700 uppercase mt-2 tracking-widest">Video Header</p>
                                                         </div>
                                                     )}
                                                 </div>
                                             )}
                                             {headerComp && currentHeaderFormat === 'DOCUMENT' && (
-                                                <div className="bg-gradient-to-br from-red-50 to-orange-50 p-3 flex items-center gap-3 border-b border-[#c6e8c3]">
-                                                    <div className="w-10 h-10 bg-red-500 rounded-lg flex items-center justify-center flex-shrink-0">
-                                                        <i className="fa-solid fa-file-pdf text-white"></i>
+                                                <div className="bg-slate-50 p-4 flex items-center gap-4 border-b border-gray-100">
+                                                    <div className="w-12 h-12 bg-rose-500 rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg border border-rose-400">
+                                                        <i className="fa-solid fa-file-pdf text-white text-xl"></i>
                                                     </div>
                                                     <div className="flex-1 min-w-0">
-                                                        <p className="text-[12px] font-medium text-slate-700 truncate">{headerComp._uploadedFileName || 'document.pdf'}</p>
-                                                        <p className="text-[10px] text-slate-400">PDF • {headerComp._uploadedFileSize ? formatFileSize(headerComp._uploadedFileSize) : 'Document'}</p>
+                                                        <p className="text-[13px] font-bold text-slate-800 truncate leading-tight">{headerComp._uploadedFileName || 'proposal_v1.pdf'}</p>
+                                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter mt-1">PDF • {headerComp._uploadedFileSize ? formatFileSize(headerComp._uploadedFileSize) : '2.4 MB'}</p>
                                                     </div>
-                                                    <i className="fa-solid fa-download text-slate-400 text-xs"></i>
+                                                    <i className="fa-solid fa-chevron-down text-[#007aff] text-xs"></i>
                                                 </div>
                                             )}
 
                                             {/* Text Content */}
-                                            <div className="p-2.5">
+                                            <div className="p-4 relative">
                                                 {headerComp?.format === 'TEXT' && headerComp?.text && (
-                                                    <div className="font-bold text-[13px] text-[#111b21] mb-1.5 pb-1.5 border-b border-[#c6e8c3]">
+                                                    <div className="font-extrabold text-[15px] text-[#111b21] mb-2 leading-tight">
                                                         {headerComp.text}
                                                     </div>
                                                 )}
-                                                <div className="text-[13px] text-[#111b21] whitespace-pre-wrap leading-[18px]">
+                                                <div className="text-[14.5px] text-[#3c4144] whitespace-pre-wrap leading-[20px] font-medium">
                                                     {renderPreviewText(bodyComp?.text)}
                                                 </div>
                                                 {footerComp?.text && (
-                                                    <div className="text-[11px] text-[#8696a0] mt-1.5 pt-1.5 border-t border-[#c6e8c3]">
+                                                    <div className="text-[11px] text-[#8696a0] mt-3 font-semibold uppercase tracking-wide">
                                                         {footerComp.text}
                                                     </div>
                                                 )}
-                                                <div className="text-[10px] text-[#8696a0] mt-1 text-right flex items-center justify-end gap-1">
+                                                <div className="text-[10px] text-[#8696a0] mt-4 flex items-center justify-end gap-1.5 font-bold">
                                                     12:00 PM <i className="fa-solid fa-check-double text-[#53bdeb]"></i>
                                                 </div>
                                             </div>
-                                            {/* Buttons Preview */}
+
+                                            {/* Realistic Buttons Preview */}
                                             {btnComp?.buttons?.length > 0 && (
-                                                <div className="border-t border-[#c6e8c3]">
+                                                <div className="border-t border-gray-100 flex flex-col bg-gray-50/10">
                                                     {btnComp.buttons.map((btn, idx) => (
-                                                        <div key={idx} className={`text-center py-2 ${idx < btnComp.buttons.length - 1 ? 'border-b border-[#c6e8c3]' : ''}`}>
-                                                            <span className="text-[#00a5f4] text-[13px] font-medium flex items-center justify-center gap-1.5">
-                                                                {btn.type === 'URL' && <i className="fa-solid fa-external-link text-[10px]"></i>}
-                                                                {btn.type === 'PHONE_NUMBER' && <i className="fa-solid fa-phone text-[10px]"></i>}
-                                                                {btn.type === 'QUICK_REPLY' && <i className="fa-solid fa-reply text-[10px]"></i>}
-                                                                {btn.text || `Button ${idx + 1}`}
+                                                        <div key={idx} className={`w-full py-3.5 text-center flex items-center justify-center gap-2 group/btn active:bg-gray-100 transition-colors cursor-pointer ${idx < btnComp.buttons.length - 1 ? 'border-b border-gray-100' : ''}`}>
+                                                            <i className={`fa-solid ${
+                                                                btn.type === 'URL' ? 'fa-arrow-up-right-from-square' : 
+                                                                btn.type === 'PHONE_NUMBER' ? 'fa-phone-flip' : 'fa-reply-all'
+                                                            } text-[#007aff] text-[10px] group-hover/btn:scale-110 transition-transform`}></i>
+                                                            <span className="text-[#007aff] text-[14px] font-bold tracking-tight">
+                                                                {btn.text || `Action Button ${idx + 1}`}
                                                             </span>
                                                         </div>
                                                     ))}
@@ -911,28 +993,33 @@ const TemplateBuilder = ({ templateId, onBack }) => {
                                         </div>
                                     </div>
                                 </div>
-                                {/* Bottom bar */}
-                                <div className="bg-[#f0f2f5] px-3 py-2 flex items-center gap-2">
-                                    <div className="flex-1 bg-white rounded-full px-3 py-1.5"><span className="text-[11px] text-slate-400">Type a message</span></div>
-                                    <div className="w-7 h-7 bg-[#00a884] rounded-full flex items-center justify-center"><i className="fa-solid fa-microphone text-white text-[10px]"></i></div>
+
+                                {/* Custom Bottom Input Bar */}
+                                <div className="bg-[#f0f2f5] px-4 py-3 pb-8 flex items-center gap-3">
+                                    <i className="fa-solid fa-plus text-[#007aff] text-xl"></i>
+                                    <div className="flex-1 bg-white rounded-2xl px-4 py-2 border border-gray-200 shadow-sm">
+                                        <span className="text-sm text-slate-300">Message</span>
+                                    </div>
+                                    <i className="fa-solid fa-camera text-[#007aff] text-xl"></i>
+                                    <i className="fa-solid fa-microphone text-[#007aff] text-xl"></i>
                                 </div>
                             </div>
                         </div>
 
                         {/* Analytics (if editing existing template) */}
                         {template.analytics && template.analytics.sent > 0 && (
-                            <div className="mt-4 bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-                                <h4 className="text-xs font-bold text-slate-600 uppercase mb-3">Template Analytics</h4>
+                            <div className="mt-8 bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
+                                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Template Analytics</h4>
                                 <div className="grid grid-cols-4 gap-2 text-center">
                                     {[
                                         { label: 'Sent', value: template.analytics.sent, color: 'text-slate-700' },
                                         { label: 'Delivered', value: template.analytics.delivered, color: 'text-emerald-600' },
                                         { label: 'Read', value: template.analytics.read, color: 'text-blue-600' },
-                                        { label: 'Failed', value: template.analytics.failed, color: 'text-red-600' },
+                                        { label: 'Failed', value: template.analytics.failed, color: 'text-rose-600' },
                                     ].map(metric => (
                                         <div key={metric.label}>
-                                            <div className={`text-lg font-bold ${metric.color}`}>{metric.value || 0}</div>
-                                            <div className="text-[10px] text-slate-500">{metric.label}</div>
+                                            <div className={`text-sm font-black ${metric.color}`}>{metric.value || 0}</div>
+                                            <div className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{metric.label}</div>
                                         </div>
                                     ))}
                                 </div>

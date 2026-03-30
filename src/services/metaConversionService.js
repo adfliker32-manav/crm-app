@@ -3,7 +3,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v18.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
 
 /**
  * Hash user data for privacy (Meta requirement)
@@ -29,11 +29,16 @@ function hashValue(value) {
  * @param {string} newStatus - The new status of the lead
  * @param {string} oldStatus - The old status of the lead (optional)
  */
-async function sendMetaEvent(user, lead, newStatus, oldStatus = null) {
+async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
     try {
+        // FIX 1.1: leadController passes the full IntegrationConfig document.
+        // Extract the nested meta sub-object so all field reads work correctly.
+        // Support both: sendMetaEvent(config, ...) and sendMetaEvent(config.meta, ...)
+        const user = config?.meta || config;
+
         // Check if CAPI is enabled and configured
         if (!user.metaCapiEnabled || !user.metaPixelId || !user.metaCapiAccessToken) {
-            console.log('⚠️ Meta CAPI not fully configured for user:', user._id);
+            console.log('⚠️ Meta CAPI not fully configured for user:', lead.userId);
             return { success: false, reason: 'CAPI not enabled or configured' };
         }
 

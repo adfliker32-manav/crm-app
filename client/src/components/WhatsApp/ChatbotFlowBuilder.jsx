@@ -13,12 +13,13 @@ import {
 import '@xyflow/react/dist/style.css';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import SmartLeadSettingsModal from './SmartLeadSettingsModal';
 
 // --- Custom Node Implementation ---
 const CompactFlowNode = ({ data, id, selected }) => {
     const type = data.blockType || 'message';
     const icon = {
-        message: '💬', media: '🖼️', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀'
+        message: '💬', media: '🖼️', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓'
     }[type] || '💬';
 
     return (
@@ -78,12 +79,13 @@ const CompactFlowNode = ({ data, id, selected }) => {
 // --- Main Component ---
 const FlowBuilder = ({ flowId, onBack }) => {
     const { showSuccess, showError } = useNotification();
-    const [flow, setFlow] = useState({ name: 'New Flow', description: '', isActive: false });
+    const [flow, setFlow] = useState({ name: 'New Flow', description: '', isActive: false, triggerType: 'keyword', triggerKeywords: [] });
     const [nodes, setNodes] = useState([]);
     const [edges, setEdges] = useState([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [selectedNode, setSelectedNode] = useState(null);
+    const [showSettingsModal, setShowSettingsModal] = useState(false);
 
     const nodeTypes = useMemo(() => ({
         message: CompactFlowNode,
@@ -93,11 +95,13 @@ const FlowBuilder = ({ flowId, onBack }) => {
         products: CompactFlowNode,
         template: CompactFlowNode,
         handoff: CompactFlowNode,
+        question: CompactFlowNode,
         start: CompactFlowNode // Fallback for old custom types
     }), []);
 
     const contentBlocks = [
         { type: 'message', icon: '💬', label: 'Text + Buttons', desc: 'Send text with button options' },
+        { type: 'question', icon: '❓', label: 'Ask Question', desc: 'Ask user and save answer as variable' },
         { type: 'media', icon: '🖼️', label: 'Media', desc: 'Send image, video, or file' },
         { type: 'list', icon: '📋', label: 'List', desc: 'Interactive list menu' },
         { type: 'product', icon: '🛍️', label: 'Single Product', desc: 'Show one product' },
@@ -214,6 +218,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const addNode = (type) => {
         const templates = {
             message: { text: 'Hello! How can I help?', buttons: [{ text: 'Continue', id: 'next' }] },
+            question: { text: 'What is your email address?', variableName: 'email', expectedType: 'email' },
             media: { text: 'Check out this!', mediaUrl: 'https://via.placeholder.com/300x200/e74c3c/ffffff?text=Product' },
             product: { text: 'Premium Backpack', price: '$89.99', image: 'https://via.placeholder.com/150/e74c3c/ffffff?text=Product' },
             list: { text: 'Choose a category:', items: ['Electronics', 'Fashion', 'Home'] },
@@ -261,8 +266,8 @@ const FlowBuilder = ({ flowId, onBack }) => {
     return (
         <div className="h-full flex flex-col bg-white">
             {/* Header Toolbar */}
-            <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
-                <div className="flex items-center gap-4">
+            <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-sm z-10">
+                <div className="flex items-center gap-3">
                     <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg transition">
                         <i className="fa-solid fa-arrow-left text-slate-600"></i>
                     </button>
@@ -276,6 +281,12 @@ const FlowBuilder = ({ flowId, onBack }) => {
                 </div>
                 <div className="flex items-center gap-3">
                     <button
+                        onClick={() => setShowSettingsModal(true)}
+                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition shadow-sm border border-slate-200"
+                    >
+                        <i className="fa-solid fa-gear mr-2"></i> Smart Settings
+                    </button>
+                    <button
                         onClick={handleSave}
                         disabled={saving}
                         className="px-6 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition disabled:opacity-50 shadow-sm"
@@ -287,21 +298,21 @@ const FlowBuilder = ({ flowId, onBack }) => {
 
             <div className="flex-1 flex overflow-hidden">
                 {/* Left Sidebar - Blocks Array */}
-                <div className="w-72 bg-slate-50 border-r border-slate-200 overflow-y-auto shadow-sm z-10 relative">
-                    <div className="p-4">
-                        <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-4">Content Blocks</h3>
-                        <div className="space-y-3">
+                <div className="w-56 bg-slate-50 border-r border-slate-200 overflow-y-auto shadow-sm z-10 relative">
+                    <div className="p-3">
+                        <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">Add Content</h3>
+                        <div className="space-y-2">
                             {contentBlocks.map(block => (
                                 <button
                                     key={block.type}
                                     onClick={() => addNode(block.type)}
-                                    className="w-full p-4 bg-white hover:bg-teal-50 rounded-xl text-left transition border border-slate-200 hover:border-teal-400 shadow-sm group"
+                                    className="w-full p-2.5 bg-white hover:bg-teal-50 rounded-lg text-left transition border border-slate-200 hover:border-teal-400 shadow-sm group"
                                 >
-                                    <div className="flex items-center gap-4">
-                                        <div className="text-3xl group-hover:scale-110 transition-transform">{block.icon}</div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="text-xl group-hover:scale-110 transition-transform">{block.icon}</div>
                                         <div className="flex-1 min-w-0">
-                                            <div className="font-bold text-sm text-slate-800">{block.label}</div>
-                                            <div className="text-xs text-slate-500 line-clamp-2 leading-snug mt-1">{block.desc}</div>
+                                            <div className="font-bold text-xs text-slate-800">{block.label}</div>
+                                            <div className="text-[10px] text-slate-500 truncate leading-snug mt-0.5">{block.desc}</div>
                                         </div>
                                     </div>
                                 </button>
@@ -331,11 +342,11 @@ const FlowBuilder = ({ flowId, onBack }) => {
                 </div>
 
                 {/* Right Sidebar - Properties Editor */}
-                {selectedNode && (
-                    <div className="w-80 bg-white border-l border-slate-200 overflow-y-auto shadow-lg z-10">
-                        <div className="p-6">
-                            <div className="flex justify-between items-center mb-6">
-                                <h3 className="text-lg font-bold text-slate-800">Edit Node</h3>
+                {selectedNode ? (
+                    <div className="w-72 bg-white border-l border-slate-200 overflow-y-auto shadow-lg z-10">
+                        <div className="p-4">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-base font-bold text-slate-800">Edit Node</h3>
                                 <button onClick={deleteSelectedNode} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition" title="Delete Node">
                                     <i className="fa-solid fa-trash"></i>
                                 </button>
@@ -393,11 +404,140 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                         <p className="text-xs text-slate-400 mt-2 text-center">Max 3 buttons allowed by WhatsApp</p>
                                     </div>
                                 )}
+
+                                {selectedNode.data.blockType === 'question' && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-4">
+                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Save Answer As Variable</label>
+                                        <input
+                                            value={selectedNode.data.variableName || ''}
+                                            onChange={(e) => updateSelectedNodeData({ variableName: e.target.value.toLowerCase().replace(/\s+/g, '_') })}
+                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 shadow-sm focus:ring-2 focus:ring-teal-500"
+                                            placeholder="e.g., email, company_name, phone"
+                                        />
+                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Expected Input Type</label>
+                                        <select
+                                            value={selectedNode.data.expectedType || 'any'}
+                                            onChange={(e) => updateSelectedNodeData({ expectedType: e.target.value })}
+                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                        >
+                                            <option value="any">Any text</option>
+                                            <option value="text">Letters only</option>
+                                            <option value="number">Number</option>
+                                            <option value="email">Email address</option>
+                                            <option value="phone">Phone number</option>
+                                        </select>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="w-72 bg-white border-l border-slate-200 overflow-y-auto shadow-lg z-10">
+                        <div className="p-4">
+                            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
+                                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center shadow-sm">
+                                    <i className="fa-solid fa-bolt text-sm"></i>
+                                </div>
+                                <div>
+                                    <h3 className="text-base font-bold text-slate-800">Flow Trigger</h3>
+                                    <p className="text-[10px] text-slate-500 uppercase tracking-wide">Configure start event</p>
+                                </div>
+                            </div>
+                            
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-semibold text-slate-700 mb-2">Trigger Type</label>
+                                    <select
+                                        value={flow.triggerType || 'keyword'}
+                                        onChange={(e) => setFlow({ ...flow, triggerType: e.target.value })}
+                                        className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-teal-500 outline-none transition shadow-sm"
+                                    >
+                                        <option value="keyword">Specific Keywords</option>
+                                        <option value="first_message">First Message Ever (New Contacts)</option>
+                                        <option value="existing_contact_message">Any Message (Existing Contacts Only)</option>
+                                        <option value="any_message">Any Message (All Contacts)</option>
+                                        <option value="manual">Manual / API Trigger</option>
+                                    </select>
+                                </div>
+
+                                {(!flow.triggerType || flow.triggerType === 'keyword') && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Activation Keywords</label>
+                                        <p className="text-xs text-slate-500 mb-3">Press Enter to add keywords</p>
+                                        
+                                        <div className="flex flex-wrap gap-2 mb-3">
+                                            {(flow.triggerKeywords || []).map((kw, i) => (
+                                                <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-teal-100 text-teal-700 text-xs font-semibold">
+                                                    {kw}
+                                                    <button
+                                                        onClick={() => {
+                                                            const newKws = flow.triggerKeywords.filter((_, idx) => idx !== i);
+                                                            setFlow({ ...flow, triggerKeywords: newKws });
+                                                        }}
+                                                        className="hover:text-red-500 leading-none"
+                                                    >&times;</button>
+                                                </span>
+                                            ))}
+                                        </div>
+                                        
+                                        <input
+                                            type="text"
+                                            placeholder="Type keyword and press Enter..."
+                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500 outline-none"
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    const val = e.target.value.trim().toLowerCase();
+                                                    if (val && !(flow.triggerKeywords || []).includes(val)) {
+                                                        setFlow({
+                                                            ...flow, 
+                                                            triggerKeywords: [...(flow.triggerKeywords || []), val]
+                                                        });
+                                                        e.target.value = '';
+                                                    }
+                                                }
+                                            }}
+                                        />
+                                    </div>
+                                )}
+                                
+                                {flow.triggerType === 'first_message' && (
+                                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-blue-700 text-sm">
+                                        <i className="fa-solid fa-circle-info mr-2"></i>
+                                        This flow will execute automatically when a completely new prospect messages this WhatsApp number for the very first time.
+                                    </div>
+                                )}
+
+                                {flow.triggerType === 'existing_contact_message' && (
+                                    <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100 text-emerald-700 text-sm">
+                                        <i className="fa-solid fa-circle-info mr-2"></i>
+                                        This flow will execute whenever an existing customer/contact sends a new message today (assuming they aren't already in another active chatbot session).
+                                    </div>
+                                )}
+
+                                {flow.triggerType === 'any_message' && (
+                                    <div className="bg-purple-50 p-4 rounded-xl border border-purple-100 text-purple-700 text-sm">
+                                        <i className="fa-solid fa-circle-info mr-2"></i>
+                                        This acts as a universal fallback flow. It will trigger for EVERY inbound message unless the user is already talking to an active menu or chatbot.
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
                 )}
             </div>
+            
+            {showSettingsModal && (
+                <SmartLeadSettingsModal 
+                    settings={flow.smartLeadSettings}
+                    flowNodes={nodes}
+                    onSave={(newSettings) => {
+                        setFlow({ ...flow, smartLeadSettings: newSettings });
+                        setShowSettingsModal(false);
+                    }}
+                    onClose={() => setShowSettingsModal(false)}
+                />
+            )}
         </div>
     );
 };

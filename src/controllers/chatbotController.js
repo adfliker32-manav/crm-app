@@ -83,7 +83,7 @@ exports.updateFlow = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { id } = req.params;
-        const { name, description, isActive, triggerType, triggerKeywords, triggerStage, nodes, edges, startNodeId } = req.body;
+        const { name, description, isActive, triggerType, triggerKeywords, triggerStage, nodes, edges, startNodeId, smartLeadSettings } = req.body;
 
         const flow = await ChatbotFlow.findOne({ _id: id, userId: userId });
 
@@ -101,6 +101,7 @@ exports.updateFlow = async (req, res) => {
         if (nodes !== undefined) flow.nodes = nodes;
         if (edges !== undefined) flow.edges = edges;
         if (startNodeId !== undefined) flow.startNodeId = startNodeId;
+        if (smartLeadSettings !== undefined) flow.smartLeadSettings = smartLeadSettings;
 
         await flow.save();
         invalidateFlowCache(userId);

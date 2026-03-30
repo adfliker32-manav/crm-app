@@ -47,6 +47,9 @@ const Sidebar = () => {
 
     const canManageTeam = ['superadmin', 'agency', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
 
+    // Workspace-level Plan Feature Check
+    const hasModule = (moduleName) => user?.activeModules ? user.activeModules.includes(moduleName) : true;
+
     useEffect(() => {
         const fetchAppName = async () => {
             try {
@@ -107,39 +110,39 @@ const Sidebar = () => {
                     <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Sales</p>
                 )}
 
-                {(canManageTeam || user?.permissions?.viewLeads !== false) && (
+                {(canManageTeam || user?.permissions?.viewLeads !== false) && hasModule('leads') && (
                     <NavItem collapsed={collapsed} to="/leads" icon="fa-solid fa-users" label="Leads" />
                 )}
 
-                {(canManageTeam || user?.permissions?.viewEmails === true || user?.permissions?.viewWhatsApp === true) && !collapsed && (
+                {(canManageTeam || user?.permissions?.viewEmails === true || user?.permissions?.viewWhatsApp === true) && !collapsed && (hasModule('whatsapp') || hasModule('email')) && (
                     <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Inbox</p>
                 )}
 
-                {(canManageTeam || user?.permissions?.viewWhatsApp === true) && (
+                {(canManageTeam || user?.permissions?.viewWhatsApp === true) && hasModule('whatsapp') && (
                     <NavItem collapsed={collapsed} to="/whatsapp" icon="fa-brands fa-whatsapp" label="WhatsApp" />
                 )}
 
-                {(canManageTeam || user?.permissions?.viewEmails === true) && (
+                {(canManageTeam || user?.permissions?.viewEmails === true) && hasModule('email') && (
                     <NavItem collapsed={collapsed} to="/email" icon="fa-solid fa-envelope" label="Email" />
                 )}
 
-                {(canManageTeam || user?.permissions?.viewReports) && !collapsed && (
+                {(canManageTeam || user?.permissions?.viewReports) && !collapsed && hasModule('reports') && (
                     <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Analytics</p>
                 )}
 
-                {(canManageTeam || user?.permissions?.viewReports) && (
+                {(canManageTeam || user?.permissions?.viewReports) && hasModule('reports') && (
                     <NavItem collapsed={collapsed} to="/reports" icon="fa-solid fa-chart-pie" label="Reports" />
                 )}
 
-                {canManageTeam && !collapsed && (
+                {canManageTeam && !collapsed && (hasModule('team') || hasModule('automations')) && (
                     <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Admin</p>
                 )}
 
-                {canManageTeam && (
+                {canManageTeam && hasModule('team') && (
                     <NavItem collapsed={collapsed} to="/team" icon="fa-solid fa-user-group" label="Team" />
                 )}
 
-                {canManageTeam && (
+                {canManageTeam && hasModule('automations') && (
                     <NavItem collapsed={collapsed} to="/automations" icon="fa-solid fa-robot" label="Automations" />
                 )}
 

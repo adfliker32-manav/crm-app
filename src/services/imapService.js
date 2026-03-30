@@ -28,7 +28,7 @@ async function processIncomingEmail(user, messageData, parsedMail) {
     
     // Extract address
     const fromAddress = parsedMail.from.value[0].address;
-    const toAddress = parsedMail.to?.value[0]?.address || user.emailUser;
+    const toAddress = parsedMail.to?.value[0]?.address || user.emailUser || user.email;
     
     // Ignore internal emails directly sent by the user to themselves
     if (fromAddress === user.emailUser) return;
@@ -93,20 +93,21 @@ async function processIncomingEmail(user, messageData, parsedMail) {
     await conversation.save();
 }
 
-async function syncUserEmails(user) {
-    if (!user.emailUser || !user.emailPassword) return;
-    const pass = decrypt(user.emailPassword);
+async function syncUserEmails(userId, config) {
+    if (!config?.emailUser || !config?.emailPassword) return;
+    const pass = decrypt(config.emailPassword);
     if (!pass) return;
     
     const client = new ImapFlow({
         host: 'imap.gmail.com',
         port: 993,
         secure: true,
-        auth: { user: user.emailUser, pass: pass },
+        auth: { user: config.emailUser, pass: pass },
         logger: false // Set to true for debugging IMAP
     });
     
     try {
+        const user = { _id: userId, emailUser: config.emailUser };
         await client.connect();
         let lock = await client.getMailboxLock('INBOX');
         try {
@@ -125,7 +126,7 @@ async function syncUserEmails(user) {
     } catch (err) {
         // Suppress auth errors so console isn't spammed for bad passwords
         if (!err.message.includes('AUTHENTICATIONFAILED')) {
-            console.error(`IMAP Sync Error for ${user.emailUser}:`, err.message);
+            console.error(`IMAP Sync Error for ${config.emailUser}:`, err.message);
         }
     } finally {
         await client.logout();
@@ -134,9 +135,18 @@ async function syncUserEmails(user) {
 
 async function syncAllUsers() {
     try {
-        const users = await User.find({ emailUser: { $ne: null }, emailPassword: { $ne: null } });
-        for (const u of users) {
-             syncUserEmails(u).catch(e => console.error(e)); // Run concurrently per user
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const configs = await IntegrationConfig.find({ 
+            "email.emailUser": { $ne: null }, 
+            "email.emailPassword": { $ne: null } 
+        }).lean();
+
+        for (const config of configs) {
+             const imapConfig = {
+                 emailUser: config.email.emailUser,
+                 emailPassword: config.email.emailPassword
+             };
+             syncUserEmails(config.userId, imapConfig).catch(e => console.error(e)); // Run concurrently per user
         }
     } catch (e) {
         console.error("Error in syncAllUsers:", e);
@@ -144,8 +154,9 @@ async function syncAllUsers() {
 }
 
 function startEmailSyncPolling() {
-    console.log("🚀 Starting IMAP Email Polling Service (Interval: 30s)");
-    setInterval(syncAllUsers, 30000);
+    console.log("🚀 Starting IMAP Email Polling Service (Interval: 10m)");
+    // Increased from 30s to 10m (600000ms) to reduce CPU overhead and IP ban risk from mail providers
+    setInterval(syncAllUsers, 600000);
 }
 
 module.exports = { syncUserEmails, startEmailSyncPolling };

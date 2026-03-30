@@ -1,10 +1,10 @@
-// Meta Lead Sync Controller - OAuth & Configuration
 const User = require('../models/User');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const Lead = require('../models/Lead');
 const axios = require('axios');
 
 // Meta Graph API base URL
-const META_GRAPH_URL = 'https://graph.facebook.com/v18.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
 
 // ==========================================
 // TOKEN REFRESH UTILITIES
@@ -63,41 +63,45 @@ async function refreshMetaToken(currentToken) {
 
 /**
  * Check and refresh user's Meta token if needed
- * @param {Object} user - User object from database
- * @returns {Object} - Updated user object (if token was refreshed)
+ * @param {string} tenantId - Tenant ID
+ * @param {Object} metaConfig - Meta configuration from IntegrationConfig
+ * @returns {Object} - Updated meta configuration
  */
-async function checkAndRefreshToken(user) {
-    if (!user.metaAccessToken || !user.metaTokenExpiry) {
-        return user; // Not connected to Meta
+async function checkAndRefreshToken(tenantId, metaConfig) {
+    if (!metaConfig?.metaAccessToken || !metaConfig?.metaTokenExpiry) {
+        return metaConfig; // Not connected to Meta
     }
 
     // Check if token needs refresh
-    if (isTokenExpiringSoon(user.metaTokenExpiry)) {
-        console.log(`⚠️ Meta token expiring soon for user ${user._id}, refreshing...`);
+    if (isTokenExpiringSoon(metaConfig.metaTokenExpiry)) {
+        console.log(`⚠️ Meta token expiring soon for tenant ${tenantId}, refreshing...`);
 
         try {
-            const { accessToken, expiresIn } = await refreshMetaToken(user.metaAccessToken);
+            const { accessToken, expiresIn } = await refreshMetaToken(metaConfig.metaAccessToken);
             const newExpiry = new Date(Date.now() + expiresIn * 1000);
 
-            // Update user in database
-            await User.findByIdAndUpdate(user._id, {
-                metaAccessToken: accessToken,
-                metaTokenExpiry: newExpiry
-            });
+            // Update IntegrationConfig in database
+            await IntegrationConfig.findOneAndUpdate(
+                { userId: tenantId },
+                {
+                    $set: {
+                        'meta.metaAccessToken': accessToken,
+                        'meta.metaTokenExpiry': newExpiry
+                    }
+                }
+            );
 
-            // Update the user object for current request
-            user.metaAccessToken = accessToken;
-            user.metaTokenExpiry = newExpiry;
+            // Update the config object for current request
+            metaConfig.metaAccessToken = accessToken;
+            metaConfig.metaTokenExpiry = newExpiry;
 
-            console.log(`✅ Token refreshed for user ${user._id}. New expiry: ${newExpiry}`);
+            console.log(`✅ Token refreshed for tenant ${tenantId}. New expiry: ${newExpiry}`);
         } catch (error) {
-            console.error(`❌ Auto-refresh failed for user ${user._id}:`, error.message);
-            // Don't throw - let the request continue with existing token
-            // It might still work, or API will return proper error
+            console.error(`❌ Auto-refresh failed for tenant ${tenantId}:`, error.message);
         }
     }
 
-    return user;
+    return metaConfig;
 }
 
 // Get Facebook OAuth URL
@@ -113,9 +117,9 @@ const getAuthUrl = async (req, res) => {
             });
         }
 
-        // Store user ID in state for callback
+        // Store tenant ID in state for callback
         const state = Buffer.from(JSON.stringify({
-            userId: req.user.userId || req.user.id
+            userId: req.tenantId
         })).toString('base64');
 
         // Required permissions for Lead Ads
@@ -127,7 +131,7 @@ const getAuthUrl = async (req, res) => {
             'ads_management'
         ].join(',');
 
-        const authUrl = `https://www.facebook.com/v18.0/dialog/oauth?` +
+        const authUrl = `https://www.facebook.com/v21.0/dialog/oauth?` +
             `client_id=${appId}` +
             `&redirect_uri=${encodeURIComponent(redirectUri)}` +
             `&state=${state}` +
@@ -221,14 +225,22 @@ const exchangeToken = async (req, res) => {
             params: { access_token: longLivedToken }
         });
 
-        // Update authenticated user with Meta credentials
-        await User.findByIdAndUpdate(userId, {
-            metaAccessToken: longLivedToken,
-            metaTokenExpiry: tokenExpiry,
-            metaUserId: userInfoResponse.data.id
-        });
+        const tenantOwnerId = req.tenantId;
 
-        console.log('✅ Meta OAuth securely linked for user:', userId);
+        // Update IntegrationConfig with Meta credentials
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: tenantOwnerId },
+            {
+                $set: {
+                    'meta.metaAccessToken': longLivedToken,
+                    'meta.metaTokenExpiry': tokenExpiry,
+                    'meta.metaUserId': userInfoResponse.data.id
+                }
+            },
+            { upsert: true }
+        );
+
+        console.log('✅ Meta OAuth securely linked for tenant:', tenantOwnerId);
         res.json({ success: true, message: 'Facebook linked successfully' });
 
     } catch (error) {
@@ -260,27 +272,22 @@ const exchangeToken = async (req, res) => {
 // Get Meta connection status
 const getStatus = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const user = await User.findById(userId).select(
-            'metaAccessToken metaTokenExpiry metaUserId metaPageId metaPageName metaFormId metaFormName metaLeadSyncEnabled metaLastSyncAt'
-        );
+        const ownerId = req.tenantId;
+        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
 
-        if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
-        }
-
-        const isConnected = !!user.metaAccessToken && user.metaTokenExpiry > new Date();
+        const meta = config?.meta || {};
+        const isConnected = !!meta.metaAccessToken && new Date(meta.metaTokenExpiry) > new Date();
 
         res.json({
             success: true,
             connected: isConnected,
-            pageId: user.metaPageId,
-            pageName: user.metaPageName,
-            formId: user.metaFormId,
-            formName: user.metaFormName,
-            syncEnabled: user.metaLeadSyncEnabled,
-            lastSyncAt: user.metaLastSyncAt,
-            tokenExpiry: user.metaTokenExpiry
+            pageId: meta.metaPageId,
+            pageName: meta.metaPageName,
+            formId: meta.metaFormId,
+            formName: meta.metaFormName,
+            syncEnabled: meta.metaLeadSyncEnabled,
+            lastSyncAt: meta.metaLastSyncAt,
+            tokenExpiry: meta.metaTokenExpiry
         });
     } catch (error) {
         console.error('❌ Meta getStatus Error:', error);
@@ -291,19 +298,19 @@ const getStatus = async (req, res) => {
 // Get user's Facebook Pages
 const getPages = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        let user = await User.findById(userId).select('metaAccessToken metaTokenExpiry');
+        const ownerId = req.tenantId;
+        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
 
-        if (!user?.metaAccessToken) {
+        if (!config?.meta?.metaAccessToken) {
             return res.status(400).json({ success: false, message: 'Not connected to Facebook' });
         }
 
         // Auto-refresh token if expiring soon
-        user = await checkAndRefreshToken(user);
+        const meta = await checkAndRefreshToken(ownerId, config.meta);
 
         const response = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
             params: {
-                access_token: user.metaAccessToken,
+                access_token: meta.metaAccessToken,
                 fields: 'id,name,access_token'
             }
         });
@@ -325,20 +332,20 @@ const getPages = async (req, res) => {
 const getForms = async (req, res) => {
     try {
         const { pageId } = req.params;
-        const userId = req.user.userId || req.user.id;
-        let user = await User.findById(userId).select('metaAccessToken metaTokenExpiry');
+        const ownerId = req.tenantId;
+        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
 
-        if (!user?.metaAccessToken) {
+        if (!config?.meta?.metaAccessToken) {
             return res.status(400).json({ success: false, message: 'Not connected to Facebook' });
         }
 
         // Auto-refresh token if expiring soon
-        user = await checkAndRefreshToken(user);
+        const meta = await checkAndRefreshToken(ownerId, config.meta);
 
         // First get page access token
         const pagesResponse = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
             params: {
-                access_token: user.metaAccessToken,
+                access_token: meta.metaAccessToken,
                 fields: 'id,access_token'
             }
         });
@@ -397,17 +404,24 @@ const connect = async (req, res) => {
             // Continue anyway - manual subscription may be needed
         }
 
-        // Update user with selection
-        await User.findByIdAndUpdate(userId, {
-            metaPageId: pageId,
-            metaPageName: pageName,
-            metaPageAccessToken: pageAccessToken,
-            metaFormId: formId,
-            metaFormName: formName,
-            metaLeadSyncEnabled: true
-        });
+        const tenantId = req.tenantId;
 
-        console.log('✅ Meta Lead Sync configured for user:', userId);
+        // Update configuration with selection
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: tenantId },
+            {
+                $set: {
+                    'meta.metaPageId': pageId,
+                    'meta.metaPageName': pageName,
+                    'meta.metaPageAccessToken': pageAccessToken,
+                    'meta.metaFormId': formId,
+                    'meta.metaFormName': formName,
+                    'meta.metaLeadSyncEnabled': true
+                }
+            }
+        );
+
+        console.log('✅ Meta Lead Sync configured for tenant:', tenantId);
         res.json({ success: true, message: 'Meta Lead Sync enabled successfully!' });
 
     } catch (error) {
@@ -419,21 +433,26 @@ const connect = async (req, res) => {
 // Disconnect Meta
 const disconnect = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const ownerId = req.tenantId;
 
-        await User.findByIdAndUpdate(userId, {
-            metaAccessToken: null,
-            metaTokenExpiry: null,
-            metaUserId: null,
-            metaPageId: null,
-            metaPageName: null,
-            metaPageAccessToken: null,
-            metaFormId: null,
-            metaFormName: null,
-            metaLeadSyncEnabled: false
-        });
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: ownerId },
+            {
+                $set: {
+                    'meta.metaAccessToken': null,
+                    'meta.metaTokenExpiry': null,
+                    'meta.metaUserId': null,
+                    'meta.metaPageId': null,
+                    'meta.metaPageName': null,
+                    'meta.metaPageAccessToken': null,
+                    'meta.metaFormId': null,
+                    'meta.metaFormName': null,
+                    'meta.metaLeadSyncEnabled': false
+                }
+            }
+        );
 
-        console.log('✅ Meta disconnected for user:', userId);
+        console.log('✅ Meta disconnected for tenant:', ownerId);
         res.json({ success: true, message: 'Meta disconnected successfully' });
 
     } catch (error) {
@@ -445,12 +464,13 @@ const disconnect = async (req, res) => {
 // Toggle sync enabled/disabled
 const toggleSync = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const ownerId = req.tenantId;
         const { enabled } = req.body;
 
-        await User.findByIdAndUpdate(userId, {
-            metaLeadSyncEnabled: enabled
-        });
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: ownerId },
+            { $set: { 'meta.metaLeadSyncEnabled': enabled } }
+        );
 
         res.json({ success: true, enabled });
     } catch (error) {
@@ -466,22 +486,18 @@ const toggleSync = async (req, res) => {
 // Get CAPI settings
 const getCapiSettings = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const user = await User.findById(userId).select(
-            'metaPixelId metaCapiEnabled metaCapiAccessToken metaTestEventCode metaStageMapping'
-        );
+        const ownerId = req.tenantId;
+        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
 
-        if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
-        }
+        const meta = config?.meta || {};
 
         res.json({
             success: true,
-            pixelId: user.metaPixelId,
-            capiAccessToken: user.metaCapiAccessToken,
-            testEventCode: user.metaTestEventCode,
-            capiEnabled: user.metaCapiEnabled,
-            stageMapping: user.metaStageMapping || {
+            pixelId: meta.metaPixelId,
+            capiAccessToken: meta.metaCapiAccessToken,
+            testEventCode: meta.metaTestEventCode,
+            capiEnabled: meta.metaCapiEnabled,
+            stageMapping: meta.metaStageMapping || {
                 first: 'New',
                 middle: 'Contacted',
                 qualified: 'Won',
@@ -497,20 +513,24 @@ const getCapiSettings = async (req, res) => {
 // Update CAPI settings
 const updateCapiSettings = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const ownerId = req.tenantId;
         const { pixelId, capiAccessToken, testEventCode, capiEnabled, stageMapping } = req.body;
 
         const updateData = {};
 
-        if (pixelId !== undefined) updateData.metaPixelId = pixelId;
-        if (capiAccessToken !== undefined) updateData.metaCapiAccessToken = capiAccessToken;
-        if (testEventCode !== undefined) updateData.metaTestEventCode = testEventCode;
-        if (capiEnabled !== undefined) updateData.metaCapiEnabled = capiEnabled;
-        if (stageMapping !== undefined) updateData.metaStageMapping = stageMapping;
+        if (pixelId !== undefined) updateData['meta.metaPixelId'] = pixelId;
+        if (capiAccessToken !== undefined) updateData['meta.metaCapiAccessToken'] = capiAccessToken;
+        if (testEventCode !== undefined) updateData['meta.metaTestEventCode'] = testEventCode;
+        if (capiEnabled !== undefined) updateData['meta.metaCapiEnabled'] = capiEnabled;
+        if (stageMapping !== undefined) updateData['meta.metaStageMapping'] = stageMapping;
 
-        await User.findByIdAndUpdate(userId, updateData);
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: ownerId },
+            { $set: updateData },
+            { upsert: true }
+        );
 
-        console.log('✅ Meta CAPI settings updated for user:', userId);
+        console.log('✅ Meta CAPI settings updated for tenant:', ownerId);
         res.json({ success: true, message: 'CAPI settings updated successfully' });
 
     } catch (error) {
@@ -524,24 +544,20 @@ const updateCapiSettings = async (req, res) => {
 // ==========================================
 const testCapiConnection = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const user = await User.findById(userId).select(
-            'metaPixelId metaCapiAccessToken metaTestEventCode'
-        );
+        const ownerId = req.tenantId;
+        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
 
-        if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
-        }
+        const meta = config?.meta || {};
 
         // Validate required fields
-        if (!user.metaPixelId) {
+        if (!meta.metaPixelId) {
             return res.status(400).json({
                 success: false,
                 message: 'Pixel ID is required. Please enter your Meta Pixel ID.'
             });
         }
 
-        if (!user.metaCapiAccessToken) {
+        if (!meta.metaCapiAccessToken) {
             return res.status(400).json({
                 success: false,
                 message: 'CAPI Access Token is required. Please generate and paste your Conversion API Access Token from Events Manager.'
@@ -561,17 +577,17 @@ const testCapiConnection = async (req, res) => {
                     client_ip_address: req.ip || '127.0.0.1'
                 }
             }],
-            access_token: user.metaCapiAccessToken
+            access_token: meta.metaCapiAccessToken
         };
 
         // Add test_event_code if configured
-        if (user.metaTestEventCode) {
-            testEventData.test_event_code = user.metaTestEventCode;
+        if (meta.metaTestEventCode) {
+            testEventData.test_event_code = meta.metaTestEventCode;
         }
 
         // Send test event to Meta
         const response = await axios.post(
-            `${META_GRAPH_URL}/${user.metaPixelId}/events`,
+            `${META_GRAPH_URL}/${meta.metaPixelId}/events`,
             testEventData,
             {
                 headers: {
@@ -590,7 +606,7 @@ const testCapiConnection = async (req, res) => {
             if (eventsReceived > 0) {
                 return res.json({
                     success: true,
-                    message: user.metaTestEventCode
+                    message: meta.metaTestEventCode
                         ? 'Test event sent successfully! Check Events Manager → Test Events tab to view it.'
                         : 'Connection successful! Event sent to Meta Conversion API.',
                     details: {

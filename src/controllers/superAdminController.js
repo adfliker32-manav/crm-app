@@ -1,7 +1,10 @@
 const User = require('../models/User');
+const WorkspaceSettings = require('../models/WorkspaceSettings');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const Lead = require('../models/Lead');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const AgencySettings = require('../models/AgencySettings');
 const GlobalSetting = require('../models/GlobalSetting');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
@@ -14,12 +17,48 @@ const ChatbotFlow = require('../models/ChatbotFlow');
 const ChatbotSession = require('../models/ChatbotSession');
 const Stage = require('../models/Stage');
 const ActivityLog = require('../models/ActivityLog');
+const AuditLog = require('../models/AuditLog');
+const SystemSetting = require('../models/SystemSetting');
+const UsageLog = require('../models/UsageLog');
+const { invalidateConfigCache } = require('../utils/systemConfig');
+const auditLogger = require('../services/auditLogger');
+const mongoose = require('mongoose');
+const os = require('os');
+const telemetryService = require('../services/telemetryService');
 
 // Helper for Token Generation (match authController logic)
 const generateToken = (id, role) => {
     return jwt.sign({ id, role }, process.env.JWT_SECRET, {
         expiresIn: '1d' // Impersonation session
     });
+};
+
+// Internal Helper: Join User with WorkspaceSettings
+const joinWorkspaceSettings = async (query = {}, options = {}) => {
+    const { sort = { createdAt: -1 }, limit = 500, skip = 0 } = options;
+    
+    return await User.aggregate([
+        { $match: query },
+        {
+            $lookup: {
+                from: 'workspacesettings',
+                localField: '_id',
+                foreignField: 'userId',
+                as: 'workspace'
+            }
+        },
+        { $unwind: { path: '$workspace', preserveNullAndEmptyArrays: true } },
+        { $sort: sort },
+        { $skip: skip },
+        { $limit: limit },
+        {
+            $project: {
+                password: 0,
+                'workspace._id': 0,
+                'workspace.userId': 0
+            }
+        }
+    ]);
 };
 
 // Create new company (Manager)
@@ -44,9 +83,28 @@ const createCompany = async (req, res) => {
             password: hashedPassword,
             phone,
             role: req.body.role === 'agency' ? 'agency' : 'manager',
-            subscriptionStatus: 'Trial', // Default to Trial
+            isOnboarded: true,
+            accountStatus: 'Active',
+            // Super Admin creates accounts already approved — no pending flow needed
+            is_active: true,
+            approved_by_admin: true,
+            status: 'approved'
+        });
+
+        // Initialize WorkspaceSettings
+        await WorkspaceSettings.create({
+            userId: newCompany._id,
+            subscriptionStatus: 'Trial',
             subscriptionPlan: 'Free',
-            planExpiryDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) // 14 days trial
+            billingType: 'trial',
+            planExpiryDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days trial
+            agentLimit: 5,
+            activeModules: ['leads', 'team', 'reports', 'settings']
+        });
+
+        // Initialize IntegrationConfig
+        await IntegrationConfig.create({
+            userId: newCompany._id
         });
 
         res.status(201).json({
@@ -97,10 +155,7 @@ const getSaaSAnalytics = async (req, res) => {
 // Get all companies (managers)
 const getAllCompanies = async (req, res) => {
     try {
-        const companies = await User.find({ role: { $in: ['manager', 'agency'] } })
-            .select('-password')
-            .populate('parentId', 'name email')
-            .sort({ createdAt: -1 });
+        const companies = await joinWorkspaceSettings({ role: { $in: ['manager', 'agency'] } });
 
         // Get additional stats for each company
         const companiesWithStats = await Promise.all(
@@ -109,7 +164,9 @@ const getAllCompanies = async (req, res) => {
                 const leadsCount = await Lead.countDocuments({ userId: company._id });
 
                 return {
-                    ...company.toObject(),
+                    ...company,
+                    // Flatten workspace settings for frontend compatibility
+                    ...(company.workspace || {}),
                     agentsCount,
                     leadsCount
                 };
@@ -131,9 +188,8 @@ const getCompanyById = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } })
-            .select('-password')
-            .populate('parentId', 'name email');
+        const results = await joinWorkspaceSettings({ _id: new mongoose.Types.ObjectId(id), role: { $in: ['manager', 'agency'] } });
+        const company = results[0];
 
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
@@ -148,7 +204,8 @@ const getCompanyById = async (req, res) => {
         res.json({
             success: true,
             company: {
-                ...company.toObject(),
+                ...company,
+                ...(company.workspace || {}),
                 agentsCount,
                 leadsCount,
                 agents
@@ -164,7 +221,7 @@ const getCompanyById = async (req, res) => {
 const updateCompany = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, email, companyName, contactPerson, phone } = req.body;
+        const { name, email, companyName, contactPerson, phone, activeModules, leadLimit, agentLimit } = req.body;
 
         // Check if company exists
         const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
@@ -180,8 +237,8 @@ const updateCompany = async (req, res) => {
             }
         }
 
-        // Update company
-        const updatedCompany = await User.findByIdAndUpdate(
+        // Update identity in User
+        const updatedUser = await User.findByIdAndUpdate(
             id,
             {
                 ...(name && { name }),
@@ -191,12 +248,31 @@ const updateCompany = async (req, res) => {
                 ...(phone !== undefined && { phone })
             },
             { new: true, runValidators: true }
-        ).select('-password');
+        ).select('-password').lean();
+
+        // Update settings in WorkspaceSettings
+        const updateFields = {};
+        if (activeModules !== undefined && Array.isArray(activeModules)) updateFields.activeModules = activeModules;
+        if (leadLimit !== undefined) updateFields['planFeatures.leadLimit'] = parseInt(leadLimit);
+        if (agentLimit !== undefined) updateFields.agentLimit = parseInt(agentLimit);
+
+        if (Object.keys(updateFields).length > 0) {
+            await WorkspaceSettings.findOneAndUpdate(
+                { userId: id },
+                { $set: updateFields },
+                { upsert: true }
+            );
+        }
+
+        const workspace = await WorkspaceSettings.findOne({ userId: id }).lean();
 
         res.json({
             success: true,
             message: "Company updated successfully",
-            company: updatedCompany
+            company: {
+                ...updatedUser,
+                ...(workspace || {})
+            }
         });
     } catch (error) {
         console.error("Update Company Error:", error);
@@ -239,6 +315,16 @@ const deleteCompany = async (req, res) => {
 
         // Delete the company manager
         await User.findByIdAndDelete(id);
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'COMPANY_MANAGEMENT',
+            action: 'COMPANY_DELETED',
+            targetType: 'Company',
+            targetId: id,
+            targetName: company.companyName || company.email,
+            req
+        });
 
         res.json({
             success: true,
@@ -325,10 +411,12 @@ const getCompanyAgents = async (req, res) => {
             .select('-password')
             .sort({ createdAt: -1 });
 
+        const workspace = await WorkspaceSettings.findOne({ userId: id }).select('agentLimit');
+
         res.json({
             success: true,
             agents,
-            agentLimit: company.agentLimit || 5,
+            agentLimit: workspace?.agentLimit || 5,
             currentAgentsCount: agents.length
         });
     } catch (error) {
@@ -352,9 +440,10 @@ const createCompanyAgent = async (req, res) => {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        // Check agent limit
+        // Check agent limit from WorkspaceSettings
         const currentAgentsCount = await User.countDocuments({ parentId: id, role: 'agent' });
-        const agentLimit = company.agentLimit || 5;
+        const workspace = await WorkspaceSettings.findOne({ userId: id }).select('agentLimit');
+        const agentLimit = workspace?.agentLimit || 5;
 
         if (currentAgentsCount >= agentLimit) {
             return res.status(400).json({
@@ -490,16 +579,21 @@ const updateAgentLimit = async (req, res) => {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        const updatedCompany = await User.findByIdAndUpdate(
-            id,
-            { agentLimit: parseInt(agentLimit) },
-            { new: true }
-        ).select('-password');
+        const updatedWorkspace = await WorkspaceSettings.findOneAndUpdate(
+            { userId: id },
+            { $set: { agentLimit: parseInt(agentLimit) } },
+            { new: true, upsert: true }
+        ).lean();
+
+        const user = await User.findById(id).select('-password').lean();
 
         res.json({
             success: true,
             message: "Agent limit updated successfully",
-            company: updatedCompany
+            company: {
+                ...user,
+                ...(updatedWorkspace || {})
+            }
         });
     } catch (error) {
         console.error("Update Agent Limit Error:", error);
@@ -507,111 +601,7 @@ const updateAgentLimit = async (req, res) => {
     }
 };
 
-// Get billing/revenue data
-const getBillingData = async (req, res) => {
-    try {
-        // Get all companies with billing info
-        const companies = await User.find({ role: { $in: ['manager', 'agency'] } })
-            .select('name email companyName subscriptionPlan subscriptionStatus planExpiryDate lastPaymentDate monthlyRevenue createdAt')
-            .sort({ createdAt: -1 });
-
-        // Calculate total monthly revenue
-        const totalMonthlyRevenue = companies.reduce((sum, company) => {
-            return sum + (company.monthlyRevenue || 0);
-        }, 0);
-
-        // Get current month revenue (companies that paid this month)
-        const currentMonth = new Date();
-        currentMonth.setDate(1);
-        currentMonth.setHours(0, 0, 0, 0);
-
-        const currentMonthRevenue = companies
-            .filter(c => c.lastPaymentDate && new Date(c.lastPaymentDate) >= currentMonth)
-            .reduce((sum, company) => sum + (company.monthlyRevenue || 0), 0);
-
-        // Count by status
-        const activeSubscriptions = companies.filter(c => c.subscriptionStatus === 'Active').length;
-        const expiredSubscriptions = companies.filter(c => c.subscriptionStatus === 'Expired').length;
-        const trialSubscriptions = companies.filter(c => c.subscriptionStatus === 'Trial').length;
-
-        // Get expiring soon (within 7 days)
-        const sevenDaysFromNow = new Date();
-        sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
-        const expiringSoon = companies.filter(c => {
-            if (!c.planExpiryDate) return false;
-            const expiry = new Date(c.planExpiryDate);
-            return expiry <= sevenDaysFromNow && expiry >= new Date() && c.subscriptionStatus === 'Active';
-        });
-
-        res.json({
-            success: true,
-            companies,
-            totalMonthlyRevenue,
-            currentMonthRevenue,
-            stats: {
-                activeSubscriptions,
-                expiredSubscriptions,
-                trialSubscriptions,
-                expiringSoon: expiringSoon.length
-            },
-            expiringSoon: expiringSoon.map(c => ({
-                _id: c._id,
-                name: c.name,
-                companyName: c.companyName,
-                email: c.email,
-                planExpiryDate: c.planExpiryDate,
-                subscriptionPlan: c.subscriptionPlan
-            }))
-        });
-    } catch (error) {
-        console.error("Get Billing Data Error:", error);
-        res.status(500).json({ message: "Server Error" });
-    }
-};
-
-// Update company billing/subscription
-const updateCompanyBilling = async (req, res) => {
-    try {
-        const { id } = req.params;
-        // Accept both frontend field names (plan, billingStatus, expiryDate) and backend names
-        const {
-            subscriptionPlan, plan,
-            subscriptionStatus, billingStatus,
-            planExpiryDate, expiryDate,
-            monthlyRevenue,
-            lastPaymentDate
-        } = req.body;
-
-        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
-        if (!company) {
-            return res.status(404).json({ message: "Company not found" });
-        }
-
-        const updateData = {};
-        // Use frontend field names as fallback
-        const finalPlan = subscriptionPlan || plan;
-        const finalStatus = subscriptionStatus || billingStatus;
-        const finalExpiryDate = planExpiryDate || expiryDate;
-
-        if (finalPlan) updateData.subscriptionPlan = finalPlan;
-        if (finalStatus) updateData.subscriptionStatus = finalStatus;
-        if (finalExpiryDate) updateData.planExpiryDate = new Date(finalExpiryDate);
-        if (monthlyRevenue !== undefined) updateData.monthlyRevenue = parseFloat(monthlyRevenue);
-        if (lastPaymentDate) updateData.lastPaymentDate = new Date(lastPaymentDate);
-
-        const updatedCompany = await User.findByIdAndUpdate(id, updateData, { new: true })
-            .select('-password');
-
-        res.json({
-            success: true,
-            message: "Billing information updated successfully",
-            company: updatedCompany
-        });
-    } catch (error) {
-        console.error("Update Billing Error:", error);
-        res.status(500).json({ message: error.message || "Server Error" });
-    }
-};
+// Billing tracking removed
 
 // Get dashboard stats (for frontend dashboard)
 const getDashboardStats = async (req, res) => {
@@ -622,8 +612,7 @@ const getDashboardStats = async (req, res) => {
             User.countDocuments({ role: 'agent' })
         ]);
 
-        const activeSubscriptions = await User.countDocuments({
-            role: 'manager',
+        const activeSubscriptions = await WorkspaceSettings.countDocuments({
             subscriptionStatus: 'Active'
         });
 
@@ -665,16 +654,30 @@ const getGrowthData = async (req, res) => {
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - days);
 
-        // Get daily company signups
-        const companies = await User.find({
-            role: 'manager',
-            createdAt: { $gte: startDate, $lte: endDate }
-        }).select('createdAt').lean();
+        // Efficient: Use MongoDB aggregation pipeline instead of in-memory filter
+        const companiesAgg = await User.aggregate([
+            { $match: { role: 'manager', createdAt: { $gte: startDate, $lte: endDate } } },
+            {
+                $group: {
+                    _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        const leadsAgg = await Lead.aggregate([
+            { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
+            {
+                $group: {
+                    _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
 
-        // Get daily lead creation
-        const leads = await Lead.find({
-            createdAt: { $gte: startDate, $lte: endDate }
-        }).select('createdAt').lean();
+        const companyMap = {};
+        companiesAgg.forEach(item => { companyMap[item._id] = item.count; });
+        const leadMap = {};
+        leadsAgg.forEach(item => { leadMap[item._id] = item.count; });
 
         // Create date labels and count data
         const labels = [];
@@ -685,26 +688,10 @@ const getGrowthData = async (req, res) => {
             const date = new Date();
             date.setDate(date.getDate() - i);
             const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const isoStr = date.toISOString().split('T')[0];
             labels.push(dateStr);
-
-            // Count companies created on this day
-            const dayStart = new Date(date);
-            dayStart.setHours(0, 0, 0, 0);
-            const dayEnd = new Date(date);
-            dayEnd.setHours(23, 59, 59, 999);
-
-            const companyCount = companies.filter(c => {
-                const created = new Date(c.createdAt);
-                return created >= dayStart && created <= dayEnd;
-            }).length;
-
-            const leadCount = leads.filter(l => {
-                const created = new Date(l.createdAt);
-                return created >= dayStart && created <= dayEnd;
-            }).length;
-
-            companyCounts.push(companyCount);
-            leadCounts.push(leadCount);
+            companyCounts.push(companyMap[isoStr] || 0);
+            leadCounts.push(leadMap[isoStr] || 0);
         }
 
         res.json({
@@ -718,71 +705,7 @@ const getGrowthData = async (req, res) => {
     }
 };
 
-// Get billing stats (separate from full billing data)
-const getBillingStats = async (req, res) => {
-    try {
-        const companies = await User.find({ role: { $in: ['manager', 'agency'] } })
-            .select('monthlyRevenue subscriptionStatus planExpiryDate lastPaymentDate')
-            .lean();
-
-        const totalMonthlyRevenue = companies.reduce((sum, c) => sum + (c.monthlyRevenue || 0), 0);
-
-        const currentMonth = new Date();
-        currentMonth.setDate(1);
-        currentMonth.setHours(0, 0, 0, 0);
-
-        const currentMonthRevenue = companies
-            .filter(c => c.lastPaymentDate && new Date(c.lastPaymentDate) >= currentMonth)
-            .reduce((sum, c) => sum + (c.monthlyRevenue || 0), 0);
-
-        const activeSubscriptions = companies.filter(c => c.subscriptionStatus === 'Active').length;
-
-        const sevenDaysFromNow = new Date();
-        sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
-        const expiringSoon = companies.filter(c => {
-            if (!c.planExpiryDate) return false;
-            const expiry = new Date(c.planExpiryDate);
-            return expiry <= sevenDaysFromNow && expiry >= new Date() && c.subscriptionStatus === 'Active';
-        }).length;
-
-        res.json({
-            totalMonthlyRevenue,
-            currentMonthRevenue,
-            activeSubscriptions,
-            expiringSoon
-        });
-    } catch (error) {
-        console.error("Billing Stats Error:", error);
-        res.status(500).json({ message: "Server Error" });
-    }
-};
-
-// Get all subscriptions (for billing view table)
-const getSubscriptions = async (req, res) => {
-    try {
-        const companies = await User.find({ role: { $in: ['manager', 'agency'] } })
-            .select('companyName email subscriptionPlan subscriptionStatus monthlyRevenue planExpiryDate lastPaymentDate createdAt')
-            .sort({ createdAt: -1 })
-            .lean();
-
-        // Map to match frontend expectations
-        const subscriptions = companies.map(c => ({
-            _id: c._id,
-            companyName: c.companyName || c.email,
-            email: c.email,
-            plan: c.subscriptionPlan ? c.subscriptionPlan.charAt(0).toUpperCase() + c.subscriptionPlan.slice(1) : 'Free',
-            billingStatus: c.subscriptionStatus ? c.subscriptionStatus.charAt(0).toUpperCase() + c.subscriptionStatus.slice(1) : 'Trial',
-            monthlyRevenue: c.monthlyRevenue || 0,
-            expiryDate: c.planExpiryDate,
-            lastPaymentDate: c.lastPaymentDate
-        }));
-
-        res.json(subscriptions);
-    } catch (error) {
-        console.error("Get Subscriptions Error:", error);
-        res.status(500).json({ message: "Server Error" });
-    }
-};
+// Subscription getters removed
 
 // ==========================================
 // 🌍 GLOBAL SETTINGS
@@ -837,6 +760,13 @@ const updateSettings = async (req, res) => {
 
         if (updates.length > 0) {
             await GlobalSetting.bulkWrite(updates);
+            auditLogger.log({
+                actor: req.user,
+                actionCategory: 'SYSTEM',
+                action: 'SETTINGS_UPDATED',
+                details: settings,
+                req
+            });
         }
 
         res.json({
@@ -849,103 +779,6 @@ const updateSettings = async (req, res) => {
     }
 };
 
-// ==========================================
-// 📦 SUBSCRIPTION PLANS MANAGEMENT
-// ==========================================
-
-const SubscriptionPlan = require('../models/SubscriptionPlan');
-
-// Get all plans
-const getAllPlans = async (req, res) => {
-    try {
-        const plans = await SubscriptionPlan.find().sort({ price: 1 });
-        res.json({
-            success: true,
-            plans
-        });
-    } catch (error) {
-        console.error("Get Plans Error:", error);
-        res.status(500).json({ message: "Server Error" });
-    }
-};
-
-// Create new plan
-const createPlan = async (req, res) => {
-    try {
-        const { name, price, features, limits } = req.body;
-
-        if (!name || price === undefined) {
-            return res.status(400).json({ message: "Name and price are required" });
-        }
-
-        const existingPlan = await SubscriptionPlan.findOne({ name });
-        if (existingPlan) {
-            return res.status(400).json({ message: "Plan with this name already exists" });
-        }
-
-        const newPlan = await SubscriptionPlan.create({
-            name,
-            price,
-            features: features || [],
-            limits: limits || { agents: 5, leads: 1000 }
-        });
-
-        res.status(201).json({
-            success: true,
-            message: "Plan created successfully",
-            plan: newPlan
-        });
-    } catch (error) {
-        console.error("Create Plan Error:", error);
-        res.status(500).json({ message: "Server Error" });
-    }
-};
-
-// Update plan
-const updatePlan = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { name, price, features, limits, isActive } = req.body;
-
-        const plan = await SubscriptionPlan.findById(id);
-        if (!plan) {
-            return res.status(404).json({ message: "Plan not found" });
-        }
-
-        const updateData = {};
-        if (name) updateData.name = name;
-        if (price !== undefined) updateData.price = price;
-        if (features) updateData.features = features;
-        if (limits) updateData.limits = limits;
-        if (isActive !== undefined) updateData.isActive = isActive;
-
-        const updatedPlan = await SubscriptionPlan.findByIdAndUpdate(id, updateData, { new: true });
-
-        res.json({
-            success: true,
-            message: "Plan updated successfully",
-            plan: updatedPlan
-        });
-    } catch (error) {
-        console.error("Update Plan Error:", error);
-        res.status(500).json({ message: "Server Error" });
-    }
-};
-
-// Delete plan
-const deletePlan = async (req, res) => {
-    try {
-        const { id } = req.params;
-        await SubscriptionPlan.findByIdAndDelete(id);
-        res.json({
-            success: true,
-            message: "Plan deleted successfully"
-        });
-    } catch (error) {
-        console.error("Delete Plan Error:", error);
-        res.status(500).json({ message: "Server Error" });
-    }
-};
 
 // ==========================================
 // 🕵️ IMPERSONATION
@@ -972,6 +805,16 @@ const impersonateUser = async (req, res) => {
         // Security Log
         console.log(`🚨 ALERT: Super Admin (${req.user.email}) is impersonating ${targetUser.email}`);
 
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'IMPERSONATION',
+            action: 'IMPERSONATE_START',
+            targetType: 'User',
+            targetId: targetUser._id,
+            targetName: targetUser.email,
+            req
+        });
+
         res.json({
             success: true,
             message: `Impersonating ${targetUser.name}`,
@@ -990,13 +833,701 @@ const impersonateUser = async (req, res) => {
     }
 };
 
+// ==========================================
+// ☁️ CLOUD USAGE ANALYTICS
+// ==========================================
+
+// Get aggregated platform-wide cloud usage
+const getCloudUsage = async (req, res) => {
+    try {
+        const agencySettings = await AgencySettings.find().select('usage planLimits');
+        
+        let totalWhatsapp = 0;
+        let totalEmails = 0;
+        let totalWhatsappLimit = 0;
+        let totalEmailLimit = 0;
+
+        agencySettings.forEach(setting => {
+            totalWhatsapp += setting.usage?.whatsappSent || 0;
+            totalEmails += setting.usage?.emailsSent || 0;
+            totalWhatsappLimit += setting.planLimits?.whatsappMessagesPerMonth || 1000;
+            totalEmailLimit += setting.planLimits?.emailsPerMonth || 5000;
+        });
+
+        res.json({
+            success: true,
+            usage: {
+                whatsapp: {
+                    sent: totalWhatsapp,
+                    limit: totalWhatsappLimit
+                },
+                email: {
+                    sent: totalEmails,
+                    limit: totalEmailLimit
+                }
+            }
+        });
+    } catch (error) {
+        console.error("Get Cloud Usage Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// ==========================================
+// 🛡️ COMMAND CENTER AUDIT LOGS
+// ==========================================
+const getAuditLogs = async (req, res) => {
+    try {
+        const { page = 1, limit = 50, category, action, search } = req.query;
+        const query = {};
+        
+        if (category) query.actionCategory = category;
+        if (action) query.action = action;
+        
+        if (search) {
+            query.$or = [
+                { actorName: { $regex: search, $options: 'i' } },
+                { targetName: { $regex: search, $options: 'i' } },
+                { action: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        
+        const logs = await AuditLog.find(query)
+            .sort({ timestamp: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+            
+        const total = await AuditLog.countDocuments(query);
+
+        res.json({
+            success: true,
+            logs,
+            total,
+            page: parseInt(page),
+            pages: Math.ceil(total / parseInt(limit))
+        });
+    } catch (error) {
+        console.error("Get Audit Logs Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// ==========================================
+// ❄️ EMERGENCY: FREEZE TENANT
+// ==========================================
+const freezeTenant = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { isFrozen } = req.body;
+
+        const company = await User.findById(id);
+        if (!company) {
+            return res.status(404).json({ message: "Company not found" });
+        }
+
+        const newAccountStatus = isFrozen ? 'Suspended' : 'Active';
+        await User.findByIdAndUpdate(id, {
+            $set: {
+                accountStatus: newAccountStatus,
+                frozenBy: isFrozen ? 'superadmin' : null,
+                frozenAt: isFrozen ? new Date() : null
+            }
+        });
+
+        // Also update WorkspaceSettings mirror so authMiddleware's tri-state check fires
+        await WorkspaceSettings.findOneAndUpdate(
+            { userId: id },
+            { $set: { accountStatus: newAccountStatus } }
+        );
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'COMPANY_MANAGEMENT',
+            action: isFrozen ? 'TENANT_SUSPENDED' : 'TENANT_UNSUSPENDED',
+            targetType: 'Company',
+            targetId: company._id,
+            targetName: company.companyName || company.email,
+            req
+        });
+
+        res.json({ 
+            success: true, 
+            message: `Tenant ${isFrozen ? 'suspended' : 'reactivated'} successfully`, 
+            isFrozen: !!isFrozen,
+            accountStatus: newAccountStatus
+        });
+    } catch (err) {
+        console.error("Freeze Tenant Error:", err);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// ==========================================
+// 🛑 EMERGENCY: GLOBAL KILL SWITCHES
+// ==========================================
+const getSystemSettings = async (req, res) => {
+    try {
+        const settings = await SystemSetting.find().lean();
+        const settingsMap = {};
+        settings.forEach(s => settingsMap[s.key] = s.value);
+        res.json({ success: true, settings: settingsMap });
+    } catch (err) {
+        console.error("Get System Settings Error:", err);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+const updateSystemSettings = async (req, res) => {
+    try {
+        const { settings } = req.body;
+        
+        const updates = Object.keys(settings).map(key => ({
+            updateOne: {
+                filter: { key },
+                update: { 
+                    $set: { 
+                        value: settings[key], 
+                        updatedBy: req.user.userId, 
+                        updatedAt: new Date() 
+                    } 
+                },
+                upsert: true
+            }
+        }));
+
+        if (updates.length > 0) {
+            await SystemSetting.bulkWrite(updates);
+            invalidateConfigCache();
+            
+            auditLogger.log({
+                actor: req.user,
+                actionCategory: 'SYSTEM',
+                action: 'SYSTEM_KILL_SWITCH_UPDATED',
+                details: settings,
+                req
+            });
+        }
+        res.json({ success: true, message: "Emergency system settings successfully applied" });
+    } catch (err) {
+        console.error("Update System Settings Error:", err);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// ==========================================
+// 🚨 CORE CRITICAL MONITORING (ALERT LOGIC)
+// ==========================================
+const analyzeHealthStatus = (metrics) => {
+    // Return Format: { level: 'healthy' | 'warning' | 'critical' | 'outage', triggers: [] }
+    let level = 'healthy';
+    const triggers = [];
+
+    const escalate = (newLevel, reason) => {
+        const levels = { 'healthy': 0, 'warning': 1, 'critical': 2, 'outage': 3 };
+        if (levels[newLevel] > levels[level]) level = newLevel;
+        triggers.push(reason);
+    };
+
+    // 1️⃣ API Failure Rate
+    if (metrics.api.errorRatePercent > 3) escalate('critical', `API Error Rate > 3% (${metrics.api.errorRatePercent}%)`);
+    else if (metrics.api.errorRatePercent > 1) escalate('warning', `Elevated API Errors (${metrics.api.errorRatePercent}%)`);
+    if (metrics.api.authFailurePercent > 20) escalate('critical', `Auth Spike > 20% (${metrics.api.authFailurePercent}%)`);
+
+    // 2️⃣ Webhook Processing
+    if (metrics.webhook.successRatePercent < 95) escalate('critical', `Webhook Success Dropped < 95% (${metrics.webhook.successRatePercent}%)`);
+    if (metrics.webhook.avgLatencyMs > 10000) escalate('critical', `Webhook Delay Over 10s (${metrics.webhook.avgLatencyMs}ms)`);
+
+    // 3️⃣ Automation Engine & Queue Backlog
+    const q = metrics.queue.agenda;
+    if (q.automationFailures > 5) escalate('warning', `Automation Failures Detected (${q.automationFailures})`);
+    if (q.automationFailures > 25) escalate('critical', `High Automation Malfunctions (${q.automationFailures})`);
+    if (q.pending > 100 && q.active === 0) escalate('critical', `Queue Deadlock! ${q.pending} pending but 0 active workers.`);
+
+    // 4️⃣ Database Performance
+    const maxConnectionsAllowed = 500; // Assuming typical Mongo pool
+    if (metrics.database.connections > (maxConnectionsAllowed * 0.85)) escalate('critical', `DB Connections saturated (>85%)`);
+
+    // 5️⃣ Messaging Delivery Health
+    const wa = metrics.delivery.whatsapp;
+    if (wa.successRate < 93 && wa.totalAttempts > 10) escalate('critical', `WhatsApp Deliverability Failing (${wa.successRate}%)`);
+
+    // 6️⃣ Infrastructure Crashes
+    const memoryUsagePercent = (metrics.server.memoryUsageMB / metrics.server.totalMemoryMB) * 100;
+    if (memoryUsagePercent > 90) escalate('critical', `Memory Saturation > 90% (${Math.round(memoryUsagePercent)}%)`);
+    
+    // CPU Load > 85% sustained (approximation)
+    const cpuCores = os.cpus().length;
+    if (metrics.server.loadAverage[0] / cpuCores > 0.85) escalate('warning', `Sustained High CPU Load`);
+
+    // 7️⃣ Abuse Detection
+    if (metrics.topTenant && metrics.topTenant.requestCount > 5000) {
+        escalate('warning', `Abnormal Traffic Spike from Tenant ${metrics.topTenant.tenantId}`);
+    }
+
+    return { level, triggers };
+};
+
+// ==========================================
+// 🩺 SYSTEM HEALTH TELEMETRY
+// ==========================================
+const getSystemHealth = async (req, res) => {
+    try {
+        const health = {};
+
+        // In-Memory Red Alert Stats
+        health.api = telemetryService.getApiStats();
+        health.webhook = telemetryService.getWebhookStats();
+        health.topTenant = telemetryService.getTopTenantUsage();
+
+        // 1. Server Memory & Load
+        health.server = {
+            uptimeSeconds: process.uptime(),
+            memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+            totalMemoryMB: Math.round(os.totalmem() / 1024 / 1024),
+            freeMemoryMB: Math.round(os.freemem() / 1024 / 1024),
+            loadAverage: os.loadavg(), // [1-min, 5-min, 15-min]
+            apiLatencyMs: health.api.avgLatencyMs
+        };
+
+        // 2. Database Telemetry
+        try {
+            const dbStats = await mongoose.connection.db.admin().serverStatus();
+            health.database = {
+                connections: dbStats.connections.current,
+                activeQueries: dbStats.globalLock.activeClients.total,
+                documentQueries: dbStats.opcounters.query,
+                inserts: dbStats.opcounters.insert,
+                updates: dbStats.opcounters.update
+            };
+        } catch (dbErr) {
+            console.error("DB Stat Error:", dbErr.message);
+            health.database = { connections: 0, error: "Unable to retrieve DB stats." };
+        }
+
+        // 3. Queue Health (Agenda)
+        try {
+            const jobsCollection = mongoose.connection.db.collection('agendaJobs');
+            const totalJobs = await jobsCollection.countDocuments();
+            const failedJobs = await jobsCollection.countDocuments({ failedAt: { $exists: true } });
+            const pendingJobs = await jobsCollection.countDocuments({
+                nextRunAt: { $exists: true, $ne: null },
+                lockedAt: null
+            });
+            const activeJobs = await jobsCollection.countDocuments({ lockedAt: { $exists: true, $ne: null } });
+
+            const automationFailures = await jobsCollection.countDocuments({
+                name: 'EXECUTE_AUTOMATION_ACTION',
+                failedAt: { $exists: true }
+            });
+
+            health.queue = {
+                agenda: {
+                    total: totalJobs,
+                    failed: failedJobs,
+                    pending: pendingJobs,
+                    active: activeJobs,
+                    automationFailures
+                }
+            };
+        } catch (qErr) {
+            health.queue = { agenda: { failed: 0, pending: 0, active: 0, automationFailures: 0 }, error: "Failed to read Agenda collection." };
+        }
+
+        // 4. Message Delivery Health
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1); // Only check last 24h
+
+        const whatsappSentPromise = WhatsAppLog.countDocuments({ status: 'sent', createdAt: { $gte: yesterday } });
+        const whatsappFailedPromise = WhatsAppLog.countDocuments({ status: 'failed', createdAt: { $gte: yesterday } });
+        
+        const emailSentPromise = EmailLog.countDocuments({ status: 'sent', createdAt: { $gte: yesterday } });
+        const emailFailedPromise = EmailLog.countDocuments({ status: 'failed', createdAt: { $gte: yesterday } });
+
+        const [waSent, waFailed, emSent, emFailed] = await Promise.all([
+            whatsappSentPromise, whatsappFailedPromise,
+            emailSentPromise, emailFailedPromise
+        ]);
+
+        health.delivery = {
+            whatsapp: {
+                sent24h: waSent,
+                failed24h: waFailed,
+                totalAttempts: waSent + waFailed,
+                successRate: waSent + waFailed === 0 ? 100 : Math.round((waSent / (waSent + waFailed)) * 100)
+            },
+            email: {
+                sent24h: emSent,
+                failed24h: emFailed,
+                totalAttempts: emSent + emFailed,
+                successRate: emSent + emFailed === 0 ? 100 : Math.round((emSent / (emSent + emFailed)) * 100)
+            }
+        };
+
+        // Execute Intelligence Analysis
+        health.alertStatus = analyzeHealthStatus(health);
+
+        res.json({ success: true, health });
+
+    } catch (error) {
+        console.error("Health Check Error:", error);
+        res.status(500).json({ success: false, message: "Failed to gather system health telemetry" });
+    }
+};
+
+// ==========================================
+// 🏢 AGENCY GOVERNANCE: Allocate Plan Limits
+// ==========================================
+// @desc    Super Admin allocates limits for an Agency
+// @route   PUT /api/superadmin/agencies/:id/limits
+// @access  Private (Super Admin)
+// ==========================================
+// Removed Dynamic Subscription Plan Management functions
+
+const updateAgencyLimits = async (req, res) => {
+    try {
+        const { id } = req.params; // The Agency ID
+        const { maxClients, whatsappMessagesPerMonth, emailsPerMonth } = req.body;
+
+        const agency = await User.findOne({ _id: id, role: 'agency' });
+        if (!agency) return res.status(404).json({ message: "Agency not found" });
+
+        const updatedSettings = await AgencySettings.findOneAndUpdate(
+            { agencyId: agency._id },
+            { 
+                $set: { 
+                    'planLimits.maxClients': maxClients,
+                    'planLimits.whatsappMessagesPerMonth': whatsappMessagesPerMonth,
+                    'planLimits.emailsPerMonth': emailsPerMonth
+                } 
+            },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'SUPERADMIN_ACTION',
+            action: 'AGENCY_LIMITS_UPDATED',
+            targetType: 'Agency',
+            targetId: agency._id,
+            targetName: agency.companyName || agency.email,
+            details: { maxClients, whatsappMessagesPerMonth, emailsPerMonth },
+            req
+        });
+
+        res.json({ success: true, message: "Agency limits updated successfully", limits: updatedSettings.planLimits });
+    } catch (err) {
+        console.error("Update Agency Limits Error:", err);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+
+// ============================================================
+// 🔭 SUPER ADMIN — WORKSPACE ANALYTICS COCKPIT
+// GET /api/super-admin/workspace-analytics
+// Per-workspace: plan, usage logs, lead count, upgrade pressure
+// ============================================================
+const getWorkspaceAnalytics = async (req, res) => {
+    try {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+
+        // All tenant owners joined with workspace settings
+        const workspaces = await joinWorkspaceSettings({ role: { $in: ['manager', 'agency'] } });
+
+        const results = await Promise.all(workspaces.map(async (ws) => {
+            const wsId = ws._id;
+
+            // Parallel data fetch
+            const [leadCount, agentCount, usageLogs] = await Promise.all([
+                Lead.countDocuments({ userId: wsId }),
+                User.countDocuments({ parentId: wsId, role: 'agent' }),
+                UsageLog.find({ workspaceId: wsId, date: { $gte: thirtyDaysAgoStr } }).lean()
+            ]);
+
+            // Aggregate 30-day usage totals
+            const usage = usageLogs.reduce((acc, day) => ({
+                leadsCreated:   acc.leadsCreated   + (day.leadsCreated   || 0),
+                whatsappSent:   acc.whatsappSent   + (day.whatsappSent   || 0),
+                emailsSent:     acc.emailsSent     + (day.emailsSent     || 0),
+                automationRuns: acc.automationRuns + (day.automationRuns || 0),
+                agentLogins:    acc.agentLogins    + (day.agentLogins    || 0),
+            }), { leadsCreated: 0, whatsappSent: 0, emailsSent: 0, automationRuns: 0, agentLogins: 0 });
+
+            // Upgrade pressure score: more activity = more likely to convert
+            const upgradePressureScore = Math.min(100,
+                Math.round((leadCount * 1.5) + (usage.whatsappSent * 0.5) + (usage.automationRuns * 2))
+            );
+
+            // Days remaining in trial
+            const now = new Date();
+            const daysRemaining = ws.workspace?.planExpiryDate
+                ? Math.max(0, Math.ceil((new Date(ws.workspace.planExpiryDate) - now) / (1000 * 60 * 60 * 24)))
+                : null;
+
+            return {
+                workspaceId:          wsId,
+                name:                 ws.name,
+                email:                ws.email,
+                companyName:          ws.companyName,
+                accountType:          ws.accountType,
+                plan:                 ws.workspace?.subscriptionPlan,
+                planStatus:           ws.workspace?.subscriptionStatus,
+                trialStartedAt:       ws.trialActivatedAt,
+                trialExpiresAt:       ws.workspace?.planExpiryDate,
+                daysRemainingInTrial: daysRemaining,
+                metaSyncEnabled:      ws.workspace?.planFeatures?.metaSync === true,
+                totalLeads:           leadCount,
+                leadLimit:            ws.workspace?.planFeatures?.leadLimit || 100,
+                totalAgents:          agentCount,
+                agentLimit:           ws.workspace?.agentLimit || ws.workspace?.planFeatures?.agentLimit || 5,
+                lastLogin:            ws.lastLogin,
+                joinedAt:             ws.createdAt,
+                usage30Days:          usage,
+                upgradePressureScore, // 0-100
+            };
+        }));
+
+        // Sort by upgrade pressure descending (hottest leads first)
+        results.sort((a, b) => b.upgradePressureScore - a.upgradePressureScore);
+
+        res.json({ success: true, total: results.length, workspaces: results });
+    } catch (err) {
+        console.error('getWorkspaceAnalytics error:', err);
+        res.status(500).json({ message: 'Failed to fetch workspace analytics' });
+    }
+};
+
+// ==============================================================
+// ✅ APPROVAL-BASED ACCESS CONTROL (Core System)
+// Replaces all payment/subscription logic.
+// Super Admin manually gates every account.
+// ==============================================================
+
+// @desc  Get all accounts pending Super Admin approval
+// @route GET /api/superadmin/accounts/pending
+const getPendingRequests = async (req, res) => {
+    try {
+        const accounts = await User.find({ 
+            role: { $in: ['manager', 'agency'] },
+            status: 'pending'
+        })
+        .select('-password')
+        .sort({ createdAt: -1 })
+        .lean();
+
+        // Enrich with agency name if sub-client
+        const enriched = await Promise.all(accounts.map(async (acc) => {
+            if (acc.parentId) {
+                const agency = await User.findById(acc.parentId).select('companyName name email').lean();
+                acc.agencyName = agency?.companyName || agency?.name || 'Unknown Agency';
+                acc.agencyEmail = agency?.email;
+            }
+            return acc;
+        }));
+
+        res.json({ success: true, accounts: enriched, total: enriched.length });
+    } catch (error) {
+        console.error('getPendingRequests Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+// @desc  Get all approved & active accounts
+// @route GET /api/superadmin/accounts/active
+const getActiveAccounts = async (req, res) => {
+    try {
+        const accounts = await User.find({ 
+            role: { $in: ['manager', 'agency'] },
+            status: 'approved',
+            is_active: true
+        })
+        .select('-password')
+        .sort({ createdAt: -1 })
+        .lean();
+
+        const enriched = await Promise.all(accounts.map(async (acc) => {
+            if (acc.parentId) {
+                const agency = await User.findById(acc.parentId).select('companyName name').lean();
+                acc.agencyName = agency?.companyName || agency?.name;
+            }
+            const agentCount = await User.countDocuments({ parentId: acc._id, role: 'agent' });
+            acc.agentCount = agentCount;
+            return acc;
+        }));
+
+        res.json({ success: true, accounts: enriched, total: enriched.length });
+    } catch (error) {
+        console.error('getActiveAccounts Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+// @desc  Get all rejected accounts
+// @route GET /api/superadmin/accounts/rejected
+const getRejectedAccounts = async (req, res) => {
+    try {
+        const accounts = await User.find({ 
+            role: { $in: ['manager', 'agency'] },
+            status: 'rejected'
+        })
+        .select('-password')
+        .sort({ createdAt: -1 })
+        .lean();
+
+        const enriched = await Promise.all(accounts.map(async (acc) => {
+            if (acc.parentId) {
+                const agency = await User.findById(acc.parentId).select('companyName name').lean();
+                acc.agencyName = agency?.companyName || agency?.name;
+            }
+            return acc;
+        }));
+
+        res.json({ success: true, accounts: enriched, total: enriched.length });
+    } catch (error) {
+        console.error('getRejectedAccounts Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+// @desc  Approve an account — sets it live and usable
+// @route PUT /api/superadmin/accounts/:id/approve
+const approveAccount = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const user = await User.findOneAndUpdate(
+            { _id: id, role: { $in: ['manager', 'agency'] } },
+            { 
+                $set: { 
+                    approved_by_admin: true, 
+                    is_active: true, 
+                    status: 'approved',
+                    accountStatus: 'Active'
+                } 
+            },
+            { new: true }
+        ).select('-password');
+
+        if (!user) return res.status(404).json({ message: 'Account not found' });
+
+        // Also ensure WorkspaceSettings exists
+        await WorkspaceSettings.findOneAndUpdate(
+            { userId: id },
+            { $setOnInsert: { 
+                userId: id,
+                activeModules: ['leads', 'team', 'reports', 'email', 'whatsapp', 'settings'],
+                agentLimit: 5
+            }},
+            { upsert: true }
+        );
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'ACCOUNT_MANAGEMENT',
+            action: 'ACCOUNT_APPROVED',
+            targetType: 'User',
+            targetId: user._id,
+            targetName: user.companyName || user.name,
+            req
+        });
+
+        res.json({ 
+            success: true, 
+            message: `Account for "${user.companyName || user.name}" has been approved and activated.`,
+            user
+        });
+    } catch (error) {
+        console.error('approveAccount Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+// @desc  Reject an account
+// @route PUT /api/superadmin/accounts/:id/reject
+const rejectAccount = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        const user = await User.findOneAndUpdate(
+            { _id: id, role: { $in: ['manager', 'agency'] } },
+            { 
+                $set: { 
+                    approved_by_admin: false, 
+                    is_active: false, 
+                    status: 'rejected' 
+                } 
+            },
+            { new: true }
+        ).select('-password');
+
+        if (!user) return res.status(404).json({ message: 'Account not found' });
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'ACCOUNT_MANAGEMENT',
+            action: 'ACCOUNT_REJECTED',
+            targetType: 'User',
+            targetId: user._id,
+            targetName: user.companyName || user.name,
+            details: { reason: reason || 'No reason provided' },
+            req
+        });
+
+        res.json({ 
+            success: true, 
+            message: `Account for "${user.companyName || user.name}" has been rejected.`,
+            user
+        });
+    } catch (error) {
+        console.error('rejectAccount Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+// @desc  Deactivate an active account (without rejecting)
+// @route PUT /api/superadmin/accounts/:id/deactivate
+const deactivateAccount = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const user = await User.findOneAndUpdate(
+            { _id: id, role: { $in: ['manager', 'agency'] } },
+            { $set: { is_active: false } },
+            { new: true }
+        ).select('-password');
+
+        if (!user) return res.status(404).json({ message: 'Account not found' });
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'ACCOUNT_MANAGEMENT',
+            action: 'ACCOUNT_DEACTIVATED',
+            targetType: 'User',
+            targetId: user._id,
+            targetName: user.companyName || user.name,
+            req
+        });
+
+        res.json({ success: true, message: `Account deactivated.`, user });
+    } catch (error) {
+        console.error('deactivateAccount Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
 module.exports = {
-    createCompany,
     getSaaSAnalytics,
     getAllCompanies,
     getCompanyById,
     updateCompany,
     deleteCompany,
+    freezeTenant,
     getCompanyLeads,
     changeCompanyPassword,
     getCompanyAgents,
@@ -1004,21 +1535,25 @@ module.exports = {
     updateCompanyAgent,
     deleteCompanyAgent,
     updateAgentLimit,
-    getBillingData,
-    updateCompanyBilling,
     getDashboardStats,
     getRecentSignups,
     getGrowthData,
-    getBillingStats,
-    getSubscriptions,
+    createCompany,
     getSettings,
     updateSettings,
+    getSystemSettings,
+    updateSystemSettings,
+    getSystemHealth,
     impersonateUser,
-
-    // Plan Management
-    getAllPlans,
-    createPlan,
-    updatePlan,
-    deletePlan
+    getCloudUsage,
+    getAuditLogs,
+    updateAgencyLimits,
+    getWorkspaceAnalytics,
+    // ✅ Approval-Based Access Control
+    getPendingRequests,
+    getActiveAccounts,
+    getRejectedAccounts,
+    approveAccount,
+    rejectAccount,
+    deactivateAccount
 };
-

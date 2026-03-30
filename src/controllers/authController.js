@@ -1,4 +1,6 @@
 const User = require('../models/User');
+const WorkspaceSettings = require('../models/WorkspaceSettings');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const Lead = require('../models/Lead');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
@@ -14,100 +16,7 @@ const ActivityLog = require('../models/ActivityLog');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
-
-// 1. REGISTER (Naya Account)
-exports.register = async (req, res) => {
-    console.log("Register endpoint hit");
-    try {
-        const { name, email, password, companyName, industry, teamSize, phone } = req.body;
-        console.log("Request body:", { name, email, password, companyName });
-
-        // SECURITY FIX: Input validation
-        if (!name || !name.trim()) {
-            console.log("Validation failed: Name required");
-            return res.status(400).json({ message: "Name is required" });
-        }
-        if (!email || !email.trim()) {
-            console.log("Validation failed: Email required");
-            return res.status(400).json({ message: "Email is required" });
-        }
-        if (!password || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)) {
-            console.log("Validation failed: Password complexity");
-            return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
-        }
-
-        // SECURITY FIX: Email format validation
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-            console.log("Validation failed: Email format");
-            return res.status(400).json({ message: "Invalid email format" });
-        }
-
-        // Check karo user pehle se to nahi hai?
-        console.log("Checking if user exists...");
-        let user = await User.findOne({ email: email.toLowerCase().trim() });
-        if (user) {
-            console.log("User already exists");
-            return res.status(400).json({ message: "User already exists" });
-        }
-
-        // Password ko Encrypt karo 🔒
-        console.log("Hashing password...");
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-
-        // Naya user banao (Default role: manager)
-        console.log("Creating user...");
-        user = await User.create({
-            name: name.trim(),
-            email: email.toLowerCase().trim(),
-            password: hashedPassword,
-            companyName: companyName ? companyName.trim() : undefined,
-            industry: industry || undefined,
-            teamSize: teamSize || undefined,
-            phone: phone || undefined,
-            role: 'manager' // By default naya banda Manager banega
-        });
-        console.log("User created:", user._id);
-
-        // 🔥 Token Payload (Isme Role daalna zaroori hai)
-        const payload = {
-            userId: user._id,
-            role: user.role,
-            name: user.name,
-            tenantId: user._id // Naya user hamesha manager/superadmin banega, to khud hi tenant hai
-        };
-
-        // SECURITY FIX: Require JWT_SECRET from environment
-        const JWT_SECRET = process.env.JWT_SECRET;
-        if (!JWT_SECRET) {
-            console.error("JWT_SECRET missing");
-            return res.status(500).json({ error: 'Server configuration error' });
-        }
-
-        console.log("Signing token...");
-        const token = jwt.sign(
-            payload,
-            JWT_SECRET,
-            { expiresIn: '1d' }
-        );
-
-        res.json({ 
-            token, 
-            role: user.role, 
-            user: { 
-                id: user._id, 
-                name: user.name,
-                role: user.role,
-                permissions: user.permissions 
-            } 
-        });
-
-    } catch (err) {
-        console.error("Registration error:", err);
-        res.status(500).json({ error: err.message, stack: err.stack });
-    }
-};
+const auditLogger = require('../services/auditLogger');
 
 // 2. LOGIN (Purana User)
 exports.login = async (req, res) => {
@@ -121,7 +30,15 @@ exports.login = async (req, res) => {
 
         // User dhundo
         const user = await User.findOne({ email: email.toLowerCase().trim() });
-        if (!user) return res.status(400).json({ message: "Invalid Email or Password" });
+        if (!user) {
+            auditLogger.log({
+                actionCategory: 'SECURITY',
+                action: 'LOGIN_FAILED',
+                details: { reason: 'User not found', emailAttempted: email },
+                req
+            });
+            return res.status(400).json({ message: "Invalid Email or Password" });
+        }
 
         // If user signed up via Google and has no password
         if (user.authProvider === 'google' && !user.password) {
@@ -130,7 +47,43 @@ exports.login = async (req, res) => {
 
         // Password match karo
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(400).json({ message: "Invalid Email or Password" });
+        if (!isMatch) {
+            auditLogger.log({
+                actionCategory: 'SECURITY',
+                action: 'LOGIN_FAILED',
+                details: { reason: 'Invalid password', emailAttempted: email },
+                req
+            });
+            return res.status(400).json({ message: "Invalid Email or Password" });
+        }
+
+        // ==========================================
+        // ✅ APPROVAL-BASED ACCESS CONTROL CHECK
+        // ==========================================
+        // Superadmin always gets in. Everyone else needs approval.
+        if (user.role !== 'superadmin') {
+            if (!user.approved_by_admin) {
+                return res.status(403).json({ 
+                    message: "Account not approved yet. Please wait for admin approval.",
+                    status: 'pending_approval'
+                });
+            }
+            if (!user.is_active) {
+                return res.status(403).json({ 
+                    message: "Account has been deactivated. Please contact your administrator.",
+                    status: 'deactivated'
+                });
+            }
+            if (user.status === 'rejected') {
+                return res.status(403).json({ 
+                    message: "Account application was rejected. Please contact support.",
+                    status: 'rejected'
+                });
+            }
+        }
+
+        const ownerId = user.role === 'agent' ? user.parentId : user._id;
+        const workspace = await WorkspaceSettings.findOne({ userId: ownerId });
 
         // 🔥 Token Payload (Yahan Magic Hoga)
         // Hum Token ke andar likh rahe hain ki ye banda 'superadmin' hai ya 'manager'
@@ -154,11 +107,29 @@ exports.login = async (req, res) => {
             { expiresIn: '1d' }
         );
 
+        auditLogger.log({
+            actor: user,
+            actionCategory: 'SECURITY',
+            action: 'LOGIN_SUCCESS',
+            req
+        });
+
         // Frontend ko bhi batao ki role kya hai
         res.json({
             token,
             role: user.role,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role, permissions: user.permissions }
+            user: { 
+                id: user._id, 
+                name: user.name, 
+                email: user.email, 
+                role: user.role, 
+                permissions: user.permissions, 
+                is_active: user.is_active,
+                approved_by_admin: user.approved_by_admin,
+                status: user.status,
+                activeModules: workspace?.activeModules || [],
+                isOnboarded: user.isOnboarded
+            }
         });
 
     } catch (err) {
@@ -170,7 +141,7 @@ exports.login = async (req, res) => {
 // 2.5 GOOGLE LOGIN (OAuth)
 exports.googleLogin = async (req, res) => {
     try {
-        const { credential } = req.body;
+        const { credential, allowNewUser = true } = req.body;
 
         if (!credential) {
             return res.status(400).json({ message: 'Google credential is required' });
@@ -206,16 +177,22 @@ exports.googleLogin = async (req, res) => {
                 user.authProvider = user.password ? user.authProvider : 'google';
                 await user.save();
             }
+            // Check if existing user has essential details to be considered onboarded
+            if (!user.isOnboarded && user.companyName) {
+                user.isOnboarded = true;
+                await user.save();
+            }
         } else {
-            // Create new user (auto-register via Google)
-            user = await User.create({
-                name: name || email.split('@')[0],
-                email: email.toLowerCase(),
-                googleId,
-                authProvider: 'google',
-                role: 'manager' // Default role for new Google sign-ups
+            // New users cannot register via Google Auth anymore
+            return res.status(404).json({ 
+                message: "You don't have an account with this Google email. Please contact the Super Admin to provision your account.",
+                isNewUser: true 
             });
         }
+        
+        // Fetch workspace for login response
+        const ownerId = user.role === 'agent' ? user.parentId : user._id;
+        const workspace = await WorkspaceSettings.findOne({ userId: ownerId });
 
         // Create JWT token (same format as normal login)
         const JWT_SECRET = process.env.JWT_SECRET;
@@ -236,7 +213,17 @@ exports.googleLogin = async (req, res) => {
         res.json({
             token,
             role: user.role,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role, permissions: user.permissions }
+            user: { 
+                id: user._id, 
+                name: user.name, 
+                email: user.email, 
+                role: user.role, 
+                permissions: user.permissions,
+                subscriptionStatus: workspace?.subscriptionStatus || 'Trial',
+                planExpiryDate: workspace?.planExpiryDate,
+                activeModules: workspace?.activeModules || [],
+                isOnboarded: user.isOnboarded
+            }
         });
 
     } catch (err) {
@@ -247,7 +234,6 @@ exports.googleLogin = async (req, res) => {
         res.status(500).json({ message: 'Google authentication failed. Please try again.' });
     }
 };
-// ... Upar register aur login waisa hi rahega ...
 
 // 3. CREATE AGENT (Manager apne neeche employee banayega)
 exports.createAgent = async (req, res) => {
@@ -264,6 +250,18 @@ exports.createAgent = async (req, res) => {
         // 2. Check duplicate email
         let user = await User.findOne({ email });
         if (user) return res.status(400).json({ message: "User already exists" });
+
+        // 2.5 CRITICAL FIX: Enforce Agent Limit from WorkspaceSettings
+        const managerId = req.user.role === 'agent' ? req.user.parentId : req.user.userId;
+        const workspace = await WorkspaceSettings.findOne({ userId: managerId }).select('agentLimit');
+        const currentAgentCount = await User.countDocuments({ parentId: managerId, role: 'agent' });
+        const limit = workspace?.agentLimit || 5;
+        
+        if (currentAgentCount >= limit) {
+            return res.status(403).json({ 
+                message: `Upgrade required. You have reached your current plan limit of ${limit} agents.` 
+            });
+        }
 
         // 3. Password Encrypt
         const salt = await bcrypt.genSalt(10);
@@ -436,9 +434,8 @@ exports.updateProfile = async (req, res) => {
 // 7. GET PUBLIC PLANS (For viewing subscription plans)
 exports.getPlans = async (req, res) => {
     try {
-        const SubscriptionPlan = require('../models/SubscriptionPlan');
-        const plans = await SubscriptionPlan.find({ isActive: true }).sort({ price: 1 });
-        res.json({ success: true, plans });
+        // Billing removed
+        res.json({ success: true, plans: [] });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });

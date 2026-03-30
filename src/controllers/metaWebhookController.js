@@ -1,9 +1,10 @@
-// Meta Lead Webhook Controller - Handles incoming leads from Meta
 const User = require('../models/User');
+const IntegrationConfig = require('../models/IntegrationConfig');
+const WorkspaceSettings = require('../models/WorkspaceSettings');
 const Lead = require('../models/Lead');
 const axios = require('axios');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v18.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
 
 // Webhook verification (GET request from Meta)
 const verifyWebhook = (req, res) => {
@@ -49,8 +50,10 @@ const handleLeadWebhook = async (req, res) => {
                 return;
             }
             const crypto = require('crypto');
-            const payload = JSON.stringify(body);
-            const expectedSignature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(payload).digest('hex');
+            // FIX 2.1: Use req.rawBody (exact bytes Meta signed) — same fix as WhatsApp webhook.
+            // JSON.stringify() changes whitespace and always mismatches Meta's HMAC.
+            const payloadToVerify = req.rawBody || Buffer.from(JSON.stringify(body));
+            const expectedSignature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(payloadToVerify).digest('hex');
             
             if (signature !== expectedSignature) {
                 console.warn("⛔ 401 Unauthorized - Invalid Meta Signature");
@@ -96,40 +99,43 @@ async function processLeadgenWebhook(pageId, leadgenData) {
 
         console.log(`📋 Processing lead: ${leadgen_id} from form: ${form_id}`);
 
-        // Find ALL users with this page connected and sync enabled
-        const users = await User.find({
-            metaPageId: pageId,
-            metaLeadSyncEnabled: true
-        });
+        // Find ALL integration configs with this page connected and sync enabled
+        const configs = await IntegrationConfig.find({
+            'meta.metaPageId': pageId,
+            'meta.metaLeadSyncEnabled': true
+        }).select('userId meta');
 
-        if (!users || users.length === 0) {
-            console.log(`⚠️ No users found with page ${pageId} or sync disabled`);
+        if (!configs || configs.length === 0) {
+            console.log(`⚠️ No integration configs found with page ${pageId} or sync disabled`);
             return;
         }
 
-        // Fetch full lead details from Meta using the first user's token (since they all track the same page)
-        const leadDetails = await fetchLeadDetails(leadgen_id, users[0].metaPageAccessToken);
+        // Fetch full lead details from Meta using the first config's token (since they all track the same page)
+        const leadDetails = await fetchLeadDetails(leadgen_id, configs[0].meta.metaPageAccessToken);
 
         if (!leadDetails) {
             console.log(`⚠️ Could not fetch lead details for ${leadgen_id}`);
             return;
         }
 
-        // Distribute the lead to all matching tenants/users
-        for (const user of users) {
-             // Check if form matches (if user wants specific form only)
-             if (user.metaFormId && user.metaFormId !== form_id) {
-                 console.log(`⚠️ Form ${form_id} doesn't match User ${user._id}'s selected form ${user.metaFormId}`);
+        // Distribute the lead to all matching tenants
+        for (const config of configs) {
+             const { meta, userId } = config;
+             
+             // Check if form matches (if config specifies a form)
+             if (meta.metaFormId && meta.metaFormId !== form_id) {
+                 console.log(`⚠️ Form ${form_id} doesn't match Tenant ${userId}'s selected form ${meta.metaFormId}`);
                  continue;
              }
 
-             // Create lead in CRM for this specific user
-             await createLeadFromMeta(user._id, leadDetails, form_id);
+             // Create lead in CRM for this specific tenant
+             await createLeadFromMeta(userId, leadDetails, form_id);
 
-             // Update last sync time for this user
-             await User.findByIdAndUpdate(user._id, {
-                 metaLastSyncAt: new Date()
-             });
+             // Update last sync time for this tenant
+             await IntegrationConfig.findOneAndUpdate(
+                 { userId: userId },
+                 { $set: { 'meta.metaLastSyncAt': new Date() } }
+             );
         }
 
     } catch (error) {
@@ -177,40 +183,51 @@ async function fetchLeadDetails(leadgenId, accessToken) {
 // Create a lead in CRM from Meta data
 async function createLeadFromMeta(userId, leadDetails, formId) {
     try {
-        // Check for duplicate (by phone or email)
-        const existingLead = await Lead.findOne({
-            userId: userId,
-            $or: [
-                { phone: leadDetails.phone },
-                { email: leadDetails.email }
-            ].filter(cond => Object.values(cond)[0]) // Only include if value exists
-        });
-
-        if (existingLead) {
-            console.log(`⚠️ Duplicate lead found: ${existingLead.name} - updating instead`);
-
-            // Add note about new form submission
-            existingLead.notes.push({
-                text: `New Meta Lead Form submission received (Form: ${formId})`,
-                date: new Date()
-            });
-            await existingLead.save();
-            return;
+        // FIX 5.1: Enforce lead limit BEFORE creating — Meta sync was bypassing plan capacity
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
+        const workspace = await WorkspaceSettings.findOne({ userId }).select('planFeatures').lean();
+        const leadLimit = workspace?.planFeatures?.leadLimit;
+        if (leadLimit != null) {
+            const currentCount = await Lead.countDocuments({ userId });
+            if (currentCount >= leadLimit) {
+                console.warn(`⚠️ Lead limit reached for tenant ${userId} (${currentCount}/${leadLimit}). Meta lead dropped.`);
+                return null;
+            }
         }
 
-        // Fetch user's custom field definitions for mapping
-        const user = await User.findById(userId).select('customFieldDefinitions').lean();
-        const customFieldDefs = user?.customFieldDefinitions || [];
+        // FIX 2.2: Only check for duplicates if meaningful values exist
+        const cleanPhone = leadDetails.phone?.trim() || null;
+        const cleanEmail = leadDetails.email?.trim() || null;
 
+        // Check for duplicate (by phone or email)
+        if (cleanPhone || cleanEmail) {
+            const existingLead = await Lead.findOne({
+                userId: userId,
+                $or: [
+                    cleanPhone ? { phone: cleanPhone } : null,
+                    cleanEmail ? { email: cleanEmail } : null
+                ].filter(Boolean)
+            });
 
+            if (existingLead) {
+                console.log(`⚠️ Duplicate lead found: ${existingLead.name} - updating instead`);
+                existingLead.notes.push({
+                    text: `New Meta Lead Form submission received (Form: ${formId})`,
+                    date: new Date()
+                });
+                await existingLead.save();
+                return null;
+            }
+        }
 
+        // Fetch workspace settings for custom field definitions
+        const workspaceFull = await WorkspaceSettings.findOne({ userId: userId }).select('customFieldDefinitions').lean();
+        const customFieldDefs = workspaceFull?.customFieldDefinitions || [];
 
         // Build customData by iterating over CRM's custom fields only
-        // This safely skips any extra/unmapped Meta fields
         const customData = {};
         if (leadDetails.rawFields) {
             customFieldDefs.forEach(field => {
-                // Try matching by label (lowercase) or by key (lowercase) in rawFields
                 const value = leadDetails.rawFields[field.label.toLowerCase()]
                            || leadDetails.rawFields[field.key.toLowerCase()];
                 if (value) {
@@ -223,8 +240,10 @@ async function createLeadFromMeta(userId, leadDetails, formId) {
         const newLead = new Lead({
             userId: userId,
             name: leadDetails.name,
-            phone: leadDetails.phone || '',
-            email: leadDetails.email || `meta_${leadDetails.id}@lead.local`,
+            // FIX 2.2: Store null when phone is missing — empty string '' breaks duplicate
+            //           detection and WhatsApp auto-message checks
+            phone: cleanPhone,
+            email: cleanEmail || `meta_${leadDetails.id}@lead.local`,
             status: 'New',
             source: 'Meta',
             customData: customData,
@@ -237,8 +256,44 @@ async function createLeadFromMeta(userId, leadDetails, formId) {
         await newLead.save();
         console.log(`✅ Created new lead from Meta: ${newLead.name} (${newLead.phone || newLead.email})`);
 
+        // FIX 2.3: Fire the same automation pipeline as leadController.createLead.
+        // Previously, Meta-synced leads silently skipped all automations.
+        setImmediate(() => {
+            // a) WhatsApp welcome message (if phone exists and template configured)
+            if (newLead.phone) {
+                const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
+                sendAutomatedWhatsAppOnLeadCreate(newLead, userId)
+                    .then(sent => {
+                        if (sent) {
+                            Lead.findByIdAndUpdate(newLead._id, {
+                                $push: { history: { type: 'WhatsApp', subType: 'Auto', content: 'Automated Welcome WhatsApp Sent (Meta Sync)', date: new Date() } }
+                            }).exec();
+                        }
+                    })
+                    .catch(err => console.error('Meta Sync WA auto-message error:', err));
+            }
+
+            // b) Meta CAPI "Lead" event
+            (async () => {
+                try {
+                    const config = await require('../models/IntegrationConfig').findOne({ userId }).select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
+                    if (config?.meta?.metaCapiEnabled) {
+                        const { sendMetaEvent } = require('../services/metaConversionService');
+                        sendMetaEvent(config, newLead, 'New', null).catch(err => console.error('Meta CAPI error (Meta Sync):', err));
+                    }
+                } catch(e) { console.error('CAPI config fetch error (Meta Sync):', e); }
+            })();
+
+            // c) Automation Builder Rules
+            const { evaluateLead } = require('../services/AutomationService');
+            evaluateLead(newLead, 'LEAD_CREATED').catch(err => console.error('AutomationService error (Meta Sync LEAD_CREATED):', err));
+        });
+
+        return newLead;
+
     } catch (error) {
         console.error("❌ createLeadFromMeta Error:", error.message);
+        return null;
     }
 }
 

@@ -38,6 +38,15 @@ const chatbotSessionSchema = new mongoose.Schema({
         enum: ['active', 'completed', 'abandoned', 'handoff'],
         default: 'active'
     },
+    qualificationLevel: {
+        type: String,
+        enum: ['None', 'Partial', 'Engaged', 'Qualified'],
+        default: 'None'
+    },
+    followUpIndex: {
+        type: Number,
+        default: 0
+    },
     startedAt: {
         type: Date,
         default: Date.now
@@ -61,9 +70,7 @@ const chatbotSessionSchema = new mongoose.Schema({
 // Index for efficient queries
 chatbotSessionSchema.index({ conversationId: 1, status: 1 });
 chatbotSessionSchema.index({ userId: 1, flowId: 1 });
-
-// Auto-abandon sessions after 24 hours of inactivity
-chatbotSessionSchema.index({ lastInteractionAt: 1 }, { expireAfterSeconds: 86400 });
+chatbotSessionSchema.index({ lastInteractionAt: 1 }); // Index for cron job queries (NO TTL - sessions managed by followup service)
 
 chatbotSessionSchema.plugin(saasPlugin);
 

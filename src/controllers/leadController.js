@@ -1,6 +1,8 @@
+const User = require('../models/User'); 
 const Lead = require('../models/Lead');
 const Stage = require('../models/Stage');
-const User = require('../models/User'); // Required for Agent Logic
+const WorkspaceSettings = require('../models/WorkspaceSettings');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const mongoose = require('mongoose');
 const axios = require('axios');
 const Papa = require('papaparse');
@@ -11,20 +13,70 @@ const { sendEmail } = require('../services/emailService');
 const { logActivity } = require('../services/auditService');
 const { findDuplicates, findAllDuplicateGroups, normalizePhone } = require('../services/duplicateService');
 const { evaluateLead } = require('../services/AutomationService');
+const { logUsage } = require('../services/usageLogger');
 
 // ==========================================
-// 1. GET LEADS (With Enterprise ABAC Scope injection)
+// 1. GET LEADS (Paginated — replaces dangerous limit(2000))
+// Query params: ?page=1&limit=50&status=New&search=john
 // ==========================================
 const getLeads = async (req, res) => {
     try {
         const query = { ...req.dataScope };
 
-        const leads = await Lead.find(query)
-            .populate('assignedTo', 'name email')
-            .sort({ date: -1 });
-        res.json(leads);
+        // Pagination
+        const page  = Math.max(1, parseInt(req.query.page)  || 1);
+        const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 100));
+        const skip  = (page - 1) * limit;
+
+        // Optional filters
+        if (req.query.status) query.status = req.query.status;
+        if (req.query.assignedTo) query.assignedTo = req.query.assignedTo;
+        if (req.query.search) {
+            const rx = new RegExp(req.query.search, 'i');
+            query.$or = [{ name: rx }, { phone: rx }, { email: rx }];
+        }
+
+        const [leads, total] = await Promise.all([
+            Lead.find(query)
+                .select('-history -messages -followUpHistory -customData')
+                .populate('assignedTo', 'name email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Lead.countDocuments(query)
+        ]);
+
+        res.json({
+            leads,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+                hasMore: page * limit < total
+            }
+        });
     } catch (err) {
-        console.error("Get Leads Error:", err);
+        console.error('Get Leads Error:', err);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+// ==========================================
+// 1.5 GET SINGLE LEAD (Full Document with History)
+// ==========================================
+const getLeadById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const query = { _id: id, ...req.dataScope };
+        
+        const lead = await Lead.findOne(query).populate('assignedTo', 'name email').lean();
+        if (!lead) return res.status(404).json({ message: 'Lead not found or unauthorized' });
+        
+        res.json(lead);
+    } catch (err) {
+        console.error("Get Lead By Id Error:", err);
         res.status(500).send('Server Error');
     }
 };
@@ -37,9 +89,32 @@ const createLead = async (req, res) => {
         const { name, email, phone, status, source, customData, force } = req.body;
         const ownerId = req.tenantId;
 
+        // 🚦 LEAD LIMIT CHECK — enforce planFeatures.leadLimit via WorkspaceSettings
+        const workspace = await WorkspaceSettings.findOne({ userId: ownerId }).select('planFeatures').lean();
+        const leadLimit = workspace?.planFeatures?.leadLimit;
+
+        if (leadLimit != null) {
+            const leadCount = await Lead.countDocuments({ userId: ownerId });
+            if (leadCount >= leadLimit) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'lead_limit_reached',
+                    message: `You have reached your maximum account capacity of ${leadLimit} leads. Please contact your administrator to increase your limit.`,
+                    currentCount: leadCount,
+                    limit: leadLimit
+                });
+            }
+        }
+
         // 🔍 DUPLICATE CHECK — unless force=true
+        // FIX 5.2: Trim and null-coerce phone/email before the duplicate check.
+        //           An empty string phone ("") would match ALL leads with empty phone,
+        //           returning false positives and blocking valid lead creation.
+        const normalizedPhoneForDupCheck = phone?.trim() || null;
+        const normalizedEmailForDupCheck = email?.trim() || null;
+
         if (!force) {
-            const duplicates = await findDuplicates(ownerId, phone, email);
+            const duplicates = await findDuplicates(ownerId, normalizedPhoneForDupCheck, normalizedEmailForDupCheck);
             if (duplicates.length > 0) {
                 return res.status(409).json({
                     duplicate: true,
@@ -65,6 +140,9 @@ const createLead = async (req, res) => {
         }
 
         await newLead.save();
+
+        // 📊 Usage Logging (non-blocking)
+        logUsage(ownerId, 'leadsCreated');
 
         // Log activity
         logActivity({
@@ -105,7 +183,11 @@ const createLead = async (req, res) => {
         // Send automated WhatsApp if configured
         if (newLead.phone) {
             setTimeout(() => {
-                sendAutomatedWhatsAppOnLeadCreate(newLead, ownerId)
+                // FIX 3.2: Normalize phone to E.164-compatible format before sending.
+                // Numbers stored as "09876543210", "+91 9876 543210" etc. would fail silently.
+                const phoneToSend = normalizePhone(newLead.phone) || newLead.phone;
+                const leadForWA = { ...newLead.toObject(), phone: phoneToSend };
+                sendAutomatedWhatsAppOnLeadCreate(leadForWA, ownerId)
                     .then(sent => {
                         if (sent) {
                             Lead.findByIdAndUpdate(newLead._id, {
@@ -191,29 +273,19 @@ const sendManualEmail = async (req, res) => {
 // ==========================================
 const updateLead = async (req, res) => {
     try {
-        console.log('🔄 [DEBUG updateLead] Request received for lead:', req.params.id);
-        console.log('🔄 [DEBUG updateLead] Request body:', JSON.stringify(req.body));
-        console.log('🔄 [DEBUG updateLead] User:', req.user?.userId || req.user?.id, 'Role:', req.user?.role);
-
         // SECURITY FIX: Validate ObjectId format
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-            console.log('❌ [DEBUG updateLead] Invalid ObjectId format');
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
 
         // SECURITY FIX: Data scope check preventing IDOR
         const ownerId = req.tenantId;
 
-        console.log('🔄 [DEBUG updateLead] Looking for lead in dataScope:', req.params.id);
         const lead = await Lead.findOne({ _id: req.params.id, ...req.dataScope });
 
         if (!lead) {
-            console.log('❌ [DEBUG updateLead] Lead not found or access denied');
-            console.log('❌ [DEBUG updateLead] Attempted query: { _id:', req.params.id, ', userId:', ownerId, '}');
             return res.status(404).json({ message: "Lead not found or access denied" });
         }
-
-        console.log('✅ [DEBUG updateLead] Lead found:', lead._id, 'Current status:', lead.status);
 
         // Handle nextFollowUpDate update
         if (req.body.hasOwnProperty('nextFollowUpDate')) {
@@ -232,9 +304,7 @@ const updateLead = async (req, res) => {
             delete req.body.nextFollowUpDate;
         }
 
-        // Track old status for stage change automation
         const oldStatus = lead.status;
-        console.log('🔄 [DEBUG updateLead] Old status:', oldStatus, '-> New status:', req.body.status);
 
         // SECURITY FIX: Prevent Mass Assignment by whitelisting fields
         const allowedFields = ['name', 'email', 'phone', 'status', 'source', 'customData', 'dealValue', 'tags'];
@@ -245,7 +315,6 @@ const updateLead = async (req, res) => {
         });
 
         await lead.save();
-        console.log('✅ [DEBUG updateLead] Lead saved successfully. New status:', lead.status);
 
         // Fetch user name if missing from token (for backward compatibility)
         let initiatorName = req.user.name;
@@ -334,14 +403,14 @@ const updateLead = async (req, res) => {
         // Send Meta Conversion API event if status changed
         if (req.body.status && req.body.status !== oldStatus) {
             try {
-                const ownerUser = await User.findById(lead.userId).select('metaCapiEnabled metaPixelId metaCapiAccessToken metaTestEventCode metaStageMapping');
-                if (ownerUser && ownerUser.metaCapiEnabled) {
-                    sendMetaEvent(ownerUser, lead, req.body.status, oldStatus).catch(err => {
+                const config = await IntegrationConfig.findOne({ userId: lead.userId }).select('meta');
+                if (config && config.meta?.metaCapiEnabled) {
+                    sendMetaEvent(config, lead, req.body.status, oldStatus).catch(err => {
                         console.error('Meta CAPI error (non-blocking):', err);
                     });
                 }
             } catch (err) {
-                console.error('Error fetching user for Meta CAPI (non-blocking):', err);
+                console.error('Error fetching config for Meta CAPI (non-blocking):', err);
             }
 
             // Evaluate Automation Builder Rules
@@ -553,6 +622,7 @@ const syncLeads = async (req, res) => {
     const { sheetUrl } = req.body;
     if (!sheetUrl) return res.status(400).json({ message: "Link required" });
 
+    let count = 0; // FIX: was an implicit global reference — now properly declared
     try {
         const userId = req.tenantId; // Enterprise ABAC Fix: Sync goes to correct tenant DB
 
@@ -562,9 +632,9 @@ const syncLeads = async (req, res) => {
             return res.status(400).json({ message: "Invalid Google Sheets URL format" });
         }
 
-        // Fetch user's custom field definitions
-        const user = await User.findById(userId).select('customFieldDefinitions').lean();
-        const customFieldDefs = user?.customFieldDefinitions || [];
+        // Fetch user's custom field definitions via WorkspaceSettings
+        const workspace = await WorkspaceSettings.findOne({ userId: userId }).select('customFieldDefinitions').lean();
+        const customFieldDefs = workspace?.customFieldDefinitions || [];
 
 
         const sheetId = sheetIdMatch[1];
@@ -573,8 +643,43 @@ const syncLeads = async (req, res) => {
         const response = await axios.get(csvUrl);
         const parsed = Papa.parse(response.data, { header: true, skipEmptyLines: true });
 
+        // Protection: Limit import to 100 leads at a time
+        if (parsed.data.length > 100) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Import limit exceeded: You are trying to import ${parsed.data.length} leads. The system currently strictly allows a maximum of 100 leads per import to ensure stability. Please split your Google Sheet.` 
+            });
+        }
 
-        let count = 0;
+        // 🚦 LEAD LIMIT CHECK
+        const leadLimit = workspace?.planFeatures?.leadLimit;
+        if (leadLimit != null) {
+            const currentLeadCount = await Lead.countDocuments({ userId: userId });
+            if (currentLeadCount + parsed.data.length > leadLimit) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'lead_limit_reached',
+                    message: `Import blocked: This import of ${parsed.data.length} leads would exceed your maximum capacity of ${leadLimit} leads. You currently have ${currentLeadCount} leads.`,
+                    currentCount: currentLeadCount,
+                    limit: leadLimit
+                });
+            }
+        }
+
+        // 🚦 BULK OPTIMIZATION: Fetch existing data once instead of in a loop
+        const existingLeads = await Lead.find({ userId: userId }).select('email phone').lean();
+        const { normalizePhone } = require('../services/duplicateService');
+        
+        const existingEmails = new Set(existingLeads.map(l => l.email?.trim().toLowerCase()).filter(Boolean));
+        const existingPhones = new Set(existingLeads.map(l => {
+            const norm = normalizePhone(l.phone);
+            return norm ? norm.slice(-10) : null;
+        }).filter(Boolean));
+
+        const leadsToInsert = [];
+        const emailsInThisBatch = new Set();
+        const phonesInThisBatch = new Set();
+
         for (const row of parsed.data) {
             const keys = Object.keys(row);
             const nameKey = keys.find(k => k.toLowerCase().includes('name'));
@@ -582,14 +687,12 @@ const syncLeads = async (req, res) => {
             const phoneKey = keys.find(k => k.toLowerCase().includes('phone') || k.toLowerCase().includes('mobile'));
 
             const finalName = nameKey ? row[nameKey] : 'Unknown';
-            const finalEmail = emailKey ? row[emailKey] : null;
-            const finalPhone = phoneKey ? row[phoneKey] : 'No Phone';
+            const finalEmail = emailKey ? row[emailKey]?.trim() : null;
+            const finalPhone = phoneKey ? row[phoneKey]?.toString() : 'No Phone';
 
             // Build customData by iterating over CRM's custom fields only
-            // This safely skips any extra/unmapped columns in the sheet
             const customData = {};
             customFieldDefs.forEach(field => {
-                // Find a matching CSV header by comparing lowercase labels
                 const matchingHeader = keys.find(k => k.toLowerCase() === field.label.toLowerCase());
                 if (matchingHeader && row[matchingHeader]) {
                     customData[field.key] = row[matchingHeader];
@@ -597,13 +700,22 @@ const syncLeads = async (req, res) => {
             });
 
             if (finalEmail || finalPhone !== 'No Phone') {
-                // 🔍 IMPROVED: Check both phone AND email for duplicates
-                const duplicates = await findDuplicates(userId, finalPhone, finalEmail);
-                const exists = duplicates.length > 0;
+                const normEmail = finalEmail ? finalEmail.toLowerCase() : null;
+                const normPhone = normalizePhone(finalPhone);
+                const phoneLast10 = normPhone ? normPhone.slice(-10) : null;
 
-                if (!exists) {
-                    // No duplicate found — create new lead
-                    const newLead = await Lead.create({
+                let isDuplicate = false;
+                
+                // Check memory sets for duplication (Database + Current Batch)
+                if (normEmail && (existingEmails.has(normEmail) || emailsInThisBatch.has(normEmail))) {
+                    isDuplicate = true;
+                }
+                if (phoneLast10 && (existingPhones.has(phoneLast10) || phonesInThisBatch.has(phoneLast10))) {
+                    isDuplicate = true;
+                }
+
+                if (!isDuplicate) {
+                    leadsToInsert.push({
                         userId: userId,
                         name: finalName,
                         email: finalEmail,
@@ -614,24 +726,35 @@ const syncLeads = async (req, res) => {
                         assignedTo: req.user.role === 'agent' ? (req.user.userId || req.user.id) : undefined
                     });
 
-                    // Send automated email if configured
+                    // Add to current batch sets to prevent local duplicates
+                    if (normEmail) emailsInThisBatch.add(normEmail);
+                    if (phoneLast10) phonesInThisBatch.add(phoneLast10);
+                }
+            }
+        }
+
+        // 🟢 BATCH INSERTION
+        if (leadsToInsert.length > 0) {
+            const insertedLeads = await Lead.insertMany(leadsToInsert);
+            count = insertedLeads.length;
+
+            // Trigger automations safely without blocking main thread
+            setTimeout(() => {
+                insertedLeads.forEach(newLead => {
                     if (newLead.email) {
                         sendAutomatedEmailOnLeadCreate(newLead, userId).catch(err => {
                             console.error('Email automation error (non-blocking):', err);
                         });
                     }
-
-                    // Send automated WhatsApp if configured
                     if (newLead.phone) {
                         sendAutomatedWhatsAppOnLeadCreate(newLead, userId).catch(err => {
                             console.error('WhatsApp automation error (non-blocking):', err);
                         });
                     }
-
-                    count++;
-                }
-            }
+                });
+            }, 0);
         }
+
         res.json({ success: true, message: `${count} New Leads Imported!` });
     } catch (err) {
         console.error("Sync Sheet Error:", err);
@@ -724,95 +847,134 @@ const getAnalytics = async (req, res) => {
 // ==========================================
 const getAnalyticsData = async (req, res) => {
     try {
-        // Enterprise ABAC Replacement
         const query = { ...req.dataScope };
+        
+        // Mongoose Aggregate $match requires strict ObjectIds for string fields that are ObjectIds in DB
+        if (query.userId && typeof query.userId === 'string' && mongoose.Types.ObjectId.isValid(query.userId)) {
+            query.userId = new mongoose.Types.ObjectId(query.userId);
+        }
+        if (query.assignedTo && typeof query.assignedTo === 'string' && mongoose.Types.ObjectId.isValid(query.assignedTo)) {
+            query.assignedTo = new mongoose.Types.ObjectId(query.assignedTo);
+        }
 
-        // Get all leads for this user based on their scope
-        const allLeads = await Lead.find(query).lean();
-        const totalLeads = allLeads.length;
-
-        // Calculate today's leads
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
-
-        const leadsToday = allLeads.filter(lead => {
-            const leadDate = new Date(lead.date || lead.createdAt);
-            return leadDate >= today && leadDate < tomorrow;
-        }).length;
-
-        // Calculate conversion rate (Won leads / Total leads)
-        const wonLeads = allLeads.filter(lead =>
-            lead.status && lead.status.toLowerCase().includes('won')
-        ).length;
-        const conversionRate = totalLeads > 0 ? ((wonLeads / totalLeads) * 100).toFixed(1) : 0;
-
-        // Follow-up analytics
         const nextWeek = new Date(today);
         nextWeek.setDate(nextWeek.getDate() + 7);
 
-        const followUpToday = allLeads.filter(lead => {
-            if (!lead.nextFollowUpDate) return false;
-            const followUpDate = new Date(lead.nextFollowUpDate);
-            return followUpDate >= today && followUpDate < tomorrow;
-        }).length;
-
-        const followUpOverdue = allLeads.filter(lead => {
-            if (!lead.nextFollowUpDate) return false;
-            const followUpDate = new Date(lead.nextFollowUpDate);
-            return followUpDate < today;
-        }).length;
-
-        const followUpUpcoming = allLeads.filter(lead => {
-            if (!lead.nextFollowUpDate) return false;
-            const followUpDate = new Date(lead.nextFollowUpDate);
-            return followUpDate >= tomorrow && followUpDate < nextWeek;
-        }).length;
-
-        const followUpTotal = allLeads.filter(lead => lead.nextFollowUpDate).length;
-
-        // Lead source distribution
-        const leadSource = {};
-        allLeads.forEach(lead => {
-            const source = lead.source || 'Unknown';
-            leadSource[source] = (leadSource[source] || 0) + 1;
-        });
-
-        // Leads over time (last 7 days)
-        const leadsOverTime = [];
+        // Setup dates array for trend chart (last 7 days)
+        const dates = [];
         for (let i = 6; i >= 0; i--) {
-            const date = new Date(today);
-            date.setDate(date.getDate() - i);
-            const nextDate = new Date(date);
-            nextDate.setDate(nextDate.getDate() + 1);
-
-            const count = allLeads.filter(lead => {
-                const leadDate = new Date(lead.date || lead.createdAt);
-                return leadDate >= date && leadDate < nextDate;
-            }).length;
-
-            leadsOverTime.push({
-                date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-                count
-            });
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            dates.push(d);
         }
 
-        // Stage distribution
-        const stageDistribution = {};
-        allLeads.forEach(lead => {
-            const stage = lead.status || 'New';
-            stageDistribution[stage] = (stageDistribution[stage] || 0) + 1;
+        const facets = {
+            basicStats: [
+                {
+                    $group: {
+                        _id: null,
+                        totalLeads: { $sum: 1 },
+                        wonLeads: { 
+                            $sum: { 
+                                $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] 
+                            } 
+                        },
+                        leadsToday: {
+                            $sum: {
+                                $cond: [
+                                    { $and: [
+                                        { $gte: [{ $ifNull: ["$date", "$createdAt"] }, today] },
+                                        { $lt: [{ $ifNull: ["$date", "$createdAt"] }, tomorrow] }
+                                    ]}, 1, 0
+                                ]
+                            }
+                        }
+                    }
+                }
+            ],
+            followUpStats: [
+                { $match: { nextFollowUpDate: { $ne: null } } },
+                {
+                    $group: {
+                        _id: null,
+                        followUpTotal: { $sum: 1 },
+                        followUpToday: {
+                            $sum: { $cond: [{ $and: [{ $gte: ["$nextFollowUpDate", today] }, { $lt: ["$nextFollowUpDate", tomorrow] }] }, 1, 0] }
+                        },
+                        followUpOverdue: {
+                            $sum: { $cond: [{ $lt: ["$nextFollowUpDate", today] }, 1, 0] }
+                        },
+                        followUpUpcoming: {
+                            $sum: { $cond: [{ $and: [{ $gte: ["$nextFollowUpDate", tomorrow] }, { $lt: ["$nextFollowUpDate", nextWeek] }] }, 1, 0] }
+                        }
+                    }
+                }
+            ],
+            sourceDistribution: [
+                { $group: { _id: { $ifNull: ["$source", "Unknown"] }, count: { $sum: 1 } } }
+            ],
+            stageDistribution: [
+                { $group: { _id: { $ifNull: ["$status", "New"] }, count: { $sum: 1 } } }
+            ]
+        };
+
+        // Dynamically add facet branches for the last 7 days chart
+        dates.forEach((date, i) => {
+            const nextDate = new Date(date);
+            nextDate.setDate(nextDate.getDate() + 1);
+            facets[`date_${i}`] = [
+                {
+                    $match: {
+                        $or: [
+                            { date: { $gte: date, $lt: nextDate } },
+                            { createdAt: { $gte: date, $lt: nextDate } },
+                            // Missing date/createdAt leads are not counted for this day
+                        ]
+                    }
+                },
+                { $count: "count" }
+            ];
         });
 
+        const [results] = await Lead.aggregate([
+            { $match: query },
+            { $facet: facets }
+        ]);
+
+        const basic = results.basicStats[0] || { totalLeads: 0, wonLeads: 0, leadsToday: 0 };
+        const followUp = results.followUpStats[0] || { followUpTotal: 0, followUpToday: 0, followUpOverdue: 0, followUpUpcoming: 0 };
+
+        const leadSource = {};
+        results.sourceDistribution.forEach(item => { leadSource[item._id] = item.count; });
+
+        const stageDistribution = {};
+        results.stageDistribution.forEach(item => { stageDistribution[item._id] = item.count; });
+
+        const leadsOverTime = dates.map((date, i) => {
+            const countArray = results[`date_${i}`];
+            const count = (countArray && countArray.length > 0) ? countArray[0].count : 0;
+            return {
+                date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                count
+            };
+        });
+
+        const conversionRate = basic.totalLeads > 0 
+            ? ((basic.wonLeads / basic.totalLeads) * 100).toFixed(1) 
+            : 0;
+
         res.json({
-            totalLeads,
-            leadsToday,
+            totalLeads: basic.totalLeads,
+            leadsToday: basic.leadsToday,
             conversionRate: parseFloat(conversionRate),
-            followUpToday,
-            followUpOverdue,
-            followUpUpcoming,
-            followUpTotal,
+            followUpToday: followUp.followUpToday,
+            followUpOverdue: followUp.followUpOverdue,
+            followUpUpcoming: followUp.followUpUpcoming,
+            followUpTotal: followUp.followUpTotal,
             leadSource,
             leadsOverTime,
             stageDistribution
@@ -974,28 +1136,16 @@ const completeFollowUp = async (req, res) => {
 // ==========================================
 const getFollowUpDoneLeads = async (req, res) => {
     try {
-        // Get all leads for the user based on ABAC scope
-        const allLeads = await Lead.find({ ...req.dataScope });
+        // Optimized: Push filtering into MongoDB instead of in-memory JS sorting
+        const followUpDoneLeads = await Lead.find({
+            ...req.dataScope,
+            'followUpHistory.0': { $exists: true } // Only leads WITH at least 1 followup
+        })
+        .select('-messages -customData') // Exclude heavy fields
+        .sort({ 'followUpHistory': -1 })
+        .lean();
 
-        // Filter to only include leads with at least one follow-up history entry
-        const filteredDoneLeads = allLeads.filter(lead =>
-            lead.followUpHistory &&
-            Array.isArray(lead.followUpHistory) &&
-            lead.followUpHistory.length > 0
-        );
-
-        // Sort by most recent follow-up completion date
-        filteredDoneLeads.sort((a, b) => {
-            const aDate = a.followUpHistory && a.followUpHistory.length > 0
-                ? new Date(a.followUpHistory[a.followUpHistory.length - 1].completedDate || 0)
-                : new Date(0);
-            const bDate = b.followUpHistory && b.followUpHistory.length > 0
-                ? new Date(b.followUpHistory[b.followUpHistory.length - 1].completedDate || 0)
-                : new Date(0);
-            return bDate - aDate; // Most recent first
-        });
-
-        res.json(filteredDoneLeads);
+        res.json(followUpDoneLeads);
     } catch (err) {
         console.error("Get Follow-up Done Leads Error:", err);
         res.status(500).json({ error: err.message });
@@ -1288,6 +1438,7 @@ const bulkAddTags = async (req, res) => {
 
 module.exports = {
     getLeads,
+    getLeadById,
     createLead,
     updateLead,
     deleteLead,

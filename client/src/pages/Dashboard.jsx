@@ -4,6 +4,7 @@ import StatCard from '../components/Dashboard/StatCard';
 import ChartsRow from '../components/Dashboard/ChartsRow';
 import FollowUpModal from '../components/Dashboard/FollowUpModal';
 import SettingsModal from '../components/Dashboard/SettingsModal';
+import TrialBanner from '../components/TrialBanner';
 
 const Dashboard = () => {
     const [loading, setLoading] = useState(true);
@@ -111,6 +112,9 @@ const Dashboard = () => {
             </div>
 
             <div className="relative z-10 p-8 space-y-8">
+                {/* ⏳ PREMIUM TRIAL BANNER (DASHBOARD ONLY) ⏳ */}
+                <TrialBanner />
+
                 {/* Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div>

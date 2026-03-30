@@ -68,74 +68,99 @@ const getConversionReport = async (req, res) => {
         const { period = 'month', startDate, endDate } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
 
-        // Get leads within date range
-        const leads = await Lead.find({
-            userId: ownerId,
-            createdAt: { $gte: start, $lte: end }
-        }).lean();
-
-        const totalLeads = leads.length;
-
-        // Calculate conversions by checking for 'Won' status
-        const wonLeads = leads.filter(lead =>
-            lead.status && lead.status.toLowerCase().includes('won')
-        );
-        const lostLeads = leads.filter(lead =>
-            lead.status && (lead.status.toLowerCase().includes('lost') || lead.status.toLowerCase().includes('dead'))
-        );
-
-        const conversionRate = totalLeads > 0
-            ? ((wonLeads.length / totalLeads) * 100).toFixed(1)
-            : 0;
-
-        // Stage funnel
-        const stageCounts = {};
-        leads.forEach(lead => {
-            const stage = lead.status || 'New';
-            stageCounts[stage] = (stageCounts[stage] || 0) + 1;
-        });
-
-        // Conversion by source
-        const sourceConversion = {};
-        leads.forEach(lead => {
-            const source = lead.source || 'Unknown';
-            if (!sourceConversion[source]) {
-                sourceConversion[source] = { total: 0, won: 0 };
-            }
-            sourceConversion[source].total++;
-            if (lead.status && lead.status.toLowerCase().includes('won')) {
-                sourceConversion[source].won++;
-            }
-        });
-
-        // Calculate conversion rate per source
-        Object.keys(sourceConversion).forEach(source => {
-            const data = sourceConversion[source];
-            data.rate = data.total > 0
-                ? ((data.won / data.total) * 100).toFixed(1)
-                : 0;
-        });
-
-        // Daily conversion trend
-        const dailyTrend = [];
+        // Calculate days difference for daily trend
         const daysDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
         const groupBy = daysDiff > 60 ? 'month' : daysDiff > 14 ? 'week' : 'day';
 
+        const [results] = await Lead.aggregate([
+            { $match: { userId: ownerId, createdAt: { $gte: start, $lte: end } } },
+            {
+                $facet: {
+                    summaryStats: [
+                        {
+                            $group: {
+                                _id: null,
+                                totalLeads: { $sum: 1 },
+                                wonLeads: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] } },
+                                lostLeads: {
+                                    $sum: {
+                                        $cond: [
+                                            { $or: [
+                                                { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /lost/i } },
+                                                { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /dead/i } }
+                                            ]}, 1, 0
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    stageFunnel: [
+                        { $group: { _id: { $ifNull: ["$status", "New"] }, count: { $sum: 1 } } }
+                    ],
+                    sourceConversion: [
+                        {
+                            $group: {
+                                _id: { $ifNull: ["$source", "Unknown"] },
+                                total: { $sum: 1 },
+                                won: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] } }
+                            }
+                        }
+                    ],
+                    dailyGroups: groupBy === 'day' ? [
+                        {
+                            $group: {
+                                _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                                total: { $sum: 1 },
+                                won: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] } }
+                            }
+                        }
+                    ] : []
+                }
+            }
+        ]);
+
+        const summary = results.summaryStats[0] || { totalLeads: 0, wonLeads: 0, lostLeads: 0 };
+        const conversionRate = summary.totalLeads > 0 
+            ? ((summary.wonLeads / summary.totalLeads) * 100).toFixed(1) 
+            : 0;
+
+        // Stage funnel Map
+        const stageCounts = {};
+        results.stageFunnel.forEach(item => {
+            stageCounts[item._id] = item.count;
+        });
+
+        // Source Conversion Map
+        const sourceConversion = {};
+        results.sourceConversion.forEach(item => {
+            sourceConversion[item._id] = {
+                total: item.total,
+                won: item.won,
+                rate: item.total > 0 ? ((item.won / item.total) * 100).toFixed(1) : 0
+            };
+        });
+
+        // Daily Trend (fill in zeroes for empty days)
+        const dailyTrend = [];
         if (groupBy === 'day') {
+            const dailyLookup = {};
+            results.dailyGroups?.forEach(g => {
+                dailyLookup[g._id] = g;
+            });
+
             for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-                const dayStart = new Date(d);
-                const dayEnd = new Date(d);
-                dayEnd.setDate(dayEnd.getDate() + 1);
-
-                const dayLeads = leads.filter(lead => {
-                    const date = new Date(lead.createdAt);
-                    return date >= dayStart && date < dayEnd;
-                });
-
+                // Formatting to match Mongo's %Y-%m-%d
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                const dateKey = `${yyyy}-${mm}-${dd}`;
+                
+                const groupData = dailyLookup[dateKey];
                 dailyTrend.push({
-                    date: dayStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-                    total: dayLeads.length,
-                    won: dayLeads.filter(l => l.status?.toLowerCase().includes('won')).length
+                    date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                    total: groupData ? groupData.total : 0,
+                    won: groupData ? groupData.won : 0
                 });
             }
         }
@@ -144,11 +169,11 @@ const getConversionReport = async (req, res) => {
             period,
             dateRange: { start, end },
             summary: {
-                totalLeads,
-                wonLeads: wonLeads.length,
-                lostLeads: lostLeads.length,
+                totalLeads: summary.totalLeads,
+                wonLeads: summary.wonLeads,
+                lostLeads: summary.lostLeads,
                 conversionRate: parseFloat(conversionRate),
-                pendingLeads: totalLeads - wonLeads.length - lostLeads.length
+                pendingLeads: summary.totalLeads - summary.wonLeads - summary.lostLeads
             },
             stageFunnel: stageCounts,
             sourceConversion,
@@ -176,49 +201,49 @@ const getAgentPerformance = async (req, res) => {
             role: 'agent'
         }).select('_id name email createdAt').lean();
 
-        // Get all leads for this owner in date range
-        const leads = await Lead.find({
-            userId: ownerId,
-            createdAt: { $gte: start, $lte: end }
-        }).lean();
+        // Calculate metrics via MongoDB aggregation instead of pulling all leads into memory
+        const results = await Lead.aggregate([
+            { $match: { userId: ownerId, createdAt: { $gte: start, $lte: end } } },
+            {
+                $group: {
+                    _id: "$assignedTo",
+                    totalLeads: { $sum: 1 },
+                    wonLeads: { 
+                        $sum: { 
+                            $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] 
+                        } 
+                    },
+                    totalDealValue: { $sum: { $ifNull: ["$dealValue", 0] } },
+                    wonDealValue: { 
+                        $sum: { 
+                            $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] 
+                        } 
+                    },
+                    followUpsCompleted: { $sum: { $size: { $ifNull: ["$followUpHistory", []] } } }
+                }
+            }
+        ]);
 
-        // Calculate metrics for each agent
-        const agentMetrics = await Promise.all(agents.map(async (agent) => {
-            const agentLeads = leads.filter(lead =>
-                lead.assignedTo && lead.assignedTo.toString() === agent._id.toString()
-            );
-
-            const wonLeads = agentLeads.filter(lead =>
-                lead.status?.toLowerCase().includes('won')
-            );
-
-            const followUpsCompleted = agentLeads.reduce((count, lead) => {
-                return count + (lead.followUpHistory?.length || 0);
-            }, 0);
-
-            const totalDealValue = agentLeads.reduce((sum, lead) => sum + (lead.dealValue || 0), 0);
-            const wonDealValue = wonLeads.reduce((sum, lead) => sum + (lead.dealValue || 0), 0);
-
+        const agentMetrics = agents.map((agent) => {
+            const agentStats = results.find(r => r._id && r._id.toString() === agent._id.toString()) || {
+                totalLeads: 0, wonLeads: 0, totalDealValue: 0, wonDealValue: 0, followUpsCompleted: 0
+            };
             return {
                 agentId: agent._id,
                 name: agent.name,
                 email: agent.email,
-                totalLeads: agentLeads.length,
-                wonLeads: wonLeads.length,
-                conversionRate: agentLeads.length > 0
-                    ? ((wonLeads.length / agentLeads.length) * 100).toFixed(1)
+                totalLeads: agentStats.totalLeads,
+                wonLeads: agentStats.wonLeads,
+                conversionRate: agentStats.totalLeads > 0
+                    ? ((agentStats.wonLeads / agentStats.totalLeads) * 100).toFixed(1)
                     : 0,
-                followUpsCompleted,
-                totalDealValue,
-                wonDealValue
+                followUpsCompleted: agentStats.followUpsCompleted,
+                totalDealValue: agentStats.totalDealValue,
+                wonDealValue: agentStats.wonDealValue
             };
-        }));
+        });
 
-        // Also calculate for unassigned leads (handled by manager directly)
-        const unassignedLeads = leads.filter(lead => !lead.assignedTo);
-        const unassignedWon = unassignedLeads.filter(lead =>
-            lead.status?.toLowerCase().includes('won')
-        );
+        const unassignedStats = results.find(r => !r._id) || { totalLeads: 0, wonLeads: 0 };
 
         // Sort by conversion rate descending
         agentMetrics.sort((a, b) => parseFloat(b.conversionRate) - parseFloat(a.conversionRate));
@@ -229,10 +254,10 @@ const getAgentPerformance = async (req, res) => {
             totalAgents: agents.length,
             agentMetrics,
             unassigned: {
-                totalLeads: unassignedLeads.length,
-                wonLeads: unassignedWon.length,
-                conversionRate: unassignedLeads.length > 0
-                    ? ((unassignedWon.length / unassignedLeads.length) * 100).toFixed(1)
+                totalLeads: unassignedStats.totalLeads,
+                wonLeads: unassignedStats.wonLeads,
+                conversionRate: unassignedStats.totalLeads > 0
+                    ? ((unassignedStats.wonLeads / unassignedStats.totalLeads) * 100).toFixed(1)
                     : 0
             }
         });
@@ -252,64 +277,104 @@ const getRevenueReport = async (req, res) => {
         const { period = 'month', startDate, endDate } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
 
-        // Get leads within date range
-        const leads = await Lead.find({
-            userId: ownerId,
-            createdAt: { $gte: start, $lte: end }
-        }).lean();
+        // Calculate main metrics via Aggregation
+        const [results] = await Lead.aggregate([
+            { $match: { userId: ownerId, createdAt: { $gte: start, $lte: end } } },
+            {
+                $facet: {
+                    summaryStats: [
+                        {
+                            $group: {
+                                _id: null,
+                                totalPotential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                wonRevenue: { 
+                                    $sum: { 
+                                        $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] 
+                                    } 
+                                },
+                                lostRevenue: { 
+                                    $sum: { 
+                                        $cond: [{ $or: [
+                                            { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /lost/i } },
+                                            { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /dead/i } }
+                                        ]}, { $ifNull: ["$dealValue", 0] }, 0] 
+                                    } 
+                                }
+                            }
+                        }
+                    ],
+                    sourceDistribution: [
+                        {
+                            $group: {
+                                _id: { $ifNull: ["$source", "Unknown"] },
+                                potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                leads: { $sum: 1 },
+                                won: { 
+                                    $sum: { 
+                                        $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] 
+                                    } 
+                                }
+                            }
+                        }
+                    ],
+                    topDeals: [
+                        { $match: { dealValue: { $gt: 0 } } },
+                        { $sort: { dealValue: -1 } },
+                        { $limit: 5 },
+                        { $project: { name: 1, dealValue: 1, status: 1, source: 1 } }
+                    ]
+                }
+            }
+        ]);
 
-        // Calculate revenue metrics
-        const totalPotential = leads.reduce((sum, lead) => sum + (lead.dealValue || 0), 0);
+        const summary = results.summaryStats[0] || { totalPotential: 0, wonRevenue: 0, lostRevenue: 0 };
+        const pendingRevenue = summary.totalPotential - summary.wonRevenue - summary.lostRevenue;
+        const wonRate = summary.totalPotential > 0 ? ((summary.wonRevenue / summary.totalPotential) * 100).toFixed(1) : 0;
 
-        const wonLeads = leads.filter(lead =>
-            lead.status?.toLowerCase().includes('won')
-        );
-        const wonRevenue = wonLeads.reduce((sum, lead) => sum + (lead.dealValue || 0), 0);
-
-        const lostLeads = leads.filter(lead =>
-            lead.status?.toLowerCase().includes('lost') || lead.status?.toLowerCase().includes('dead')
-        );
-        const lostRevenue = lostLeads.reduce((sum, lead) => sum + (lead.dealValue || 0), 0);
-
-        const pendingRevenue = totalPotential - wonRevenue - lostRevenue;
-
-        // Revenue by source
         const revenueBySource = {};
-        leads.forEach(lead => {
-            const source = lead.source || 'Unknown';
-            if (!revenueBySource[source]) {
-                revenueBySource[source] = { potential: 0, won: 0, leads: 0 };
-            }
-            revenueBySource[source].potential += (lead.dealValue || 0);
-            revenueBySource[source].leads++;
-            if (lead.status?.toLowerCase().includes('won')) {
-                revenueBySource[source].won += (lead.dealValue || 0);
-            }
+        results.sourceDistribution.forEach(item => {
+            revenueBySource[item._id] = {
+                potential: item.potential,
+                won: item.won,
+                leads: item.leads
+            };
         });
 
         // Monthly revenue trend (last 6 months)
+        const sixMonthsAgo = new Date();
+        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
+        sixMonthsAgo.setDate(1);
+        sixMonthsAgo.setHours(0, 0, 0, 0);
+
+        const trendResults = await Lead.aggregate([
+            { $match: { userId: ownerId, createdAt: { $gte: sixMonthsAgo } } },
+            {
+                $group: {
+                    _id: {
+                        year: { $year: { date: "$createdAt", timezone: "UTC" } },
+                        month: { $month: { date: "$createdAt", timezone: "UTC" } }
+                    },
+                    potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                    won: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] } },
+                    leads: { $sum: 1 }
+                }
+            }
+        ]);
+
         const monthlyTrend = [];
         for (let i = 5; i >= 0; i--) {
-            const monthStart = new Date();
-            monthStart.setMonth(monthStart.getMonth() - i);
-            monthStart.setDate(1);
-            monthStart.setHours(0, 0, 0, 0);
-
-            const monthEnd = new Date(monthStart);
-            monthEnd.setMonth(monthEnd.getMonth() + 1);
-
-            const monthLeads = leads.filter(lead => {
-                const date = new Date(lead.createdAt);
-                return date >= monthStart && date < monthEnd;
-            });
-
-            const monthWon = monthLeads.filter(l => l.status?.toLowerCase().includes('won'));
-
+            const mDate = new Date();
+            mDate.setMonth(mDate.getMonth() - i);
+            const y = mDate.getFullYear();
+            const m = mDate.getMonth() + 1; // 1-12
+            
+            const stats = trendResults.find(t => t._id.year === y && t._id.month === m) || { potential: 0, won: 0, leads: 0 };
+            
             monthlyTrend.push({
-                month: monthStart.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
-                potential: monthLeads.reduce((sum, l) => sum + (l.dealValue || 0), 0),
-                won: monthWon.reduce((sum, l) => sum + (l.dealValue || 0), 0),
-                leads: monthLeads.length
+                month: mDate.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+                potential: stats.potential,
+                won: stats.won,
+                leads: stats.leads
             });
         }
 
@@ -317,26 +382,15 @@ const getRevenueReport = async (req, res) => {
             period,
             dateRange: { start, end },
             summary: {
-                totalPotential,
-                wonRevenue,
-                lostRevenue,
+                totalPotential: summary.totalPotential,
+                wonRevenue: summary.wonRevenue,
+                lostRevenue: summary.lostRevenue,
                 pendingRevenue,
-                wonRate: totalPotential > 0
-                    ? ((wonRevenue / totalPotential) * 100).toFixed(1)
-                    : 0
+                wonRate: parseFloat(wonRate)
             },
             revenueBySource,
             monthlyTrend,
-            topDeals: leads
-                .filter(l => l.dealValue > 0)
-                .sort((a, b) => b.dealValue - a.dealValue)
-                .slice(0, 5)
-                .map(l => ({
-                    name: l.name,
-                    dealValue: l.dealValue,
-                    status: l.status,
-                    source: l.source
-                }))
+            topDeals: results.topDeals || []
         });
 
     } catch (err) {
@@ -354,70 +408,92 @@ const getComprehensiveReport = async (req, res) => {
         const { period = 'month', startDate, endDate } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
 
-        // Get all data
-        const leads = await Lead.find({
-            userId: ownerId,
-            createdAt: { $gte: start, $lte: end }
-        }).lean();
-
         const allTimeLeads = await Lead.countDocuments({ userId: ownerId });
 
-        // Previous period comparison
+        // Previous period comparison calculation
         const periodDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
         const prevStart = new Date(start);
         prevStart.setDate(prevStart.getDate() - periodDays);
         const prevEnd = new Date(start);
 
-        const prevLeads = await Lead.find({
-            userId: ownerId,
-            createdAt: { $gte: prevStart, $lt: prevEnd }
-        }).lean();
+        // Fetch both current and previous period stats using a single $facet
+        const [results] = await Lead.aggregate([
+            { 
+                $match: { 
+                    userId: ownerId, 
+                    createdAt: { $gte: prevStart, $lte: end }
+                } 
+            },
+            {
+                $facet: {
+                    currentPeriod: [
+                        { $match: { createdAt: { $gte: start, $lte: end } } },
+                        {
+                            $group: {
+                                _id: null,
+                                totalLeads: { $sum: 1 },
+                                wonLeads: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] } },
+                                totalRevenue: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] } }
+                            }
+                        }
+                    ],
+                    previousPeriod: [
+                        { $match: { createdAt: { $gte: prevStart, $lt: prevEnd } } },
+                        {
+                            $group: {
+                                _id: null,
+                                totalLeads: { $sum: 1 },
+                                wonLeads: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] } },
+                                totalRevenue: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] } }
+                            }
+                        }
+                    ]
+                }
+            }
+        ]);
 
-        // Calculate key metrics
-        const totalLeads = leads.length;
-        const prevTotal = prevLeads.length;
-        const leadGrowth = prevTotal > 0
-            ? (((totalLeads - prevTotal) / prevTotal) * 100).toFixed(1)
+        const current = results.currentPeriod[0] || { totalLeads: 0, wonLeads: 0, totalRevenue: 0 };
+        const previous = results.previousPeriod[0] || { totalLeads: 0, wonLeads: 0, totalRevenue: 0 };
+
+        // Calculate key growth metrics natively
+        const leadGrowth = previous.totalLeads > 0
+            ? (((current.totalLeads - previous.totalLeads) / previous.totalLeads) * 100).toFixed(1)
             : 0;
 
-        const wonLeads = leads.filter(l => l.status?.toLowerCase().includes('won'));
-        const prevWon = prevLeads.filter(l => l.status?.toLowerCase().includes('won'));
-
-        const conversionRate = totalLeads > 0
-            ? ((wonLeads.length / totalLeads) * 100).toFixed(1)
+        const conversionRate = current.totalLeads > 0
+            ? ((current.wonLeads / current.totalLeads) * 100).toFixed(1)
             : 0;
-        const prevConversion = prevTotal > 0
-            ? ((prevWon.length / prevTotal) * 100).toFixed(1)
+            
+        const prevConversion = previous.totalLeads > 0
+            ? ((previous.wonLeads / previous.totalLeads) * 100).toFixed(1)
             : 0;
 
-        const totalRevenue = wonLeads.reduce((sum, l) => sum + (l.dealValue || 0), 0);
-        const prevRevenue = prevWon.reduce((sum, l) => sum + (l.dealValue || 0), 0);
-        const revenueGrowth = prevRevenue > 0
-            ? (((totalRevenue - prevRevenue) / prevRevenue) * 100).toFixed(1)
+        const revenueGrowth = previous.totalRevenue > 0
+            ? (((current.totalRevenue - previous.totalRevenue) / previous.totalRevenue) * 100).toFixed(1)
             : 0;
 
         res.json({
             period,
             dateRange: { start, end },
             overview: {
-                totalLeads,
+                totalLeads: current.totalLeads,
                 leadGrowth: parseFloat(leadGrowth),
                 conversionRate: parseFloat(conversionRate),
                 conversionChange: parseFloat(conversionRate) - parseFloat(prevConversion),
-                totalRevenue,
+                totalRevenue: current.totalRevenue,
                 revenueGrowth: parseFloat(revenueGrowth),
                 allTimeLeads
             },
             comparison: {
                 current: {
-                    leads: totalLeads,
-                    won: wonLeads.length,
-                    revenue: totalRevenue
+                    leads: current.totalLeads,
+                    won: current.wonLeads,
+                    revenue: current.totalRevenue
                 },
                 previous: {
-                    leads: prevTotal,
-                    won: prevWon.length,
-                    revenue: prevRevenue
+                    leads: previous.totalLeads,
+                    won: previous.wonLeads,
+                    revenue: previous.totalRevenue
                 }
             }
         });

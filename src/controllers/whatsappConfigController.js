@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const crypto = require('crypto');
 const axios = require('axios');
 
@@ -48,17 +49,20 @@ function decrypt(text) {
 exports.getWhatsAppConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const user = await User.findById(ownerId).select('waBusinessId waPhoneNumberId waAccessToken');
+        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('whatsapp');
         
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
+        if (!config) {
+            return res.json({
+                waBusinessId: '',
+                waPhoneNumberId: '',
+                isConfigured: false
+            });
         }
         
-        // Return config without token (token is encrypted, so we don't expose it)
         res.json({
-            waBusinessId: user.waBusinessId || '',
-            waPhoneNumberId: user.waPhoneNumberId || '',
-            isConfigured: !!(user.waPhoneNumberId && user.waAccessToken)
+            waBusinessId: config.whatsapp?.waBusinessId || '',
+            waPhoneNumberId: config.whatsapp?.waPhoneNumberId || '',
+            isConfigured: !!(config.whatsapp?.waPhoneNumberId && config.whatsapp?.waAccessToken)
         });
     } catch (error) {
         console.error('Error fetching WhatsApp config:', error);
@@ -91,29 +95,25 @@ exports.updateWhatsAppConfig = async (req, res) => {
         }
         
         const updateData = {
-            waPhoneNumberId: waPhoneNumberId.trim(),
-            waAccessToken: encryptedToken
+            'whatsapp.waPhoneNumberId': waPhoneNumberId.trim(),
+            'whatsapp.waAccessToken': encryptedToken
         };
         
         if (waBusinessId) {
-            updateData.waBusinessId = waBusinessId.trim();
+            updateData['whatsapp.waBusinessId'] = waBusinessId.trim();
         }
         
-        const user = await User.findByIdAndUpdate(
-            ownerId,
+        const config = await IntegrationConfig.findOneAndUpdate(
+            { userId: ownerId },
             { $set: updateData },
-            { new: true, select: 'waBusinessId waPhoneNumberId' }
+            { new: true, upsert: true, select: 'whatsapp' }
         );
-        
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
         
         res.json({
             success: true,
             message: 'WhatsApp configuration updated successfully',
-            waBusinessId: user.waBusinessId,
-            waPhoneNumberId: user.waPhoneNumberId,
+            waBusinessId: config.whatsapp.waBusinessId,
+            waPhoneNumberId: config.whatsapp.waPhoneNumberId,
             isConfigured: true
         });
     } catch (error) {
@@ -133,21 +133,21 @@ exports.testWhatsAppConfig = async (req, res) => {
         let accessToken = waAccessToken;
         
         if (!phoneNumberId || !accessToken) {
-            const user = await User.findById(ownerId).select('waPhoneNumberId waAccessToken');
-            if (!user || !user.waPhoneNumberId || !user.waAccessToken) {
+            const config = await IntegrationConfig.findOne({ userId: ownerId }).select('whatsapp');
+            if (!config || !config.whatsapp?.waPhoneNumberId || !config.whatsapp?.waAccessToken) {
                 return res.status(400).json({ 
                     message: 'WhatsApp configuration not found. Please configure your WhatsApp settings first.' 
                 });
             }
-            phoneNumberId = user.waPhoneNumberId;
-            accessToken = decrypt(user.waAccessToken);
+            phoneNumberId = config.whatsapp.waPhoneNumberId;
+            accessToken = decrypt(config.whatsapp.waAccessToken);
             if (!accessToken) {
                 return res.status(500).json({ message: 'Error decrypting access token' });
             }
         }
         
         // Test by getting phone number info
-        const url = `https://graph.facebook.com/v17.0/${phoneNumberId}`;
+        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}`;
         
         try {
             const response = await axios.get(url, {
@@ -198,12 +198,14 @@ exports.testWhatsAppConfig = async (req, res) => {
 exports.getWhatsAppSettings = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const user = await User.findById(ownerId).select('whatsappSettings');
-        if (!user) return res.status(404).json({ message: 'User not found' });
+        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('whatsapp.businessHours whatsapp.autoReply');
         
         res.json({
             success: true,
-            settings: user.whatsappSettings || {}
+            settings: {
+                businessHours: config?.whatsapp?.businessHours || {},
+                autoReply: config?.whatsapp?.autoReply || {}
+            }
         });
     } catch (error) {
         console.error('Error fetching WhatsApp settings:', error);
@@ -220,21 +222,22 @@ exports.updateWhatsAppSettings = async (req, res) => {
         const { businessHours, autoReply } = req.body;
         
         const updateData = {};
-        if (businessHours) updateData['whatsappSettings.businessHours'] = businessHours;
-        if (autoReply) updateData['whatsappSettings.autoReply'] = autoReply;
+        if (businessHours) updateData['whatsapp.businessHours'] = businessHours;
+        if (autoReply) updateData['whatsapp.autoReply'] = autoReply;
         
-        const user = await User.findByIdAndUpdate(
-            ownerId,
+        const config = await IntegrationConfig.findOneAndUpdate(
+            { userId: ownerId },
             { $set: updateData },
-            { new: true, select: 'whatsappSettings' }
+            { new: true, upsert: true, select: 'whatsapp' }
         );
-        
-        if (!user) return res.status(404).json({ message: 'User not found' });
         
         res.json({
             success: true,
             message: 'Settings updated successfully',
-            settings: user.whatsappSettings
+            settings: {
+                businessHours: config.whatsapp.businessHours,
+                autoReply: config.whatsapp.autoReply
+            }
         });
     } catch (error) {
         console.error('Error updating WhatsApp settings:', error);

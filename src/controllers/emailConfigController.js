@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
@@ -50,21 +51,26 @@ function decrypt(text) {
 exports.getEmailConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const user = await User.findById(ownerId).select('emailUser emailPassword emailFromName');
+        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('email');
 
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
+        if (!config || !config.email) {
+            return res.json({
+                emailUser: '',
+                emailPassword: '',
+                emailFromName: '',
+                isConfigured: false
+            });
         }
 
         // Decrypt password before returning
-        const decryptedPassword = user.emailPassword ? decrypt(user.emailPassword) : '';
+        const decryptedPassword = config.email.emailPassword ? decrypt(config.email.emailPassword) : '';
 
         // Return config with decrypted password
         res.json({
-            emailUser: user.emailUser || '',
+            emailUser: config.email.emailUser || '',
             emailPassword: decryptedPassword || '',
-            emailFromName: user.emailFromName || user.name || '',
-            isConfigured: !!(user.emailUser && user.emailPassword)
+            emailFromName: config.email.emailFromName || '',
+            isConfigured: !!(config.email.emailUser && config.email.emailPassword)
         });
     } catch (error) {
         console.error('Error fetching email config:', error);
@@ -94,29 +100,25 @@ exports.updateEmailConfig = async (req, res) => {
 
         // If password is provided, encrypt it
         const updateData = {
-            emailUser: emailUser.toLowerCase().trim(),
-            emailFromName: emailFromName || null
+            'email.emailUser': emailUser.toLowerCase().trim(),
+            'email.emailFromName': emailFromName || null
         };
 
         if (emailPassword) {
-            updateData.emailPassword = encrypt(emailPassword);
+            updateData['email.emailPassword'] = encrypt(emailPassword);
         }
 
-        const user = await User.findByIdAndUpdate(
-            ownerId,
+        const config = await IntegrationConfig.findOneAndUpdate(
+            { userId: ownerId },
             { $set: updateData },
-            { new: true, select: 'emailUser emailFromName' }
+            { new: true, upsert: true, select: 'email' }
         );
-
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
 
         res.json({
             success: true,
             message: 'Email configuration updated successfully',
-            emailUser: user.emailUser,
-            emailFromName: user.emailFromName,
+            emailUser: config.email.emailUser,
+            emailFromName: config.email.emailFromName,
             isConfigured: true
         });
     } catch (error) {
@@ -136,14 +138,14 @@ exports.testEmailConfig = async (req, res) => {
         let userPassword = emailPassword;
 
         if (!userEmail || !userPassword) {
-            const user = await User.findById(ownerId).select('emailUser emailPassword');
-            if (!user || !user.emailUser || !user.emailPassword) {
+            const config = await IntegrationConfig.findOne({ userId: ownerId }).select('email');
+            if (!config || !config.email?.emailUser || !config.email?.emailPassword) {
                 return res.status(400).json({
                     message: 'Email configuration not found. Please configure your email settings first.'
                 });
             }
-            userEmail = user.emailUser;
-            userPassword = decrypt(user.emailPassword);
+            userEmail = config.email.emailUser;
+            userPassword = decrypt(config.email.emailPassword);
         }
 
         // Create test transporter

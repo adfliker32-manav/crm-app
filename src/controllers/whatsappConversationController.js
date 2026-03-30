@@ -4,6 +4,7 @@ const Lead = require('../models/Lead');
 const User = require('../models/User');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const { sendWhatsAppTextMessage } = require('../services/whatsappService');
+const { cancelActiveChatbots } = require('../services/chatbotEngineService');
 const mongoose = require('mongoose');
 
 // Helper to resolve specific mapped variables
@@ -209,6 +210,9 @@ exports.sendMessage = async (req, res) => {
         if (!conversation) {
             return res.status(404).json({ message: 'Conversation not found' });
         }
+
+        // Cancel any active chatbot sessions — agent is taking over
+        setImmediate(() => cancelActiveChatbots(conversation._id).catch(e => console.error('cancelActiveChatbots error:', e)));
 
         // Send via WhatsApp API
         const result = await sendWhatsAppTextMessage(conversation.phone, text.trim(), userId);
@@ -522,6 +526,9 @@ exports.sendMediaMessage = async (req, res) => {
             return res.status(404).json({ message: 'Conversation not found' });
         }
 
+        // Cancel any active chatbot sessions — agent is taking over
+        setImmediate(() => cancelActiveChatbots(conversation._id).catch(e => console.error('cancelActiveChatbots error:', e)));
+
         if (!req.file) {
             return res.status(400).json({ message: 'No file uploaded' });
         }
@@ -559,7 +566,7 @@ exports.sendMediaMessage = async (req, res) => {
         }
 
         // Upload media to WhatsApp
-        const uploadUrl = `https://graph.facebook.com/v17.0/${phoneNumberId}/media`;
+        const uploadUrl = `https://graph.facebook.com/v21.0/${phoneNumberId}/media`;
         const FormData = require('form-data');
         const form = new FormData();
         form.append('messaging_product', 'whatsapp');
@@ -579,7 +586,7 @@ exports.sendMediaMessage = async (req, res) => {
         console.log(`✅ Media uploaded to WhatsApp, ID: ${mediaId}`);
 
         // Step 2: Send media message using the uploaded media ID
-        const sendUrl = `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`;
+        const sendUrl = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
         const msgData = {
             messaging_product: 'whatsapp',
             to: conversation.phone,

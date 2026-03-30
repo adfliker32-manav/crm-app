@@ -2,38 +2,33 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { validate, schemas } = require('../middleware/validateRequest');
 const rateLimit = require('express-rate-limit');
 
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10, // Limit each IP to 10 requests per windowMs
+    windowMs: 15 * 60 * 1000,
+    max: 10,
     message: { message: 'Too many authentication attempts, please try again after 15 minutes' }
 });
 
-// 1. Register & Login (Public)
-router.post('/register', authLimiter, authController.register);
-router.post('/login', authLimiter, authController.login);
-router.post('/google', authLimiter, authController.googleLogin); // Google OAuth Login
+// 1. Login (Public)
+router.post('/login', authLimiter, validate(schemas.login), authController.login);
+router.post('/google', authLimiter, authController.googleLogin);
 
 // 2. Add New Agent (Manager Only)
-router.post('/add-agent', authMiddleware, authController.createAgent);
+router.post('/add-agent', authMiddleware, validate(schemas.createAgent), authController.createAgent);
 
-// 👇 YE MISSING THA: Team List fetch karne ke liye
+// 3. Team Management
 router.get('/my-team', authMiddleware, authController.getMyTeam);
-
-// 3. Remove Agent (Manager Only)
 router.delete('/remove-agent/:id', authMiddleware, authController.deleteAgent);
-
-// 4. Update Agent (Manager Only)
 router.put('/update-agent/:id', authMiddleware, authController.updateAgent);
 
-// 5. Update Profile (All Authenticated Users)
+// 4. Profile & Plans
 router.put('/profile', authMiddleware, authController.updateProfile);
+// Billing removed
 
-// 5. Get Public Plans (For viewing subscription plans)
-router.get('/plans', authMiddleware, authController.getPlans);
-
-// 6. Get App Name (Public - no auth required)
+// 5. Public
 router.get('/app-name', authController.getAppName);
 
 module.exports = router;
+

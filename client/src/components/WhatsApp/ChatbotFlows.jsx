@@ -125,8 +125,10 @@ const ChatbotFlows = ({ onEditFlow }) => {
                                 <div className="flex items-center gap-2 text-sm">
                                     <i className="fa-solid fa-bolt text-amber-500"></i>
                                     <span className="text-slate-600">
-                                        {flow.triggerType === 'keyword' && `Keywords: ${flow.triggerKeywords.join(', ')}`}
-                                        {flow.triggerType === 'first_message' && 'First message from contact'}
+                                        {flow.triggerType === 'keyword' && `Keywords: ${(flow.triggerKeywords || []).join(', ')}`}
+                                        {flow.triggerType === 'first_message' && 'First message (New Contacts)'}
+                                        {flow.triggerType === 'existing_contact_message' && 'Any message (Existing Contacts)'}
+                                        {flow.triggerType === 'any_message' && 'Any message (All Contacts)'}
                                         {flow.triggerType === 'stage_change' && `Stage: ${flow.triggerStage}`}
                                         {flow.triggerType === 'manual' && 'Manual trigger only'}
                                     </span>
@@ -134,7 +136,7 @@ const ChatbotFlows = ({ onEditFlow }) => {
                             </div>
 
                             {/* Stats */}
-                            <div className="grid grid-cols-3 gap-2 mb-4 p-3 bg-slate-50 rounded-lg">
+                            <div className="grid grid-cols-4 gap-2 mb-4 p-3 bg-slate-50 rounded-lg">
                                 <div className="text-center">
                                     <p className="text-xs text-slate-500">Triggered</p>
                                     <p className="text-lg font-bold text-slate-800">{flow.analytics?.triggered || 0}</p>
@@ -142,6 +144,10 @@ const ChatbotFlows = ({ onEditFlow }) => {
                                 <div className="text-center">
                                     <p className="text-xs text-slate-500">Completed</p>
                                     <p className="text-lg font-bold text-green-600">{flow.analytics?.completed || 0}</p>
+                                </div>
+                                <div className="text-center">
+                                    <p className="text-xs text-slate-500">Leads</p>
+                                    <p className="text-lg font-bold text-teal-600">{flow.analytics?.leadsGenerated || 0}</p>
                                 </div>
                                 <div className="text-center">
                                     <p className="text-xs text-slate-500">Rate</p>

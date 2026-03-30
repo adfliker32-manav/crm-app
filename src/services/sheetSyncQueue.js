@@ -31,20 +31,22 @@ agenda.define('sheet-sync', async (job) => {
 
     try {
         // Fetch user with sync config + custom fields
-        const user = await User.findById(userId)
-            .select('googleSheetSync customFieldDefinitions role parentId')
-            .lean();
+        const user = await User.findById(userId).select('role parentId').lean();
+        if (!user) return;
+        
+        const tenantOwnerId = user.role === 'agent' && user.parentId ? user.parentId : userId;
 
-        if (!user || !user.googleSheetSync?.syncEnabled || !user.googleSheetSync?.sheetUrl) {
+        const config = await IntegrationConfig.findOne({ userId: tenantOwnerId }).select('googleSheet').lean();
+        const workspace = await WorkspaceSettings.findOne({ userId: tenantOwnerId }).select('customFieldDefinitions').lean();
+
+        if (!config || !config.googleSheet?.syncEnabled || !config.googleSheet?.sheetUrl) {
             console.log(`⚠️ [Sheet Sync] User ${userId} sync disabled or no sheet URL — cancelling job`);
             await agenda.cancel({ name: 'sheet-sync', 'data.userId': userId });
             return;
         }
 
-        const tenantOwnerId = user.role === 'agent' && user.parentId ? user.parentId : userId;
-
-        const { sheetUrl } = user.googleSheetSync;
-        const customFieldDefs = user.customFieldDefinitions || [];
+        const { sheetUrl } = config.googleSheet;
+        const customFieldDefs = workspace?.customFieldDefinitions || [];
 
         // Extract sheet ID
         const sheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
@@ -131,24 +133,29 @@ agenda.define('sheet-sync', async (job) => {
     }
 });
 
-// ── Helper: Update sync status in User model ──
+// ── Helper: Update sync status in IntegrationConfig ──
 async function markSyncStatus(userId, status, errorMsg) {
-    await User.findByIdAndUpdate(userId, {
-        'googleSheetSync.lastSyncAt': new Date(),
-        'googleSheetSync.lastSyncStatus': status,
-        'googleSheetSync.lastSyncError': errorMsg || null
-    });
+    const IntegrationConfig = require('../models/IntegrationConfig');
+    await IntegrationConfig.findOneAndUpdate(
+        { userId: userId }, 
+        {
+            'googleSheet.lastSyncAt': new Date(),
+            'googleSheet.lastSyncStatus': status,
+            'googleSheet.lastSyncError': errorMsg || null
+        }
+    );
 }
 
 // ── Schedule / Cancel individual user jobs ───
 async function scheduleUserSync(userId) {
-    const user = await User.findById(userId).select('googleSheetSync').lean();
-    if (!user || !user.googleSheetSync?.syncEnabled || !user.googleSheetSync?.sheetUrl) {
+    const IntegrationConfig = require('../models/IntegrationConfig');
+    const config = await IntegrationConfig.findOne({ userId: userId }).select('googleSheet').lean();
+    if (!config || !config.googleSheet?.syncEnabled || !config.googleSheet?.sheetUrl) {
         await cancelUserSync(userId);
         return;
     }
 
-    const intervalMinutes = user.googleSheetSync.syncIntervalMinutes || 15;
+    const intervalMinutes = config.googleSheet.syncIntervalMinutes || 15;
 
     // Remove existing job first (to avoid duplicates)
     await agenda.cancel({ name: 'sheet-sync', 'data.userId': userId.toString() });
@@ -170,17 +177,18 @@ async function startSheetSyncScheduler() {
         await agenda.start();
         console.log('📋 Sheet Sync Scheduler started');
 
+        const IntegrationConfig = require('../models/IntegrationConfig');
         // Find all users with sync enabled
-        const users = await User.find({
-            'googleSheetSync.syncEnabled': true,
-            'googleSheetSync.sheetUrl': { $ne: null }
-        }).select('_id googleSheetSync.syncIntervalMinutes').lean();
+        const configs = await IntegrationConfig.find({
+            'googleSheet.syncEnabled': true,
+            'googleSheet.sheetUrl': { $ne: null }
+        }).select('userId googleSheet.syncIntervalMinutes').lean();
 
-        console.log(`📋 Found ${users.length} user(s) with auto-sync enabled`);
+        console.log(`📋 Found ${configs.length} user(s) with auto-sync enabled`);
 
-        for (const user of users) {
-            const intervalMinutes = user.googleSheetSync?.syncIntervalMinutes || 15;
-            await agenda.every(`${intervalMinutes} minutes`, 'sheet-sync', { userId: user._id.toString() });
+        for (const config of configs) {
+            const intervalMinutes = config.googleSheet?.syncIntervalMinutes || 15;
+            await agenda.every(`${intervalMinutes} minutes`, 'sheet-sync', { userId: config.userId.toString() });
         }
 
         console.log('✅ All sheet sync jobs scheduled');

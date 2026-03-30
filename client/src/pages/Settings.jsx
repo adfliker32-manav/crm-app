@@ -1,28 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import api from '../services/api';
 import MetaConfigSection from '../components/Settings/MetaConfigSection';
 import CustomFieldsSettings from '../components/Settings/CustomFieldsSettings';
-import BillingSettings from '../components/Settings/BillingSettings';
 import SheetSyncSettings from '../components/Settings/SheetSyncSettings';
 import TagsSettings from '../components/Settings/TagsSettings';
 
 const Settings = () => {
     const { user, updateUser } = useAuth();
     const { showSuccess, showError } = useNotification();
+    const [searchParams, setSearchParams] = useSearchParams();
 
     const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
     const canAccessSettings = canManageTeam || user?.permissions?.accessSettings === true;
 
     if (!canAccessSettings) return <Navigate to="/dashboard" replace />;
 
-    const [activeTab, setActiveTab] = useState('profile');
+    // Read tab from query param if present
+    const initialTab = searchParams.get('tab') || 'profile';
+    const [activeTab, setActiveTab] = useState(initialTab);
     const [name, setName] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [loading, setLoading] = useState(false);
+
+    // Sync tab with URL search params
+    useEffect(() => {
+        const tab = searchParams.get('tab');
+        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta'].includes(tab)) {
+            setActiveTab(tab);
+        }
+    }, [searchParams]);
 
     useEffect(() => {
         if (user) {
@@ -76,8 +86,7 @@ const Settings = () => {
         { id: 'tags', label: 'Lead Tags', icon: 'fa-tags' },
         { id: 'customFields', label: 'Custom Fields', icon: 'fa-list-check' },
         { id: 'sheetSync', label: 'Sheet Sync', icon: 'fa-table' },
-        { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' }
-        // HIDING BILLING FOR NOW: { id: 'billing', label: 'Billing', icon: 'fa-credit-card' }
+        { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' },
     ];
 
     return (
@@ -89,7 +98,10 @@ const Settings = () => {
                 {tabs.map(tab => (
                     <button
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
+                        onClick={() => {
+                            setActiveTab(tab.id);
+                            setSearchParams({ tab: tab.id });
+                        }}
                         className={`px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2.5 transition-all duration-200 ${
                             activeTab === tab.id
                             ? 'bg-white text-blue-600 shadow-sm ring-1 ring-slate-200/50'
@@ -228,18 +240,6 @@ const Settings = () => {
                 {activeTab === 'sheetSync' && (
                     <div className="animate-in fade-in duration-300">
                         <SheetSyncSettings />
-                    </div>
-                )}
-
-                {activeTab === 'billing' && (
-                    <div className="animate-in fade-in duration-300">
-                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
-                            <h2 className="text-xl font-bold text-slate-800">Billing & Subscription</h2>
-                            <p className="text-sm text-slate-500 mt-1">Manage your subscription plan and billing details.</p>
-                        </div>
-                        <div className="p-8">
-                            <BillingSettings />
-                        </div>
                     </div>
                 )}
             </div>

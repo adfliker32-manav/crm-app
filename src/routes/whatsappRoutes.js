@@ -1,9 +1,9 @@
 // src/routes/whatsappRoutes.js
 const express = require('express');
 const router = express.Router();
-const webhookController = require('../controllers/webhookController');
 const whatsappConversationController = require('../controllers/whatsappConversationController');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const requireModule = require('../middleware/moduleMiddleware');
 const { meterUsage } = require('../middleware/usageMeter');
 const multer = require('multer');
 
@@ -13,66 +13,66 @@ const upload = multer({
     limits: { fileSize: 16 * 1024 * 1024 } // 16MB max (video limit)
 });
 
-// Webhook Connections (legacy - keeping for backward compatibility)
-router.get('/webhook', webhookController.verifyWebhook);
-router.post('/webhook', webhookController.handleWebhook);
+// ⚠️  Legacy webhook routes REMOVED — use /webhook/whatsapp for Meta webhooks.
+//     Primary webhook handler: src/controllers/whatsappWebhookController.js
 
-// Legacy Frontend API Routes
-router.get('/leads', authMiddleware, webhookController.getWhatsAppLeads);
-router.post('/send', authMiddleware, meterUsage('whatsapp'), webhookController.sendReply);
+// Legacy Frontend API Routes (still used by older UI components)
+const webhookController = require('../controllers/webhookController');
+router.get('/leads', authMiddleware, requireModule('whatsapp'), webhookController.getWhatsAppLeads);
+router.post('/send', authMiddleware, requireModule('whatsapp'), meterUsage('whatsapp'), webhookController.sendReply);
 
 // WhatsApp Configuration Routes
 const whatsappConfigController = require('../controllers/whatsappConfigController');
-router.get('/config', authMiddleware, whatsappConfigController.getWhatsAppConfig);
-router.put('/config', authMiddleware, whatsappConfigController.updateWhatsAppConfig);
-router.post('/config/test', authMiddleware, whatsappConfigController.testWhatsAppConfig);
+router.get('/config', authMiddleware, requireModule('whatsapp'), whatsappConfigController.getWhatsAppConfig);
+router.put('/config', authMiddleware, requireModule('whatsapp'), whatsappConfigController.updateWhatsAppConfig);
+router.post('/config/test', authMiddleware, requireModule('whatsapp'), whatsappConfigController.testWhatsAppConfig);
 
 // WhatsApp Automation Settings (Business Hours & Auto-Reply)
-router.get('/settings', authMiddleware, whatsappConfigController.getWhatsAppSettings);
-router.put('/settings', authMiddleware, whatsappConfigController.updateWhatsAppSettings);
+router.get('/settings', authMiddleware, requireModule('whatsapp'), whatsappConfigController.getWhatsAppSettings);
+router.put('/settings', authMiddleware, requireModule('whatsapp'), whatsappConfigController.updateWhatsAppSettings);
 
 // WhatsApp Analytics Dashboard
 const whatsappAnalyticsController = require('../controllers/whatsappAnalyticsController');
-router.get('/analytics', authMiddleware, whatsappAnalyticsController.getDashboardStats);
+router.get('/analytics', authMiddleware, requireModule('whatsapp'), whatsappAnalyticsController.getDashboardStats);
 
 // ============================================
 // NEW: Conversation Management Routes
 // ============================================
 
 // Get all conversations
-router.get('/conversations', authMiddleware, whatsappConversationController.getConversations);
+router.get('/conversations', authMiddleware, requireModule('whatsapp'), whatsappConversationController.getConversations);
 
 // Get unread count (for badge)
-router.get('/conversations/unread', authMiddleware, whatsappConversationController.getUnreadCount);
+router.get('/conversations/unread', authMiddleware, requireModule('whatsapp'), whatsappConversationController.getUnreadCount);
 
 // Start new conversation
-router.post('/conversations/new', authMiddleware, whatsappConversationController.startConversation);
+router.post('/conversations/new', authMiddleware, requireModule('whatsapp'), whatsappConversationController.startConversation);
 
 // Get single conversation with messages
-router.get('/conversations/:id', authMiddleware, whatsappConversationController.getConversation);
+router.get('/conversations/:id', authMiddleware, requireModule('whatsapp'), whatsappConversationController.getConversation);
 
 // Send message in conversation
-router.post('/conversations/:id/send', authMiddleware, whatsappConversationController.sendMessage);
+router.post('/conversations/:id/send', authMiddleware, requireModule('whatsapp'), whatsappConversationController.sendMessage);
 
 // Mark conversation as read
-router.put('/conversations/:id/read', authMiddleware, whatsappConversationController.markAsRead);
+router.put('/conversations/:id/read', authMiddleware, requireModule('whatsapp'), whatsappConversationController.markAsRead);
 
 // Link conversation to lead
-router.post('/conversations/:id/link', authMiddleware, whatsappConversationController.linkToLead);
+router.post('/conversations/:id/link', authMiddleware, requireModule('whatsapp'), whatsappConversationController.linkToLead);
 
 // Update conversation status (archive/unarchive/spam)
-router.put('/conversations/:id/status', authMiddleware, whatsappConversationController.updateStatus);
+router.put('/conversations/:id/status', authMiddleware, requireModule('whatsapp'), whatsappConversationController.updateStatus);
 
 // Send media in conversation (file upload via multer)
-router.post('/conversations/:id/send-media', authMiddleware, upload.single('file'), whatsappConversationController.sendMediaMessage);
+router.post('/conversations/:id/send-media', authMiddleware, requireModule('whatsapp'), upload.single('file'), whatsappConversationController.sendMediaMessage);
 
 // Download media proxy (frontend can't call Meta API directly)
-router.get('/media/:mediaId', authMiddleware, whatsappConversationController.downloadMediaProxy);
+router.get('/media/:mediaId', authMiddleware, requireModule('whatsapp'), whatsappConversationController.downloadMediaProxy);
 
 // ============================================
 // Upload media for template headers
 // ============================================
-router.post('/upload-media', authMiddleware, upload.single('file'), async (req, res) => {
+router.post('/upload-media', authMiddleware, requireModule('whatsapp'), upload.single('file'), async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         if (!req.file) {

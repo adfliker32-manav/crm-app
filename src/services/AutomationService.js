@@ -3,6 +3,7 @@ const Lead = require('../models/Lead');
 const { sendEmail } = require('./emailService');
 const { sendWhatsAppMessage } = require('./whatsappService');
 const { logActivity } = require('./auditService');
+const { isFeatureDisabled } = require('../utils/systemConfig');
 
 // Advanced property resolver (handles 'customData.Property' etc)
 const resolveField = (obj, path) => {
@@ -97,6 +98,11 @@ const executeRuleActions = async (rule, lead) => {
 let globalAgendaInstance = null; // Store reference to agenda
 const evaluateLead = async (lead, triggerType) => {
     try {
+        if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) {
+            console.log(`🛑 AUTOMATION KILL SWITCH ACTIVE. Blocked automation evaluation for lead: ${lead?.name}`);
+            return;
+        }
+
         if (!lead || !lead.userId) return;
 
         // Find totally active rules matching this exact trigger
@@ -139,6 +145,11 @@ const defineAutomationJobs = (agenda) => {
     globalAgendaInstance = agenda;
     
     agenda.define('EXECUTE_AUTOMATION_ACTION', async (job) => {
+        if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) {
+            console.log(`🛑 AUTOMATION KILL SWITCH ACTIVE. Blocked scheduled background job.`);
+            return;
+        }
+
         const { ruleId, leadId } = job.attrs.data;
         
         try {

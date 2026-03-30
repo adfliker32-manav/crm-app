@@ -88,7 +88,6 @@ const AgencySidebar = () => {
                 {!collapsed && (
                     <p className="text-[10px] text-slate-500 px-6 mt-6 mb-3 uppercase tracking-widest font-bold">Platform Settings</p>
                 )}
-                <NavItem collapsed={collapsed} to="/agency/billing" icon="fa-solid fa-credit-card" label="Billing & Margins" />
                 <NavItem collapsed={collapsed} to="/agency/white-label" icon="fa-solid fa-palette" label="White-Label" />
 
             </nav>

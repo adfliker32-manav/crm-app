@@ -57,12 +57,13 @@ const Leads = () => {
     const fetchData = useCallback(async () => {
         try {
             const [leadsRes, stagesRes, tagsRes] = await Promise.all([
-                api.get('/leads'),
+                api.get('/leads?limit=500'),   // paginated endpoint — extract .leads
                 api.get('/stages'),
                 api.get('/tags')
             ]);
 
-            const fetchedLeads = leadsRes.data;
+            // API now returns { leads: [], pagination: {} } — extract the array
+            const fetchedLeads = leadsRes.data?.leads ?? leadsRes.data ?? [];
             let fetchedStages = stagesRes.data;
             let fetchedTags = tagsRes.data;
 
