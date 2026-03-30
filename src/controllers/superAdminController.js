@@ -25,6 +25,22 @@ const auditLogger = require('../services/auditLogger');
 const mongoose = require('mongoose');
 const os = require('os');
 const telemetryService = require('../services/telemetryService');
+const { deleteOwnedRecords } = require('../services/accountCleanupService');
+const {
+    STRONG_PASSWORD_MESSAGE,
+    normalizeEmail,
+    hasStrongPassword,
+    parseBoundedInteger
+} = require('../utils/controllerHelpers');
+
+const COMPANY_ROLE_FILTER = { $in: ['manager', 'agency'] };
+const DEFAULT_AGENT_LIMIT = 5;
+const DEFAULT_ACTIVE_MODULES = ['leads', 'team', 'reports', 'settings'];
+const TRIAL_DURATION_MS = 14 * 24 * 60 * 60 * 1000;
+
+const findCompanyById = (id) => User.findOne({ _id: id, role: COMPANY_ROLE_FILTER });
+
+const getAgentLimitValue = (workspace) => workspace?.agentLimit || DEFAULT_AGENT_LIMIT;
 
 // Helper for Token Generation (match authController logic)
 const generateToken = (id, role) => {
@@ -70,7 +86,8 @@ const createCompany = async (req, res) => {
             return res.status(400).json({ message: "All fields are required" });
         }
 
-        const existingUser = await User.findOne({ email: email.toLowerCase() });
+        const normalizedEmail = normalizeEmail(email);
+        const existingUser = await User.findOne({ email: normalizedEmail });
         if (existingUser) {
             return res.status(400).json({ message: "Email already in use" });
         }
@@ -79,7 +96,7 @@ const createCompany = async (req, res) => {
         const newCompany = await User.create({
             companyName,
             name,
-            email: email.toLowerCase(),
+            email: normalizedEmail,
             password: hashedPassword,
             phone,
             role: req.body.role === 'agency' ? 'agency' : 'manager',
@@ -91,21 +108,20 @@ const createCompany = async (req, res) => {
             status: 'approved'
         });
 
-        // Initialize WorkspaceSettings
-        await WorkspaceSettings.create({
-            userId: newCompany._id,
-            subscriptionStatus: 'Trial',
-            subscriptionPlan: 'Free',
-            billingType: 'trial',
-            planExpiryDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days trial
-            agentLimit: 5,
-            activeModules: ['leads', 'team', 'reports', 'settings']
-        });
-
-        // Initialize IntegrationConfig
-        await IntegrationConfig.create({
-            userId: newCompany._id
-        });
+        await Promise.all([
+            WorkspaceSettings.create({
+                userId: newCompany._id,
+                subscriptionStatus: 'Trial',
+                subscriptionPlan: 'Free',
+                billingType: 'trial',
+                planExpiryDate: new Date(Date.now() + TRIAL_DURATION_MS),
+                agentLimit: DEFAULT_AGENT_LIMIT,
+                activeModules: DEFAULT_ACTIVE_MODULES
+            }),
+            IntegrationConfig.create({
+                userId: newCompany._id
+            })
+        ]);
 
         res.status(201).json({
             success: true,
@@ -155,7 +171,7 @@ const getSaaSAnalytics = async (req, res) => {
 // Get all companies (managers)
 const getAllCompanies = async (req, res) => {
     try {
-        const companies = await joinWorkspaceSettings({ role: { $in: ['manager', 'agency'] } });
+        const companies = await joinWorkspaceSettings({ role: COMPANY_ROLE_FILTER });
 
         // Get additional stats for each company
         const companiesWithStats = await Promise.all(
@@ -188,7 +204,7 @@ const getCompanyById = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const results = await joinWorkspaceSettings({ _id: new mongoose.Types.ObjectId(id), role: { $in: ['manager', 'agency'] } });
+        const results = await joinWorkspaceSettings({ _id: new mongoose.Types.ObjectId(id), role: COMPANY_ROLE_FILTER });
         const company = results[0];
 
         if (!company) {
@@ -223,15 +239,15 @@ const updateCompany = async (req, res) => {
         const { id } = req.params;
         const { name, email, companyName, contactPerson, phone, activeModules, leadLimit, agentLimit } = req.body;
 
-        // Check if company exists
-        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
+        const company = await findCompanyById(id);
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        // Check if email is being changed and if it's already taken
-        if (email && email !== company.email) {
-            const existingUser = await User.findOne({ email, _id: { $ne: id } });
+        const normalizedEmail = email ? normalizeEmail(email) : email;
+
+        if (normalizedEmail && normalizedEmail !== company.email) {
+            const existingUser = await User.findOne({ email: normalizedEmail, _id: { $ne: id } });
             if (existingUser) {
                 return res.status(400).json({ message: "Email already in use" });
             }
@@ -242,7 +258,7 @@ const updateCompany = async (req, res) => {
             id,
             {
                 ...(name && { name }),
-                ...(email && { email: email.toLowerCase() }),
+                ...(normalizedEmail && { email: normalizedEmail }),
                 ...(companyName !== undefined && { companyName }),
                 ...(contactPerson !== undefined && { contactPerson }),
                 ...(phone !== undefined && { phone })
@@ -253,8 +269,8 @@ const updateCompany = async (req, res) => {
         // Update settings in WorkspaceSettings
         const updateFields = {};
         if (activeModules !== undefined && Array.isArray(activeModules)) updateFields.activeModules = activeModules;
-        if (leadLimit !== undefined) updateFields['planFeatures.leadLimit'] = parseInt(leadLimit);
-        if (agentLimit !== undefined) updateFields.agentLimit = parseInt(agentLimit);
+        if (leadLimit !== undefined) updateFields['planFeatures.leadLimit'] = Number.parseInt(leadLimit, 10);
+        if (agentLimit !== undefined) updateFields.agentLimit = Number.parseInt(agentLimit, 10);
 
         if (Object.keys(updateFields).length > 0) {
             await WorkspaceSettings.findOneAndUpdate(
@@ -285,31 +301,17 @@ const deleteCompany = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // Check if company exists
-        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
+        const company = await findCompanyById(id);
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        // Get all agents to include them in cascade delete
         const agents = await User.find({ parentId: id, role: 'agent' });
         const agentIds = agents.map(a => a._id);
         const allUserIds = [id, ...agentIds];
 
-        // Cascade delete all associated data
         await Promise.all([
-            Lead.deleteMany({ userId: { $in: allUserIds } }),
-            WhatsAppConversation.deleteMany({ userId: { $in: allUserIds } }),
-            WhatsAppMessage.deleteMany({ userId: { $in: allUserIds } }),
-            WhatsAppTemplate.deleteMany({ userId: { $in: allUserIds } }),
-            WhatsAppBroadcast.deleteMany({ userId: { $in: allUserIds } }),
-            WhatsAppLog.deleteMany({ userId: { $in: allUserIds } }),
-            EmailLog.deleteMany({ userId: { $in: allUserIds } }),
-            EmailTemplate.deleteMany({ userId: { $in: allUserIds } }),
-            ChatbotFlow.deleteMany({ userId: { $in: allUserIds } }),
-            ChatbotSession.deleteMany({ userId: { $in: allUserIds } }),
-            Stage.deleteMany({ userId: { $in: allUserIds } }),
-            ActivityLog.deleteMany({ $or: [{ userId: { $in: allUserIds } }, { companyId: id }] }),
+            deleteOwnedRecords(allUserIds, { companyId: id }),
             User.deleteMany({ parentId: id, role: 'agent' })
         ]);
 
@@ -342,16 +344,17 @@ const getCompanyLeads = async (req, res) => {
         const { id } = req.params;
         const { page = 1, limit = 50 } = req.query;
 
-        // Check if company exists
-        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
+        const company = await findCompanyById(id);
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const parsedPage = parseBoundedInteger(page, 1, { min: 1 });
+        const parsedLimit = parseBoundedInteger(limit, 50, { min: 1, max: 200 });
+        const skip = (parsedPage - 1) * parsedLimit;
         const leads = await Lead.find({ userId: id })
             .sort({ createdAt: -1 })
-            .limit(parseInt(limit))
+            .limit(parsedLimit)
             .skip(skip);
 
         const totalLeads = await Lead.countDocuments({ userId: id });
@@ -360,8 +363,8 @@ const getCompanyLeads = async (req, res) => {
             success: true,
             leads,
             totalLeads,
-            currentPage: parseInt(page),
-            totalPages: Math.ceil(totalLeads / parseInt(limit))
+            currentPage: parsedPage,
+            totalPages: Math.ceil(totalLeads / parsedLimit)
         });
     } catch (error) {
         console.error("Get Company Leads Error:", error);
@@ -375,11 +378,11 @@ const changeCompanyPassword = async (req, res) => {
         const { id } = req.params;
         const { newPassword } = req.body;
 
-        if (!newPassword || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(newPassword)) {
-            return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
+        if (!newPassword || !hasStrongPassword(newPassword)) {
+            return res.status(400).json({ message: STRONG_PASSWORD_MESSAGE });
         }
 
-        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
+        const company = await findCompanyById(id);
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -402,7 +405,7 @@ const getCompanyAgents = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
+        const company = await findCompanyById(id);
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
@@ -416,7 +419,7 @@ const getCompanyAgents = async (req, res) => {
         res.json({
             success: true,
             agents,
-            agentLimit: workspace?.agentLimit || 5,
+            agentLimit: getAgentLimitValue(workspace),
             currentAgentsCount: agents.length
         });
     } catch (error) {
@@ -435,15 +438,14 @@ const createCompanyAgent = async (req, res) => {
             return res.status(400).json({ message: "Name, email, and password are required" });
         }
 
-        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
+        const company = await findCompanyById(id);
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        // Check agent limit from WorkspaceSettings
         const currentAgentsCount = await User.countDocuments({ parentId: id, role: 'agent' });
         const workspace = await WorkspaceSettings.findOne({ userId: id }).select('agentLimit');
-        const agentLimit = workspace?.agentLimit || 5;
+        const agentLimit = getAgentLimitValue(workspace);
 
         if (currentAgentsCount >= agentLimit) {
             return res.status(400).json({
@@ -451,8 +453,8 @@ const createCompanyAgent = async (req, res) => {
             });
         }
 
-        // Check if email already exists
-        const existingUser = await User.findOne({ email: email.toLowerCase() });
+        const normalizedEmail = normalizeEmail(email);
+        const existingUser = await User.findOne({ email: normalizedEmail });
         if (existingUser) {
             return res.status(400).json({ message: "Email already in use" });
         }
@@ -460,7 +462,7 @@ const createCompanyAgent = async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
         const newAgent = await User.create({
             name,
-            email: email.toLowerCase(),
+            email: normalizedEmail,
             password: hashedPassword,
             role: 'agent',
             parentId: id
@@ -496,16 +498,17 @@ const updateCompanyAgent = async (req, res) => {
 
         const updateData = {};
         if (name) updateData.name = name;
-        if (email && email !== agent.email) {
-            const existingUser = await User.findOne({ email: email.toLowerCase(), _id: { $ne: agentId } });
+        const normalizedEmail = email ? normalizeEmail(email) : email;
+        if (normalizedEmail && normalizedEmail !== agent.email) {
+            const existingUser = await User.findOne({ email: normalizedEmail, _id: { $ne: agentId } });
             if (existingUser) {
                 return res.status(400).json({ message: "Email already in use" });
             }
-            updateData.email = email.toLowerCase();
+            updateData.email = normalizedEmail;
         }
         if (password) {
-            if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)) {
-                return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
+            if (!hasStrongPassword(password)) {
+                return res.status(400).json({ message: STRONG_PASSWORD_MESSAGE });
             }
             updateData.password = await bcrypt.hash(password, 10);
         }
@@ -535,23 +538,7 @@ const deleteCompanyAgent = async (req, res) => {
             return res.status(404).json({ message: "Agent not found" });
         }
 
-        // Cascade delete agent's data
-        await Promise.all([
-            Lead.deleteMany({ userId: agentId }),
-            WhatsAppConversation.deleteMany({ userId: agentId }),
-            WhatsAppMessage.deleteMany({ userId: agentId }),
-            WhatsAppTemplate.deleteMany({ userId: agentId }),
-            WhatsAppBroadcast.deleteMany({ userId: agentId }),
-            WhatsAppLog.deleteMany({ userId: agentId }),
-            EmailLog.deleteMany({ userId: agentId }),
-            EmailTemplate.deleteMany({ userId: agentId }),
-            ChatbotFlow.deleteMany({ userId: agentId }),
-            ChatbotSession.deleteMany({ userId: agentId }),
-            Stage.deleteMany({ userId: agentId }),
-            ActivityLog.deleteMany({ userId: agentId })
-        ]);
-
-        // Delete agent
+        await deleteOwnedRecords(agentId);
         await User.findByIdAndDelete(agentId);
 
         res.json({
@@ -574,14 +561,14 @@ const updateAgentLimit = async (req, res) => {
             return res.status(400).json({ message: "Valid agent limit is required" });
         }
 
-        const company = await User.findOne({ _id: id, role: { $in: ['manager', 'agency'] } });
+        const company = await findCompanyById(id);
         if (!company) {
             return res.status(404).json({ message: "Company not found" });
         }
 
         const updatedWorkspace = await WorkspaceSettings.findOneAndUpdate(
             { userId: id },
-            { $set: { agentLimit: parseInt(agentLimit) } },
+            { $set: { agentLimit: Number.parseInt(agentLimit, 10) } },
             { new: true, upsert: true }
         ).lean();
 

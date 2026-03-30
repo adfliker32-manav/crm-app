@@ -141,12 +141,19 @@ async function syncAllUsers() {
             "email.emailPassword": { $ne: null } 
         }).lean();
 
+        // 🚀 CRITICAL SCALABILITY FIX: Process emails Sequentially, NOT Concurrently
         for (const config of configs) {
              const imapConfig = {
                  emailUser: config.email.emailUser,
                  emailPassword: config.email.emailPassword
              };
-             syncUserEmails(config.userId, imapConfig).catch(e => console.error(e)); // Run concurrently per user
+             
+             // 1. Await the sync fully. This parses heavy emails one account at a time.
+             await syncUserEmails(config.userId, imapConfig).catch(e => console.error(e)); 
+             
+             // 2. Yield the Event Loop for 1 second. This allows Webhooks, API clicks, 
+             // and Socket.IO pushes to process flawlessly before starting the next mailbox.
+             await new Promise(resolve => setTimeout(resolve, 1000));
         }
     } catch (e) {
         console.error("Error in syncAllUsers:", e);

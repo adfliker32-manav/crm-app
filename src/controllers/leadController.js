@@ -14,6 +14,141 @@ const { logActivity } = require('../services/auditService');
 const { findDuplicates, findAllDuplicateGroups, normalizePhone } = require('../services/duplicateService');
 const { evaluateLead } = require('../services/AutomationService');
 const { logUsage } = require('../services/usageLogger');
+const {
+    getRequestUserId,
+    hasManageTeamAccess,
+    parseBoundedInteger,
+    runInBackground
+} = require('../utils/controllerHelpers');
+
+const DEFAULT_LEAD_PAGE = 1;
+const DEFAULT_LEAD_PAGE_SIZE = 100;
+const MAX_LEAD_PAGE_SIZE = 200;
+const DEFAULT_LEAD_STATUS = 'New';
+const DEFAULT_LEAD_SOURCE = 'Manual Entry';
+const ALLOWED_LEAD_UPDATE_FIELDS = new Set([
+    'name',
+    'email',
+    'phone',
+    'status',
+    'source',
+    'customData',
+    'dealValue',
+    'tags'
+]);
+
+const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+const isValidLeadId = (value) => mongoose.Types.ObjectId.isValid(value);
+
+const appendLeadHistory = (leadId, historyEntry) =>
+    Lead.findByIdAndUpdate(leadId, {
+        $push: { history: historyEntry }
+    }).exec();
+
+const resolveActorName = async (user) => {
+    if (user?.name) {
+        return user.name;
+    }
+
+    const actorId = getRequestUserId(user);
+    if (!actorId) {
+        return 'Unknown';
+    }
+
+    const actor = await User.findById(actorId).select('name');
+    return actor ? actor.name : 'Unknown';
+};
+
+const hasStageChanged = (previousStatus, nextStatus) =>
+    Boolean(nextStatus && nextStatus !== previousStatus);
+
+const applyNextFollowUpDateUpdate = (lead, updates) => {
+    if (!hasOwn(updates, 'nextFollowUpDate')) {
+        return;
+    }
+
+    if (updates.nextFollowUpDate) {
+        if (lead.nextFollowUpDate && !lead.lastFollowUpDate) {
+            lead.lastFollowUpDate = lead.nextFollowUpDate;
+        }
+
+        lead.nextFollowUpDate = new Date(updates.nextFollowUpDate);
+    } else {
+        lead.nextFollowUpDate = null;
+    }
+
+    delete updates.nextFollowUpDate;
+};
+
+const applyLeadUpdates = (lead, updates) => {
+    Object.keys(updates).forEach((key) => {
+        if (ALLOWED_LEAD_UPDATE_FIELDS.has(key) && updates[key] !== undefined) {
+            lead[key] = updates[key];
+        }
+    });
+};
+
+const queueLeadCreatedEffects = (lead, ownerId) => {
+    if (lead.email) {
+        runInBackground('Email automation error (non-blocking):', async () => {
+            const sent = await sendAutomatedEmailOnLeadCreate(lead, ownerId);
+
+            if (sent) {
+                await appendLeadHistory(lead._id, {
+                    type: 'Email',
+                    subType: 'Auto',
+                    content: 'Automated Welcome Email Sent',
+                    date: new Date()
+                });
+            }
+        });
+    }
+
+    if (lead.phone) {
+        runInBackground('WhatsApp automation error (non-blocking):', async () => {
+            const phoneToSend = normalizePhone(lead.phone) || lead.phone;
+            const leadForWhatsApp =
+                typeof lead.toObject === 'function'
+                    ? { ...lead.toObject(), phone: phoneToSend }
+                    : { ...lead, phone: phoneToSend };
+
+            const sent = await sendAutomatedWhatsAppOnLeadCreate(leadForWhatsApp, ownerId);
+
+            if (sent) {
+                await appendLeadHistory(lead._id, {
+                    type: 'WhatsApp',
+                    subType: 'Auto',
+                    content: 'Automated Welcome WhatsApp Sent',
+                    date: new Date()
+                });
+            }
+        });
+    }
+
+    runInBackground('Automation Service Error (LEAD_CREATED):', () =>
+        evaluateLead(lead, 'LEAD_CREATED')
+    );
+};
+
+const queueLeadStageChangeEffects = (lead) => {
+    runInBackground('Auto Error (STAGE_CHANGED):', () => evaluateLead(lead, 'STAGE_CHANGED'));
+    runInBackground('Auto Error (TIME_IN_STAGE):', () => evaluateLead(lead, 'TIME_IN_STAGE'));
+};
+
+const sendMetaEventIfEnabled = async (lead, newStatus, oldStatus) => {
+    try {
+        const config = await IntegrationConfig.findOne({ userId: lead.userId }).select('meta');
+
+        if (config && config.meta?.metaCapiEnabled) {
+            runInBackground('Meta CAPI error (non-blocking):', () =>
+                sendMetaEvent(config, lead, newStatus, oldStatus)
+            );
+        }
+    } catch (err) {
+        console.error('Error fetching config for Meta CAPI (non-blocking):', err);
+    }
+};
 
 // ==========================================
 // 1. GET LEADS (Paginated — replaces dangerous limit(2000))
@@ -23,10 +158,12 @@ const getLeads = async (req, res) => {
     try {
         const query = { ...req.dataScope };
 
-        // Pagination
-        const page  = Math.max(1, parseInt(req.query.page)  || 1);
-        const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 100));
-        const skip  = (page - 1) * limit;
+        const page = parseBoundedInteger(req.query.page, DEFAULT_LEAD_PAGE, { min: 1 });
+        const limit = parseBoundedInteger(req.query.limit, DEFAULT_LEAD_PAGE_SIZE, {
+            min: 1,
+            max: MAX_LEAD_PAGE_SIZE
+        });
+        const skip = (page - 1) * limit;
 
         // Optional filters
         if (req.query.status) query.status = req.query.status;
@@ -129,14 +266,14 @@ const createLead = async (req, res) => {
             name,
             email,
             phone,
-            status: status || 'New',
-            source: source || 'Manual Entry',
+            status: status || DEFAULT_LEAD_STATUS,
+            source: source || DEFAULT_LEAD_SOURCE,
             customData: customData || {}
         });
 
         // Enterprise ABAC: Auto-assign lead to agent if they created it
         if (req.user.role === 'agent') {
-            newLead.assignedTo = req.user.userId || req.user.id;
+            newLead.assignedTo = getRequestUserId(req.user);
         }
 
         await newLead.save();
@@ -152,68 +289,11 @@ const createLead = async (req, res) => {
             entityType: 'Lead',
             entityId: newLead._id,
             entityName: newLead.name,
-            metadata: { source: source || 'Manual Entry', status: status || 'New' },
+            metadata: { source: source || DEFAULT_LEAD_SOURCE, status: status || DEFAULT_LEAD_STATUS },
             companyId: ownerId
         }).catch(err => console.error('Audit log error:', err));
 
-        // Send automated email if configured
-        if (newLead.email) {
-            setTimeout(() => {
-                sendAutomatedEmailOnLeadCreate(newLead, ownerId)
-                    .then(sent => {
-                        if (sent) {
-                            Lead.findByIdAndUpdate(newLead._id, {
-                                $push: {
-                                    history: {
-                                        type: 'Email',
-                                        subType: 'Auto',
-                                        content: 'Automated Welcome Email Sent',
-                                        date: new Date()
-                                    }
-                                }
-                            }).exec();
-                        }
-                    })
-                    .catch(err => {
-                        console.error('Email automation error (non-blocking):', err);
-                    });
-            }, 0);
-        }
-
-        // Send automated WhatsApp if configured
-        if (newLead.phone) {
-            setTimeout(() => {
-                // FIX 3.2: Normalize phone to E.164-compatible format before sending.
-                // Numbers stored as "09876543210", "+91 9876 543210" etc. would fail silently.
-                const phoneToSend = normalizePhone(newLead.phone) || newLead.phone;
-                const leadForWA = { ...newLead.toObject(), phone: phoneToSend };
-                sendAutomatedWhatsAppOnLeadCreate(leadForWA, ownerId)
-                    .then(sent => {
-                        if (sent) {
-                            Lead.findByIdAndUpdate(newLead._id, {
-                                $push: {
-                                    history: {
-                                        type: 'WhatsApp',
-                                        subType: 'Auto',
-                                        content: 'Automated Welcome WhatsApp Sent',
-                                        date: new Date()
-                                    }
-                                }
-                            }).exec();
-                        }
-                    })
-                    .catch(err => {
-                        console.error('WhatsApp automation error (non-blocking):', err);
-                    });
-            }, 0);
-        }
-
-        // Evaluate Automation Builder Rules
-        setTimeout(() => {
-            evaluateLead(newLead, 'LEAD_CREATED').catch(err => {
-                console.error('Automation Service Error (LEAD_CREATED):', err);
-            });
-        }, 0);
+        queueLeadCreatedEffects(newLead, ownerId);
 
         res.json(newLead);
     } catch (err) {
@@ -229,7 +309,7 @@ const sendManualEmail = async (req, res) => {
     try {
         const { to, subject, message } = req.body;
         const leadId = req.params.id;
-        const userId = req.user.userId || req.user.id;
+        const userId = getRequestUserId(req.user);
 
         if (!to || !subject || !message) {
             return res.status(400).json({ message: "To, Subject, and Message are required" });
@@ -274,7 +354,7 @@ const sendManualEmail = async (req, res) => {
 const updateLead = async (req, res) => {
     try {
         // SECURITY FIX: Validate ObjectId format
-        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        if (!isValidLeadId(req.params.id)) {
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
 
@@ -287,63 +367,38 @@ const updateLead = async (req, res) => {
             return res.status(404).json({ message: "Lead not found or access denied" });
         }
 
-        // Handle nextFollowUpDate update
-        if (req.body.hasOwnProperty('nextFollowUpDate')) {
-            if (req.body.nextFollowUpDate) {
-                // Setting a new follow-up date
-                if (lead.nextFollowUpDate && !lead.lastFollowUpDate) {
-                    // If previous nextFollowUpDate exists and we're setting a new one, mark the old one as lastFollowUpDate
-                    lead.lastFollowUpDate = lead.nextFollowUpDate;
-                }
-                lead.nextFollowUpDate = new Date(req.body.nextFollowUpDate);
-            } else {
-                // Clearing the follow-up date (setting to null)
-                lead.nextFollowUpDate = null;
-            }
-            // Remove from req.body so we can use $set for other fields
-            delete req.body.nextFollowUpDate;
-        }
+        const updates = { ...req.body };
+        applyNextFollowUpDateUpdate(lead, updates);
 
         const oldStatus = lead.status;
-
-        // SECURITY FIX: Prevent Mass Assignment by whitelisting fields
-        const allowedFields = ['name', 'email', 'phone', 'status', 'source', 'customData', 'dealValue', 'tags'];
-        Object.keys(req.body).forEach(key => {
-            if (allowedFields.includes(key) && req.body[key] !== undefined) {
-                lead[key] = req.body[key];
-            }
-        });
+        applyLeadUpdates(lead, updates);
 
         await lead.save();
 
-        // Fetch user name if missing from token (for backward compatibility)
-        let initiatorName = req.user.name;
-        if (!initiatorName) {
-            const u = await User.findById(req.user.userId || req.user.id).select('name');
-            initiatorName = u ? u.name : 'Unknown';
-        }
+        const initiatorName = await resolveActorName(req.user);
+        const nextStatus = updates.status;
+        const stageChanged = hasStageChanged(oldStatus, nextStatus);
 
-        // Log lead edit
         const changesObj = {};
-        if (oldStatus && req.body.status && oldStatus !== req.body.status) {
-            changesObj.status = { before: oldStatus, after: req.body.status };
+        if (stageChanged) {
+            changesObj.status = { before: oldStatus, after: nextStatus };
         }
         logActivity({
-            userId: req.user.userId || req.user.id,
+            userId: getRequestUserId(req.user),
             userName: initiatorName,
-            actionType: req.body.status && oldStatus !== req.body.status ? 'LEAD_STATUS_CHANGED' : 'LEAD_EDITED',
+            actionType: stageChanged ? 'LEAD_STATUS_CHANGED' : 'LEAD_EDITED',
             entityType: 'Lead',
             entityId: lead._id,
             entityName: lead.name,
             changes: Object.keys(changesObj).length > 0 ? changesObj : null,
-            metadata: { fieldsUpdated: Object.keys(req.body) },
+            metadata: { fieldsUpdated: Object.keys(updates) },
             companyId: ownerId
         }).catch(err => console.error('Audit log error:', err));
 
         // Send automated email if stage changed
-        if (req.body.status && req.body.status !== oldStatus && lead.email) {
+        if (stageChanged && lead.email) {
             const ownerId = lead.userId;
-            sendAutomatedEmailOnStageChange(lead, oldStatus, req.body.status, ownerId)
+            sendAutomatedEmailOnStageChange(lead, oldStatus, nextStatus, ownerId)
                 .then(sent => {
                     if (sent) {
                         Lead.findByIdAndUpdate(lead._id, {
@@ -351,7 +406,7 @@ const updateLead = async (req, res) => {
                                 history: {
                                     type: 'Email',
                                     subType: 'Auto',
-                                    content: `Automated Email: Stage changed to ${req.body.status}`,
+                                    content: `Automated Email: Stage changed to ${nextStatus}`,
                                     date: new Date()
                                 }
                             }
@@ -364,9 +419,9 @@ const updateLead = async (req, res) => {
         }
 
         // Send automated WhatsApp if stage changed
-        if (req.body.status && req.body.status !== oldStatus && lead.phone) {
+        if (stageChanged && lead.phone) {
             const ownerId = lead.userId;
-            sendAutomatedWhatsAppOnStageChange(lead, oldStatus, req.body.status, ownerId)
+            sendAutomatedWhatsAppOnStageChange(lead, oldStatus, nextStatus, ownerId)
                 .then(sent => {
                     if (sent) {
                         Lead.findByIdAndUpdate(lead._id, {
@@ -374,7 +429,7 @@ const updateLead = async (req, res) => {
                                 history: {
                                     type: 'WhatsApp',
                                     subType: 'Auto',
-                                    content: `Automated WhatsApp: Stage changed to ${req.body.status}`,
+                                    content: `Automated WhatsApp: Stage changed to ${nextStatus}`,
                                     date: new Date()
                                 }
                             }
@@ -387,37 +442,22 @@ const updateLead = async (req, res) => {
         }
 
         // 🟢 Explicit History Log for Stage Change (Requested by User)
-        if (req.body.status && req.body.status !== oldStatus) {
+        if (stageChanged) {
             await Lead.findByIdAndUpdate(lead._id, {
                 $push: {
                     history: {
                         type: 'System',
                         subType: 'Stage Change',
-                        content: `${initiatorName} changed stage from "${oldStatus}" to "${req.body.status}"`,
+                        content: `${initiatorName} changed stage from "${oldStatus}" to "${nextStatus}"`,
                         date: new Date()
                     }
                 }
             });
         }
 
-        // Send Meta Conversion API event if status changed
-        if (req.body.status && req.body.status !== oldStatus) {
-            try {
-                const config = await IntegrationConfig.findOne({ userId: lead.userId }).select('meta');
-                if (config && config.meta?.metaCapiEnabled) {
-                    sendMetaEvent(config, lead, req.body.status, oldStatus).catch(err => {
-                        console.error('Meta CAPI error (non-blocking):', err);
-                    });
-                }
-            } catch (err) {
-                console.error('Error fetching config for Meta CAPI (non-blocking):', err);
-            }
-
-            // Evaluate Automation Builder Rules
-            setTimeout(() => {
-                evaluateLead(lead, 'STAGE_CHANGED').catch(err => console.error('Auto Error (STAGE_CHANGED):', err));
-                evaluateLead(lead, 'TIME_IN_STAGE').catch(err => console.error('Auto Error (TIME_IN_STAGE):', err));
-            }, 0);
+        if (stageChanged) {
+            await sendMetaEventIfEnabled(lead, nextStatus, oldStatus);
+            queueLeadStageChangeEffects(lead);
         }
 
         res.json({ success: true, lead });
@@ -433,7 +473,7 @@ const updateLead = async (req, res) => {
 const deleteLead = async (req, res) => {
     try {
         // SECURITY FIX: Validate ObjectId format
-        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        if (!isValidLeadId(req.params.id)) {
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
 
@@ -447,7 +487,7 @@ const deleteLead = async (req, res) => {
 
         // Log deletion
         logActivity({
-            userId: req.user.userId || req.user.id,
+            userId: getRequestUserId(req.user),
             userName: req.user.name || 'Unknown',
             actionType: 'LEAD_DELETED',
             entityType: 'Lead',
@@ -469,7 +509,7 @@ const deleteLead = async (req, res) => {
 const addNote = async (req, res) => {
     try {
         // SECURITY FIX: Validate ObjectId format
-        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        if (!isValidLeadId(req.params.id)) {
             return res.status(400).json({ message: "Invalid lead ID format" });
         }
 
@@ -502,7 +542,7 @@ const addNote = async (req, res) => {
 
         // Log note addition
         logActivity({
-            userId: req.user.userId || req.user.id,
+            userId: getRequestUserId(req.user),
             userName: req.user.name || 'Unknown',
             actionType: 'NOTE_ADDED',
             entityType: 'Lead',
@@ -543,7 +583,7 @@ const getStages = async (req, res) => {
 
 const createStage = async (req, res) => {
     try {
-        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
+        const canManageTeam = hasManageTeamAccess(req.user);
         if (!canManageTeam) return res.status(403).json({ message: "Unauthorized to modify pipeline stages" });
 
         const ownerId = req.tenantId;
@@ -560,7 +600,7 @@ const createStage = async (req, res) => {
 
 const deleteStage = async (req, res) => {
     try {
-        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
+        const canManageTeam = hasManageTeamAccess(req.user);
         if (!canManageTeam) return res.status(403).json({ message: "Unauthorized to modify pipeline stages" });
 
         const ownerId = req.tenantId;
@@ -585,7 +625,7 @@ const deleteStage = async (req, res) => {
 
 const updateStage = async (req, res) => {
     try {
-        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
+        const canManageTeam = hasManageTeamAccess(req.user);
         if (!canManageTeam) return res.status(403).json({ message: "Unauthorized to modify pipeline stages" });
 
         const ownerId = req.tenantId;
@@ -723,7 +763,7 @@ const syncLeads = async (req, res) => {
                         source: 'Google Sheet',
                         status: 'New',
                         customData: customData,
-                        assignedTo: req.user.role === 'agent' ? (req.user.userId || req.user.id) : undefined
+                        assignedTo: req.user.role === 'agent' ? getRequestUserId(req.user) : undefined
                     });
 
                     // Add to current batch sets to prevent local duplicates
@@ -1184,7 +1224,7 @@ const assignLead = async (req, res) => {
 
         // Log assignment
         logActivity({
-            userId: req.user.userId || req.user.id,
+            userId: getRequestUserId(req.user),
             userName: req.user.name || 'Unknown',
             actionType: 'LEAD_ASSIGNED',
             entityType: 'Lead',
@@ -1295,7 +1335,7 @@ const autoDeleteDuplicates = async (req, res) => {
         // Log activity
         if (deletedCount > 0) {
             logActivity({
-                userId: req.user.userId || req.user.id,
+                userId: getRequestUserId(req.user),
                 userName: req.user.name || 'Unknown',
                 actionType: 'DUPLICATES_DELETED',
                 entityType: 'Lead',
@@ -1358,7 +1398,7 @@ const bulkImportLeads = async (req, res) => {
                     status: lead.status || 'New',
                     tags: Array.isArray(lead.tags) ? lead.tags : [],
                     customData: lead.customData || {},
-                    assignedTo: req.user.role === 'agent' ? (req.user.userId || req.user.id) : undefined
+                    assignedTo: req.user.role === 'agent' ? getRequestUserId(req.user) : undefined
                 });
 
                 // Add to Sets so we don't insert duplicates within the same batch!
@@ -1372,7 +1412,7 @@ const bulkImportLeads = async (req, res) => {
 
             // Log activity
             logActivity({
-                userId: req.user.userId || req.user.id,
+                userId: getRequestUserId(req.user),
                 userName: req.user.name || 'Unknown',
                 actionType: 'LEAD_CREATED',
                 entityType: 'Lead',
@@ -1420,7 +1460,7 @@ const bulkAddTags = async (req, res) => {
         
         // Audit log
         logActivity({
-            userId: req.user.userId || req.user.id,
+            userId: getRequestUserId(req.user),
             userName: req.user.name || 'Unknown',
             actionType: 'LEAD_EDITED',
             entityType: 'Lead',

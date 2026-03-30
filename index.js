@@ -71,7 +71,13 @@ if (!process.env.SUPERADMIN_EMAIL || !process.env.SUPERADMIN_PASSWORD) {
   process.exit(1);
 }
 
-mongoose.connect(MONGO_URI)
+// 🚀 Optimized Connection Pool for 50+ Enterprise Clients (Max 250 Connections)
+mongoose.connect(MONGO_URI, {
+  maxPoolSize: 250, // Increase from default 100 to handle 50+ simultaneous clients
+  minPoolSize: 20,  // Keep 20 connections alive to prevent cold-start latency when Webhooks burst
+  serverSelectionTimeoutMS: 15000, // Wait 15s instead of 30s before failing if DB is unreachable
+  socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+})
   .then(async () => {
     console.log('✅ MongoDB Connected to Cloud! ☁️');
 

@@ -1,111 +1,150 @@
 const User = require('../models/User');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
-const IntegrationConfig = require('../models/IntegrationConfig');
-const Lead = require('../models/Lead');
-const WhatsAppConversation = require('../models/WhatsAppConversation');
-const WhatsAppMessage = require('../models/WhatsAppMessage');
-const WhatsAppTemplate = require('../models/WhatsAppTemplate');
-const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
-const WhatsAppLog = require('../models/WhatsAppLog');
-const EmailLog = require('../models/EmailLog');
-const EmailTemplate = require('../models/EmailTemplate');
-const ChatbotFlow = require('../models/ChatbotFlow');
-const ChatbotSession = require('../models/ChatbotSession');
-const Stage = require('../models/Stage');
-const ActivityLog = require('../models/ActivityLog');
+const GlobalSetting = require('../models/GlobalSetting');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const auditLogger = require('../services/auditLogger');
+const { BASIC_AGENT } = require('../constants/permissionPresets');
+const { deleteOwnedRecords } = require('../services/accountCleanupService');
+const {
+    STRONG_PASSWORD_MESSAGE,
+    normalizeEmail,
+    getRequestUserId,
+    hasManageTeamAccess,
+    hasStrongPassword
+} = require('../utils/controllerHelpers');
+
+const TOKEN_EXPIRY = '1d';
+const PASSWORD_SALT_ROUNDS = 10;
+
+const getWorkspaceForUser = (user) => {
+    const ownerId = user.role === 'agent' ? user.parentId : user._id;
+    return WorkspaceSettings.findOne({ userId: ownerId });
+};
+
+const buildAuthPayload = (user) => ({
+    userId: user._id,
+    role: user.role,
+    name: user.name,
+    permissions: user.permissions,
+    tenantId: user.role === 'agent' ? user.parentId : user._id
+});
+
+const buildBaseUserResponse = (user) => ({
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    permissions: user.permissions,
+    isOnboarded: user.isOnboarded
+});
+
+const buildLoginUserResponse = (user, workspace) => ({
+    ...buildBaseUserResponse(user),
+    is_active: user.is_active,
+    approved_by_admin: user.approved_by_admin,
+    status: user.status,
+    activeModules: workspace?.activeModules || []
+});
+
+const buildGoogleUserResponse = (user, workspace) => ({
+    ...buildBaseUserResponse(user),
+    subscriptionStatus: workspace?.subscriptionStatus || 'Trial',
+    planExpiryDate: workspace?.planExpiryDate,
+    activeModules: workspace?.activeModules || []
+});
+
+const getJwtSecret = () => process.env.JWT_SECRET;
+
+const signAuthToken = (user) =>
+    jwt.sign(buildAuthPayload(user), getJwtSecret(), { expiresIn: TOKEN_EXPIRY });
+
+const hashPassword = (password) => bcrypt.hash(password, PASSWORD_SALT_ROUNDS);
+
+const logFailedLogin = (reason, emailAttempted, req) => {
+    auditLogger.log({
+        actionCategory: 'SECURITY',
+        action: 'LOGIN_FAILED',
+        details: { reason, emailAttempted },
+        req
+    });
+};
+
+const blockUnapprovedLogin = (user, res) => {
+    if (user.role === 'superadmin') {
+        return false;
+    }
+
+    if (!user.approved_by_admin) {
+        res.status(403).json({
+            message: 'Account not approved yet. Please wait for admin approval.',
+            status: 'pending_approval'
+        });
+        return true;
+    }
+
+    if (!user.is_active) {
+        res.status(403).json({
+            message: 'Account has been deactivated. Please contact your administrator.',
+            status: 'deactivated'
+        });
+        return true;
+    }
+
+    if (user.status === 'rejected') {
+        res.status(403).json({
+            message: 'Account application was rejected. Please contact support.',
+            status: 'rejected'
+        });
+        return true;
+    }
+
+    return false;
+};
+
+const findManagedAgent = (managerId, agentId) =>
+    User.findOne({ _id: agentId, parentId: managerId, role: 'agent' });
 
 // 2. LOGIN (Purana User)
 exports.login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // SECURITY FIX: Input validation
         if (!email || !password) {
-            return res.status(400).json({ message: "Email and password are required" });
+            return res.status(400).json({ message: 'Email and password are required' });
         }
 
-        // User dhundo
-        const user = await User.findOne({ email: email.toLowerCase().trim() });
+        const normalizedEmail = normalizeEmail(email);
+        const user = await User.findOne({ email: normalizedEmail });
+
         if (!user) {
-            auditLogger.log({
-                actionCategory: 'SECURITY',
-                action: 'LOGIN_FAILED',
-                details: { reason: 'User not found', emailAttempted: email },
-                req
-            });
-            return res.status(400).json({ message: "Invalid Email or Password" });
+            logFailedLogin('User not found', email, req);
+            return res.status(400).json({ message: 'Invalid Email or Password' });
         }
 
-        // If user signed up via Google and has no password
         if (user.authProvider === 'google' && !user.password) {
-            return res.status(400).json({ message: "This account uses Google Sign-In. Please use the 'Sign in with Google' button." });
+            return res.status(400).json({
+                message: "This account uses Google Sign-In. Please use the 'Sign in with Google' button."
+            });
         }
 
-        // Password match karo
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            auditLogger.log({
-                actionCategory: 'SECURITY',
-                action: 'LOGIN_FAILED',
-                details: { reason: 'Invalid password', emailAttempted: email },
-                req
-            });
-            return res.status(400).json({ message: "Invalid Email or Password" });
+            logFailedLogin('Invalid password', email, req);
+            return res.status(400).json({ message: 'Invalid Email or Password' });
         }
 
-        // ==========================================
-        // ✅ APPROVAL-BASED ACCESS CONTROL CHECK
-        // ==========================================
-        // Superadmin always gets in. Everyone else needs approval.
-        if (user.role !== 'superadmin') {
-            if (!user.approved_by_admin) {
-                return res.status(403).json({ 
-                    message: "Account not approved yet. Please wait for admin approval.",
-                    status: 'pending_approval'
-                });
-            }
-            if (!user.is_active) {
-                return res.status(403).json({ 
-                    message: "Account has been deactivated. Please contact your administrator.",
-                    status: 'deactivated'
-                });
-            }
-            if (user.status === 'rejected') {
-                return res.status(403).json({ 
-                    message: "Account application was rejected. Please contact support.",
-                    status: 'rejected'
-                });
-            }
+        if (blockUnapprovedLogin(user, res)) {
+            return;
         }
 
-        const ownerId = user.role === 'agent' ? user.parentId : user._id;
-        const workspace = await WorkspaceSettings.findOne({ userId: ownerId });
-
-        // 🔥 Token Payload (Yahan Magic Hoga)
-        // Hum Token ke andar likh rahe hain ki ye banda 'superadmin' hai ya 'manager'
-        const payload = {
-            userId: user._id,
-            role: user.role,
-            name: user.name,
-            permissions: user.permissions, // Include permissions for Agents
-            tenantId: user.role === 'agent' ? user.parentId : user._id // Avoid DB lookups later!
-        };
-
-        // SECURITY FIX: Require JWT_SECRET from environment
-        const JWT_SECRET = process.env.JWT_SECRET;
-        if (!JWT_SECRET) {
+        const workspace = await getWorkspaceForUser(user);
+        if (!getJwtSecret()) {
             return res.status(500).json({ error: 'Server configuration error' });
         }
 
-        const token = jwt.sign(
-            payload,
-            JWT_SECRET,
-            { expiresIn: '1d' }
-        );
+        const token = signAuthToken(user);
 
         auditLogger.log({
             actor: user,
@@ -114,24 +153,11 @@ exports.login = async (req, res) => {
             req
         });
 
-        // Frontend ko bhi batao ki role kya hai
         res.json({
             token,
             role: user.role,
-            user: { 
-                id: user._id, 
-                name: user.name, 
-                email: user.email, 
-                role: user.role, 
-                permissions: user.permissions, 
-                is_active: user.is_active,
-                approved_by_admin: user.approved_by_admin,
-                status: user.status,
-                activeModules: workspace?.activeModules || [],
-                isOnboarded: user.isOnboarded
-            }
+            user: buildLoginUserResponse(user, workspace)
         });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -141,91 +167,69 @@ exports.login = async (req, res) => {
 // 2.5 GOOGLE LOGIN (OAuth)
 exports.googleLogin = async (req, res) => {
     try {
-        const { credential, allowNewUser = true } = req.body;
+        const { credential } = req.body;
 
         if (!credential) {
             return res.status(400).json({ message: 'Google credential is required' });
         }
 
-        const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-        if (!GOOGLE_CLIENT_ID) {
+        const googleClientId = process.env.GOOGLE_CLIENT_ID;
+        if (!googleClientId) {
             console.error('GOOGLE_CLIENT_ID missing from environment');
             return res.status(500).json({ message: 'Google login is not configured on the server' });
         }
 
-        // Verify the Google ID token
-        const client = new OAuth2Client(GOOGLE_CLIENT_ID);
+        const client = new OAuth2Client(googleClientId);
         const ticket = await client.verifyIdToken({
             idToken: credential,
-            audience: GOOGLE_CLIENT_ID,
+            audience: googleClientId
         });
-        const payload = ticket.getPayload();
-
-        const { sub: googleId, email, name, picture } = payload;
+        const googlePayload = ticket.getPayload();
+        const { sub: googleId, email } = googlePayload;
 
         if (!email) {
             return res.status(400).json({ message: 'Unable to get email from Google account' });
         }
 
-        // Find existing user by googleId or email
-        let user = await User.findOne({ $or: [{ googleId }, { email: email.toLowerCase() }] });
+        const normalizedEmail = normalizeEmail(email);
+        let user = await User.findOne({ $or: [{ googleId }, { email: normalizedEmail }] });
 
-        if (user) {
-            // Update googleId if user exists by email but hasn't linked Google yet
-            if (!user.googleId) {
-                user.googleId = googleId;
-                user.authProvider = user.password ? user.authProvider : 'google';
-                await user.save();
-            }
-            // Check if existing user has essential details to be considered onboarded
-            if (!user.isOnboarded && user.companyName) {
-                user.isOnboarded = true;
-                await user.save();
-            }
-        } else {
-            // New users cannot register via Google Auth anymore
-            return res.status(404).json({ 
+        if (!user) {
+            return res.status(404).json({
                 message: "You don't have an account with this Google email. Please contact the Super Admin to provision your account.",
-                isNewUser: true 
+                isNewUser: true
             });
         }
-        
-        // Fetch workspace for login response
-        const ownerId = user.role === 'agent' ? user.parentId : user._id;
-        const workspace = await WorkspaceSettings.findOne({ userId: ownerId });
 
-        // Create JWT token (same format as normal login)
-        const JWT_SECRET = process.env.JWT_SECRET;
-        if (!JWT_SECRET) {
+        let shouldSaveUser = false;
+
+        if (!user.googleId) {
+            user.googleId = googleId;
+            user.authProvider = user.password ? user.authProvider : 'google';
+            shouldSaveUser = true;
+        }
+
+        if (!user.isOnboarded && user.companyName) {
+            user.isOnboarded = true;
+            shouldSaveUser = true;
+        }
+
+        if (shouldSaveUser) {
+            await user.save();
+        }
+
+        const workspace = await getWorkspaceForUser(user);
+        if (!getJwtSecret()) {
             return res.status(500).json({ error: 'Server configuration error' });
         }
 
-        const tokenPayload = {
-            userId: user._id,
-            role: user.role,
-            name: user.name,
-            permissions: user.permissions,
-            tenantId: user.role === 'agent' ? user.parentId : user._id
-        };
-
-        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '1d' });
+        const token = signAuthToken(user);
 
         res.json({
             token,
             role: user.role,
-            user: { 
-                id: user._id, 
-                name: user.name, 
-                email: user.email, 
-                role: user.role, 
-                permissions: user.permissions,
-                subscriptionStatus: workspace?.subscriptionStatus || 'Trial',
-                planExpiryDate: workspace?.planExpiryDate,
-                activeModules: workspace?.activeModules || [],
-                isOnboarded: user.isOnboarded
-            }
+            user: buildGoogleUserResponse(user, workspace)
         });
-
     } catch (err) {
         console.error('Google Login Error:', err);
         if (err.message?.includes('Token used too late') || err.message?.includes('Invalid token')) {
@@ -239,50 +243,43 @@ exports.googleLogin = async (req, res) => {
 exports.createAgent = async (req, res) => {
     try {
         const { name, email, password, permissions } = req.body;
-        const { BASIC_AGENT } = require('../constants/permissionPresets');
 
-        // 1. Check permission
-        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
-        if (!canManageTeam) {
-            return res.status(403).json({ message: "Unauthorized to manage team" });
+        if (!hasManageTeamAccess(req.user)) {
+            return res.status(403).json({ message: 'Unauthorized to manage team' });
         }
 
-        // 2. Check duplicate email
-        let user = await User.findOne({ email });
-        if (user) return res.status(400).json({ message: "User already exists" });
+        const normalizedEmail = normalizeEmail(email);
+        let user = await User.findOne({ email: normalizedEmail });
 
-        // 2.5 CRITICAL FIX: Enforce Agent Limit from WorkspaceSettings
-        const managerId = req.user.role === 'agent' ? req.user.parentId : req.user.userId;
+        if (user) {
+            return res.status(400).json({ message: 'User already exists' });
+        }
+
+        const managerId = getRequestUserId(req.user);
         const workspace = await WorkspaceSettings.findOne({ userId: managerId }).select('agentLimit');
         const currentAgentCount = await User.countDocuments({ parentId: managerId, role: 'agent' });
         const limit = workspace?.agentLimit || 5;
-        
+
         if (currentAgentCount >= limit) {
-            return res.status(403).json({ 
-                message: `Upgrade required. You have reached your current plan limit of ${limit} agents.` 
+            return res.status(403).json({
+                message: `Upgrade required. You have reached your current plan limit of ${limit} agents.`
             });
         }
 
-        // 3. Password Encrypt
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-
-        // 4. Use provided permissions or default to BASIC_AGENT preset
         const agentPermissions = permissions || BASIC_AGENT;
 
-        // 5. Create Agent Linked to Manager
         user = await User.create({
             name,
-            email,
-            password: hashedPassword,
-            role: 'agent',            // Role fix hai
-            parentId: req.user.userId, // Manager ka ID yahan save hoga
-            permissions: agentPermissions // Add permissions
+            email: normalizedEmail,
+            password: await hashPassword(password),
+            role: 'agent',
+            parentId: managerId,
+            permissions: agentPermissions
         });
 
         res.json({
             success: true,
-            message: "Agent Created Successfully!",
+            message: 'Agent Created Successfully!',
             agent: {
                 id: user._id,
                 name: user.name,
@@ -290,51 +287,33 @@ exports.createAgent = async (req, res) => {
                 permissions: user.permissions
             }
         });
-
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
     }
 };
+
 // 4. GET MY TEAM (Manager apne agents dekhega)
 // 5. DELETE AGENT (Manager apne agent ko remove kar sakta hai)
 exports.deleteAgent = async (req, res) => {
     try {
         const agentId = req.params.id;
 
-        // Verify requester is a manager or has manageTeam permission
-        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
-        if (!canManageTeam) {
-            return res.status(403).json({ message: "Unauthorized to manage team" });
+        if (!hasManageTeamAccess(req.user)) {
+            return res.status(403).json({ message: 'Unauthorized to manage team' });
         }
 
-        // Find the agent and ensure they belong to this manager
-        const agent = await User.findOne({ _id: agentId, parentId: req.user.userId });
+        const managerId = getRequestUserId(req.user);
+        const agent = await findManagedAgent(managerId, agentId);
 
         if (!agent) {
-            return res.status(404).json({ message: "Agent not found or does not belong to you" });
+            return res.status(404).json({ message: 'Agent not found or does not belong to you' });
         }
 
-        // Cascade delete agent's data
-        await Promise.all([
-            Lead.deleteMany({ userId: agentId }),
-            WhatsAppConversation.deleteMany({ userId: agentId }),
-            WhatsAppMessage.deleteMany({ userId: agentId }),
-            WhatsAppTemplate.deleteMany({ userId: agentId }),
-            WhatsAppBroadcast.deleteMany({ userId: agentId }),
-            WhatsAppLog.deleteMany({ userId: agentId }),
-            EmailLog.deleteMany({ userId: agentId }),
-            EmailTemplate.deleteMany({ userId: agentId }),
-            ChatbotFlow.deleteMany({ userId: agentId }),
-            ChatbotSession.deleteMany({ userId: agentId }),
-            Stage.deleteMany({ userId: agentId }),
-            ActivityLog.deleteMany({ userId: agentId })
-        ]);
-
-        // Delete the agent
+        await deleteOwnedRecords(agentId);
         await User.findByIdAndDelete(agentId);
 
-        res.json({ success: true, message: "Agent and all associated data deleted successfully" });
+        res.json({ success: true, message: 'Agent and all associated data deleted successfully' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -347,44 +326,44 @@ exports.updateAgent = async (req, res) => {
         const { id } = req.params;
         const { name, permissions, password } = req.body;
 
-        // Only managers or users with permission can update agents
-        const canManageTeam = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.manageTeam === true;
-        if (!canManageTeam) {
-            return res.status(403).json({ message: "Unauthorized to manage team" });
+        if (!hasManageTeamAccess(req.user)) {
+            return res.status(403).json({ message: 'Unauthorized to manage team' });
         }
 
-        // Find agent and ensure they belong to this manager
-        const agent = await User.findOne({ _id: id, parentId: req.user.userId, role: 'agent' });
+        const managerId = getRequestUserId(req.user);
+        const agent = await findManagedAgent(managerId, id);
 
         if (!agent) {
-            return res.status(404).json({ message: "Agent not found or does not belong to you" });
+            return res.status(404).json({ message: 'Agent not found or does not belong to you' });
         }
 
-        // Update fields
         const updateData = {};
-        if (name) updateData.name = name;
-        if (permissions) updateData.permissions = permissions;
 
-        // Handle password update
-        if (password) {
-            if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)) {
-                return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
-            }
-            const salt = await bcrypt.genSalt(10);
-            updateData.password = await bcrypt.hash(password, salt);
+        if (name) {
+            updateData.name = name;
         }
 
-        const updatedAgent = await User.findByIdAndUpdate(id, updateData, { new: true })
-            .select('-password');
+        if (permissions) {
+            updateData.permissions = permissions;
+        }
+
+        if (password) {
+            if (!hasStrongPassword(password)) {
+                return res.status(400).json({ message: STRONG_PASSWORD_MESSAGE });
+            }
+
+            updateData.password = await hashPassword(password);
+        }
+
+        const updatedAgent = await User.findByIdAndUpdate(id, updateData, { new: true }).select('-password');
 
         res.json({
             success: true,
-            message: "Agent updated successfully",
+            message: 'Agent updated successfully',
             agent: updatedAgent
         });
-
     } catch (err) {
-        console.error("Update Agent Error:", err);
+        console.error('Update Agent Error:', err);
         res.status(500).json({ error: err.message });
     }
 };
@@ -392,8 +371,8 @@ exports.updateAgent = async (req, res) => {
 // 6. GET MY TEAM
 exports.getMyTeam = async (req, res) => {
     try {
-        // Sirf wo users dhundo jinka 'parentId' logged-in user (Manager) hai
-        const agents = await User.find({ parentId: req.user.userId }).select('-password'); // Password mat bhejna
+        const managerId = getRequestUserId(req.user);
+        const agents = await User.find({ parentId: managerId }).select('-password');
         res.json(agents);
     } catch (err) {
         console.error(err);
@@ -405,26 +384,32 @@ exports.getMyTeam = async (req, res) => {
 exports.updateProfile = async (req, res) => {
     try {
         const { name, password } = req.body;
-        const userId = req.user.userId;
+        const userId = getRequestUserId(req.user);
 
         const user = await User.findById(userId);
-        if (!user) return res.status(404).json({ message: "User not found" });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
 
         if (name && name.trim()) {
             user.name = name.trim();
         }
 
         if (password && password.trim()) {
-            if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)) {
-                return res.status(400).json({ message: "Password must be at least 8 characters, and include uppercase, lowercase, number, and special character" });
+            if (!hasStrongPassword(password)) {
+                return res.status(400).json({ message: STRONG_PASSWORD_MESSAGE });
             }
-            const salt = await bcrypt.genSalt(10);
-            user.password = await bcrypt.hash(password, salt);
+
+            user.password = await hashPassword(password);
         }
 
         await user.save();
 
-        res.json({ success: true, message: "Profile updated successfully", user: { id: user._id, name: user.name, email: user.email } });
+        res.json({
+            success: true,
+            message: 'Profile updated successfully',
+            user: { id: user._id, name: user.name, email: user.email }
+        });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -434,7 +419,6 @@ exports.updateProfile = async (req, res) => {
 // 7. GET PUBLIC PLANS (For viewing subscription plans)
 exports.getPlans = async (req, res) => {
     try {
-        // Billing removed
         res.json({ success: true, plans: [] });
     } catch (err) {
         console.error(err);
@@ -445,14 +429,14 @@ exports.getPlans = async (req, res) => {
 // 8. GET APP NAME (Public - no auth required)
 exports.getAppName = async (req, res) => {
     try {
-        const GlobalSetting = require('../models/GlobalSetting');
         const appNameSetting = await GlobalSetting.findOne({ key: 'app_name' });
+
         res.json({
             success: true,
             appName: appNameSetting?.value || 'CRM Pro'
         });
     } catch (err) {
         console.error(err);
-        res.json({ success: true, appName: 'CRM Pro' }); // Fallback on error
+        res.json({ success: true, appName: 'CRM Pro' });
     }
 };
