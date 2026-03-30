@@ -26,23 +26,6 @@ const getCredentials = async (userId = null) => {
     return { phoneNumberId, accessToken };
 };
 
-// Internal Helper: Cancel active chatbot sessions for a phone number
-const cancelActiveChatbots = async (phone) => {
-    try {
-        const WhatsAppConversation = require('../models/WhatsAppConversation');
-        const ChatbotSession = require('../models/ChatbotSession');
-        const conv = await WhatsAppConversation.findOne({ phone: phone });
-        if (conv) {
-            await ChatbotSession.updateMany(
-                { conversationId: conv._id, status: 'active' },
-                { $set: { status: 'handoff', handoffReason: 'Agent manually replied', completedAt: new Date() } }
-            );
-        }
-    } catch (e) {
-        console.error('Error cancelling chatbot sessions:', e);
-    }
-};
-
 const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
@@ -109,7 +92,6 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
         const response = await axios.post(url, data, config);
 
         console.log(`✅ SUCCESS: Message Sent! Response ID: ${response.data.messages[0].id}`);
-        await cancelActiveChatbots(to);
         return response.data;
 
     } catch (error) {
@@ -180,7 +162,6 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
 
         const messageId = response.data.messages?.[0]?.id;
         console.log(`✅ SUCCESS: WhatsApp text message sent! Response ID: ${messageId}`);
-        await cancelActiveChatbots(to);
 
         // Log successful message (non-blocking)
         if (userId && messageId) {
@@ -257,7 +238,6 @@ const sendMediaMessage = async (to, mediaType, mediaId, caption = null, userId =
 
         const response = await axios.post(url, data, config);
         console.log(`✅ Media message sent (${mediaType}):`, response.data.messages[0].id);
-        await cancelActiveChatbots(to);
         return response.data;
     } catch (error) {
         console.error(`❌ Failed to send ${mediaType} message:`, error.response?.data || error.message);
@@ -306,7 +286,6 @@ const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
 
         const response = await axios.post(url, data, config);
         console.log(`✅ Interactive message sent:`, response.data.messages[0].id);
-        await cancelActiveChatbots(to);
         return response.data;
     } catch (error) {
         console.error('❌ Failed to send interactive message:', error.response?.data || error.message);
@@ -353,7 +332,6 @@ const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en'
         
         const messageId = response.data.messages?.[0]?.id;
         console.log(`✅ SUCCESS: WhatsApp template sent! Response ID: ${messageId}`);
-        await cancelActiveChatbots(to);
 
         // Log successful message
         if (userId && messageId) {

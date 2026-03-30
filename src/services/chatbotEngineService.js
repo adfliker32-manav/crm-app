@@ -6,20 +6,72 @@ const User = require('../models/User');
 const { sendWhatsAppTextMessage, sendInteractiveMessage } = require('./whatsappService');
 const NodeCache = require('node-cache');
 const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+const normalizeId = (value) => value ? value.toString() : null;
+const buildFlowCacheKey = (ownerIds) => `flows_${[...new Set(ownerIds.map(normalizeId).filter(Boolean))].sort().join('|')}`;
 
 exports.invalidateFlowCache = (userId) => {
-    flowCache.del(`flows_${userId}`);
+    const normalizedUserId = normalizeId(userId);
+    const matchingKeys = flowCache.keys().filter((key) => {
+        if (!key.startsWith('flows_')) return false;
+        return key.slice(6).split('|').includes(normalizedUserId);
+    });
+
+    if (matchingKeys.length > 0) {
+        flowCache.del(matchingKeys);
+    } else {
+        flowCache.del(`flows_${normalizedUserId}`);
+    }
     console.log(`🧹 Cleared chatbot flow cache for user ${userId}`);
 };
 
-const getActiveFlows = async (userId) => {
-    const cacheKey = `flows_${userId}`;
+const resolveChatbotContext = async (userId) => {
+    const normalizedUserId = normalizeId(userId);
+    const owner = await User.findById(userId).select('role parentId').lean();
+    const tenantId = owner?.role === 'agent' && owner.parentId
+        ? normalizeId(owner.parentId)
+        : normalizedUserId;
+
+    let flowOwnerIds = tenantId && tenantId !== normalizedUserId
+        ? [tenantId, normalizedUserId]
+        : [tenantId || normalizedUserId];
+
+    if (tenantId) {
+        const relatedUsers = await User.find({
+            $or: [{ _id: tenantId }, { parentId: tenantId }]
+        }).select('_id').lean();
+
+        flowOwnerIds = [
+            ...flowOwnerIds,
+            ...relatedUsers.map((user) => normalizeId(user._id))
+        ];
+    }
+
+    return {
+        tenantId: tenantId || normalizedUserId,
+        flowOwnerIds: [...new Set(flowOwnerIds.filter(Boolean))]
+    };
+};
+
+const getActiveFlows = async (ownerIds, preferredOwnerId) => {
+    const cacheKey = buildFlowCacheKey(ownerIds);
     let flows = flowCache.get(cacheKey);
     if (!flows) {
-        flows = await ChatbotFlow.find({ userId: userId, isActive: true }).lean();
+        flows = await ChatbotFlow.find({
+            userId: { $in: ownerIds },
+            isActive: true
+        }).lean();
         flowCache.set(cacheKey, flows);
     }
-    return flows;
+
+    const preferredId = normalizeId(preferredOwnerId);
+    const ownerPriority = [...new Set(ownerIds.map(normalizeId).filter(Boolean))];
+    return [...flows].sort((a, b) => {
+        const aUserId = normalizeId(a.userId);
+        const bUserId = normalizeId(b.userId);
+        const aPriority = aUserId === preferredId ? -1 : ownerPriority.indexOf(aUserId);
+        const bPriority = bUserId === preferredId ? -1 : ownerPriority.indexOf(bUserId);
+        return aPriority - bPriority;
+    });
 };
 
 // Helper to evaluate if currently within business hours
@@ -66,13 +118,10 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
     try {
         const conversation = await WhatsAppConversation.findById(conversationId);
         if (!conversation) return null;
+        const { tenantId, flowOwnerIds } = await resolveChatbotContext(userId);
 
         // 1. Check Global Automations (Welcome & Out-of-Office)
-        const User = require('../models/User');
         const IntegrationConfig = require('../models/IntegrationConfig');
-        
-        let tenantOwner = await User.findById(userId).select('role parentId');
-        let tenantId = (tenantOwner && tenantOwner.role === 'agent' && tenantOwner.parentId) ? tenantOwner.parentId : userId;
 
         const config = await IntegrationConfig.findOne({ userId: tenantId }).select('whatsapp').lean();
         
@@ -89,7 +138,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                         (new Date() - new Date(conversation.lastMessageAt)) > (4 * 60 * 60 * 1000);
 
                     if (conversation.metadata.totalInbound === 1 || isNewConversationBurst) {
-                        await sendWhatsAppTextMessage(conversation.phone, autoReply.outOfOfficeMessage, userId);
+                        await sendWhatsAppTextMessage(conversation.phone, autoReply.outOfOfficeMessage, tenantId);
                         sentOOO = true;
                     }
                 }
@@ -98,7 +147,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             // Welcome Message logic — ONLY fires if OOO was NOT sent (mutually exclusive)
             if (!sentOOO && autoReply.welcomeEnabled && autoReply.welcomeMessage) {
                 if (conversation.metadata.totalInbound === 1) {
-                    await sendWhatsAppTextMessage(conversation.phone, autoReply.welcomeMessage, userId);
+                    await sendWhatsAppTextMessage(conversation.phone, autoReply.welcomeMessage, tenantId);
                 }
             }
         }
@@ -119,7 +168,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
         }
 
         // Check for keyword triggers using memory cache
-        const allActiveFlows = await getActiveFlows(userId);
+        const allActiveFlows = await getActiveFlows(flowOwnerIds, tenantId);
         let targetFlow = null;
 
         // 1. Keyword Flow Match (Case-Insensitive & Boundary matched)
@@ -151,7 +200,11 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 
         if (targetFlow) {
             // Start new session with first matching flow
-            return await startSession(targetFlow, conversationId, userId);
+            return await startSession(
+                targetFlow,
+                conversationId,
+                normalizeId(targetFlow.userId) || tenantId
+            );
         }
 
         return null;
