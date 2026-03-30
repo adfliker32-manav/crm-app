@@ -211,7 +211,7 @@ const processEntry = async (entry) => {
                 debug(`💬 Found ${value.messages.length} incoming message(s)`);
                 for (const message of value.messages) {
                     debug(`   → Processing message ID: ${message.id}, type: ${message.type}, from: ${message.from}`);
-                    await processIncomingMessage(message, value.contacts, user._id);
+                    await processIncomingMessage(message, value.contacts, user._id, phoneNumberId);
                 }
             } else {
                 debug('   ℹ️  No messages array in this change (could be status update only)');
@@ -234,7 +234,7 @@ const processEntry = async (entry) => {
 };
 
 // Process an incoming message
-const processIncomingMessage = async (message, contacts, userId) => {
+const processIncomingMessage = async (message, contacts, userId, incomingPhoneNumberId) => {
     try {
         const from = message.from; // Sender's phone number
         const waMessageId = message.id;
@@ -266,26 +266,31 @@ const processIncomingMessage = async (message, contacts, userId) => {
         const messagePreview = extractMessagePreview(message);
 
         // --- 3. FIX: FIND REAL CONVERSATION OWNER ---
-        // Webhooks often resolve to the Agency `userId`, but an Agent might have 
-        // sent the outbound template creating the conversation under the Agent's `userId`.
-        // If we strictly upsert on the Agency `userId`, it creates a duplicate.
-        // We must search the entire company tree to find if this contact already exists.
-        const User = require('../models/User'); // Ensure imported
-        const currentUser = await User.findById(userId).select('role parentId').lean();
-        const companyId = currentUser?.role === 'agent' ? currentUser.parentId : userId;
-        
-        const companyUsers = await User.find({
-            $or: [{ _id: companyId }, { parentId: companyId }]
-        }).select('_id').lean();
-        const companyUserIds = companyUsers.map(u => u._id);
+        // Webhooks often resolve to the Agency/SuperAdmin `userId`, but a Manager/Agent 
+        // might have sent the outbound template under their own disjoint `userId` while sharing
+        // the same WhatsApp Phone Number credentials in testing/production.
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const User = require('../models/User');
 
-        // Find if any agent/admin in the company already has a conversation with this contact
+        const safePhoneNumberId = incomingPhoneNumberId || process.env.WA_PHONE_NUMBER_ID;
+
+        // Find all users who are explicitly configured to use this incoming Phone Number ID
+        const configs = await IntegrationConfig.find({ "whatsapp.waPhoneNumberId": safePhoneNumberId }).select('userId').lean();
+        const usersProp = await User.find({ waPhoneNumberId: safePhoneNumberId }).select('_id').lean();
+        
+        const validUserIds = [
+            userId, // The fallback owner resolved earlier
+            ...configs.map(c => c.userId),
+            ...usersProp.map(u => u._id)
+        ];
+
+        // Find if any user sharing this phone number already has a conversation
         const existingConversation = await WhatsAppConversation.findOne({
-            userId: { $in: companyUserIds },
+            userId: { $in: validUserIds },
             waContactId: from
         }).sort({ lastMessageAt: -1 }).lean();
 
-        // If found, append to that specific user's conversation. If not, default to the webhook's userId.
+        // If found, append to that specific user's conversation to prevent duplicates.
         const targetUserId = existingConversation ? existingConversation.userId : userId;
 
         // --- 4. ATOMIC UPSERT ---
