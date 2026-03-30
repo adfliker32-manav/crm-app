@@ -497,6 +497,16 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                     }
                                                 }
                                             }}
+                                            onBlur={(e) => {
+                                                const val = e.target.value.trim().toLowerCase();
+                                                if (val && !(flow.triggerKeywords || []).includes(val)) {
+                                                    setFlow({
+                                                        ...flow, 
+                                                        triggerKeywords: [...(flow.triggerKeywords || []), val]
+                                                    });
+                                                    e.target.value = '';
+                                                }
+                                            }}
                                         />
                                     </div>
                                 )}
