@@ -133,7 +133,13 @@ async function syncUserEmails(userId, config) {
     }
 }
 
+let isRunning = false;
 async function syncAllUsers() {
+    if (isRunning) {
+        console.log("⏳ Skipping IMAP Sync: Previous cycle still running.");
+        return;
+    }
+    isRunning = true;
     try {
         const IntegrationConfig = require('../models/IntegrationConfig');
         const configs = await IntegrationConfig.find({ 
@@ -157,6 +163,8 @@ async function syncAllUsers() {
         }
     } catch (e) {
         console.error("Error in syncAllUsers:", e);
+    } finally {
+        isRunning = false;
     }
 }
 

@@ -167,16 +167,16 @@ const processEntry = async (entry) => {
             debug(`📱 Display Phone Number:          ${displayPhoneNumber}`);
             debugJSON('📋 Change value', value);
 
-            // Find the user who owns this phone number via IntegrationConfig
+            // Find the user who owns this phone number via IntegrationConfig and populate user directly
             debug(`🔎 Looking for tenant with waPhoneNumberId = "${phoneNumberId}" via IntegrationConfig...`);
-            const config = await IntegrationConfig.findOne({ "whatsapp.waPhoneNumberId": phoneNumberId });
+            const config = await IntegrationConfig.findOne({ "whatsapp.waPhoneNumberId": phoneNumberId })
+                .populate('userId', 'email role parentId')
+                .lean();
             
             let user = null;
-            if (config) {
-                user = await User.findById(config.userId).select('email role parentId').lean();
-                if (user) {
-                    debug(`✅ Found user by waPhoneNumberId: ${user.email} (${user._id})`);
-                }
+            if (config && config.userId) {
+                user = config.userId;
+                debug(`✅ Found user by waPhoneNumberId: ${user.email} (${user._id})`);
             } else {
                 debug(`⚠️  No IntegrationConfig found by waPhoneNumberId. Trying environment fallback...`);
             }
@@ -259,13 +259,6 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
 
         // Try to link to existing lead by phone if creating a new conversation
         const phoneLastTen = from.slice(-10);
-        const lead = await Lead.findOne({
-            userId: userId,
-            phone: { $regex: phoneLastTen, $options: 'i' }
-        });
-
-        const messagePreview = extractMessagePreview(message);
-
         // --- 3. FIX: FIND REAL CONVERSATION OWNER ---
         // Webhooks often resolve to the Agency/SuperAdmin `userId`, but a Manager/Agent 
         // might have sent the outbound template under their own disjoint `userId` while sharing
@@ -275,9 +268,14 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
 
         const safePhoneNumberId = incomingPhoneNumberId || process.env.WA_PHONE_NUMBER_ID;
 
-        // Find all users who are explicitly configured to use this incoming Phone Number ID
-        const configs = await IntegrationConfig.find({ "whatsapp.waPhoneNumberId": safePhoneNumberId }).select('userId').lean();
-        const usersProp = await User.find({ waPhoneNumberId: safePhoneNumberId }).select('_id').lean();
+        const messagePreview = extractMessagePreview(message);
+
+        // Parallelize independent database reads to save significant overhead
+        const [lead, configs, usersProp] = await Promise.all([
+            Lead.findOne({ userId: userId, phone: { $regex: phoneLastTen, $options: 'i' } }).lean(),
+            IntegrationConfig.find({ "whatsapp.waPhoneNumberId": safePhoneNumberId }).select('userId').lean(),
+            User.find({ waPhoneNumberId: safePhoneNumberId }).select('_id').lean()
+        ]);
         
         const validUserIds = [
             userId, // The fallback owner resolved earlier
@@ -418,12 +416,14 @@ const processStatusUpdate = async (status, userId) => {
             };
         }
 
-        const result = await WhatsAppMessage.updateOne(
+        // Execute single atomic update that also returns the updated document instantly
+        const updatedMsg = await WhatsAppMessage.findOneAndUpdate(
             { waMessageId: waMessageId },
-            updatePayload
-        );
+            updatePayload,
+            { new: true, select: 'conversationId userId' }
+        ).lean();
 
-        if (result.matchedCount === 0) {
+        if (!updatedMsg) {
             console.log(`⚠️ Message not found for status update: ${waMessageId}`);
             debug('   The message may not have been saved by this server (e.g., sent via another tool)');
             return;
@@ -433,19 +433,15 @@ const processStatusUpdate = async (status, userId) => {
         debug(`✅ Status atomic update completed`);
 
         // 🔌 Push status update to frontend via Socket.IO
-        // Find the message to get its conversationId for targeted emit
-        const updatedMsg = await WhatsAppMessage.findOne({ waMessageId }).select('conversationId userId').lean();
-        if (updatedMsg) {
-            emitToUser(updatedMsg.userId, 'whatsapp:statusUpdate', {
-                waMessageId,
-                status: statusType,
-                conversationId: updatedMsg.conversationId
-            });
-            emitToConversation(updatedMsg.conversationId.toString(), 'whatsapp:statusUpdate', {
-                waMessageId,
-                status: statusType
-            });
-        }
+        emitToUser(updatedMsg.userId, 'whatsapp:statusUpdate', {
+            waMessageId,
+            status: statusType,
+            conversationId: updatedMsg.conversationId
+        });
+        emitToConversation(updatedMsg.conversationId.toString(), 'whatsapp:statusUpdate', {
+            waMessageId,
+            status: statusType
+        });
 
     } catch (error) {
         console.error('❌ Error processing status update:', error);

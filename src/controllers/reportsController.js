@@ -529,26 +529,53 @@ const getAgentDetailedPerformance = async (req, res) => {
 
         // Get leads for the selected agent in date range
         const selectedAgentId = new mongoose.Types.ObjectId(agentId);
+        
+        // 1. AGGREGATION FOR SUMMARY METRICS (Avoids pulling full lead data)
+        const [aggSummary] = await Lead.aggregate([
+            { $match: { userId: ownerId, assignedTo: selectedAgentId, createdAt: { $gte: start, $lte: end } } },
+            {
+                $facet: {
+                    stats: [
+                        { $group: {
+                            _id: null,
+                            leadsAssigned: { $sum: 1 },
+                            dealsClosed: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] } },
+                            revenueGenerated: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] } },
+                            leadsContacted: {
+                                $sum: {
+                                    $cond: [
+                                        { $or: [
+                                            { $gt: [{ $size: { $ifNull: [ { $filter: { input: { $ifNull: ["$history", []] }, as: "h", cond: { $in: ["$$h.type", ["Email", "WhatsApp", "Follow-up"]] } } }, [] ] } }, 0] },
+                                            { $gt: [{ $size: { $ifNull: ["$followUpHistory", []] } }, 0] },
+                                            { $gt: [{ $size: { $ifNull: [ { $filter: { input: { $ifNull: ["$messages", []] }, as: "m", cond: { $eq: ["$$m.from", "admin"] } } }, [] ] } }, 0] }
+                                        ]}, 1, 0
+                                    ]
+                                }
+                            }
+                        }}
+                    ],
+                    stageCounts: [
+                        { $group: { _id: { $ifNull: ["$status", "New"] }, count: { $sum: 1 } } }
+                    ]
+                }
+            }
+        ]);
+
+        const stats = aggSummary.stats[0] || { leadsAssigned: 0, dealsClosed: 0, revenueGenerated: 0, leadsContacted: 0 };
+        const leadsAssigned = stats.leadsAssigned;
+        const dealsClosed = stats.dealsClosed;
+        const revenueGenerated = stats.revenueGenerated;
+        const leadsContacted = stats.leadsContacted;
+
+        // 2. LEAN QUERY FOR COMPLEX TIME CALCULATIONS
+        // Only pull strictly necessary arrays to prevent Node.js RAM exhaustion
         const agentLeads = await Lead.find({
             userId: ownerId,
             assignedTo: selectedAgentId,
             createdAt: { $gte: start, $lte: end }
-        }).lean();
+        }).select('name status createdAt firstContactedAt history.type history.subType history.date history.metadata history.content messages.from messages.timestamp followUpHistory.completedDate').lean();
 
         const selectedAgent = agents.find(a => a._id.toString() === agentId);
-
-        // 1. SUMMARY METRICS
-        const leadsAssigned = agentLeads.length;
-
-        // Contacted = leads with any history entry (Email, WhatsApp, Follow-up) from admin
-        const leadsContacted = agentLeads.filter(lead => {
-            const hasHistory = lead.history && lead.history.some(h =>
-                ['Email', 'WhatsApp', 'Follow-up'].includes(h.type)
-            );
-            const hasFollowUp = lead.followUpHistory && lead.followUpHistory.length > 0;
-            const hasMessages = lead.messages && lead.messages.some(m => m.from === 'admin');
-            return hasHistory || hasFollowUp || hasMessages;
-        }).length;
 
         const contactRate = leadsAssigned > 0
             ? ((leadsContacted / leadsAssigned) * 100).toFixed(1)
@@ -597,27 +624,18 @@ const getAgentDetailedPerformance = async (req, res) => {
         const avgFirstResponseMinutes = Math.round(avgFirstResponseMs / (1000 * 60));
         const avgFirstResponseHours = (avgFirstResponseMs / (1000 * 60 * 60)).toFixed(1);
 
-        // Deals Closed & Revenue
-        const wonLeads = agentLeads.filter(lead =>
-            lead.status?.toLowerCase().includes('won')
-        );
-        const dealsClosed = wonLeads.length;
         const conversionRate = leadsAssigned > 0
             ? ((dealsClosed / leadsAssigned) * 100).toFixed(1)
             : 0;
-        const revenueGenerated = wonLeads.reduce((sum, lead) => sum + (lead.dealValue || 0), 0);
 
         // 2. PIPELINE LEAKAGE TABLE
         const stageCounts = {};
         const stageOrder = ['New', 'Contacted', 'Qualified', 'Proposal Sent', 'Negotiation', 'Won', 'Lost', 'Dead Lead'];
 
-        // Count leads by stage
-        agentLeads.forEach(lead => {
-            const stage = lead.status || 'New';
-            if (!stageCounts[stage]) {
-                stageCounts[stage] = { entered: 0, current: 0 };
-            }
-            stageCounts[stage].current++;
+        // Extract Current resting stage from Aggregation (Faster)
+        const currentStageRaw = aggSummary.stageCounts || [];
+        currentStageRaw.forEach(s => {
+            stageCounts[s._id] = { entered: 0, current: s.count };
         });
 
         // Track stage transitions from history

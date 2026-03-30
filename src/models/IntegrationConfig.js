@@ -13,7 +13,7 @@ const integrationConfigSchema = new mongoose.Schema({
     // 🟢 WhatsApp Configuration
     whatsapp: {
         waBusinessId: { type: String, default: null },
-        waPhoneNumberId: { type: String, default: null }, // Unique constraint removed to fix null duplicates
+        waPhoneNumberId: { type: String, default: null, index: true }, // Unique constraint removed to fix null duplicates
         // FIX 4.3: select:false prevents token leakage if a route returns the full config document
         waAccessToken: { type: String, default: null, select: false },
         waAppId: { type: String, default: null },

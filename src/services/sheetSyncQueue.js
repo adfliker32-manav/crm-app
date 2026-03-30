@@ -8,7 +8,9 @@ const axios = require('axios');
 const Papa = require('papaparse');
 const User = require('../models/User');
 const Lead = require('../models/Lead');
-const { findDuplicates } = require('./duplicateService');
+const IntegrationConfig = require('../models/IntegrationConfig');
+const WorkspaceSettings = require('../models/WorkspaceSettings');
+const { findDuplicates, normalizePhone } = require('./duplicateService');
 const { sendAutomatedEmailOnLeadCreate } = require('./emailAutomationService');
 const { sendAutomatedWhatsAppOnLeadCreate } = require('./whatsappAutomationService');
 
@@ -62,8 +64,26 @@ agenda.define('sheet-sync', async (job) => {
         const response = await axios.get(csvUrl, { timeout: 30000 });
         const parsed = Papa.parse(response.data, { header: true, skipEmptyLines: true });
 
-        // Process rows (same skip-mapping logic as manual sync)
+        // 1. Fetch all existing leads for quick memory lookup
+        const existingLeads = await Lead.find({ userId: tenantOwnerId })
+            .select('phone email')
+            .lean();
+
+        const existingPhones = new Set();
+        const existingEmails = new Set();
+
+        for (const lead of existingLeads) {
+            const nPhone = normalizePhone(lead.phone);
+            if (nPhone) existingPhones.add(nPhone.slice(-10));
+            if (lead.email && lead.email.trim()) {
+                existingEmails.add(lead.email.trim().toLowerCase());
+            }
+        }
+
+        // Process rows (memory lookup instead of DB lookup per row)
+        const newLeadsToInsert = [];
         let count = 0;
+
         for (const row of parsed.data) {
             const keys = Object.keys(row);
             const nameKey = keys.find(k => k.toLowerCase().includes('name'));
@@ -83,21 +103,41 @@ agenda.define('sheet-sync', async (job) => {
                 }
             });
 
-            if (finalEmail || finalPhone !== 'No Phone') {
-                const duplicates = await findDuplicates(tenantOwnerId, finalPhone, finalEmail);
-                if (duplicates.length === 0) {
-                    const newLead = await Lead.create({
-                        userId: tenantOwnerId,
-                        assignedTo: user.role === 'agent' ? userId : null,
-                        name: finalName,
-                        email: finalEmail,
-                        phone: finalPhone,
-                        source: 'Google Sheet (Auto)',
-                        status: 'New',
-                        customData: customData
-                    });
+            const normPhone = normalizePhone(finalPhone);
+            const normEmail = finalEmail ? finalEmail.trim().toLowerCase() : null;
 
-                    // Non-blocking automations
+            if (!normPhone && !normEmail) continue;
+
+            const isPhoneDupe = normPhone && existingPhones.has(normPhone.slice(-10));
+            const isEmailDupe = normEmail && existingEmails.has(normEmail);
+
+            if (!isPhoneDupe && !isEmailDupe) {
+                // Not a duplicate
+                newLeadsToInsert.push({
+                    userId: tenantOwnerId,
+                    assignedTo: user.role === 'agent' ? userId : null,
+                    name: finalName,
+                    email: finalEmail,
+                    phone: finalPhone,
+                    source: 'Google Sheet (Auto)',
+                    status: 'New',
+                    customData: customData
+                });
+
+                // Add to memory sets to avoid duplicates within the sheet itself
+                if (normPhone) existingPhones.add(normPhone.slice(-10));
+                if (normEmail) existingEmails.add(normEmail);
+            }
+        }
+
+        // Bulk insert new leads
+        if (newLeadsToInsert.length > 0) {
+            try {
+                const insertedLeads = await Lead.insertMany(newLeadsToInsert, { ordered: false });
+                count = insertedLeads.length;
+
+                // Trigger automations for inserted leads safely
+                for (const newLead of insertedLeads) {
                     if (newLead.email) {
                         sendAutomatedEmailOnLeadCreate(newLead, tenantOwnerId).catch(err =>
                             console.error('[Sheet Sync] Email automation error:', err.message));
@@ -106,8 +146,23 @@ agenda.define('sheet-sync', async (job) => {
                         sendAutomatedWhatsAppOnLeadCreate(newLead, tenantOwnerId).catch(err =>
                             console.error('[Sheet Sync] WhatsApp automation error:', err.message));
                     }
-
-                    count++;
+                }
+            } catch (insertErr) {
+                // Handle Mongoose BulkWriteError gracefully if some insert and others fail
+                if (insertErr.name === 'BulkWriteError' && insertErr.insertedDocs) {
+                    count = insertErr.insertedDocs.length;
+                    for (const newLead of insertErr.insertedDocs) {
+                        if (newLead.email) {
+                            sendAutomatedEmailOnLeadCreate(newLead, tenantOwnerId).catch(err =>
+                                console.error('[Sheet Sync] Email automation error:', err.message));
+                        }
+                        if (newLead.phone) {
+                            sendAutomatedWhatsAppOnLeadCreate(newLead, tenantOwnerId).catch(err =>
+                                console.error('[Sheet Sync] WhatsApp automation error:', err.message));
+                        }
+                    }
+                } else {
+                    throw insertErr;
                 }
             }
         }
@@ -135,7 +190,6 @@ agenda.define('sheet-sync', async (job) => {
 
 // ── Helper: Update sync status in IntegrationConfig ──
 async function markSyncStatus(userId, status, errorMsg) {
-    const IntegrationConfig = require('../models/IntegrationConfig');
     await IntegrationConfig.findOneAndUpdate(
         { userId: userId }, 
         {
@@ -148,7 +202,6 @@ async function markSyncStatus(userId, status, errorMsg) {
 
 // ── Schedule / Cancel individual user jobs ───
 async function scheduleUserSync(userId) {
-    const IntegrationConfig = require('../models/IntegrationConfig');
     const config = await IntegrationConfig.findOne({ userId: userId }).select('googleSheet').lean();
     if (!config || !config.googleSheet?.syncEnabled || !config.googleSheet?.sheetUrl) {
         await cancelUserSync(userId);
@@ -177,7 +230,6 @@ async function startSheetSyncScheduler() {
         await agenda.start();
         console.log('📋 Sheet Sync Scheduler started');
 
-        const IntegrationConfig = require('../models/IntegrationConfig');
         // Find all users with sync enabled
         const configs = await IntegrationConfig.find({
             'googleSheet.syncEnabled': true,

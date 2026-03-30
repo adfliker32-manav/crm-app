@@ -16,7 +16,8 @@ const LeadSchema = new mongoose.Schema({
     userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: true,
+        index: true
     },
     name: {
         type: String,
@@ -24,14 +25,17 @@ const LeadSchema = new mongoose.Schema({
     },
     phone: {
         type: String,
-        required: true
+        required: true,
+        index: true
     },
     email: {
-        type: String
+        type: String,
+        index: true
     },
     status: {
         type: String,
-        default: 'New'
+        default: 'New',
+        index: true
     },
     source: {
         type: String,
@@ -52,7 +56,8 @@ const LeadSchema = new mongoose.Schema({
 
     // 👇 Follow-up Reminder
     nextFollowUpDate: {
-        type: Date
+        type: Date,
+        index: true
     },
     lastFollowUpDate: {
         type: Date
@@ -102,7 +107,8 @@ const LeadSchema = new mongoose.Schema({
     assignedTo: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        default: null
+        default: null,
+        index: true
     },
 
     // First Contact Tracking (for response time metrics)
@@ -112,6 +118,9 @@ const LeadSchema = new mongoose.Schema({
     }
 
 }, { timestamps: true });
+
+// Add index for sorting/filtering by creation date
+LeadSchema.index({ createdAt: -1 });
 
 LeadSchema.plugin(saasPlugin);
 

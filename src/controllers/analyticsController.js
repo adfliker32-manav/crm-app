@@ -22,30 +22,55 @@ const getGoals = async (req, res) => {
             User.find(agentQuery).select('_id name email').lean()
         ]);
 
-        // Enrich with actual actuals for the month
         const monthStart = new Date(currentMonth + '-01');
         const monthEnd = new Date(monthStart);
         monthEnd.setMonth(monthEnd.getMonth() + 1);
 
-        const agentsWithProgress = await Promise.all(agents.map(async (agent) => {
-            const goal = goals.find(g => g.agentId.toString() === agent._id.toString()) || {};
+        const agentIds = agents.map(a => a._id);
 
-            const [leads, tasks] = await Promise.all([
-                Lead.find({
+        const [leadStats, taskStats] = await Promise.all([
+            Lead.aggregate([
+                { $match: { 
+                    ...req.dataScope, 
+                    assignedTo: { $in: agentIds }, 
+                    createdAt: { $gte: monthStart, $lt: monthEnd } 
+                }},
+                { $group: {
+                    _id: "$assignedTo",
+                    totalLeads: { $sum: 1 },
+                    wonLeads: { 
+                        $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] } 
+                    },
+                    wonRevenue: { 
+                        $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] } 
+                    }
+                }}
+            ]),
+            Task.aggregate([
+                { $match: {
                     ...req.dataScope,
-                    assignedTo: agent._id,
-                    createdAt: { $gte: monthStart, $lt: monthEnd }
-                }).lean(),
-                Task.find({
-                    ...req.dataScope,
-                    createdBy: agent._id,
+                    createdBy: { $in: agentIds },
                     status: 'Completed',
                     updatedAt: { $gte: monthStart, $lt: monthEnd }
-                }).lean()
-            ]);
+                }},
+                { $group: {
+                    _id: "$createdBy",
+                    totalTasks: { $sum: 1 }
+                }}
+            ])
+        ]);
 
-            const wonLeads = leads.filter(l => l.status?.toLowerCase().includes('won'));
-            const wonRevenue = wonLeads.reduce((s, l) => s + (l.dealValue || 0), 0);
+        const leadStatsMap = {};
+        leadStats.forEach(s => leadStatsMap[s._id?.toString() || ''] = s);
+
+        const taskStatsMap = {};
+        taskStats.forEach(s => taskStatsMap[s._id?.toString() || ''] = s);
+
+        const agentsWithProgress = agents.map(agent => {
+            const goal = goals.find(g => g.agentId.toString() === agent._id.toString()) || {};
+            const agentIdStr = agent._id.toString();
+            const lStats = leadStatsMap[agentIdStr] || { totalLeads: 0, wonLeads: 0, wonRevenue: 0 };
+            const tStats = taskStatsMap[agentIdStr] || { totalTasks: 0 };
 
             return {
                 agentId: agent._id,
@@ -59,13 +84,13 @@ const getGoals = async (req, res) => {
                     targetTasks: goal.targetTasks || 0,
                 },
                 actuals: {
-                    leads: leads.length,
-                    won: wonLeads.length,
-                    revenue: wonRevenue,
-                    tasks: tasks.length,
+                    leads: lStats.totalLeads,
+                    won: lStats.wonLeads,
+                    revenue: lStats.wonRevenue,
+                    tasks: tStats.totalTasks,
                 }
             };
-        }));
+        });
 
         res.json({ month: currentMonth, agents: agentsWithProgress });
     } catch (err) {
@@ -107,17 +132,51 @@ const getFunnelAnalysis = async (req, res) => {
         else if (period === 'custom' && startDate && endDate) { start = new Date(startDate); end = new Date(endDate); }
         else { start = new Date(now.getFullYear(), now.getMonth(), 1); end = new Date(); }
 
-        const query = { ...req.dataScope, createdAt: { $gte: start, $lte: end } };
-        const leads = await Lead.find(query).lean();
+        const [aggResult] = await Lead.aggregate([
+            { $match: { ...req.dataScope, createdAt: { $gte: start, $lte: end } } },
+            {
+                $facet: {
+                    stageCounts: [
+                        { $group: { _id: { $ifNull: ["$status", "New"] }, count: { $sum: 1 } } }
+                    ],
+                    timeToClose: [
+                        { $match: { status: { $regex: /won/i } } }, // Filter won leads
+                        {
+                            $group: {
+                                _id: null,
+                                closeCount: { $sum: 1 },
+                                totalDays: {
+                                    $sum: {
+                                        $divide: [
+                                            { $subtract: ["$updatedAt", "$createdAt"] },
+                                            1000 * 60 * 60 * 24 // Ms to days
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    totalLeads: [
+                        { $count: "count" }
+                    ]
+                }
+            }
+        ]);
+
+        const rawStageCounts = aggResult.stageCounts || [];
+        const stageCounts = {};
+        rawStageCounts.forEach(s => stageCounts[s._id] = s.count);
+
+        const timeToCloseStats = (aggResult.timeToClose && aggResult.timeToClose[0]) || { closeCount: 0, totalDays: 0 };
+        const avgTimeToClose = timeToCloseStats.closeCount > 0 
+            ? (timeToCloseStats.totalDays / timeToCloseStats.closeCount).toFixed(1) 
+            : null;
+
+        const totalLeadsCount = (aggResult.totalLeads && aggResult.totalLeads[0]) ? aggResult.totalLeads[0].count : 0;
 
         const stageOrder = ['New', 'Contacted', 'Qualified', 'Proposal Sent', 'Negotiation', 'Won'];
-        const stageCounts = {};
-        leads.forEach(lead => {
-            const s = lead.status || 'New';
-            stageCounts[s] = (stageCounts[s] || 0) + 1;
-        });
 
-        // FIX: Calculate cumulative "reached" counts (bottom-up sum)
+        // Calculate cumulative "reached" counts (bottom-up sum)
         let runningTotal = 0;
         const reachedCounts = {};
         
@@ -127,17 +186,14 @@ const getFunnelAnalysis = async (req, res) => {
             reachedCounts[stage] = runningTotal;
         }
 
-        // Add any custom stages that aren't in the standard order
         Object.keys(stageCounts).forEach(s => {
             if (!stageOrder.includes(s)) {
                 runningTotal += stageCounts[s]; 
             }
         });
         
-        // Ensure New encompasses absolute total entering the funnel
-        reachedCounts['New'] = Math.max(reachedCounts['New'] || 0, leads.length);
+        reachedCounts['New'] = Math.max(reachedCounts['New'] || 0, totalLeadsCount);
 
-        // Build Funnel Array with Drop-off using 'Reached' cumulative math
         const funnelWithDropoff = stageOrder.map((stage, i) => {
             const reached = reachedCounts[stage] || 0;
             const nextStage = stageOrder[i + 1];
@@ -148,24 +204,15 @@ const getFunnelAnalysis = async (req, res) => {
             
             return { 
                 stage, 
-                count: reached, // Cumulative volume reaching this stage
-                currentInStage: stageCounts[stage] || 0, // Volume currently resting here
+                count: reached, 
+                currentInStage: stageCounts[stage] || 0, 
                 dropped: i === stageOrder.length - 1 ? 0 : dropped, 
                 dropRate: i === stageOrder.length - 1 ? 0 : parseFloat(dropRate) 
             };
         });
 
-        // Time-to-close calculation
-        const wonLeads = leads.filter(l => l.status?.toLowerCase().includes('won') && l.createdAt && l.updatedAt);
-        let totalDays = 0, closeCount = 0;
-        wonLeads.forEach(l => {
-            const days = (new Date(l.updatedAt) - new Date(l.createdAt)) / (1000 * 60 * 60 * 24);
-            if (days > 0) { totalDays += days; closeCount++; }
-        });
-        const avgTimeToClose = closeCount > 0 ? (totalDays / closeCount).toFixed(1) : null;
-
         res.json({
-            period, totalLeads: leads.length, funnel: funnelWithDropoff,
+            period, totalLeads: totalLeadsCount, funnel: funnelWithDropoff,
             avgTimeToCloseDays: avgTimeToClose ? parseFloat(avgTimeToClose) : null
         });
     } catch (err) {
@@ -193,27 +240,55 @@ const getActivityMetrics = async (req, res) => {
         }
         
         const agents = await User.find(agentQuery).select('_id name').lean();
+        const agentIds = agents.map(a => a._id);
 
-        const agentActivity = await Promise.all(agents.map(async (agent) => {
-            const [leads, completedTasks] = await Promise.all([
-                Lead.find({ ...req.dataScope, assignedTo: agent._id, createdAt: { $gte: start, $lte: end } }).lean(),
-                Task.find({ ...req.dataScope, createdBy: agent._id, status: 'Completed', updatedAt: { $gte: start, $lte: end } }).lean()
-            ]);
+        const [leadFollowUpStats, taskStats, leadsHandledStats] = await Promise.all([
+            // 1. Leads Handled (Leads Created matching period)
+            Lead.aggregate([
+                { $match: { ...req.dataScope, assignedTo: { $in: agentIds }, createdAt: { $gte: start, $lte: end } } },
+                { $group: { _id: "$assignedTo", leadsHandled: { $sum: 1 } } }
+            ]),
+            // 2. Follow-ups Done (Unwind and match exact follow-up dates)
+            Lead.aggregate([
+                { $match: { ...req.dataScope, assignedTo: { $in: agentIds } } },
+                { $project: { assignedTo: 1, followUpHistory: 1 } },
+                { $unwind: "$followUpHistory" },
+                { $match: { 
+                    "followUpHistory.completedDate": { $gte: start, $lte: end } 
+                }},
+                { $group: { _id: "$assignedTo", followUpsDone: { $sum: 1 } } }
+            ]),
+            // 3. Tasks Completed
+            Task.aggregate([
+                { $match: { ...req.dataScope, createdBy: { $in: agentIds }, status: 'Completed', updatedAt: { $gte: start, $lte: end } } },
+                { $group: { _id: "$createdBy", tasksCompleted: { $sum: 1 } } }
+            ])
+        ]);
 
-            const followUpsDone = leads.reduce((sum, l) => sum + (l.followUpHistory?.filter(f => {
-                const d = new Date(f.completedDate);
-                return d >= start && d <= end;
-            })?.length || 0), 0);
+        const leadsHandledMap = {};
+        leadsHandledStats.forEach(s => leadsHandledMap[s._id?.toString() || ''] = s.leadsHandled);
+
+        const followUpsMap = {};
+        leadFollowUpStats.forEach(s => followUpsMap[s._id?.toString() || ''] = s.followUpsDone);
+
+        const tasksMap = {};
+        taskStats.forEach(s => tasksMap[s._id?.toString() || ''] = s.tasksCompleted);
+
+        const agentActivity = agents.map(agent => {
+            const aId = agent._id.toString();
+            const handled = leadsHandledMap[aId] || 0;
+            const followups = followUpsMap[aId] || 0;
+            const tasks = tasksMap[aId] || 0;
 
             return {
                 agentId: agent._id,
                 agentName: agent.name,
-                leadsHandled: leads.length,
-                tasksCompleted: completedTasks.length,
-                followUpsDone,
-                activityScore: completedTasks.length + followUpsDone
+                leadsHandled: handled,
+                tasksCompleted: tasks,
+                followUpsDone: followups,
+                activityScore: tasks + followups
             };
-        }));
+        });
 
         agentActivity.sort((a, b) => b.activityScore - a.activityScore);
 
