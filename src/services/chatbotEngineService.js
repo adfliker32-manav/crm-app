@@ -8,6 +8,7 @@ const NodeCache = require('node-cache');
 const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const normalizeId = (value) => value ? value.toString() : null;
 const buildFlowCacheKey = (ownerIds) => `flows_${[...new Set(ownerIds.map(normalizeId).filter(Boolean))].sort().join('|')}`;
+const getSessionFlowId = (session) => session?.flowId?._id || session?.flowId || null;
 
 exports.invalidateFlowCache = (userId) => {
     const normalizedUserId = normalizeId(userId);
@@ -394,6 +395,12 @@ const evaluateSmartLead = async (session, flow, conversation) => {
 const continueSession = async (session, userResponse, conversationId, userId) => {
     try {
         const flow = session.flowId;
+        if (!flow || !Array.isArray(flow.nodes)) {
+            console.warn(`Chatbot session ${session._id} has a missing flow reference. Ending session safely.`);
+            await endSession(session, 'abandoned');
+            return null;
+        }
+
         const currentNode = flow.nodes.find(n => n.id === session.currentNodeId);
 
         if (!currentNode) {
@@ -455,6 +462,12 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
 // Execute a specific node
 const executeNode = async (session, flow, nodeId) => {
     try {
+        if (!flow || !Array.isArray(flow.nodes)) {
+            console.warn(`Cannot execute chatbot node for session ${session._id}: flow is missing.`);
+            await endSession(session, 'abandoned');
+            return null;
+        }
+
         const node = flow.nodes.find(n => n.id === nodeId);
         if (!node) {
             await endSession(session, 'abandoned');
@@ -653,10 +666,15 @@ const endSession = async (session, status) => {
         await session.save();
 
         // Update analytics
-        const updateField = status === 'completed' ? 'analytics.completed' : 'analytics.abandoned';
-        await ChatbotFlow.findByIdAndUpdate(session.flowId, {
-            $inc: { [updateField]: 1 }
-        });
+        const flowId = getSessionFlowId(session);
+        if (flowId) {
+            const updateField = status === 'completed' ? 'analytics.completed' : 'analytics.abandoned';
+            await ChatbotFlow.findByIdAndUpdate(flowId, {
+                $inc: { [updateField]: 1 }
+            });
+        } else {
+            console.warn(`Skipping chatbot analytics update for session ${session._id}: flow reference is missing.`);
+        }
 
         console.log(`✅ Chatbot session ${status}:`, session._id);
     } catch (error) {

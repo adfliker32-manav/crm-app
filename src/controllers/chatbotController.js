@@ -1,4 +1,5 @@
 const ChatbotFlow = require('../models/ChatbotFlow');
+const ChatbotSession = require('../models/ChatbotSession');
 const mongoose = require('mongoose');
 const { invalidateFlowCache } = require('../services/chatbotEngineService');
 
@@ -119,13 +120,28 @@ exports.deleteFlow = async (req, res) => {
         const userId = req.user.userId || req.user.id;
         const { id } = req.params;
 
-        const flow = await ChatbotFlow.findOneAndDelete({ _id: id, userId: userId });
+        const flow = await ChatbotFlow.findOne({ _id: id, userId: userId });
 
         if (!flow) {
             return res.status(404).json({ message: 'Flow not found' });
         }
 
+        const endedSessions = await ChatbotSession.updateMany(
+            { flowId: flow._id, status: 'active' },
+            {
+                $set: {
+                    status: 'abandoned',
+                    completedAt: new Date()
+                }
+            }
+        );
+
+        await flow.deleteOne();
+
         invalidateFlowCache(userId);
+        if (endedSessions.modifiedCount > 0) {
+            console.log(`Ended ${endedSessions.modifiedCount} active chatbot session(s) before deleting flow ${flow._id}`);
+        }
 
         res.json({ success: true, message: 'Flow deleted successfully' });
     } catch (error) {
