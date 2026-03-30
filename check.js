@@ -1,0 +1,1 @@
+require('dotenv').config(); const mongoose = require('mongoose'); mongoose.connect(process.env.MONGO_URI).then(async () => { const msgs = await mongoose.connection.db.collection('whatsappmessages').find({}).sort({_id:-1}).limit(5).toArray(); msgs.forEach(m => console.log('Msg:', m.content?.text, '| userId:', m?.userId, '| ts:', m.timestamp)); process.exit(0); });

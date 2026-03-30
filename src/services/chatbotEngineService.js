@@ -1,14 +1,71 @@
 const ChatbotFlow = require('../models/ChatbotFlow');
 const ChatbotSession = require('../models/ChatbotSession');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
+const WhatsAppMessage = require('../models/WhatsAppMessage');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
 const { sendWhatsAppTextMessage, sendInteractiveMessage } = require('./whatsappService');
+const { emitToUser } = require('./socketService');
 const NodeCache = require('node-cache');
 const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const normalizeId = (value) => value ? value.toString() : null;
 const buildFlowCacheKey = (ownerIds) => `flows_${[...new Set(ownerIds.map(normalizeId).filter(Boolean))].sort().join('|')}`;
 const getSessionFlowId = (session) => session?.flowId?._id || session?.flowId || null;
+
+// ============================================================
+// 🔧 HELPER: Persist automated outbound messages to the DB
+// Without this, chatbot replies are invisible in the inbox UI.
+// ============================================================
+const saveBotMessage = async (conversationId, userId, text, type = 'text', waResult = null) => {
+    try {
+        const waMessageId = waResult?.messages?.[0]?.id || undefined;
+        const messageDoc = new WhatsAppMessage({
+            conversationId,
+            userId,
+            waMessageId,
+            direction: 'outbound',
+            type,
+            content: { text },
+            status: waMessageId ? 'sent' : 'pending',
+            timestamp: new Date(),
+            isAutomated: true
+        });
+        await messageDoc.save();
+
+        // Update conversation metadata
+        await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+            $set: {
+                lastMessage: text.substring(0, 100),
+                lastMessageAt: new Date(),
+                lastMessageDirection: 'outbound'
+            },
+            $inc: {
+                'metadata.totalMessages': 1,
+                'metadata.totalOutbound': 1
+            }
+        });
+
+        // Push to frontend via Socket.IO (real-time)
+        const savedMsg = messageDoc.toObject();
+        emitToUser(userId, 'whatsapp:newMessage', {
+            conversationId,
+            message: savedMsg
+        });
+        emitToUser(userId, 'whatsapp:conversationUpdate', {
+            conversationId,
+            updates: {
+                lastMessage: text.substring(0, 100),
+                lastMessageAt: new Date(),
+                lastMessageDirection: 'outbound'
+            }
+        });
+
+        return savedMsg;
+    } catch (err) {
+        console.error('Error saving bot message to DB:', err);
+        return null;
+    }
+};
 
 exports.invalidateFlowCache = (userId) => {
     const normalizedUserId = normalizeId(userId);
@@ -139,7 +196,8 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                         (new Date() - new Date(conversation.lastMessageAt)) > (4 * 60 * 60 * 1000);
 
                     if (conversation.metadata.totalInbound === 1 || isNewConversationBurst) {
-                        await sendWhatsAppTextMessage(conversation.phone, autoReply.outOfOfficeMessage, tenantId);
+                        const oooResult = await sendWhatsAppTextMessage(conversation.phone, autoReply.outOfOfficeMessage, tenantId);
+                        await saveBotMessage(conversationId, tenantId, autoReply.outOfOfficeMessage, 'text', oooResult);
                         sentOOO = true;
                     }
                 }
@@ -148,7 +206,8 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             // Welcome Message logic — ONLY fires if OOO was NOT sent (mutually exclusive)
             if (!sentOOO && autoReply.welcomeEnabled && autoReply.welcomeMessage) {
                 if (conversation.metadata.totalInbound === 1) {
-                    await sendWhatsAppTextMessage(conversation.phone, autoReply.welcomeMessage, tenantId);
+                    const welcomeResult = await sendWhatsAppTextMessage(conversation.phone, autoReply.welcomeMessage, tenantId);
+                    await saveBotMessage(conversationId, tenantId, autoReply.welcomeMessage, 'text', welcomeResult);
                 }
             }
         }
@@ -493,15 +552,17 @@ const executeNode = async (session, flow, nodeId) => {
 
                 if (node.data.buttons && node.data.buttons.length > 0) {
                     // Send interactive message with buttons
-                    await sendInteractiveMessage(
+                    const interactiveResult = await sendInteractiveMessage(
                         conversation.phone,
                         messageText,
                         node.data.buttons.map(b => ({ id: b.id, text: b.text })),
                         session.userId
                     );
+                    await saveBotMessage(session.conversationId, session.userId, messageText, 'interactive', interactiveResult);
                 } else {
                     // Send regular text message
-                    await sendWhatsAppTextMessage(conversation.phone, messageText, session.userId);
+                    const textResult = await sendWhatsAppTextMessage(conversation.phone, messageText, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, messageText, 'text', textResult);
 
                     // Auto-advance to next node if no buttons
                     if (node.data.nextNodeId) {
@@ -515,7 +576,8 @@ const executeNode = async (session, flow, nodeId) => {
             case 'question':
                 // Send question and wait for response
                 const questionText = replaceVariables(node.data.text, session.variables);
-                await sendWhatsAppTextMessage(conversation.phone, questionText, session.userId);
+                const questionResult = await sendWhatsAppTextMessage(conversation.phone, questionText, session.userId);
+                await saveBotMessage(session.conversationId, session.userId, questionText, 'text', questionResult);
                 // Session will wait for user response
                 break;
 

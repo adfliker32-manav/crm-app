@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import useSocket from '../../hooks/useSocket';
 
 const WhatsAppInbox = () => {
     const { showSuccess, showError } = useNotification();
@@ -29,6 +30,8 @@ const WhatsAppInbox = () => {
     const attachRef = useRef(null);
     const templatePickerRef = useRef(null);
     const inputRef = useRef(null);
+    const selectedChatRef = useRef(null); // Track selectedChat in socket callbacks
+    const { socket, isConnected } = useSocket();
 
     const fetchConversations = useCallback(async () => {
         try {
@@ -61,6 +64,11 @@ const WhatsAppInbox = () => {
 
     useEffect(() => { fetchConversations(); fetchTemplates(); }, [fetchConversations]);
 
+    // Keep selectedChatRef in sync for socket callbacks
+    useEffect(() => {
+        selectedChatRef.current = selectedChat;
+    }, [selectedChat]);
+
     const fetchTemplates = async () => {
         try {
             const res = await api.get('/whatsapp/templates');
@@ -90,13 +98,102 @@ const WhatsAppInbox = () => {
         return false;
     };
 
+    // ============================================================
+    // 🔌 SOCKET.IO — Real-time event listeners (replaces 5s polling)
+    // ============================================================
+    useEffect(() => {
+        if (!socket) return;
+
+        // --- New message arrives (inbound from customer, outbound from bot/agent) ---
+        const handleNewMessage = ({ conversationId, message }) => {
+            const currentChat = selectedChatRef.current;
+
+            // If this message is for the currently open conversation, append it
+            if (currentChat && currentChat._id === conversationId) {
+                setMessages(prev => {
+                    // Deduplicate — prevent adding if already in the list
+                    if (prev.some(m => m._id === message._id)) return prev;
+                    return [...prev, message];
+                });
+            }
+
+            // Update conversation list sidebar
+            setConversations(prev => {
+                const exists = prev.some(c => c._id === conversationId);
+                if (exists) {
+                    return prev.map(c => {
+                        if (c._id !== conversationId) return c;
+                        return {
+                            ...c,
+                            lastMessage: message.content?.text?.substring(0, 100) || 'Message',
+                            lastMessageAt: message.timestamp,
+                            lastMessageDirection: message.direction,
+                            // Increment unread only for inbound messages not from currently viewed chat
+                            unreadCount: (message.direction === 'inbound' && (!currentChat || currentChat._id !== conversationId))
+                                ? (c.unreadCount || 0) + 1
+                                : c.unreadCount
+                        };
+                    });
+                } else {
+                    // New conversation — refresh the list
+                    fetchConversations();
+                    return prev;
+                }
+            });
+        };
+
+        // --- Conversation metadata update (lastMessage, unread, etc.) ---
+        const handleConversationUpdate = ({ conversationId, updates }) => {
+            setConversations(prev =>
+                prev.map(c => c._id === conversationId ? { ...c, ...updates } : c)
+            );
+            // Also update selectedChat if it matches
+            const currentChat = selectedChatRef.current;
+            if (currentChat && currentChat._id === conversationId) {
+                setSelectedChat(prev => prev ? { ...prev, ...updates } : prev);
+            }
+        };
+
+        // --- Delivery status update (sent → delivered → read) ---
+        const handleStatusUpdate = ({ waMessageId, status, conversationId }) => {
+            const currentChat = selectedChatRef.current;
+            if (currentChat && currentChat._id === conversationId) {
+                setMessages(prev =>
+                    prev.map(m =>
+                        m.waMessageId === waMessageId ? { ...m, status } : m
+                    )
+                );
+            }
+        };
+
+        socket.on('whatsapp:newMessage', handleNewMessage);
+        socket.on('whatsapp:conversationUpdate', handleConversationUpdate);
+        socket.on('whatsapp:statusUpdate', handleStatusUpdate);
+
+        return () => {
+            socket.off('whatsapp:newMessage', handleNewMessage);
+            socket.off('whatsapp:conversationUpdate', handleConversationUpdate);
+            socket.off('whatsapp:statusUpdate', handleStatusUpdate);
+        };
+    }, [socket, fetchConversations]);
+
+    // Watch/unwatch conversation room for targeted events
+    useEffect(() => {
+        if (!socket || !selectedChat) return;
+        socket.emit('watch:conversation', selectedChat._id);
+        return () => {
+            socket.emit('unwatch:conversation', selectedChat._id);
+        };
+    }, [socket, selectedChat?._id]);
+
+    // ⏰ Safety-net fallback poll (60s instead of 5s = 92% less DB load)
     useEffect(() => {
         const interval = setInterval(() => {
             fetchConversations();
-            if (selectedChat) fetchMessages(selectedChat._id);
-        }, 5000);
+            if (selectedChatRef.current) fetchMessages(selectedChatRef.current._id);
+        }, 60000); // 60 seconds
         return () => clearInterval(interval);
-    }, [selectedChat, fetchConversations, fetchMessages]);
+    }, [fetchConversations, fetchMessages]);
 
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;

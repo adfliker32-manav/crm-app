@@ -5,6 +5,7 @@ const User = require('../models/User');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const { sendWhatsAppTextMessage } = require('../services/whatsappService');
 const { cancelActiveChatbots } = require('../services/chatbotEngineService');
+const { emitToUser, emitToConversation } = require('../services/socketService');
 const mongoose = require('mongoose');
 
 // Helper to resolve specific mapped variables
@@ -245,6 +246,25 @@ exports.sendMessage = async (req, res) => {
             success: true,
             message: message.toObject(),
             waMessageId
+        });
+
+        // 🔌 Push to frontend via Socket.IO (real-time for other tabs/agents)
+        const savedMsg = message.toObject();
+        emitToUser(userId, 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToUser(userId, 'whatsapp:conversationUpdate', {
+            conversationId: conversation._id,
+            updates: {
+                lastMessage: text.trim().substring(0, 100),
+                lastMessageAt: new Date(),
+                lastMessageDirection: 'outbound'
+            }
         });
     } catch (error) {
         let errorMsg = error.message;

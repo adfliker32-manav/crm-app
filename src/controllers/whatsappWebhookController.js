@@ -5,6 +5,7 @@ const Lead = require('../models/Lead');
 const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const telemetryService = require('../services/telemetryService');
+const { emitToUser, emitToConversation } = require('../services/socketService');
 
 // ============================================================
 // 🐛 DEBUG MODE - controlled via WA_WEBHOOK_DEBUG env variable
@@ -351,6 +352,27 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         await messageDoc.save();
         debug(`✅ WhatsAppMessage saved to DB: ${messageDoc._id}`);
 
+        // 🔌 Push to frontend via Socket.IO (real-time)
+        const savedMsg = messageDoc.toObject();
+        emitToUser(targetUserId, 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToUser(targetUserId, 'whatsapp:conversationUpdate', {
+            conversationId: conversation._id,
+            updates: {
+                lastMessage: messagePreview.substring(0, 100),
+                lastMessageAt: timestamp,
+                lastMessageDirection: 'inbound',
+                unreadCount: conversation.unreadCount,
+                displayName: displayName || conversation.displayName
+            }
+        });
+
         console.log(`✅ Received message from ${from}: ${messagePreview.substring(0, 50)}...`);
 
         // Trigger chatbot/auto-reply logic asynchronously (decoupled)
@@ -409,6 +431,21 @@ const processStatusUpdate = async (status, userId) => {
 
         console.log(`📬 Message ${waMessageId} status: ${statusType}`);
         debug(`✅ Status atomic update completed`);
+
+        // 🔌 Push status update to frontend via Socket.IO
+        // Find the message to get its conversationId for targeted emit
+        const updatedMsg = await WhatsAppMessage.findOne({ waMessageId }).select('conversationId userId').lean();
+        if (updatedMsg) {
+            emitToUser(updatedMsg.userId, 'whatsapp:statusUpdate', {
+                waMessageId,
+                status: statusType,
+                conversationId: updatedMsg.conversationId
+            });
+            emitToConversation(updatedMsg.conversationId.toString(), 'whatsapp:statusUpdate', {
+                waMessageId,
+                status: statusType
+            });
+        }
 
     } catch (error) {
         console.error('❌ Error processing status update:', error);

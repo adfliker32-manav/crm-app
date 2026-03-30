@@ -34,6 +34,7 @@
     "node-cron": "^4.2.1",
     "nodemailer": "^7.0.12",
     "papaparse": "^5.5.3",
+    "socket.io": "^4.8.3",
     "uuid": "^13.0.0"
   },
   "devDependencies": {

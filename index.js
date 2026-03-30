@@ -3,8 +3,10 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
 const express = require('express');
+const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const { initSocket } = require('./src/services/socketService');
 
 // Routes Import
 const authRoutes = require('./src/routes/authRoutes');
@@ -279,7 +281,12 @@ const reloadWebsite = () => {
 
 // 🔥 SERVER START
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+// 🔌 Initialize Socket.IO on the same HTTP server
+initSocket(server);
+
+server.listen(PORT, () => {
   console.log(`🚀 Server Running on Port ${PORT}`);
 
   // Start Keep-Alive Loop (only in production or if configured)
