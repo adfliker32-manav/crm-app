@@ -8,6 +8,9 @@ const WhatsAppInbox = () => {
     const [conversations, setConversations] = useState([]);
     const [selectedChat, setSelectedChat] = useState(null);
     const [messages, setMessages] = useState([]);
+    const [page, setPage] = useState(1);
+    const [hasMore, setHasMore] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
     const [newMessage, setNewMessage] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
@@ -47,20 +50,51 @@ const WhatsAppInbox = () => {
         }
     }, [searchTerm, filter]);
 
-    const fetchMessages = useCallback(async (conversationId) => {
+    const fetchMessages = useCallback(async (conversationId, pageNum = 1, isInitial = false) => {
+        if (!isInitial && (!hasMore || loadingMore)) return;
+        
+        if (isInitial) {
+            setLoading(true);
+            setPage(1);
+            setHasMore(true);
+        } else {
+            setLoadingMore(true);
+        }
+
         try {
-            const res = await api.get(`/whatsapp/conversations/${conversationId}`);
-            setMessages(res.data.messages || []);
-            setSelectedChat(res.data.conversation);
-            await api.put(`/whatsapp/conversations/${conversationId}/read`);
-            setConversations(prev => prev.map(c =>
-                c._id === conversationId ? { ...c, unreadCount: 0 } : c
-            ));
+            const limit = 10; // User requested 10 for "lightweight"
+            const res = await api.get(`/whatsapp/conversations/${conversationId}?page=${pageNum}&limit=${limit}`);
+            const newMessages = res.data.messages || [];
+            
+            // Deduplicate to avoid overlaps
+            if (isInitial) {
+                setMessages(newMessages);
+                setSelectedChat(res.data.conversation); // Keep in sync
+            } else {
+                setMessages(prev => {
+                    const existingIds = new Set(prev.map(m => m._id));
+                    const uniqueNew = newMessages.filter(m => !existingIds.has(m._id));
+                    return [...uniqueNew, ...prev];
+                });
+                setPage(pageNum);
+            }
+            
+            setHasMore(res.data.pagination?.page < res.data.pagination?.pages);
+            
+            if (isInitial) {
+                await api.put(`/whatsapp/conversations/${conversationId}/read`);
+                setConversations(prev => prev.map(c =>
+                    c._id === conversationId ? { ...c, unreadCount: 0 } : c
+                ));
+            }
         } catch (error) {
             console.error('Error fetching messages:', error);
             showError('Failed to load messages');
+        } finally {
+            setLoading(false);
+            setLoadingMore(false);
         }
-    }, [showError]);
+    }, [showError, hasMore, loadingMore]);
 
     useEffect(() => { fetchConversations(); fetchTemplates(); }, [fetchConversations]);
 
@@ -200,8 +234,35 @@ const WhatsAppInbox = () => {
     }, [fetchConversations, fetchMessages]);
 
     useEffect(() => {
-        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }, [messages]);
+        if (scrollRef.current) {
+            // Only auto-scroll to bottom on initial load or new incoming message
+            // Don't auto-scroll when prepending older messages (to avoid jumping)
+            if (!loadingMore) {
+                scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            }
+        }
+    }, [messages, loadingMore]);
+
+    // Handle Scroll for Pagination (Scroll to Top)
+    const handleChatScroll = (e) => {
+        if (!hasMore || loadingMore || !selectedChat) return;
+        
+        const { scrollTop, scrollHeight } = e.currentTarget;
+        if (scrollTop < 50) { // Trigger early before reaching exact 0
+            const oldHeight = scrollHeight;
+            const targetChatId = selectedChat._id;
+            
+            fetchMessages(targetChatId, page + 1).then(() => {
+                // Scroll Anchoring: Maintain position relative to current view
+                setTimeout(() => {
+                    if (scrollRef.current) {
+                        const newHeight = scrollRef.current.scrollHeight;
+                        scrollRef.current.scrollTop = newHeight - oldHeight;
+                    }
+                }, 0);
+            });
+        }
+    };
 
     // Close attach menu and template picker on outside click
     useEffect(() => {
@@ -389,7 +450,7 @@ const WhatsAppInbox = () => {
 
     const handleSelectChat = (chat) => {
         setSelectedChat(chat);
-        fetchMessages(chat._id);
+        fetchMessages(chat._id, 1, true); // initial load
         setShowContactPanel(false);
     };
 
@@ -659,10 +720,19 @@ const WhatsAppInbox = () => {
                         </div>
 
                         {/* Messages */}
-                        <div className="flex-1 overflow-y-auto px-16 py-4" ref={scrollRef}
+                        <div 
+                            className="flex-1 overflow-y-auto px-16 py-4" 
+                            ref={scrollRef}
+                            onScroll={handleChatScroll}
                             style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='400' height='400' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3Cpattern id='p' width='60' height='60' patternUnits='userSpaceOnUse'%3E%3Cpath d='M30 5 q5 8 0 16 q-5 8 0 16' fill='none' stroke='%23d4cfc4' stroke-width='.4' opacity='.6'/%3E%3Ccircle cx='10' cy='50' r='1.5' fill='%23d4cfc4' opacity='.3'/%3E%3Ccircle cx='50' cy='20' r='1' fill='%23d4cfc4' opacity='.3'/%3E%3C/pattern%3E%3C/defs%3E%3Crect fill='%23efeae2' width='400' height='400'/%3E%3Crect fill='url(%23p)' width='400' height='400'/%3E%3C/svg%3E")`, backgroundSize: '400px' }}
                         >
                             <div className="space-y-1 max-w-3xl mx-auto">
+                                {/* Loading More Indicator */}
+                                {loadingMore && (
+                                    <div className="text-center py-2">
+                                        <div className="inline-block w-5 h-5 border-2 border-[#00a884] border-t-transparent rounded-full animate-spin"></div>
+                                    </div>
+                                )}
                                 {/* Date separator */}
                                 {messages.length > 0 && (
                                     <div className="text-center my-3">
