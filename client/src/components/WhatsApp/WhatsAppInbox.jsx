@@ -481,7 +481,8 @@ const WhatsAppInbox = () => {
     };
 
     const renderMediaContent = (msg) => {
-        const mediaProxy = msg.content?.mediaId ? `/whatsapp/media/${msg.content.mediaId}` : null;
+        const token = localStorage.getItem('token');
+        const mediaProxy = msg.content?.mediaId ? `/whatsapp/media/${msg.content.mediaId}?token=${token}` : null;
         const mediaUrl = mediaProxy ? `${api.defaults.baseURL}${mediaProxy}` : msg.content?.mediaUrl;
 
         switch (msg.type) {

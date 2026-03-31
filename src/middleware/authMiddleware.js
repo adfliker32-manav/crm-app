@@ -9,8 +9,7 @@ if (!JWT_SECRET) {
 
 // MAIN AUTH MIDDLEWARE
 const authMiddleware = async (req, res, next) => {
-    let token = req.header('Authorization');
-
+    let token = req.header('Authorization') || req.query.token;
     if (!token) return res.status(401).json({ message: "No Token, Authorization Denied" });
 
     if (token.startsWith('Bearer ')) {
