@@ -34,6 +34,7 @@ const WhatsAppInbox = () => {
     const templatePickerRef = useRef(null);
     const inputRef = useRef(null);
     const selectedChatRef = useRef(null); // Track selectedChat in socket callbacks
+    const shouldScrollToBottomRef = useRef(true); // 🛡️ Flag for pagination vs new messages
     const { socket, isConnected } = useSocket();
 
     const fetchConversations = useCallback(async () => {
@@ -57,8 +58,10 @@ const WhatsAppInbox = () => {
             setLoading(true);
             setPage(1);
             setHasMore(true);
+            shouldScrollToBottomRef.current = true; // ✨ Initial load: go to bottom
         } else {
             setLoadingMore(true);
+            shouldScrollToBottomRef.current = false; // 🛑 Pagination: stay put
         }
 
         try {
@@ -144,6 +147,8 @@ const WhatsAppInbox = () => {
 
             // If this message is for the currently open conversation, append it
             if (currentChat && currentChat._id === conversationId) {
+                // If it's the current chat, we WANT to scroll down for the new message
+                shouldScrollToBottomRef.current = true; 
                 setMessages(prev => {
                     // 🛡️ DEDUPLICATION: Prevent duplicate rendering (API Response + Socket Event)
                     // We check both internal MongoDB _id and the WhatsApp waMessageId
@@ -234,14 +239,10 @@ const WhatsAppInbox = () => {
     }, [fetchConversations, fetchMessages]);
 
     useEffect(() => {
-        if (scrollRef.current) {
-            // Only auto-scroll to bottom on initial load or new incoming message
-            // Don't auto-scroll when prepending older messages (to avoid jumping)
-            if (!loadingMore) {
-                scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-            }
+        if (scrollRef.current && shouldScrollToBottomRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-    }, [messages, loadingMore]);
+    }, [messages]);
 
     // Handle Scroll for Pagination (Scroll to Top)
     const handleChatScroll = (e) => {
@@ -281,6 +282,7 @@ const WhatsAppInbox = () => {
         e.preventDefault();
         if (!newMessage.trim() || !selectedChat) return;
         setSending(true);
+        shouldScrollToBottomRef.current = true; // 💪 User sent message: scroll down
         try {
             const res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send`, { text: newMessage.trim() });
             setMessages(prev => {
@@ -322,6 +324,7 @@ const WhatsAppInbox = () => {
     const handleSendMedia = async () => {
         if (!mediaPreview || !selectedChat) return;
         setUploading(true);
+        shouldScrollToBottomRef.current = true; // 💪 User sent media: scroll down
         try {
             const formData = new FormData();
             formData.append('file', mediaPreview.file);
@@ -415,6 +418,7 @@ const WhatsAppInbox = () => {
     const handleSendTemplate = async (templateNameToSend) => {
         if (!selectedChat || !templateNameToSend) return;
         setSending(true);
+        shouldScrollToBottomRef.current = true; // 💪 User sent template: scroll down
         try {
             const res = await api.post('/whatsapp/conversations/new', {
                 phone: selectedChat.phone,
