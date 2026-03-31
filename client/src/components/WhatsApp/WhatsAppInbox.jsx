@@ -111,8 +111,13 @@ const WhatsAppInbox = () => {
             // If this message is for the currently open conversation, append it
             if (currentChat && currentChat._id === conversationId) {
                 setMessages(prev => {
-                    // Deduplicate — prevent adding if already in the list
-                    if (prev.some(m => m._id === message._id)) return prev;
+                    // 🛡️ DEDUPLICATION: Prevent duplicate rendering (API Response + Socket Event)
+                    // We check both internal MongoDB _id and the WhatsApp waMessageId
+                    const exists = prev.some(m => 
+                        (m._id && m._id === message._id) || 
+                        (m.waMessageId && m.waMessageId === message.waMessageId)
+                    );
+                    if (exists) return prev;
                     return [...prev, message];
                 });
             }
@@ -154,7 +159,6 @@ const WhatsAppInbox = () => {
             }
         };
 
-        // --- Delivery status update (sent → delivered → read) ---
         const handleStatusUpdate = ({ waMessageId, status, conversationId }) => {
             const currentChat = selectedChatRef.current;
             if (currentChat && currentChat._id === conversationId) {
@@ -218,7 +222,13 @@ const WhatsAppInbox = () => {
         setSending(true);
         try {
             const res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send`, { text: newMessage.trim() });
-            setMessages(prev => [...prev, res.data.message]);
+            setMessages(prev => {
+                const exists = prev.some(m => 
+                    (m._id && m._id === res.data.message._id) || 
+                    (m.waMessageId && m.waMessageId === res.data.message.waMessageId)
+                );
+                return exists ? prev : [...prev, res.data.message];
+            });
             setNewMessage('');
             setConversations(prev => prev.map(c =>
                 c._id === selectedChat._id
@@ -259,7 +269,13 @@ const WhatsAppInbox = () => {
             const res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send-media`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
-            setMessages(prev => [...prev, res.data.message]);
+            setMessages(prev => {
+                const exists = prev.some(m => 
+                    (m._id && m._id === res.data.message._id) || 
+                    (m.waMessageId && m.waMessageId === res.data.message.waMessageId)
+                );
+                return exists ? prev : [...prev, res.data.message];
+            });
             setMediaPreview(null);
             setNewMessage('');
             showSuccess('Media sent!');
@@ -343,7 +359,15 @@ const WhatsAppInbox = () => {
                 phone: selectedChat.phone,
                 templateName: templateNameToSend
             });
-            if (res.data.message) setMessages(prev => [...prev, res.data.message]);
+            if (res.data.message) {
+                setMessages(prev => {
+                    const exists = prev.some(m => 
+                        (m._id && m._id === res.data.message._id) || 
+                        (m.waMessageId && m.waMessageId === res.data.message.waMessageId)
+                    );
+                    return exists ? prev : [...prev, res.data.message];
+                });
+            }
             fetchConversations();
             setShowTemplatePicker(false);
             showSuccess('Template sent! Conversation window re-opened.');

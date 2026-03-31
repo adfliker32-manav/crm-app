@@ -122,6 +122,13 @@ const LeadSchema = new mongoose.Schema({
 // Add index for sorting/filtering by creation date
 LeadSchema.index({ createdAt: -1 });
 
+// Add compound indexes for high-frequency multi-tenant queries
+LeadSchema.index({ userId: 1, createdAt: -1 });
+LeadSchema.index({ userId: 1, status: 1 });
+LeadSchema.index({ userId: 1, assignedTo: 1 });
+LeadSchema.index({ userId: 1, phone: 1 });
+LeadSchema.index({ userId: 1, email: 1 });
+
 LeadSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('Lead', LeadSchema);

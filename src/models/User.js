@@ -174,6 +174,12 @@ const userSchema = new mongoose.Schema({
     }
 });
 
+// Add indexes for efficient lookups
+userSchema.index({ googleId: 1 }, { sparse: true });
+userSchema.index({ parentId: 1 });
+userSchema.index({ role: 1 });
+userSchema.index({ createdAt: -1 });
+
 userSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('User', userSchema);
