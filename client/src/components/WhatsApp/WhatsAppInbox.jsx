@@ -482,24 +482,33 @@ const WhatsAppInbox = () => {
 
     const renderMediaContent = (msg) => {
         const token = localStorage.getItem('token');
-        const mediaProxy = msg.content?.mediaId ? `/whatsapp/media/${msg.content.mediaId}?token=${token}` : null;
-        const mediaUrl = mediaProxy ? `${api.defaults.baseURL}${mediaProxy}` : msg.content?.mediaUrl;
+        // Robust token sanitization: Remove Bearer prefix and extra whitespace
+        const rawToken = token ? token.replace(/^Bearer\s+/i, '').trim() : '';
+        
+        // Encode the token for safe URL transport
+        const mediaProxy = msg.content?.mediaId ? `/whatsapp/media/${msg.content.mediaId}?token=${encodeURIComponent(rawToken)}` : null;
+        
+        // Build robust full URL with slash protection
+        const base = api.defaults.baseURL || '';
+        const sanitizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+        const fullMediaUrl = mediaProxy ? sanitizedBase + mediaProxy : msg.content?.mediaUrl;
 
         switch (msg.type) {
             case 'image':
                 return (
                     <div className="mb-1 group relative">
-                        {mediaUrl ? (
+                        {fullMediaUrl ? (
                             <div className="relative overflow-hidden rounded-lg bg-slate-100 min-h-[100px] min-w-[150px]">
                                 <img 
-                                    src={mediaUrl} 
+                                    src={fullMediaUrl} 
                                     alt="Shared" 
                                     className="rounded-lg max-w-[280px] max-h-[300px] object-cover cursor-pointer hover:brightness-95 transition-all duration-300" 
                                     loading="lazy"
-                                    onClick={() => setSelectedImage(mediaUrl)}
+                                    onClick={() => setSelectedImage(fullMediaUrl)}
                                     onError={(e) => {
+                                        console.error('WhatsApp Image Load Failed:', e.target.src);
                                         e.target.onerror = null;
-                                        e.target.src = 'https://placehold.co/400x300?text=Expired+or+Loading';
+                                        e.target.src = 'https://placehold.co/400x300?text=Auth+Error+or+Expired';
                                     }}
                                 />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors pointer-events-none"></div>
@@ -507,7 +516,7 @@ const WhatsAppInbox = () => {
                         ) : (
                             <div className="bg-slate-50 text-[#8696a0] rounded-lg p-6 flex flex-col items-center justify-center gap-2 border border-dashed border-slate-200">
                                 <i className="fa-solid fa-image-slash text-2xl"></i>
-                                <span className="text-[10px] font-medium uppercase tracking-wider">Image Unvailable</span>
+                                <span className="text-[10px] font-medium uppercase tracking-wider">Image Unavailable</span>
                             </div>
                         )}
                         {msg.content?.caption && <p className="text-[14px] text-[#111b21] mt-1.5 px-0.5">{msg.content.caption}</p>}

@@ -10,14 +10,18 @@ if (!JWT_SECRET) {
 // MAIN AUTH MIDDLEWARE
 const authMiddleware = async (req, res, next) => {
     let token = req.header('Authorization') || req.query.token;
-    if (!token) return res.status(401).json({ message: "No Token, Authorization Denied" });
-
-    if (token.startsWith('Bearer ')) {
-        token = token.substring(7);
-    }
-
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
+        // Sanitize token (handle URL encoding or Bearer prefix in query/header)
+        let cleanToken = token.replace(/^Bearer\s+/i, '').trim();
+        
+        // Additional URL decoding for safety if it came from query
+        if (req.query.token) {
+            cleanToken = decodeURIComponent(cleanToken);
+            // Handle if there's still a Bearer prefix inside the decoded string
+            cleanToken = cleanToken.replace(/^Bearer\s+/i, '').trim();
+        }
+
+        const decoded = jwt.verify(cleanToken, JWT_SECRET);
         req.user = decoded;
 
         const User = require('../models/User'); // Lazy load models
