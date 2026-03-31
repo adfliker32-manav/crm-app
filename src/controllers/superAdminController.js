@@ -1037,6 +1037,13 @@ const analyzeHealthStatus = (metrics) => {
     const maxConnectionsAllowed = 500; // Assuming typical Mongo pool
     if (metrics.database.connections > (maxConnectionsAllowed * 0.85)) escalate('critical', `DB Connections saturated (>85%)`);
 
+    if (metrics.database.storageLimitBytes > 0) {
+        const storageUsagePercent = (metrics.database.totalUsedBytes / metrics.database.storageLimitBytes) * 100;
+        if (storageUsagePercent > 95) escalate('critical', `DB Storage Critically Low (>95%)`);
+        else if (storageUsagePercent > 80) escalate('warning', `DB Storage Filling Up (>80%)`);
+    }
+
+
     // 5️⃣ Messaging Delivery Health
     const wa = metrics.delivery.whatsapp;
     if (wa.successRate < 93 && wa.totalAttempts > 10) escalate('critical', `WhatsApp Deliverability Failing (${wa.successRate}%)`);
@@ -1081,17 +1088,27 @@ const getSystemHealth = async (req, res) => {
 
         // 2. Database Telemetry
         try {
-            const dbStats = await mongoose.connection.db.admin().serverStatus();
+            const serverStatus = await mongoose.connection.db.admin().serverStatus();
+            const dbStats = await mongoose.connection.db.stats();
+
+            const totalUsedBytes = (dbStats.dataSize || 0) + (dbStats.indexSize || 0);
+
             health.database = {
-                connections: dbStats.connections.current,
-                activeQueries: dbStats.globalLock.activeClients.total,
-                documentQueries: dbStats.opcounters.query,
-                inserts: dbStats.opcounters.insert,
-                updates: dbStats.opcounters.update
+                connections: serverStatus.connections?.current || 0,
+                activeQueries: serverStatus.globalLock?.activeClients?.total || 0,
+                documentQueries: serverStatus.opcounters?.query || 0,
+                inserts: serverStatus.opcounters?.insert || 0,
+                updates: serverStatus.opcounters?.update || 0,
+
+                // Storage Stats
+                dataSize: dbStats.dataSize || 0,
+                indexSize: dbStats.indexSize || 0,
+                totalUsedBytes: totalUsedBytes,
+                storageLimitBytes: 536870912 // 512 MB (M0 Free Tier limit)
             };
         } catch (dbErr) {
             console.error("DB Stat Error:", dbErr.message);
-            health.database = { connections: 0, error: "Unable to retrieve DB stats." };
+            health.database = { connections: 0, error: "Unable to retrieve DB stats: " + dbErr.message };
         }
 
         // 3. Queue Health (Agenda)

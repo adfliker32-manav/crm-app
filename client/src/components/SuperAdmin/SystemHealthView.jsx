@@ -103,11 +103,11 @@ const SystemHealthView = () => {
             )}
 
             <div className="mb-2 mt-8">
-                <h2 className="text-lg font-black text-slate-800 uppercase tracking-widest">8 Pillars of Survival</h2>
+                <h2 className="text-lg font-black text-slate-800 uppercase tracking-widest">9 Pillars of System Control</h2>
             </div>
             
-            {/* Metric Grid : The 8 Pillars */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Metric Grid : The 9 Pillars */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
 
                 {/* 1. API Failure Rate */}
                 <div className={`p-5 rounded-xl border shadow-sm ${apiStats.errorRatePercent > 3 ? 'border-red-500 bg-red-50' : 'border-slate-200 bg-white'}`}>
@@ -260,6 +260,28 @@ const SystemHealthView = () => {
                     <div className="mt-3 truncate text-xs font-mono">
                         <span className="text-slate-500 truncate">
                             Target: {topTenant ? topTenant.tenantId : 'None'}
+                        </span>
+                    </div>
+                </div>
+
+                {/* 9. Database Storage */}
+                <div className={`p-5 rounded-xl border shadow-sm ${(database.totalUsedBytes / database.storageLimitBytes) > 0.8 ? 'border-amber-500 bg-amber-50' : 'border-slate-200 bg-white'}`}>
+                    <div className="text-xs font-bold text-slate-400 mb-2 uppercase flex justify-between">
+                        <span>9. DB Storage</span>
+                        <i className="fa-solid fa-hard-drive"></i>
+                    </div>
+                    <div className="flex items-baseline gap-2">
+                        <span className={`text-3xl font-black ${(database.totalUsedBytes / (database.storageLimitBytes || 1)) > 0.95 ? 'text-red-600' : (database.totalUsedBytes / (database.storageLimitBytes || 1)) > 0.8 ? 'text-amber-500' : 'text-slate-800'}`}>
+                            {Math.round((database.totalUsedBytes / 1024 / 1024) * 10) / 10}
+                        </span>
+                        <span className="text-xs font-bold text-slate-500">MB USED</span>
+                    </div>
+                    <div className="mt-3 flex justify-between text-xs font-mono">
+                        <span className="text-slate-500">
+                            Limit: {Math.round((database.storageLimitBytes || 536870912) / 1024 / 1024)}MB
+                        </span>
+                        <span className="text-slate-500 font-bold">
+                            {Math.round((database.totalUsedBytes / (database.storageLimitBytes || 1)) * 100)}%
                         </span>
                     </div>
                 </div>
