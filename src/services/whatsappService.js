@@ -217,9 +217,11 @@ const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en'
 // Download media from WhatsApp with local disk caching
 const downloadMedia = async (mediaId, userId = null) => {
     try {
+        console.log(`🔍 Media Request: ${mediaId} (User: ${userId})`);
         const uploadsDir = path.join(process.cwd(), 'uploads', 'whatsapp');
         
         if (!fs.existsSync(uploadsDir)) {
+            console.log('📁 Creating WhatsApp uploads directory...');
             fs.mkdirSync(uploadsDir, { recursive: true });
         }
 
@@ -227,6 +229,7 @@ const downloadMedia = async (mediaId, userId = null) => {
         const cachedFile = files.find(f => f.startsWith(mediaId));
         
         if (cachedFile) {
+            console.log(`✅ Cache Hit: ${cachedFile}`);
             const filePath = path.join(uploadsDir, cachedFile);
             const data = fs.readFileSync(filePath);
             const ext = path.extname(cachedFile).toLowerCase();
@@ -244,6 +247,7 @@ const downloadMedia = async (mediaId, userId = null) => {
             };
         }
 
+        console.log(`🌐 Cache Miss. Fetching from Meta: ${mediaId}`);
         const { accessToken } = await getCredentials(userId);
 
         const mediaInfoUrl = `https://graph.facebook.com/v21.0/${mediaId}`;
@@ -255,6 +259,7 @@ const downloadMedia = async (mediaId, userId = null) => {
         const mimeType = mediaInfoResponse.data.mime_type;
         const extension = mimeType.split('/')[1]?.split(';')[0] || 'bin';
 
+        console.log(`⬇️  Downloading Binary: ${mediaUrl.substring(0, 50)}...`);
         const mediaResponse = await axios.get(mediaUrl, {
             headers: { 'Authorization': `Bearer ${accessToken}` },
             responseType: 'arraybuffer'
