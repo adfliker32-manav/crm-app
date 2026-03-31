@@ -11,6 +11,7 @@ const WhatsAppInbox = () => {
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
+    const [selectedImage, setSelectedImage] = useState(null); // 🖼️ State for Lightbox
     const [newMessage, setNewMessage] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
@@ -481,44 +482,60 @@ const WhatsAppInbox = () => {
 
     const renderMediaContent = (msg) => {
         const mediaProxy = msg.content?.mediaId ? `/whatsapp/media/${msg.content.mediaId}` : null;
+        const mediaUrl = mediaProxy ? `${api.defaults.baseURL}${mediaProxy}` : msg.content?.mediaUrl;
 
         switch (msg.type) {
             case 'image':
                 return (
-                    <div className="mb-1">
-                        {mediaProxy ? (
-                            <img src={`${api.defaults.baseURL}${mediaProxy}`} alt="Shared" className="rounded-lg max-w-[280px] max-h-[300px] object-cover cursor-pointer hover:opacity-90 transition" loading="lazy" />
-                        ) : msg.content?.mediaUrl ? (
-                            <img src={msg.content.mediaUrl} alt="Shared" className="rounded-lg max-w-[280px] max-h-[300px] object-cover" loading="lazy" />
+                    <div className="mb-1 group relative">
+                        {mediaUrl ? (
+                            <div className="relative overflow-hidden rounded-lg bg-slate-100 min-h-[100px] min-w-[150px]">
+                                <img 
+                                    src={mediaUrl} 
+                                    alt="Shared" 
+                                    className="rounded-lg max-w-[280px] max-h-[300px] object-cover cursor-pointer hover:brightness-95 transition-all duration-300" 
+                                    loading="lazy"
+                                    onClick={() => setSelectedImage(mediaUrl)}
+                                    onError={(e) => {
+                                        e.target.onerror = null;
+                                        e.target.src = 'https://placehold.co/400x300?text=Expired+or+Loading';
+                                    }}
+                                />
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors pointer-events-none"></div>
+                            </div>
                         ) : (
-                            <div className="bg-slate-100 rounded-lg p-4 flex items-center gap-2 text-slate-500"><i className="fa-solid fa-image text-2xl"></i> Image</div>
+                            <div className="bg-slate-50 text-[#8696a0] rounded-lg p-6 flex flex-col items-center justify-center gap-2 border border-dashed border-slate-200">
+                                <i className="fa-solid fa-image-slash text-2xl"></i>
+                                <span className="text-[10px] font-medium uppercase tracking-wider">Image Unvailable</span>
+                            </div>
                         )}
-                        {msg.content?.caption && <p className="text-sm mt-1.5">{msg.content.caption}</p>}
+                        {msg.content?.caption && <p className="text-[14px] text-[#111b21] mt-1.5 px-0.5">{msg.content.caption}</p>}
                     </div>
                 );
             case 'video':
                 return (
-                    <div className="mb-1">
-                        <div className="bg-slate-900/10 rounded-lg p-6 flex flex-col items-center gap-2 max-w-[280px]">
-                            <i className="fa-solid fa-play-circle text-4xl text-white/80"></i>
-                            <span className="text-xs text-slate-600">Video</span>
+                    <div className="mb-1 relative group cursor-pointer" onClick={() => mediaUrl && window.open(mediaUrl, '_blank')}>
+                        <div className="bg-[#111b21]/10 rounded-lg p-10 flex flex-col items-center justify-center gap-3 max-w-[280px] border border-slate-200 relative overflow-hidden">
+                            <i className="fa-solid fa-circle-play text-5xl text-[#00a884]"></i>
+                            <span className="text-[11px] font-bold text-slate-600 uppercase tracking-widest leading-none">Play Video</span>
+                            <div className="absolute top-2 right-2 px-1.5 py-0.5 bg-black/20 rounded text-[9px] text-white">MP4</div>
                         </div>
-                        {msg.content?.caption && <p className="text-sm mt-1.5">{msg.content.caption}</p>}
+                        {msg.content?.caption && <p className="text-[14px] text-[#111b21] mt-1.5 px-0.5">{msg.content.caption}</p>}
                     </div>
                 );
             case 'document':
                 return (
-                    <div className="bg-slate-50/80 rounded-lg p-3 flex items-center gap-3 max-w-[280px] border border-slate-200/50 mb-1">
-                        <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center flex-shrink-0">
-                            <i className="fa-solid fa-file-lines text-white"></i>
+                    <div className="bg-white/80 rounded-xl p-3.5 flex items-center gap-3.5 max-w-[280px] border border-slate-200/80 mb-1 shadow-sm hover:shadow-md transition-all cursor-pointer group">
+                        <div className="w-11 h-11 bg-blue-500 rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-blue-500/20 group-hover:scale-105 transition-transform">
+                            <i className="fa-solid fa-file-pdf text-white text-lg"></i>
                         </div>
                         <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-slate-800 truncate">{msg.content?.fileName || 'Document'}</p>
-                            <p className="text-xs text-slate-500">PDF • Document</p>
+                            <p className="text-[13px] font-bold text-slate-800 truncate leading-tight mb-0.5">{msg.content?.fileName || 'Document'}</p>
+                            <p className="text-[10px] text-slate-400 font-medium uppercase tracking-tight">{(msg.content?.fileSize / 1024).toFixed(0) || '0'} KB • Document</p>
                         </div>
-                        {mediaProxy && (
-                            <a href={`${api.defaults.baseURL}${mediaProxy}`} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600">
-                                <i className="fa-solid fa-download"></i>
+                        {mediaUrl && (
+                            <a href={mediaUrl} target="_blank" rel="noopener noreferrer" className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 hover:text-[#00a884] hover:bg-slate-200 transition-colors">
+                                <i className="fa-solid fa-arrow-down-to-bracket"></i>
                             </a>
                         )}
                     </div>
@@ -1079,6 +1096,17 @@ const WhatsAppInbox = () => {
                                 {startingChat ? <><i className="fa-solid fa-spinner fa-spin"></i> Sending...</> : <><i className="fa-solid fa-paper-plane"></i> Send Template</>}
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+            {/* ═══════════ IMAGE LIGHTBOX ═══════════ */}
+            {selectedImage && (
+                <div className="fixed inset-0 bg-black/90 z-[100] flex flex-col animate-in fade-in zoom-in duration-200">
+                    <button onClick={() => setSelectedImage(null)} className="absolute top-6 right-6 w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition backdrop-blur-md">
+                        <i className="fa-solid fa-xmark text-2xl"></i>
+                    </button>
+                    <div className="flex-1 flex items-center justify-center p-12">
+                        <img src={selectedImage} alt="Fullscreen" className="max-w-full max-h-full object-contain shadow-2xl rounded-sm" />
                     </div>
                 </div>
             )}
