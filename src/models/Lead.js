@@ -130,7 +130,7 @@ LeadSchema.index({ userId: 1, phone: 1 });
 LeadSchema.index({ userId: 1, email: 1 });
 
 // Auto-truncate arrays to prevent document bloat (16MB limits)
-LeadSchema.pre('save', function(next) {
+LeadSchema.pre('save', function() {
     if (this.messages && this.messages.length > 100) {
         this.messages = this.messages.slice(-100);
     }
@@ -144,7 +144,6 @@ LeadSchema.pre('save', function(next) {
         this.notes = this.notes.slice(-50);
     }
     this.markModified('customData');
-    next();
 });
 
 LeadSchema.plugin(saasPlugin);

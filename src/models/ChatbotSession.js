@@ -68,12 +68,11 @@ const chatbotSessionSchema = new mongoose.Schema({
 });
 
 // Ensure Map updates persist and arrays don't bloat
-chatbotSessionSchema.pre('save', function(next) {
+chatbotSessionSchema.pre('save', function() {
     if (this.visitedNodes && this.visitedNodes.length > 200) {
         this.visitedNodes = this.visitedNodes.slice(-200);
     }
     this.markModified('variables');
-    next();
 });
 
 // Index for efficient queries
