@@ -63,6 +63,9 @@ router.post('/conversations/:id/link', authMiddleware, requireModule('whatsapp')
 // Update conversation status (archive/unarchive/spam)
 router.put('/conversations/:id/status', authMiddleware, requireModule('whatsapp'), whatsappConversationController.updateStatus);
 
+// Resume chatbot (manual unpause)
+router.put('/conversations/:id/resume-chatbot', authMiddleware, requireModule('whatsapp'), whatsappConversationController.resumeChatbot);
+
 // Send media in conversation (file upload via multer)
 router.post('/conversations/:id/send-media', authMiddleware, requireModule('whatsapp'), upload.single('file'), whatsappConversationController.sendMediaMessage);
 

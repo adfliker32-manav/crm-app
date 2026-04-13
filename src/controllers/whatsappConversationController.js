@@ -616,3 +616,35 @@ exports.downloadMediaProxy = async (req, res) => {
     }
 };
 
+// Resume/Unpause chatbot for a conversation (manually override the 24h human pause)
+exports.resumeChatbot = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const { id } = req.params;
+
+        const companyUserIds = await getCompanyUserIds(userId);
+
+        // Find conversation and reset chatbotPausedUntil
+        const conversation = await WhatsAppConversation.findOneAndUpdate(
+            { _id: id, userId: { $in: companyUserIds } },
+            { $set: { chatbotPausedUntil: new Date(0) } },
+            { new: true }
+        );
+
+        if (!conversation) {
+            return res.status(404).json({ message: 'Conversation not found' });
+        }
+
+        // Emit update to frontend
+        emitToUser(userId, 'whatsapp:conversationUpdate', {
+            conversationId: conversation._id,
+            updates: { chatbotPausedUntil: conversation.chatbotPausedUntil }
+        });
+
+        res.json({ success: true, message: 'Chatbot resumed successfully', conversation });
+    } catch (error) {
+        console.error('Error resuming chatbot:', error);
+        res.status(500).json({ message: 'Error resuming chatbot', error: 'Server error' });
+    }
+};
+

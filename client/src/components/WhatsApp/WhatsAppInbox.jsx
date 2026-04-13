@@ -136,6 +136,12 @@ const WhatsAppInbox = () => {
         return false;
     };
 
+    // Check if the chatbot is manually paused (human handoff)
+    const isChatbotPaused = (chat) => {
+        if (!chat || !chat.chatbotPausedUntil) return false;
+        return new Date() < new Date(chat.chatbotPausedUntil);
+    };
+
     // ============================================================
     // 🔌 SOCKET.IO — Real-time event listeners (replaces 5s polling)
     // ============================================================
@@ -451,6 +457,24 @@ const WhatsAppInbox = () => {
             fetchConversations();
             showSuccess(newStatus === 'archived' ? 'Chat archived' : 'Chat unarchived');
         } catch { showError('Failed to update'); }
+    };
+
+    const handleResumeChatbot = async (chatId) => {
+        try {
+            const res = await api.put(`/whatsapp/conversations/${chatId}/resume-chatbot`);
+            if (res.data.success) {
+                showSuccess('Chatbot resumed! It will now respond to new messages.');
+                // Update local state
+                if (selectedChat?._id === chatId) {
+                    setSelectedChat(prev => ({ ...prev, chatbotPausedUntil: res.data.conversation.chatbotPausedUntil }));
+                }
+                setConversations(prev => prev.map(c => 
+                    c._id === chatId ? { ...c, chatbotPausedUntil: res.data.conversation.chatbotPausedUntil } : c
+                ));
+            }
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to resume chatbot');
+        }
     };
 
     const handleSelectChat = (chat) => {
@@ -830,6 +854,25 @@ const WhatsAppInbox = () => {
                                                 </div>
                                             )}
                                         </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Chatbot Paused Banner */}
+                            {selectedChat && isChatbotPaused(selectedChat) && (
+                                <div className="px-4 py-2 bg-blue-50 border-b border-blue-200">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2 text-blue-700 text-xs">
+                                            <i className="fa-solid fa-robot"></i>
+                                            <span className="font-semibold">Chatbot is currently PAUSED for this chat.</span>
+                                            <span>(Paused because you replied manually)</span>
+                                        </div>
+                                        <button 
+                                            onClick={() => handleResumeChatbot(selectedChat._id)} 
+                                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1.5"
+                                        >
+                                            <i className="fa-solid fa-play"></i> Resume Chatbot
+                                        </button>
                                     </div>
                                 </div>
                             )}
