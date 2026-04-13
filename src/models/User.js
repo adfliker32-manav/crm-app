@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const saasPlugin = require('./plugins/saasPlugin');
+const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
     name: {
@@ -20,8 +21,7 @@ const userSchema = new mongoose.Schema({
     },
     googleId: {
         type: String,
-        default: null,
-        sparse: true  // Allow multiple nulls but unique when set
+        default: null
     },
     authProvider: {
         type: String,
@@ -171,6 +171,22 @@ const userSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    }
+});
+
+// Hash password before saving
+userSchema.pre('save', async function() {
+    if (!this.isModified('password') || !this.password) return;
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+});
+
+// Hash password on updates
+userSchema.pre('findOneAndUpdate', async function() {
+    const update = this.getUpdate();
+    if (update.password) {
+        const salt = await bcrypt.genSalt(10);
+        update.password = await bcrypt.hash(update.password, salt);
     }
 });
 

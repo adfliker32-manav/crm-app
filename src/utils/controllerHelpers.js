@@ -43,6 +43,13 @@ const runInBackground = (label, task) => {
     }, 0);
 };
 
+// ⚠️ SECURITY: Sanitize user input before using in MongoDB $regex queries.
+// Without this, attackers can inject regex like '.*.*.*.*a' causing catastrophic backtracking (ReDoS).
+const escapeRegex = (str) => {
+    if (typeof str !== 'string') return '';
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
 module.exports = {
     STRONG_PASSWORD_MESSAGE,
     normalizeEmail,
@@ -51,5 +58,6 @@ module.exports = {
     hasStrongPassword,
     parseBoundedInteger,
     handleDetachedPromise,
-    runInBackground
+    runInBackground,
+    escapeRegex
 };

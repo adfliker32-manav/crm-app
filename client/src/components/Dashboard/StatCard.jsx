@@ -28,8 +28,8 @@ const StatCard = ({ title, value, icon, subtext, trend, trendUp, gradient }) => 
                     </div>
                     {trend && (
                         <div className={`flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full ${trendUp
-                                ? 'bg-emerald-50 text-emerald-600'
-                                : 'bg-rose-50 text-rose-500'
+                            ? 'bg-emerald-50 text-emerald-600'
+                            : 'bg-rose-50 text-rose-500'
                             }`}>
                             <i className={`fa-solid ${trendUp ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down'} text-xs`}></i>
                             {trend}

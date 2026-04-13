@@ -33,8 +33,6 @@ const verifyWebhook = (req, res) => {
         res.status(200).send(challenge);
     } else {
         console.log("⛔ 403 Forbidden - Verification failed");
-        console.log("   Mode check:", mode === 'subscribe' ? "✅" : "❌");
-        console.log("   Token check:", token === MY_VERIFY_TOKEN ? "✅" : "❌");
         res.sendStatus(403);
     }
 };
@@ -121,45 +119,23 @@ async function processIncomingMessage(messageObj, value) {
             return;
         }
 
-        // Find the user by phone number ID (try both waPhoneNumberId and waBusinessId)
-        let ownerUser = await User.findOne({ 
-            $or: [
-                { waPhoneNumberId: phoneNumberId },
-                { waBusinessId: phoneNumberId }
-            ]
-        });
-
-        // If no user found, try to find by default phone number ID from env (for single-tenant setup)
-        if (!ownerUser && phoneNumberId) {
-            const envPhoneId = process.env.Phone_Number_ID || process.env.WA_PHONE_NUMBER_ID;
-            if (phoneNumberId === envPhoneId) {
-                // Find the first manager or superadmin user (for single-tenant setup fallback)
-                ownerUser = await User.findOne({ role: { $in: ['superadmin', 'manager'] } });
-                if (ownerUser) {
-                    console.log(`✅ Using fallback user ${ownerUser.email} for incoming message`);
-                }
-            }
-        }
+        // Find the tenant who owns this phone number via IntegrationConfig (proper multi-tenant lookup)
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const config = await IntegrationConfig.findOne({ "whatsapp.waPhoneNumberId": phoneNumberId })
+            .populate('userId', 'email role parentId');
+        let ownerUser = config?.userId || null;
 
         if (!ownerUser) {
-            console.log(`⚠️  No user found for phone number ID: ${phoneNumberId}`);
-            console.log(`   Available users with WhatsApp config:`);
-            const usersWithWA = await User.find({ 
-                $or: [
-                    { waPhoneNumberId: { $exists: true, $ne: null } },
-                    { waBusinessId: { $exists: true, $ne: null } }
-                ]
-            }).select('email waPhoneNumberId waBusinessId');
-            console.log(usersWithWA);
+            console.log(`⚠️  No tenant found for phone number ID: ${phoneNumberId}`);
             return;
         }
 
         // Normalize phone number (remove + and spaces)
-        const normalizedPhone = from.replace(/[+\s]/g, '');
+        const normalizedPhone = from.replace(/[^0-9]/g, '');
 
-        // Find or create lead
+        // Find lead using exact match (not regex — prevents ReDoS and collection scans)
         let lead = await Lead.findOne({ 
-            phone: { $regex: normalizedPhone.replace(/\d/g, '\\d') },
+            phone: normalizedPhone,
             userId: ownerUser._id 
         });
 
@@ -190,18 +166,21 @@ async function processIncomingMessage(messageObj, value) {
 
         // ============================================
         // Sync to New Conversation Data Model
+        // ⚠️ SECURITY FIX: Must set waContactId (required field)
+        // ⚠️ PERFORMANCE FIX: Use indexed field (waContactId) not unindexed (phone)
         // ============================================
         const waMessageId = messageObj.id;
 
         let conversation = await WhatsAppConversation.findOne({
-            phone: normalizedPhone,
-            userId: ownerUser._id
+            userId: ownerUser._id,
+            waContactId: normalizedPhone
         });
 
         if (!conversation) {
             conversation = new WhatsAppConversation({
                 userId: ownerUser._id,
                 leadId: lead._id,
+                waContactId: normalizedPhone,
                 phone: normalizedPhone,
                 displayName: name,
                 status: 'active',
@@ -233,15 +212,19 @@ async function processIncomingMessage(messageObj, value) {
         if (!existingMsg) {
             await messageRecord.save();
 
-            // Update Conversation
-            conversation.lastMessage = msgBody.substring(0, 100);
-            conversation.lastMessageAt = new Date();
-            conversation.lastMessageDirection = 'inbound';
-            conversation.unreadCount = (conversation.unreadCount || 0) + 1;
-            conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
-            conversation.metadata.totalInbound = (conversation.metadata.totalInbound || 0) + 1;
-            
-            await conversation.save();
+            // Update Conversation using atomic query to prevent race conditions
+            await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                $set: {
+                    lastMessage: msgBody.substring(0, 100),
+                    lastMessageAt: new Date(),
+                    lastMessageDirection: 'inbound'
+                },
+                $inc: { 
+                    unreadCount: 1,
+                    'metadata.totalMessages': 1,
+                    'metadata.totalInbound': 1
+                }
+            });
             console.log(`✅ Synced into WhatsAppConversation DB: ${conversation._id}`);
         } else {
             console.log(`⚠️ Duplicate webhook message id ${waMessageId} ignored.`);
@@ -273,34 +256,23 @@ const sendReply = async (req, res) => {
     try {
         console.log(`📤 Sending reply to ${phone}: ${message}`);
 
-        // Get user credentials
+        // Get user credentials (per-tenant, no .env fallback)
         const userId = req.user?.userId || req.user?.id;
         const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
         
-        let phoneNumberId, accessToken;
-        
-        if (userId) {
-            const userCredentials = await getUserWhatsAppCredentials(userId);
-            if (userCredentials && userCredentials.phoneNumberId && userCredentials.accessToken) {
-                phoneNumberId = userCredentials.phoneNumberId;
-                accessToken = userCredentials.accessToken;
-            }
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Authentication required' });
         }
-        
-        // Fallback to environment variables
-        if (!phoneNumberId || !accessToken) {
-            phoneNumberId = process.env.Phone_Number_ID || process.env.WA_PHONE_NUMBER_ID;
-            accessToken = process.env.WHATSAPP_TOKEN || process.env.WA_ACCESS_TOKEN;
-        }
-        
-        if (!phoneNumberId || !accessToken) {
-            return res.status(500).json({ 
+
+        const userCredentials = await getUserWhatsAppCredentials(userId);
+        if (!userCredentials || !userCredentials.phoneNumberId || !userCredentials.accessToken) {
+            return res.status(400).json({ 
                 success: false, 
-                message: userId 
-                    ? "WhatsApp configuration not found. Please configure your WhatsApp settings."
-                    : "WhatsApp credentials not configured"
+                message: 'WhatsApp not configured. Go to Settings → WhatsApp Config to set up your credentials.'
             });
         }
+
+        const { phoneNumberId, accessToken } = userCredentials;
         
         const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
         

@@ -1,6 +1,57 @@
 const nodemailer = require('nodemailer');
 const { getUserEmailCredentials } = require('../utils/emailUtils');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { isEmailSuppressed } = require('../controllers/emailUnsubscribeController');
+
+// ═══════════════════════════════════════════════════════════════
+// Transporter Cache — avoids per-request SMTP handshake overhead.
+// Key: userId or 'env-default', Value: { transporter, createdAt }
+// TTL: 5 minutes — stale entries are auto-evicted on next access.
+// ═══════════════════════════════════════════════════════════════
+const transporterCache = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Invalidate a cached transporter (call when user updates SMTP credentials).
+ */
+const clearTransporterCache = (userId) => {
+    const key = userId || 'env-default';
+    if (transporterCache.has(key)) {
+        const cached = transporterCache.get(key);
+        if (cached.transporter && typeof cached.transporter.close === 'function') {
+            cached.transporter.close(); // gracefully close pooled connection
+        }
+        transporterCache.delete(key);
+        console.log(`🗑️ Transporter cache cleared for ${key}`);
+    }
+};
+
+/**
+ * Get or create a Nodemailer transporter (with cache).
+ */
+const getTransporter = (userCredentials = null, userId = null) => {
+    const cacheKey = userId || 'env-default';
+
+    // Check cache first
+    if (transporterCache.has(cacheKey)) {
+        const cached = transporterCache.get(cacheKey);
+        if (Date.now() - cached.createdAt < CACHE_TTL_MS) {
+            return cached.transporter; // cache HIT
+        }
+        // TTL expired — close and re-create
+        if (cached.transporter && typeof cached.transporter.close === 'function') {
+            cached.transporter.close();
+        }
+        transporterCache.delete(cacheKey);
+    }
+
+    // Build fresh transporter
+    const transporter = createTransporter(userCredentials);
+    if (transporter) {
+        transporterCache.set(cacheKey, { transporter, createdAt: Date.now() });
+    }
+    return transporter;
+};
 
 // Create reusable transporter for Gmail SMTP
 const createTransporter = (userCredentials = null) => {
@@ -25,11 +76,22 @@ const createTransporter = (userCredentials = null) => {
         return null;
     }
 
+    let host, port, service;
+    if (userCredentials && userCredentials.serviceType === 'smtp') {
+        service = undefined; // Do not use predefined service
+        host = userCredentials.smtpHost;
+        port = userCredentials.smtpPort || 587;
+    } else {
+        service = 'gmail';
+        host = 'smtp.gmail.com';
+        port = 587;
+    }
+
     const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        host: 'smtp.gmail.com',
-        port: 587,
-        secure: false, // true for 465, false for other ports
+        service: service,
+        host: host,
+        port: port,
+        secure: port === 465, // true for 465, false for other ports
         auth: {
             user: email,
             pass: password
@@ -38,13 +100,13 @@ const createTransporter = (userCredentials = null) => {
         connectionTimeout: 10000, // 10 seconds
         greetingTimeout: 10000, // 10 seconds
         socketTimeout: 10000, // 10 seconds
-        // Retry settings
+        // Pool settings — optimized for throughput
         pool: true,
-        maxConnections: 1,
-        maxMessages: 3,
-        // Optional: For better error handling
+        maxConnections: 5,
+        maxMessages: 100,
+        // TLS — strict verification for production security
         tls: {
-            rejectUnauthorized: false
+            rejectUnauthorized: true
         },
         // Debug mode (can be disabled in production)
         debug: process.env.NODE_ENV === 'development',
@@ -91,10 +153,16 @@ const sendEmail = async (options) => {
         throw new Error("Emergency: Email sending is temporarily disabled platform-wide.");
     }
 
-    const { to, subject, text, html, from, attachments, userId } = options;
+    const { to, subject, text, html, from, attachments, userId, cc, bcc } = options;
 
     if (!to || !subject || (!text && !html)) {
         throw new Error('Missing required email fields: to, subject, and text/html are required');
+    }
+
+    // FIX B3: Check suppression list before sending
+    if (await isEmailSuppressed(to)) {
+        console.log(`🚫 Email to ${to} blocked — address is on suppression list (unsubscribed/bounced).`);
+        throw new Error(`Email to ${to} is blocked: address has been unsubscribed or bounced.`);
     }
 
     // Get user credentials if userId provided
@@ -108,7 +176,7 @@ const sendEmail = async (options) => {
         }
     }
 
-    const transporter = createTransporter(userCredentials);
+    const transporter = getTransporter(userCredentials, userId);
     if (!transporter) {
         const errorMsg = userId
             ? 'Email configuration not found. Please configure your email settings in Email Management.'
@@ -119,14 +187,45 @@ const sendEmail = async (options) => {
     // Default from email (can be overridden)
     const fromEmail = from || (userCredentials ? userCredentials.email : (process.env.EMAIL_USER || process.env.GMAIL_USER));
 
+    // Per-user email signature (if configured)
+    const signatureHtml = userCredentials?.signature ? `<br><br>${userCredentials.signature}` : '';
+    const signatureText = userCredentials?.signature ? `\n\n${userCredentials.signature.replace(/<[^>]*>/g, '')}` : '';
+
+    // FIX B1: Unsubscribe link must point to the BACKEND API, not the frontend
+    const backendUrl = process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const unsubscribeLink = `${backendUrl}/api/email/unsubscribe?email=${encodeURIComponent(to)}`;
+
+    // FIX B4: CAN-SPAM requires physical postal address
+    const businessAddress = userCredentials?.businessAddress || process.env.BUSINESS_ADDRESS || '';
+    const addressHtml = businessAddress ? `<br><span style="font-size:11px;color:#999;">${businessAddress}</span>` : '';
+    const addressText = businessAddress ? `\n${businessAddress}` : '';
+
+    const unsubscribeHtml = `<br><br><div style="border-top:1px solid #eee;padding-top:10px;margin-top:20px;font-size:12px;color:#777;text-align:center;">This email was sent to ${to}. If you no longer wish to receive these emails, you can <a href="${unsubscribeLink}" style="color:#0056b3;text-decoration:none;">unsubscribe</a> at any time.${addressHtml}</div>`;
+    const unsubscribeText = `\n\n---\nThis email was sent to ${to}. To unsubscribe, visit: ${unsubscribeLink}${addressText}`;
+
     const mailOptions = {
         from: `"${fromName}" <${fromEmail}>`,
         to: to,
         subject: subject,
-        text: text || html?.replace(/<[^>]*>/g, ''), // Plain text fallback
-        html: html || text, // HTML version
-        attachments: attachments || [] // File attachments
+        text: (text || html?.replace(/<[^>]*>/g, '')) + signatureText + unsubscribeText,
+        html: (html || text) + signatureHtml + unsubscribeHtml,
+        attachments: attachments || [],
+        // FIX B2: RFC 8058 / Gmail 2024 Sender Guidelines compliance
+        headers: {
+            'List-Unsubscribe': `<${unsubscribeLink}>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+        }
     };
+
+    // CC/BCC support
+    if (cc) mailOptions.cc = cc;
+    if (bcc) mailOptions.bcc = bcc;
+
+    // FIX F4: Reply threading — pass In-Reply-To and References if available
+    if (options.inReplyTo) {
+        mailOptions.inReplyTo = options.inReplyTo;
+        mailOptions.references = options.references || options.inReplyTo;
+    }
 
     try {
         // Verify connection removed for performance - sendMail will handle connection errors
@@ -171,5 +270,6 @@ const sendEmail = async (options) => {
 module.exports = {
     sendEmail,
     sendEmailWithRetry,
-    createTransporter
+    createTransporter,
+    clearTransporterCache
 };

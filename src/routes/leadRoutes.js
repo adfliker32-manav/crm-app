@@ -14,6 +14,19 @@ const bulkLimiter = rateLimit({
     message: { success: false, error: 'rate_limit', message: 'Too many bulk requests. Please wait 15 minutes.' }
 });
 
+// ⚠️ SECURITY: Rate limit write operations to prevent spam and abuse
+const writeLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute window
+    max: 30,
+    message: { success: false, error: 'rate_limit', message: 'Too many write requests. Please slow down.' }
+});
+
+const deleteLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 20,
+    message: { success: false, error: 'rate_limit', message: 'Too many delete requests. Please wait.' }
+});
+
 // ==========================
 // 📌 Lead Routes (With Permission Protection)
 // (Prefix '/api/leads' index.js se aayega)
@@ -21,9 +34,12 @@ const bulkLimiter = rateLimit({
 
 // ⚠️ IMPORTANT: Non-parameterized routes MUST come BEFORE parameterized routes!
 
-// 0. Google Sheet Auto-Sync Config (MUST BE BEFORE /:id routes!)
+// 0. Google Sheet Push Sync Config (MUST BE BEFORE /:id routes!)
 router.get('/sheet-sync-config', authMiddleware, sheetSyncController.getSheetSyncConfig);
 router.put('/sheet-sync-config', authMiddleware, sheetSyncController.updateSheetSyncConfig);
+router.post('/google-sheets-list', authMiddleware, sheetSyncController.listGoogleSheets);
+router.post('/sheet-headers', authMiddleware, sheetSyncController.fetchSheetHeaders);
+router.post('/sheet-sync-config/regenerate-secret', authMiddleware, sheetSyncController.regenerateWebhookSecret);
 
 // 1. Sync Google Sheet (Manual — MUST BE BEFORE /:id routes!)
 router.post('/sync-sheet', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.syncLeads);
@@ -52,7 +68,7 @@ router.post('/bulk-tags', authMiddleware, checkPermission('editLeads'), leadCont
 // 7.5. Duplicate Detection Routes (MUST BE BEFORE /:id routes!)
 router.post('/check-duplicates', authMiddleware, leadController.checkDuplicates);
 router.get('/duplicates', authMiddleware, leadController.getDuplicateGroups);
-router.post('/duplicates/auto-delete', authMiddleware, checkPermission('deleteLeads'), leadController.autoDeleteDuplicates);
+router.post('/duplicates/auto-delete', authMiddleware, deleteLimiter, checkPermission('deleteLeads'), leadController.autoDeleteDuplicates);
 
 // 7.6 Bulk Import CSV (MUST BE BEFORE /:id routes!)
 router.post('/bulk-import', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.bulkImportLeads);
@@ -64,7 +80,7 @@ router.get('/', authMiddleware, checkPermission('viewLeads'), leadController.get
 router.get('/:id', authMiddleware, checkPermission('viewLeads'), leadController.getLeadById);
 
 // 9. Create Lead
-router.post('/', authMiddleware, checkPermission('createLeads'), validate(schemas.createLead), leadController.createLead);
+router.post('/', authMiddleware, writeLimiter, checkPermission('createLeads'), validate(schemas.createLead), leadController.createLead);
 
 // 10. Assign Lead (PARAMETERIZED ROUTE)
 router.put('/:id/assign', authMiddleware, checkPermission('assignLeads'), leadController.assignLead);
@@ -73,7 +89,7 @@ router.put('/:id/assign', authMiddleware, checkPermission('assignLeads'), leadCo
 router.put('/:id', authMiddleware, checkPermission('editLeads'), validate(schemas.updateLead), leadController.updateLead);
 
 // 12. Delete Lead (PARAMETERIZED ROUTE)
-router.delete('/:id', authMiddleware, checkPermission('deleteLeads'), leadController.deleteLead);
+router.delete('/:id', authMiddleware, deleteLimiter, checkPermission('deleteLeads'), leadController.deleteLead);
 
 // 13. Add Note (PARAMETERIZED ROUTE)
 router.post('/:id/notes', authMiddleware, checkPermission('createNotes'), leadController.addNote);

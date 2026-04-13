@@ -55,6 +55,10 @@ const whatsAppConversationSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    chatbotPausedUntil: {
+        type: Date,
+        default: null
+    },
     tags: [{
         type: String
     }],

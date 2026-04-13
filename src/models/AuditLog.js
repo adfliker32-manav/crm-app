@@ -74,6 +74,9 @@ auditLogSchema.index({ actionCategory: 1, timestamp: -1 });
 auditLogSchema.index({ actorId: 1, timestamp: -1 });
 auditLogSchema.index({ targetId: 1, timestamp: -1 });
 
+// Auto-delete audit logs older than 180 days to prevent unbounded DB growth
+auditLogSchema.index({ timestamp: 1 }, { expireAfterSeconds: 180 * 24 * 60 * 60 });
+
 // Note: Intentionally NOT using saasPlugin here! 
 // We want this collection to be globally queryable by Super Admin across all tenants.
 

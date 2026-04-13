@@ -55,7 +55,11 @@ const handleLeadWebhook = async (req, res) => {
             const payloadToVerify = req.rawBody || Buffer.from(JSON.stringify(body));
             const expectedSignature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(payloadToVerify).digest('hex');
             
-            if (signature !== expectedSignature) {
+            // ⚠️ SECURITY: Use timingSafeEqual to prevent timing attacks.
+            // Plain string comparison (===) leaks information about the expected value.
+            const sigBuffer = Buffer.from(signature);
+            const expBuffer = Buffer.from(expectedSignature);
+            if (sigBuffer.length !== expBuffer.length || !crypto.timingSafeEqual(sigBuffer, expBuffer)) {
                 console.warn("⛔ 401 Unauthorized - Invalid Meta Signature");
                 return;
             }
@@ -100,10 +104,11 @@ async function processLeadgenWebhook(pageId, leadgenData) {
         console.log(`📋 Processing lead: ${leadgen_id} from form: ${form_id}`);
 
         // Find ALL integration configs with this page connected and sync enabled
+        // FIX: Must explicitly select +meta.metaPageAccessToken because it's marked select:false in schema
         const configs = await IntegrationConfig.find({
             'meta.metaPageId': pageId,
             'meta.metaLeadSyncEnabled': true
-        }).select('userId meta');
+        }).select('userId meta +meta.metaPageAccessToken');
 
         if (!configs || configs.length === 0) {
             console.log(`⚠️ No integration configs found with page ${pageId} or sync disabled`);
@@ -266,7 +271,12 @@ async function createLeadFromMeta(userId, leadDetails, formId) {
                     .then(sent => {
                         if (sent) {
                             Lead.findByIdAndUpdate(newLead._id, {
-                                $push: { history: { type: 'WhatsApp', subType: 'Auto', content: 'Automated Welcome WhatsApp Sent (Meta Sync)', date: new Date() } }
+                                $push: { 
+                                    history: { 
+                                        $each: [{ type: 'WhatsApp', subType: 'Auto', content: 'Automated Welcome WhatsApp Sent (Meta Sync)', date: new Date() }],
+                                        $slice: -100 
+                                    } 
+                                }
                             }).exec();
                         }
                     })

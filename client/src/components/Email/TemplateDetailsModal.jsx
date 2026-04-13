@@ -3,11 +3,13 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import AttachmentUploadModal from './AttachmentUploadModal';
+import DOMPurify from 'dompurify';
 
 const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onRefresh }) => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+    const [previewMode, setPreviewMode] = useState('raw'); // 'raw' or 'preview'
 
     const formatFileSize = (bytes) => {
         if (!bytes) return '0 Bytes';
@@ -70,9 +72,32 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                     <div className="p-6 space-y-6">
                         {/* Email Body */}
                         <div>
-                            <h4 className="font-bold text-gray-700 mb-2">Email Body</h4>
+                            <div className="flex items-center justify-between mb-2">
+                                <h4 className="font-bold text-gray-700">Email Body</h4>
+                                <div className="flex bg-gray-100 rounded-lg p-0.5">
+                                    <button
+                                        onClick={() => setPreviewMode('raw')}
+                                        className={`px-3 py-1 text-xs font-medium rounded-md transition ${previewMode === 'raw' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                    >
+                                        <i className="fa-solid fa-code mr-1"></i>Raw
+                                    </button>
+                                    <button
+                                        onClick={() => setPreviewMode('preview')}
+                                        className={`px-3 py-1 text-xs font-medium rounded-md transition ${previewMode === 'preview' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                    >
+                                        <i className="fa-solid fa-eye mr-1"></i>Preview
+                                    </button>
+                                </div>
+                            </div>
                             <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 max-h-64 overflow-y-auto">
-                                <pre className="whitespace-pre-wrap font-sans text-sm text-gray-700">{template.body}</pre>
+                                {previewMode === 'raw' ? (
+                                    <pre className="whitespace-pre-wrap font-sans text-sm text-gray-700">{template.body}</pre>
+                                ) : (
+                                    <div
+                                        className="prose prose-sm max-w-none text-gray-700"
+                                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(template.body) }}
+                                    />
+                                )}
                             </div>
                         </div>
 

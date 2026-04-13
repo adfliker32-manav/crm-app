@@ -60,7 +60,7 @@ const getJwtSecret = () => process.env.JWT_SECRET;
 const signAuthToken = (user) =>
     jwt.sign(buildAuthPayload(user), getJwtSecret(), { expiresIn: TOKEN_EXPIRY });
 
-const hashPassword = (password) => bcrypt.hash(password, PASSWORD_SALT_ROUNDS);
+// password hashing is now handled by User model hooks
 
 const logFailedLogin = (reason, emailAttempted, req) => {
     auditLogger.log({
@@ -160,7 +160,7 @@ exports.login = async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -271,7 +271,7 @@ exports.createAgent = async (req, res) => {
         user = await User.create({
             name,
             email: normalizedEmail,
-            password: await hashPassword(password),
+            password: password,
             role: 'agent',
             parentId: managerId,
             permissions: agentPermissions
@@ -289,7 +289,7 @@ exports.createAgent = async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -316,7 +316,7 @@ exports.deleteAgent = async (req, res) => {
         res.json({ success: true, message: 'Agent and all associated data deleted successfully' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -352,7 +352,7 @@ exports.updateAgent = async (req, res) => {
                 return res.status(400).json({ message: STRONG_PASSWORD_MESSAGE });
             }
 
-            updateData.password = await hashPassword(password);
+            updateData.password = password;
         }
 
         const updatedAgent = await User.findByIdAndUpdate(id, updateData, { new: true }).select('-password');
@@ -364,7 +364,7 @@ exports.updateAgent = async (req, res) => {
         });
     } catch (err) {
         console.error('Update Agent Error:', err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -376,7 +376,7 @@ exports.getMyTeam = async (req, res) => {
         res.json(agents);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -400,7 +400,7 @@ exports.updateProfile = async (req, res) => {
                 return res.status(400).json({ message: STRONG_PASSWORD_MESSAGE });
             }
 
-            user.password = await hashPassword(password);
+            user.password = password;
         }
 
         await user.save();
@@ -412,7 +412,7 @@ exports.updateProfile = async (req, res) => {
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -422,7 +422,7 @@ exports.getPlans = async (req, res) => {
         res.json({ success: true, plans: [] });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 

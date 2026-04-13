@@ -129,6 +129,24 @@ LeadSchema.index({ userId: 1, assignedTo: 1 });
 LeadSchema.index({ userId: 1, phone: 1 });
 LeadSchema.index({ userId: 1, email: 1 });
 
+// Auto-truncate arrays to prevent document bloat (16MB limits)
+LeadSchema.pre('save', function(next) {
+    if (this.messages && this.messages.length > 100) {
+        this.messages = this.messages.slice(-100);
+    }
+    if (this.history && this.history.length > 100) {
+        this.history = this.history.slice(-100);
+    }
+    if (this.followUpHistory && this.followUpHistory.length > 50) {
+        this.followUpHistory = this.followUpHistory.slice(-50);
+    }
+    if (this.notes && this.notes.length > 50) {
+        this.notes = this.notes.slice(-50);
+    }
+    this.markModified('customData');
+    next();
+});
+
 LeadSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('Lead', LeadSchema);

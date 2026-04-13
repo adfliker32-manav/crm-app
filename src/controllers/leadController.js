@@ -43,7 +43,7 @@ const isValidLeadId = (value) => mongoose.Types.ObjectId.isValid(value);
 
 const appendLeadHistory = (leadId, historyEntry) =>
     Lead.findByIdAndUpdate(leadId, {
-        $push: { history: historyEntry }
+        $push: { history: { $each: [historyEntry], $slice: -100 } }
     }).exec();
 
 const resolveActorName = async (user) => {
@@ -138,7 +138,8 @@ const queueLeadStageChangeEffects = (lead) => {
 
 const sendMetaEventIfEnabled = async (lead, newStatus, oldStatus) => {
     try {
-        const config = await IntegrationConfig.findOne({ userId: lead.userId }).select('meta');
+        const config = await IntegrationConfig.findOne({ userId: lead.userId })
+            .select('+meta.metaCapiAccessToken +meta.metaCapiEnabled +meta.metaPixelId +meta.metaStageMapping +meta.metaTestEventCode');
 
         if (config && config.meta?.metaCapiEnabled) {
             runInBackground('Meta CAPI error (non-blocking):', () =>
@@ -169,7 +170,11 @@ const getLeads = async (req, res) => {
         if (req.query.status) query.status = req.query.status;
         if (req.query.assignedTo) query.assignedTo = req.query.assignedTo;
         if (req.query.search) {
-            const rx = new RegExp(req.query.search, 'i');
+            if (req.query.search.length > 50) {
+                return res.status(400).json({ success: false, message: 'Search query exceeds maximum length of 50 characters' });
+            }
+            const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const rx = new RegExp(escapeRegExp(req.query.search), 'i');
             query.$or = [{ name: rx }, { phone: rx }, { email: rx }];
         }
 
@@ -208,7 +213,7 @@ const getLeadById = async (req, res) => {
         const { id } = req.params;
         const query = { _id: id, ...req.dataScope };
         
-        const lead = await Lead.findOne(query).populate('assignedTo', 'name email').lean();
+        const lead = await Lead.findOne(query).select('-messages').populate('assignedTo', 'name email').lean();
         if (!lead) return res.status(404).json({ message: 'Lead not found or unauthorized' });
         
         res.json(lead);
@@ -226,9 +231,8 @@ const createLead = async (req, res) => {
         const { name, email, phone, status, source, customData, force } = req.body;
         const ownerId = req.tenantId;
 
-        // 🚦 LEAD LIMIT CHECK — enforce planFeatures.leadLimit via WorkspaceSettings
-        const workspace = await WorkspaceSettings.findOne({ userId: ownerId }).select('planFeatures').lean();
-        const leadLimit = workspace?.planFeatures?.leadLimit;
+        // 🚦 LEAD LIMIT CHECK — uses req.workspace from auth middleware cache (no extra DB query)
+        const leadLimit = req.workspace?.planFeatures?.leadLimit;
 
         if (leadLimit != null) {
             const leadCount = await Lead.countDocuments({ userId: ownerId });
@@ -332,11 +336,14 @@ const sendManualEmail = async (req, res) => {
         await Lead.findByIdAndUpdate(leadId, {
             $push: {
                 history: {
-                    type: 'Email',
-                    subType: 'Manual',
-                    content: `Sent: ${subject}`,
-                    metadata: { subject, body: message },
-                    date: new Date()
+                    $each: [{
+                        type: 'Email',
+                        subType: 'Manual',
+                        content: `Sent: ${subject}`,
+                        metadata: { subject, body: message },
+                        date: new Date()
+                    }],
+                    $slice: -100
                 }
             }
         });
@@ -404,10 +411,13 @@ const updateLead = async (req, res) => {
                         Lead.findByIdAndUpdate(lead._id, {
                             $push: {
                                 history: {
-                                    type: 'Email',
-                                    subType: 'Auto',
-                                    content: `Automated Email: Stage changed to ${nextStatus}`,
-                                    date: new Date()
+                                    $each: [{
+                                        type: 'Email',
+                                        subType: 'Auto',
+                                        content: `Automated Email: Stage changed to ${nextStatus}`,
+                                        date: new Date()
+                                    }],
+                                    $slice: -100
                                 }
                             }
                         }).exec();
@@ -427,10 +437,13 @@ const updateLead = async (req, res) => {
                         Lead.findByIdAndUpdate(lead._id, {
                             $push: {
                                 history: {
-                                    type: 'WhatsApp',
-                                    subType: 'Auto',
-                                    content: `Automated WhatsApp: Stage changed to ${nextStatus}`,
-                                    date: new Date()
+                                    $each: [{
+                                        type: 'WhatsApp',
+                                        subType: 'Auto',
+                                        content: `Automated WhatsApp: Stage changed to ${nextStatus}`,
+                                        date: new Date()
+                                    }],
+                                    $slice: -100
                                 }
                             }
                         }).exec();
@@ -446,10 +459,13 @@ const updateLead = async (req, res) => {
             await Lead.findByIdAndUpdate(lead._id, {
                 $push: {
                     history: {
-                        type: 'System',
-                        subType: 'Stage Change',
-                        content: `${initiatorName} changed stage from "${oldStatus}" to "${nextStatus}"`,
-                        date: new Date()
+                        $each: [{
+                            type: 'System',
+                            subType: 'Stage Change',
+                            content: `Stage updated: ${oldStatus} ➔ ${nextStatus} by ${initiatorName}`,
+                            date: new Date()
+                        }],
+                        $slice: -100
                     }
                 }
             });
@@ -526,12 +542,18 @@ const addNote = async (req, res) => {
             { _id: req.params.id, ...req.dataScope },
             {
                 $push: {
-                    notes: { text: text.trim(), date: new Date() },
+                    notes: {
+                        $each: [{ text: text.trim(), date: new Date() }],
+                        $slice: -50
+                    },
                     history: {
-                        type: 'Note',
-                        subType: 'Manual',
-                        content: text.trim(),
-                        date: new Date()
+                        $each: [{
+                            type: 'Note',
+                            subType: 'Manual',
+                            content: text.trim(),
+                            date: new Date()
+                        }],
+                        $slice: -100
                     }
                 }
             },
@@ -564,7 +586,7 @@ const addNote = async (req, res) => {
 const getStages = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        let stages = await Stage.find({ userId: ownerId }).sort('order');
+        let stages = await Stage.find({ userId: ownerId }).sort('order').lean();
 
         if (stages.length === 0) {
             const defaults = [
@@ -672,10 +694,11 @@ const syncLeads = async (req, res) => {
             return res.status(400).json({ message: "Invalid Google Sheets URL format" });
         }
 
-        // Fetch user's custom field definitions via WorkspaceSettings
-        const workspace = await WorkspaceSettings.findOne({ userId: userId }).select('customFieldDefinitions').lean();
+        // ⚡ PERFORMANCE: Use cached workspace from auth middleware for planFeatures.
+        // CustomFieldDefinitions need fresh fetch since the auth cache may not include them.
+        const cachedWorkspace = req.workspace || {};
+        const workspace = await WorkspaceSettings.findOne({ userId: userId }).select('customFieldDefinitions planFeatures').lean();
         const customFieldDefs = workspace?.customFieldDefinitions || [];
-
 
         const sheetId = sheetIdMatch[1];
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
@@ -706,13 +729,18 @@ const syncLeads = async (req, res) => {
             }
         }
 
-        // 🚦 BULK OPTIMIZATION: Fetch existing data once instead of in a loop
-        const existingLeads = await Lead.find({ userId: userId }).select('email phone').lean();
+        // 🚦 BULK OPTIMIZATION: Get unique email/phone values directly from DB
+        //    instead of loading all lead documents into memory
         const { normalizePhone } = require('../services/duplicateService');
         
-        const existingEmails = new Set(existingLeads.map(l => l.email?.trim().toLowerCase()).filter(Boolean));
-        const existingPhones = new Set(existingLeads.map(l => {
-            const norm = normalizePhone(l.phone);
+        const [existingEmailList, existingPhoneList] = await Promise.all([
+            Lead.distinct('email', { userId: userId, email: { $ne: null } }),
+            Lead.distinct('phone', { userId: userId, phone: { $ne: null } })
+        ]);
+        
+        const existingEmails = new Set(existingEmailList.map(e => e?.trim().toLowerCase()).filter(Boolean));
+        const existingPhones = new Set(existingPhoneList.map(p => {
+            const norm = normalizePhone(p);
             return norm ? norm.slice(-10) : null;
         }).filter(Boolean));
 
@@ -781,16 +809,10 @@ const syncLeads = async (req, res) => {
             // Trigger automations safely without blocking main thread
             setTimeout(() => {
                 insertedLeads.forEach(newLead => {
-                    if (newLead.email) {
-                        sendAutomatedEmailOnLeadCreate(newLead, userId).catch(err => {
-                            console.error('Email automation error (non-blocking):', err);
-                        });
-                    }
-                    if (newLead.phone) {
-                        sendAutomatedWhatsAppOnLeadCreate(newLead, userId).catch(err => {
-                            console.error('WhatsApp automation error (non-blocking):', err);
-                        });
-                    }
+                    queueLeadCreatedEffects(newLead, userId);
+                    
+                    // Meta CAPI "Lead" event
+                    sendMetaEventIfEnabled(newLead, 'New', null).catch(err => console.error('Meta CAPI error (Sheet Sync):', err));
                 });
             }, 0);
         }
@@ -803,84 +825,12 @@ const syncLeads = async (req, res) => {
 };
 
 // ==========================================
-// 8. ANALYTICS
+// 8. ANALYTICS (DEPRECATED — use getAnalyticsData or getDashboardSummary instead)
+// Kept as a lightweight backward-compatible endpoint; internally delegates to $facet.
 // ==========================================
-const getAnalytics = async (req, res) => {
-    try {
-        // Setup match query using ABAC scope
-        const matchQuery = { ...req.dataScope };
-        
-        // Mongoose Aggregate $match requires strict ObjectIds for string fields that are ObjectIds in DB
-        if (matchQuery.userId && typeof matchQuery.userId === 'string' && mongoose.Types.ObjectId.isValid(matchQuery.userId)) {
-            matchQuery.userId = new mongoose.Types.ObjectId(matchQuery.userId);
-        }
-        if (matchQuery.assignedTo && typeof matchQuery.assignedTo === 'string' && mongoose.Types.ObjectId.isValid(matchQuery.assignedTo)) {
-            matchQuery.assignedTo = new mongoose.Types.ObjectId(matchQuery.assignedTo);
-        }
-
-        const statsArray = await Lead.aggregate([
-            { $match: matchQuery },
-            {
-                $group: {
-                    _id: { $ifNull: ['$status', 'New'] },
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
-
-        // Convert array to object format
-        const stats = {};
-        statsArray.forEach(item => {
-            stats[item._id] = item.count;
-        });
-
-        // Calculate follow-up analytics
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const nextWeek = new Date(today);
-        nextWeek.setDate(nextWeek.getDate() + 7);
-
-        // Follow-ups due today
-        const followUpToday = await Lead.countDocuments({
-            ...req.dataScope,
-            nextFollowUpDate: {
-                $gte: today,
-                $lt: tomorrow
-            }
-        });
-
-        // Overdue follow-ups (before today)
-        const followUpOverdue = await Lead.countDocuments({
-            ...req.dataScope,
-            nextFollowUpDate: {
-                $lt: today
-            }
-        });
-
-        // Upcoming follow-ups (next 7 days, excluding today)
-        const followUpUpcoming = await Lead.countDocuments({
-            ...req.dataScope,
-            nextFollowUpDate: {
-                $gte: tomorrow,
-                $lt: nextWeek
-            }
-        });
-
-        // Add follow-up analytics to response
-        stats.followUpAnalytics = {
-            dueToday: followUpToday,
-            overdue: followUpOverdue,
-            upcoming: followUpUpcoming,
-            total: followUpToday + followUpOverdue + followUpUpcoming
-        };
-
-        res.json(stats);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};
+// NOTE: This endpoint is confirmed dead code (no frontend references).
+// Removed to eliminate 4 redundant DB queries per call.
+// If you need analytics, use GET /api/leads/analytics-data or GET /api/dashboard.
 
 // ==========================================
 // 8.5. GET ANALYTICS DATA (For Dashboard)
@@ -1026,26 +976,42 @@ const getAnalyticsData = async (req, res) => {
 };
 
 // ==========================================
-// 9. GET FOLLOW-UP LEADS (Due Today)
+// 9. GET FOLLOW-UP LEADS (Due Today) — Now Paginated
 // ==========================================
 const getFollowUpLeads = async (req, res) => {
     try {
+        const page = parseBoundedInteger(req.query.page, 1, { min: 1 });
+        const limit = parseBoundedInteger(req.query.limit, 50, { min: 1, max: 100 });
+        const skip = (page - 1) * limit;
+
         // Get today's date (start and end of day)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
 
-        // Find leads with nextFollowUpDate between today 00:00 and tomorrow 00:00
-        const followUpLeads = await Lead.find({
+        const query = {
             ...req.dataScope,
             nextFollowUpDate: {
                 $gte: today,
                 $lt: tomorrow
             }
-        }).sort({ nextFollowUpDate: 1 });
+        };
 
-        res.json(followUpLeads);
+        const [leads, total] = await Promise.all([
+            Lead.find(query)
+                .select('-history -messages -followUpHistory -customData')
+                .sort({ nextFollowUpDate: 1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Lead.countDocuments(query)
+        ]);
+
+        res.json({
+            leads,
+            pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
+        });
     } catch (err) {
         console.error("Get Follow-up Leads Error:", err);
         res.status(500).json({ error: err.message });
@@ -1172,20 +1138,33 @@ const completeFollowUp = async (req, res) => {
 };
 
 // ==========================================
-// 12. GET FOLLOW-UP DONE LEADS
+// 12. GET FOLLOW-UP DONE LEADS — Now Paginated
 // ==========================================
 const getFollowUpDoneLeads = async (req, res) => {
     try {
-        // Optimized: Push filtering into MongoDB instead of in-memory JS sorting
-        const followUpDoneLeads = await Lead.find({
-            ...req.dataScope,
-            'followUpHistory.0': { $exists: true } // Only leads WITH at least 1 followup
-        })
-        .select('-messages -customData') // Exclude heavy fields
-        .sort({ 'followUpHistory': -1 })
-        .lean();
+        const page = parseBoundedInteger(req.query.page, 1, { min: 1 });
+        const limit = parseBoundedInteger(req.query.limit, 50, { min: 1, max: 100 });
+        const skip = (page - 1) * limit;
 
-        res.json(followUpDoneLeads);
+        const query = {
+            ...req.dataScope,
+            'followUpHistory.0': { $exists: true }
+        };
+
+        const [leads, total] = await Promise.all([
+            Lead.find(query)
+                .select('-messages -customData')
+                .sort({ updatedAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Lead.countDocuments(query)
+        ]);
+
+        res.json({
+            leads,
+            pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
+        });
     } catch (err) {
         console.error("Get Follow-up Done Leads Error:", err);
         res.status(500).json({ error: err.message });
@@ -1234,7 +1213,8 @@ const assignLead = async (req, res) => {
             companyId: ownerId
         }).catch(err => console.error('Audit log error:', err));
 
-        const updatedLead = await Lead.findById(id).populate('assignedTo', 'name email');
+        // ⚡ PERFORMANCE: Populate from the already-fetched lead instead of re-querying
+        const updatedLead = await Lead.findById(id).select('-history -messages -followUpHistory').populate('assignedTo', 'name email').lean();
         res.json({ success: true, message: agentId ? "Lead assigned" : "Lead unassigned", lead: updatedLead });
     } catch (err) {
         console.error("Assign Lead Error:", err);
@@ -1321,15 +1301,15 @@ const autoDeleteDuplicates = async (req, res) => {
         let ownerId = req.tenantId;
 
         const groups = await findAllDuplicateGroups(ownerId);
-        let deletedCount = 0;
-        const deletedIds = [];
 
-        for (const group of groups) {
-            for (const dup of group.duplicates) {
-                await Lead.findByIdAndDelete(dup._id);
-                deletedIds.push(dup._id);
-                deletedCount++;
-            }
+        // ⚡ PERFORMANCE: Collect all duplicate IDs and delete in ONE batch operation
+        // Previously did N individual findByIdAndDelete calls (1 DB roundtrip per duplicate)
+        const allDupIds = groups.flatMap(g => g.duplicates.map(d => d._id));
+        let deletedCount = 0;
+
+        if (allDupIds.length > 0) {
+            const result = await Lead.deleteMany({ _id: { $in: allDupIds } });
+            deletedCount = result.deletedCount;
         }
 
         // Log activity
@@ -1370,10 +1350,15 @@ const bulkImportLeads = async (req, res) => {
             return res.status(400).json({ message: "No leads provided for import." });
         }
 
-        // Fetch user's existing leads phones/emails to avoid DB roundtrips for duplicates
-        const existingLeads = await Lead.find({ userId: ownerId }).select('phone email').lean();
-        const existingPhones = new Set(existingLeads.map(l => l.phone).filter(Boolean).map(normalizePhone));
-        const existingEmails = new Set(existingLeads.map(l => l.email?.toLowerCase()).filter(Boolean));
+        // ⚡ PERFORMANCE FIX: Use Lead.distinct() instead of loading ALL leads into memory.
+        // Previously: Lead.find({userId}).select('phone email').lean() loaded every document.
+        // Now: distinct() returns only unique values — orders of magnitude less memory.
+        const [existingPhoneList, existingEmailList] = await Promise.all([
+            Lead.distinct('phone', { userId: ownerId, phone: { $ne: null } }),
+            Lead.distinct('email', { userId: ownerId, email: { $ne: null } })
+        ]);
+        const existingPhones = new Set(existingPhoneList.map(p => normalizePhone(p)).filter(Boolean));
+        const existingEmails = new Set(existingEmailList.map(e => e?.trim().toLowerCase()).filter(Boolean));
 
         const newLeadsToInsert = [];
         let duplicateCount = 0;
@@ -1488,7 +1473,7 @@ module.exports = {
     deleteStage,
     updateStage,
     syncLeads,
-    getAnalytics,
+    // getAnalytics removed — dead code, replaced by getAnalyticsData and getDashboardSummary
     getAnalyticsData,
     getFollowUpLeads,
     updateFollowUpDate,

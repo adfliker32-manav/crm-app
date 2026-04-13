@@ -1,6 +1,7 @@
 const EmailLog = require('../models/EmailLog');
 const EmailMessage = require('../models/EmailMessage');
 const mongoose = require('mongoose');
+const { escapeRegex } = require('../utils/controllerHelpers');
 
 // Get email analytics - Optimized with single aggregation pipeline
 exports.getAnalytics = async (req, res) => {
@@ -128,7 +129,7 @@ exports.getAnalytics = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching email analytics:', error);
-        res.status(500).json({ message: 'Error fetching analytics', error: error.message });
+        res.status(500).json({ message: 'Error fetching analytics', error: 'Server error' });
     }
 };
 
@@ -155,9 +156,10 @@ exports.getLogs = async (req, res) => {
         }
         
         if (search) {
+            const safe = escapeRegex(search);
             query.$or = [
-                { to: { $regex: search, $options: 'i' } },
-                { subject: { $regex: search, $options: 'i' } }
+                { to: { $regex: safe, $options: 'i' } },
+                { subject: { $regex: safe, $options: 'i' } }
             ];
         }
         
@@ -167,6 +169,7 @@ exports.getLogs = async (req, res) => {
             .sort({ sentAt: -1 })
             .limit(parseInt(limit))
             .skip(skip)
+            .select('-body')
             .populate('templateId', 'name')
             .populate('leadId', 'name email phone')
             .lean();
@@ -184,7 +187,7 @@ exports.getLogs = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching email logs:', error);
-        res.status(500).json({ message: 'Error fetching logs', error: error.message });
+        res.status(500).json({ message: 'Error fetching logs', error: 'Server error' });
     }
 };
 
@@ -204,6 +207,6 @@ exports.getLog = async (req, res) => {
         res.json(log);
     } catch (error) {
         console.error('Error fetching email log:', error);
-        res.status(500).json({ message: 'Error fetching log', error: error.message });
+        res.status(500).json({ message: 'Error fetching log', error: 'Server error' });
     }
 };

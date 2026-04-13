@@ -76,7 +76,7 @@ const EmailManagement = () => {
                     <StatCard
                         title="Sent Today"
                         value={stats.today.sent}
-                        label="+2.5% vs yesterday"
+                        label="Today's count"
                         icon="fa-paper-plane"
                         color="text-emerald-600"
                         bgColor="bg-emerald-50"

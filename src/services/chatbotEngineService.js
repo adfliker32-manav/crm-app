@@ -6,6 +6,7 @@ const Lead = require('../models/Lead');
 const User = require('../models/User');
 const { sendWhatsAppTextMessage, sendInteractiveMessage } = require('./whatsappService');
 const { emitToUser } = require('./socketService');
+const whatsappQueueService = require('./whatsappQueueService');
 const NodeCache = require('node-cache');
 const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const normalizeId = (value) => value ? value.toString() : null;
@@ -28,7 +29,8 @@ const saveBotMessage = async (conversationId, userId, text, type = 'text', waRes
             content: { text },
             status: waMessageId ? 'sent' : 'pending',
             timestamp: new Date(),
-            isAutomated: true
+            isAutomated: true,
+            automationSource: 'chatbot'
         });
         await messageDoc.save();
 
@@ -82,8 +84,17 @@ exports.invalidateFlowCache = (userId) => {
     console.log(`🧹 Cleared chatbot flow cache for user ${userId}`);
 };
 
+// FIX #22: Cache tenant→ownerIds mapping to avoid 2 DB queries per incoming message
+const contextCache = new NodeCache({ stdTTL: 300, checkperiod: 60 }); // 5-min TTL
+
 const resolveChatbotContext = async (userId) => {
     const normalizedUserId = normalizeId(userId);
+    
+    // Check cache first
+    const cacheKey = `ctx_${normalizedUserId}`;
+    const cached = contextCache.get(cacheKey);
+    if (cached) return cached;
+    
     const owner = await User.findById(userId).select('role parentId').lean();
     const tenantId = owner?.role === 'agent' && owner.parentId
         ? normalizeId(owner.parentId)
@@ -104,10 +115,13 @@ const resolveChatbotContext = async (userId) => {
         ];
     }
 
-    return {
+    const result = {
         tenantId: tenantId || normalizedUserId,
         flowOwnerIds: [...new Set(flowOwnerIds.filter(Boolean))]
     };
+    
+    contextCache.set(cacheKey, result);
+    return result;
 };
 
 const getActiveFlows = async (ownerIds, preferredOwnerId) => {
@@ -178,6 +192,12 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
         if (!conversation) return null;
         const { tenantId, flowOwnerIds } = await resolveChatbotContext(userId);
 
+        // Check if chatbot is paused due to human handoff (Agent reply)
+        if (conversation.chatbotPausedUntil && new Date() < conversation.chatbotPausedUntil) {
+            console.log(`⏸️ Chatbot paused for conversation ${conversationId} until ${conversation.chatbotPausedUntil}`);
+            return null;
+        }
+
         // 1. Check Global Automations (Welcome & Out-of-Office)
         const IntegrationConfig = require('../models/IntegrationConfig');
 
@@ -214,7 +234,25 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 
         // 2. Chatbot Flow Evaluation
         const messageText = message.content?.text?.toLowerCase().trim();
-        if (!messageText) return null;
+        
+        // FIX: Handle media messages — acknowledge receipt instead of silently ignoring
+        if (!messageText) {
+            // Check if there's an active session waiting for a response
+            const activeSession = await ChatbotSession.findOne({
+                conversationId: conversationId,
+                status: 'active'
+            });
+            if (activeSession) {
+                // Let the user know we need a text response
+                const conversation = await WhatsAppConversation.findById(conversationId);
+                if (conversation) {
+                    const replyText = 'Please send a text message to continue. Media files are not supported in this conversation flow.';
+                    const result = await sendWhatsAppTextMessage(conversation.phone, replyText, tenantId);
+                    await saveBotMessage(conversationId, tenantId, replyText, 'text', result);
+                }
+            }
+            return null;
+        }
 
         // Check for active session first
         let session = await ChatbotSession.findOne({
@@ -231,20 +269,49 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
         const allActiveFlows = await getActiveFlows(flowOwnerIds, tenantId);
         let targetFlow = null;
 
-        // 1. Keyword Flow Match (Case-Insensitive & Boundary matched)
+        // Function to calculate Levenshtein distance for typo tolerance
+        const getLevenshteinDistance = (a, b) => {
+            if (a.length === 0) return b.length;
+            if (b.length === 0) return a.length;
+            const matrix = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+            for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+            for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+            for (let i = 1; i <= a.length; i++) {
+                for (let j = 1; j <= b.length; j++) {
+                    const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+                    matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+                }
+            }
+            return matrix[a.length][b.length];
+        };
+
+        // 1. Fuzzy Keyword Flow Match (Intent parsing with typo-tolerance)
         targetFlow = allActiveFlows.find(f => {
             if (f.triggerType !== 'keyword' || !f.triggerKeywords || f.triggerKeywords.length === 0) return false;
             
+            const wordsInMessage = messageText.split(/\s+/);
+            
             return f.triggerKeywords.some(k => {
                 const kl = k.toLowerCase().trim();
-                // Check exact match or word boundary regex (handles if keyword is part of a larger sentence)
-                if (messageText === kl) return true;
-                try {
-                    const regex = new RegExp(`\\b${kl}\\b`, 'i');
-                    return regex.test(messageText);
-                } catch (e) {
-                    return messageText.includes(kl); // Fallback for special characters
+                
+                // Exact or inclusion match
+                if (messageText.includes(kl)) return true;
+                
+                // Fuzzy match for typo tolerance (distance of 1 for short words, 2 for longer words)
+                // We compare the keyword against every word in the message
+                const maxDistance = kl.length <= 4 ? 1 : 2;
+                for (const word of wordsInMessage) {
+                    const cleanWord = word.replace(/[^a-z0-9]/gi, ''); // remove punctuation
+                    if (Math.abs(cleanWord.length - kl.length) <= maxDistance) {
+                        const distance = getLevenshteinDistance(cleanWord, kl);
+                        if (distance <= maxDistance) {
+                            console.log(`🎯 Fuzzy matched keyword '${kl}' with typed word '${cleanWord}' (distance: ${distance})`);
+                            return true;
+                        }
+                    }
                 }
+                
+                return false;
             });
         });
 
@@ -277,13 +344,32 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 // Start a new chatbot session
 const startSession = async (flow, conversationId, userId) => {
     try {
+        // Fetch parent conversation & potential Lead to populate variables immediately
+        const conversation = await WhatsAppConversation.findById(conversationId).populate('leadId');
+        const initialVariables = new Map();
+        
+        if (conversation && conversation.leadId) {
+            const lead = conversation.leadId;
+            initialVariables.set('lead_name', lead.name || '');
+            initialVariables.set('lead_email', lead.email || '');
+            initialVariables.set('lead_status', lead.status || '');
+            initialVariables.set('lead_tags', (lead.tags || []).join(', '));
+            
+            if (lead.customData) {
+                // Populate custom fields as variables
+                Object.entries(lead.customData).forEach(([key, value]) => {
+                    initialVariables.set(key, (value || '').toString());
+                });
+            }
+        }
+
         // Create session
         const session = new ChatbotSession({
             conversationId: conversationId,
             userId: userId,
             flowId: flow._id,
             currentNodeId: flow.startNodeId,
-            variables: new Map(),
+            variables: initialVariables,
             visitedNodes: []
         });
 
@@ -390,11 +476,30 @@ const evaluateSmartLead = async (session, flow, conversation) => {
             updateOp.$addToSet = { tags: { $each: bestRule.assignTags } };
         }
 
-        await Lead.findByIdAndUpdate(leadIdToUpdate, updateOp);
+        const updatedLead = await Lead.findByIdAndUpdate(leadIdToUpdate, updateOp, { new: true });
 
         if (didLevelUp && bestRule?.assignTags?.length > 0) {
             await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
                 $addToSet: { tags: { $each: bestRule.assignTags } }
+            });
+        }
+        
+        // Fire Automation & Meta CAPI hooks for Lead Upgrade Status Change
+        if (didLevelUp && bestRule?.changeStageTo && updatedLead) {
+            setImmediate(async () => {
+                try {
+                    const { evaluateLead } = require('./AutomationService');
+                    evaluateLead(updatedLead, 'STAGE_CHANGED').catch(e => console.error('[Chatbot] Automation engine error:', e));
+
+                    const IntegrationConfig = require('../models/IntegrationConfig');
+                    const config = await IntegrationConfig.findOne({ userId: session.userId }).select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
+                    if (config?.meta?.metaCapiEnabled) {
+                        const { sendMetaEvent } = require('./metaConversionService');
+                        sendMetaEvent(config, updatedLead, bestRule.changeStageTo, null).catch(e => console.error('[Chatbot] Meta CAPI error:', e));
+                    }
+                } catch(err) {
+                    console.error('[Chatbot] Background trigger error:', err);
+                }
             });
         }
     } else if (didLevelUp) {
@@ -435,6 +540,23 @@ const evaluateSmartLead = async (session, flow, conversation) => {
         await lead.save();
         leadIdToUpdate = lead._id;
         
+        // Fire Automation & Meta CAPI hooks for newly generated Lead
+        setImmediate(async () => {
+            try {
+                const { evaluateLead } = require('./AutomationService');
+                evaluateLead(lead, 'LEAD_CREATED').catch(e => console.error('[Chatbot] Automation engine error:', e));
+
+                const IntegrationConfig = require('../models/IntegrationConfig');
+                const config = await IntegrationConfig.findOne({ userId: session.userId }).select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
+                if (config?.meta?.metaCapiEnabled) {
+                    const { sendMetaEvent } = require('./metaConversionService');
+                    sendMetaEvent(config, lead, newLeadStatus, null).catch(e => console.error('[Chatbot] Meta CAPI error:', e));
+                }
+            } catch(err) {
+                console.error('[Chatbot] Background trigger error:', err);
+            }
+        });
+        
         // Dynamically track new lead generation in flow analytics
         await ChatbotFlow.findByIdAndUpdate(flow._id, {
             $inc: { 'analytics.leadsGenerated': 1 }
@@ -460,6 +582,14 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
             return null;
         }
 
+        // FIX #25: Fetch conversation ONCE and reuse throughout the session lifecycle
+        const conversation = await WhatsAppConversation.findById(conversationId);
+        if (!conversation) {
+            console.warn(`Conversation ${conversationId} not found for session ${session._id}`);
+            await endSession(session, 'abandoned');
+            return null;
+        }
+
         const currentNode = flow.nodes.find(n => n.id === session.currentNodeId);
 
         if (!currentNode) {
@@ -476,13 +606,38 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
 
         // Handle different node types
         if (currentNode.type === 'question') {
+            // FIX: Validate response against expectedType before accepting
+            const expectedType = currentNode.data.expectedType || 'any';
+            if (expectedType !== 'any' && expectedType !== 'text') {
+                let isValid = true;
+                let validationMsg = '';
+                
+                if (expectedType === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userResponse)) {
+                    isValid = false;
+                    validationMsg = 'Please enter a valid email address (e.g. name@example.com)';
+                } else if (expectedType === 'number' && isNaN(userResponse.replace(/[,\s]/g, ''))) {
+                    isValid = false;
+                    validationMsg = 'Please enter a valid number.';
+                } else if (expectedType === 'phone' && !/^[+]?[\d\s()-]{7,15}$/.test(userResponse)) {
+                    isValid = false;
+                    validationMsg = 'Please enter a valid phone number.';
+                }
+                
+                if (!isValid) {
+                    if (conversation) {
+                        const valResult = await sendWhatsAppTextMessage(conversation.phone, validationMsg, session.userId);
+                        await saveBotMessage(conversationId, session.userId, validationMsg, 'text', valResult);
+                    }
+                    return { success: true }; // Stay on the same node, wait for valid input
+                }
+            }
+            
             // Store answer in variables
             const variableName = currentNode.data.variableName || 'answer';
             session.variables.set(variableName, userResponse);
             session.markModified('variables');
 
-            // Evaluate smart lead config
-            const conversation = await WhatsAppConversation.findById(conversationId);
+            // Evaluate smart lead config — reuse already-fetched conversation
             await evaluateSmartLead(session, flow, conversation);
 
             // Move to next node
@@ -491,7 +646,7 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
                 session.currentNodeId = nextNodeId;
                 session.lastInteractionAt = new Date();
                 await session.save();
-                return await executeNode(session, flow, nextNodeId);
+                return await executeNode(session, flow, nextNodeId, conversation);
             } else {
                 await endSession(session, 'completed');
                 return null;
@@ -507,8 +662,22 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
                 session.currentNodeId = button.nextNodeId;
                 session.lastInteractionAt = new Date();
                 await session.save();
-                return await executeNode(session, flow, button.nextNodeId);
+                return await executeNode(session, flow, button.nextNodeId, conversation);
             }
+            
+            // FIX: Send retry prompt if no button matched instead of silently doing nothing
+            if (conversation) {
+                const buttonOptions = currentNode.data.buttons.map(b => `• ${b.text}`).join('\n');
+                const retryText = `I didn't understand that. Please choose one of the following options:\n${buttonOptions}`;
+                const retryResult = await sendInteractiveMessage(
+                    conversation.phone,
+                    retryText,
+                    currentNode.data.buttons.map(b => ({ id: b.id, text: b.text })),
+                    session.userId
+                );
+                await saveBotMessage(conversationId, session.userId, retryText, 'interactive', retryResult);
+            }
+            return { success: true }; // Stay on current node
         }
 
         return null;
@@ -519,7 +688,7 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
 };
 
 // Execute a specific node
-const executeNode = async (session, flow, nodeId) => {
+const executeNode = async (session, flow, nodeId, conversation = null) => {
     try {
         if (!flow || !Array.isArray(flow.nodes)) {
             console.warn(`Cannot execute chatbot node for session ${session._id}: flow is missing.`);
@@ -533,7 +702,10 @@ const executeNode = async (session, flow, nodeId) => {
             return null;
         }
 
-        const conversation = await WhatsAppConversation.findById(session.conversationId);
+        // FIX #25: Reuse passed conversation, only fetch if not provided
+        if (!conversation) {
+            conversation = await WhatsAppConversation.findById(session.conversationId);
+        }
         if (!conversation) return null;
 
         switch (node.type) {
@@ -542,7 +714,7 @@ const executeNode = async (session, flow, nodeId) => {
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
                 }
                 break;
 
@@ -568,7 +740,7 @@ const executeNode = async (session, flow, nodeId) => {
                     if (node.data.nextNodeId) {
                         session.currentNodeId = node.data.nextNodeId;
                         await session.save();
-                        return await executeNode(session, flow, node.data.nextNodeId);
+                        return await executeNode(session, flow, node.data.nextNodeId, conversation);
                     }
                 }
                 break;
@@ -590,12 +762,12 @@ const executeNode = async (session, flow, nodeId) => {
                 if (matchedCondition && matchedCondition.nextNodeId) {
                     session.currentNodeId = matchedCondition.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, matchedCondition.nextNodeId);
+                    return await executeNode(session, flow, matchedCondition.nextNodeId, conversation);
                 } else if (node.data.nextNodeId) {
                     // Default path
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
                 }
                 break;
 
@@ -607,21 +779,152 @@ const executeNode = async (session, flow, nodeId) => {
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
                 }
                 break;
 
             case 'delay':
-                // NOTE: We do NOT use setTimeout here as it is lost on server restart.
-                // Instead we log the delay intent and advance immediately to the next node.
-                // True scheduled delays should be handled via the Agenda job queue (future improvement).
-                console.log(`⏱️ Delay node: ${node.data.delaySeconds}s - advancing immediately (safe mode)`);
+                if (node.data.nextNodeId && node.data.delaySeconds > 0) {
+                    await whatsappQueueService.scheduleDelayNode(
+                        session._id,
+                        flow._id,
+                        node.data.nextNodeId,
+                        node.data.delaySeconds
+                    );
+                } else if (node.data.nextNodeId) {
+                    // No delay config, jump immediately
+                    session.currentNodeId = node.data.nextNodeId;
+                    await session.save();
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                }
+                break;
+
+            case 'template':
+                // Send an approved WhatsApp template message
+                if (node.data.templateName) {
+                    const { sendWhatsAppTemplateMessage } = require('./whatsappService');
+                    const templateResult = await sendWhatsAppTemplateMessage(
+                        conversation.phone,
+                        node.data.templateName,
+                        node.data.templateLanguage || 'en',
+                        [], // components — no dynamic variables from chatbot for now
+                        session.userId,
+                        { isAutomated: true, triggerType: 'chatbot' }
+                    );
+                    await saveBotMessage(
+                        session.conversationId,
+                        session.userId,
+                        `📄 Template: ${node.data.templateName}`,
+                        'template',
+                        templateResult
+                    );
+                } else {
+                    console.warn(`⚠️ Template node ${nodeId} has no templateName configured. Skipping.`);
+                }
+
+                // Auto-advance to next node
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
                 }
                 break;
+
+            case 'media':
+                // Send media message (image/video/document) with optional caption
+                const mediaCaption = replaceVariables(node.data.text || '', session.variables);
+                if (node.data.mediaUrl) {
+                    // Use text message with media URL as link for now
+                    // (WhatsApp Cloud API requires uploaded media IDs, so we send URL in text)
+                    const mediaText = mediaCaption ? `${mediaCaption}\n\n${node.data.mediaUrl}` : node.data.mediaUrl;
+                    const mediaResult = await sendWhatsAppTextMessage(conversation.phone, mediaText, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, mediaText, 'text', mediaResult);
+                } else if (mediaCaption) {
+                    const mediaCaptionResult = await sendWhatsAppTextMessage(conversation.phone, mediaCaption, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, mediaCaption, 'text', mediaCaptionResult);
+                }
+
+                // Auto-advance to next node
+                if (node.data.nextNodeId) {
+                    session.currentNodeId = node.data.nextNodeId;
+                    await session.save();
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                }
+                break;
+
+            case 'list':
+                // Send list as interactive button menu (WhatsApp limits to 3 buttons) or text list
+                const listText = replaceVariables(node.data.text || 'Choose an option:', session.variables);
+                const listItems = node.data.items || [];
+                
+                if (listItems.length > 0 && listItems.length <= 3) {
+                    // Send as interactive buttons
+                    const listButtons = listItems.map((item, idx) => ({
+                        id: `list_${idx}`,
+                        text: typeof item === 'string' ? item : item.text || `Option ${idx + 1}`
+                    }));
+                    const listResult = await sendInteractiveMessage(
+                        conversation.phone, listText, listButtons, session.userId
+                    );
+                    await saveBotMessage(session.conversationId, session.userId, listText, 'interactive', listResult);
+                } else {
+                    // More than 3 items — send as numbered text list
+                    const numberedList = listItems.map((item, idx) => {
+                        const itemText = typeof item === 'string' ? item : item.text || `Option ${idx + 1}`;
+                        return `${idx + 1}. ${itemText}`;
+                    }).join('\n');
+                    const fullListText = `${listText}\n\n${numberedList}`;
+                    const listTextResult = await sendWhatsAppTextMessage(conversation.phone, fullListText, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, fullListText, 'text', listTextResult);
+                }
+                // Wait for user selection (same as message with buttons)
+                break;
+
+            case 'product':
+            case 'products':
+                // Send product info as rich text message
+                const productText = replaceVariables(node.data.text || '', session.variables);
+                const priceInfo = node.data.price ? `\n💰 Price: ${node.data.price}` : '';
+                const productMessage = productText + priceInfo;
+                
+                if (productMessage) {
+                    const productResult = await sendWhatsAppTextMessage(conversation.phone, productMessage, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, productMessage, 'text', productResult);
+                }
+
+                // Auto-advance to next node
+                if (node.data.nextNodeId) {
+                    session.currentNodeId = node.data.nextNodeId;
+                    await session.save();
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                }
+                break;
+
+            case 'handoff':
+                // Transfer to human agent — end chatbot session and notify agent
+                const handoffText = replaceVariables(node.data.text || 'An agent will assist you shortly.', session.variables);
+                const handoffResult = await sendWhatsAppTextMessage(conversation.phone, handoffText, session.userId);
+                await saveBotMessage(session.conversationId, session.userId, handoffText, 'text', handoffResult);
+
+                // Pause chatbot for 24 hours so agent can work
+                await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                    $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+                });
+
+                // Notify agent via Socket.IO
+                const handoffUserId = conversation.assignedTo || session.userId;
+                emitToUser(handoffUserId, 'notification:agent', {
+                    type: 'chatbot_handoff',
+                    conversationId: conversation._id,
+                    phone: conversation.phone,
+                    displayName: conversation.displayName,
+                    message: `🤝 Chatbot handoff requested by ${conversation.displayName || conversation.phone}`,
+                    timestamp: new Date()
+                });
+
+                // End the chatbot session
+                await endSession(session, 'handoff');
+                return { success: true };
 
             case 'end':
                 await endSession(session, 'completed');
@@ -650,18 +953,22 @@ const replaceVariables = (text, variables) => {
 
 // Evaluate condition
 const evaluateCondition = (condition, variables) => {
+    if (!condition || !condition.variable) return false;
     const value = variables.get(condition.variable);
-    if (value === undefined) return false;
+    if (value === undefined || value === null) return false;
+
+    // FIX: Guard against null/undefined condition.value to prevent TypeError
+    const conditionValue = condition.value != null ? condition.value : '';
 
     switch (condition.operator) {
         case 'equals':
-            return value.toString().toLowerCase() === condition.value.toLowerCase();
+            return value.toString().toLowerCase() === conditionValue.toString().toLowerCase();
         case 'contains':
-            return value.toString().toLowerCase().includes(condition.value.toLowerCase());
+            return value.toString().toLowerCase().includes(conditionValue.toString().toLowerCase());
         case 'greater_than':
-            return parseFloat(value) > parseFloat(condition.value);
+            return parseFloat(value) > parseFloat(conditionValue);
         case 'less_than':
-            return parseFloat(value) < parseFloat(condition.value);
+            return parseFloat(value) < parseFloat(conditionValue);
         case 'not_empty':
             return value && value.toString().trim().length > 0;
         default:
@@ -678,15 +985,29 @@ const executeAction = async (actionData, session, conversation) => {
                     await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
                         $addToSet: { tags: actionData.actionData.tag }
                     });
+                    // Also tag the Lead if linked
+                    if (conversation.leadId) {
+                        await Lead.findByIdAndUpdate(conversation.leadId, {
+                            $addToSet: { tags: actionData.actionData.tag }
+                        });
+                    }
                 }
                 break;
 
             case 'change_stage':
                 if (conversation.leadId && actionData.actionData?.stage) {
-                    // FIX: Use $set operator — bare field update causes MongoServerError
-                    // when mixed with other operators elsewhere in the pipeline.
                     await Lead.findByIdAndUpdate(conversation.leadId, {
-                        $set: { status: actionData.actionData.stage }
+                        $set: { status: actionData.actionData.stage },
+                        $push: {
+                            history: {
+                                $each: [{
+                                    type: 'System', subType: 'Stage Change',
+                                    content: `Stage changed to "${actionData.actionData.stage}" by chatbot action.`,
+                                    date: new Date()
+                                }],
+                                $slice: -100
+                            }
+                        }
                     });
                 }
                 break;
@@ -703,7 +1024,6 @@ const executeAction = async (actionData, session, conversation) => {
                     });
                     await lead.save();
 
-                    // FIX: Use $set operator — bare field causes MongoServerError
                     await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
                         $set: { leadId: lead._id }
                     });
@@ -711,8 +1031,65 @@ const executeAction = async (actionData, session, conversation) => {
                 break;
 
             case 'notify_agent':
-                // TODO: Implement agent notification
-                console.log('Agent notification:', actionData.actionData);
+                // FIX: Implement real agent notification via Socket.IO
+                try {
+                    const agentMsg = actionData.actionData?.message || `Chatbot needs attention for conversation with ${conversation.displayName || conversation.phone}`;
+                    // Notify the conversation owner (or assigned agent)
+                    const notifyUserId = conversation.assignedTo || session.userId;
+                    emitToUser(notifyUserId, 'notification:agent', {
+                        type: 'chatbot_handoff',
+                        conversationId: conversation._id,
+                        phone: conversation.phone,
+                        displayName: conversation.displayName,
+                        message: agentMsg,
+                        timestamp: new Date()
+                    });
+                    console.log(`🔔 Agent notification sent to ${notifyUserId} for conversation ${conversation._id}`);
+                } catch (notifErr) {
+                    console.error('Error sending agent notification:', notifErr.message);
+                }
+                break;
+
+            case 'send_email':
+                // FIX: Implement send_email action
+                try {
+                    if (actionData.actionData?.to || session.variables.get('email')) {
+                        const { sendEmail } = require('./emailService');
+                        const emailTo = actionData.actionData?.to || session.variables.get('email');
+                        const emailSubject = actionData.actionData?.subject || 'Follow-up from our chat';
+                        let emailBody = actionData.actionData?.body || '';
+                        // Replace variables in email body
+                        if (session.variables) {
+                            session.variables.forEach((val, key) => {
+                                emailBody = emailBody.replace(new RegExp(`{{${key}}}`, 'g'), val);
+                            });
+                        }
+                        await sendEmail({ to: emailTo, subject: emailSubject, text: emailBody, userId: session.userId });
+                        console.log(`📧 Chatbot sent email to ${emailTo}`);
+                    }
+                } catch (emailErr) {
+                    console.error('Error in chatbot send_email action:', emailErr.message);
+                }
+                break;
+
+            case 'update_field':
+                // FIX: Implement update_field action — updates custom fields on the linked Lead
+                try {
+                    if (conversation.leadId && actionData.actionData?.fieldName) {
+                        const fieldName = actionData.actionData.fieldName;
+                        let fieldValue = actionData.actionData.fieldValue || '';
+                        // Allow using session variable values
+                        if (actionData.actionData.fromVariable && session.variables.get(actionData.actionData.fromVariable)) {
+                            fieldValue = session.variables.get(actionData.actionData.fromVariable);
+                        }
+                        await Lead.findByIdAndUpdate(conversation.leadId, {
+                            $set: { [`customData.${fieldName}`]: fieldValue }
+                        });
+                        console.log(`✏️ Chatbot updated lead field '${fieldName}' = '${fieldValue}'`);
+                    }
+                } catch (fieldErr) {
+                    console.error('Error in chatbot update_field action:', fieldErr.message);
+                }
                 break;
         }
     } catch (error) {
@@ -764,6 +1141,7 @@ exports.handoffToAgent = async (sessionId, reason) => {
 // CRITICAL: Without this, chatbot runs in parallel with human agents — spam risk!
 exports.cancelActiveChatbots = async (conversationId) => {
     try {
+        await WhatsAppConversation.findByIdAndUpdate(conversationId, { $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
         const result = await ChatbotSession.updateMany(
             { conversationId: conversationId, status: 'active' },
             { $set: { status: 'handoff', handoffReason: 'Agent manually replied', completedAt: new Date() } }
@@ -778,3 +1156,6 @@ exports.cancelActiveChatbots = async (conversationId) => {
 };
 
 
+
+// Exported for Agenda queue processor
+exports.resumeExecution = async (session, flow, nodeId) => { return await executeNode(session, flow, nodeId); };

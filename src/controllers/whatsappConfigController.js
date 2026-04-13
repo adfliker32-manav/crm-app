@@ -49,7 +49,9 @@ function decrypt(text) {
 exports.getWhatsAppConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('whatsapp');
+        // Must use '+' to include select:false fields (waAccessToken)
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+whatsapp.waAccessToken whatsapp.waPhoneNumberId whatsapp.waBusinessId');
         
         if (!config) {
             return res.json({
@@ -66,7 +68,7 @@ exports.getWhatsAppConfig = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching WhatsApp config:', error);
-        res.status(500).json({ message: 'Error fetching WhatsApp configuration', error: error.message });
+        res.status(500).json({ message: 'Error fetching WhatsApp configuration', error: 'Server error' });
     }
 };
 
@@ -118,7 +120,7 @@ exports.updateWhatsAppConfig = async (req, res) => {
         });
     } catch (error) {
         console.error('Error updating WhatsApp config:', error);
-        res.status(500).json({ message: 'Error updating WhatsApp configuration', error: error.message });
+        res.status(500).json({ message: 'Error updating WhatsApp configuration', error: 'Server error' });
     }
 };
 
@@ -133,7 +135,9 @@ exports.testWhatsAppConfig = async (req, res) => {
         let accessToken = waAccessToken;
         
         if (!phoneNumberId || !accessToken) {
-            const config = await IntegrationConfig.findOne({ userId: ownerId }).select('whatsapp');
+            // Must use '+' to include select:false fields (waAccessToken)
+            const config = await IntegrationConfig.findOne({ userId: ownerId })
+                .select('+whatsapp.waAccessToken whatsapp.waPhoneNumberId');
             if (!config || !config.whatsapp?.waPhoneNumberId || !config.whatsapp?.waAccessToken) {
                 return res.status(400).json({ 
                     message: 'WhatsApp configuration not found. Please configure your WhatsApp settings first.' 
@@ -209,7 +213,7 @@ exports.getWhatsAppSettings = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching WhatsApp settings:', error);
-        res.status(500).json({ message: 'Error fetching settings', error: error.message });
+        res.status(500).json({ message: 'Error fetching settings', error: 'Server error' });
     }
 };
 
@@ -241,6 +245,6 @@ exports.updateWhatsAppSettings = async (req, res) => {
         });
     } catch (error) {
         console.error('Error updating WhatsApp settings:', error);
-        res.status(500).json({ message: 'Error updating settings', error: error.message });
+        res.status(500).json({ message: 'Error updating settings', error: 'Server error' });
     }
 };

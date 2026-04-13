@@ -1,74 +1,7 @@
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const User = require('../models/User');
-const { sendWhatsAppMessage } = require('./whatsappService');// Helper to resolve specific mapped variables
-const resolveVariable = (mappingObj, varNum, data) => {
-    // Handle Mongoose Map vs plain object
-    const mapType = (mappingObj && typeof mappingObj.get === 'function') 
-        ? mappingObj.get(varNum.toString()) 
-        : (mappingObj?.[varNum.toString()] || '');
-        
-    switch (mapType) {
-        case 'lead.name': return data.leadName || '';
-        case 'lead.phone': return data.leadPhone || '';
-        case 'lead.email': return data.leadEmail || '';
-        case 'lead.status': return data.stageName || '';
-        case 'company.name': return data.companyName || '';
-        case 'user.name': return data.userName || '';
-        case 'custom': 
-            const customVal = (mappingObj && typeof mappingObj.get === 'function') 
-                ? mappingObj.get(`${varNum}_custom`) 
-                : (mappingObj?.[`${varNum}_custom`] || '');
-            return customVal || '';
-        default: 
-            // Fallback to older static convention if unmapped
-            if (varNum === 1) return data.leadName || 'Customer';
-            if (varNum === 2) return data.stageName || 'New';
-            if (varNum === 3) return data.companyName || 'Our Company';
-            if (varNum === 4) return data.userName || 'Representative';
-            return '';
-    }
-};
-
-// Helper to build Meta API components from the database components
-const buildMetaComponents = (dbComponents, variableMapping, data) => {
-    const metaComponents = [];
-
-    for (const comp of dbComponents) {
-        // Meta requires components array payload for dynamic variables
-        if (comp.type === 'BODY' && comp.text) {
-            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
-            if (matches && matches.length > 0) {
-                const parameters = [];
-                // Extract unique digits
-                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
-                
-                for (const n of nums) {
-                    parameters.push({
-                        type: 'text',
-                        text: resolveVariable(variableMapping, n, data)
-                    });
-                }
-                metaComponents.push({
-                    type: 'body',
-                    parameters: parameters
-                });
-            }
-        }
-        // If header text has variables, Meta requires them in header parameters
-        if (comp.type === 'HEADER' && comp.format === 'TEXT' && comp.text) {
-            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
-            if (matches && matches.length > 0) {
-                const parameters = [];
-                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
-                for (const n of nums) {
-                    parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
-                }
-                metaComponents.push({ type: 'header', parameters: parameters });
-            }
-        }
-    }
-    return metaComponents;
-};
+const { sendWhatsAppMessage } = require('./whatsappService');
+const { buildMetaComponents } = require('../utils/templateVariableResolver');
 
 // Send automated WhatsApp message when lead is created
 const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
@@ -78,13 +11,13 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
             isActive: true,
             isAutomated: true,
             triggerType: 'on_lead_create'
-        });
+        }).lean();
 
         if (!templates || templates.length === 0) {
             return false;
         }
 
-        const user = await User.findById(userId);
+        const user = await User.findById(userId).select('name companyName').lean();
         if (!user || !lead.phone) return false;
 
         const templateData = {
@@ -123,7 +56,7 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
             isAutomated: true,
             triggerType: 'on_stage_change',
             stage: newStage // Template must match the new stage
-        });
+        }).lean();
 
         if (!templates || templates.length === 0) {
             console.log(`No automated WhatsApp templates found for stage: ${newStage}`);
@@ -131,7 +64,7 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
         }
 
         // Get user info
-        const user = await User.findById(userId);
+        const user = await User.findById(userId).select('name companyName').lean();
         if (!user) {
             console.error('User not found for WhatsApp automation');
             return;

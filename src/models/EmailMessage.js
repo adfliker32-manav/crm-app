@@ -69,6 +69,10 @@ const emailMessageSchema = new mongoose.Schema({
 
 emailMessageSchema.index({ conversationId: 1, timestamp: 1 });
 emailMessageSchema.index({ messageId: 1 });
+// FIX D2: userId is used in almost every query but was not indexed
+emailMessageSchema.index({ userId: 1, conversationId: 1, timestamp: 1 });
+// FIX D1: Auto-delete messages after 180 days to prevent unbounded growth
+emailMessageSchema.index({ timestamp: 1 }, { expireAfterSeconds: 180 * 24 * 60 * 60 });
 
 emailMessageSchema.plugin(saasPlugin);
 

@@ -1,5 +1,7 @@
 const AutomationRule = require('../models/AutomationRule');
 const Lead = require('../models/Lead');
+const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
+const WhatsAppConversation = require('../models/WhatsAppConversation');
 const { sendEmail } = require('./emailService');
 const { sendWhatsAppMessage } = require('./whatsappService');
 const { logActivity } = require('./auditService');
@@ -36,66 +38,142 @@ const evaluateCondition = (condition, leadValue) => {
     }
 };
 
-// Main execution block: actually performs the logic
+// ─────────────────────────────────────────────────────────────────
+// Execute all actions in a rule sequentially for a given lead.
+// Handles SEND_WHATSAPP, SEND_EMAIL, CHANGE_STAGE, ASSIGN_USER,
+// and the new WAIT_FOR_REPLY with conditional branching.
+// ─────────────────────────────────────────────────────────────────
 const executeRuleActions = async (rule, lead) => {
     try {
         console.log(`🤖 [Automation] Executing Rule: "${rule.name}" for Lead: "${lead.name}"`);
         let changesMade = false;
         const updates = {};
+        const historyEntries = []; // Collect all history entries to push at once
 
         for (const action of rule.actions) {
+
+            // ── SEND_WHATSAPP ──────────────────────────────────────
             if (action.type === 'SEND_WHATSAPP') {
                 if (lead.phone) {
                     await sendWhatsAppMessage(lead.phone, action.templateId || 'hello_world', lead.userId);
-                    // Add history
-                    if (!updates.$push) updates.$push = { history: {} };
-                    updates.$push.history = { type: 'WhatsApp', subType: 'Auto', content: `Automated WhatsApp Sent (Rule: ${rule.name})`, date: new Date() };
+                    historyEntries.push({ type: 'WhatsApp', subType: 'Auto', content: `Automated WhatsApp Sent (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
                 }
+
+            // ── SEND_EMAIL ─────────────────────────────────────────
             } else if (action.type === 'SEND_EMAIL') {
                 if (lead.email) {
                     await sendEmail({ to: lead.email, subject: action.subject, text: action.body, userId: lead.userId });
-                    // Add history
-                    if (!updates.$push) updates.$push = { history: {} };
-                    updates.$push.history = { type: 'Email', subType: 'Auto', content: `Automated Email Sent (Rule: ${rule.name})`, date: new Date() };
+                    historyEntries.push({ type: 'Email', subType: 'Auto', content: `Automated Email Sent (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
                 }
+
+            // ── CHANGE_STAGE ───────────────────────────────────────
             } else if (action.type === 'CHANGE_STAGE') {
                 if (lead.status !== action.stageName) {
                     updates.$set = updates.$set || {};
                     updates.$set.status = action.stageName;
-                    
-                    if (!updates.$push) updates.$push = { history: {} };
-                    updates.$push.history = { type: 'System', subType: 'Auto', content: `Stage changed to ${action.stageName} (Rule: ${rule.name})`, date: new Date() };
+                    historyEntries.push({ type: 'System', subType: 'Auto', content: `Stage changed to ${action.stageName} (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
                 }
+
+            // ── ASSIGN_USER ────────────────────────────────────────
             } else if (action.type === 'ASSIGN_USER') {
                 if (lead.assignedTo?.toString() !== action.userId?.toString()) {
                     updates.$set = updates.$set || {};
                     updates.$set.assignedTo = action.userId;
-                    
-                    if (!updates.$push) updates.$push = { history: {} };
-                    updates.$push.history = { type: 'System', subType: 'Auto', content: `Lead assigned automatically (Rule: ${rule.name})`, date: new Date() };
+                    historyEntries.push({ type: 'System', subType: 'Auto', content: `Lead assigned automatically (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
                 }
+
+            // ── WAIT_FOR_REPLY (New) ───────────────────────────────
+            // Creates a watcher document and schedules a timeout job.
+            // The watcher listens on the lead's WhatsApp conversation.
+            } else if (action.type === 'WAIT_FOR_REPLY') {
+                // Find the lead's active WhatsApp conversation
+                const conversation = await WhatsAppConversation.findOne({
+                    leadId: lead._id,
+                    status: 'active'
+                }).lean();
+
+                if (!conversation) {
+                    console.warn(`⚠️ [Automation] WAIT_FOR_REPLY: No active WA conversation found for lead ${lead._id}. Skipping watcher.`);
+                    continue;
+                }
+
+                const waitHours = action.waitForReplyHours || 24;
+                const deadline = new Date(Date.now() + waitHours * 60 * 60 * 1000);
+
+                // Create the watcher document
+                const watcher = await LeadAutomationWatcher.create({
+                    tenantId: lead.userId,
+                    leadId: lead._id,
+                    conversationId: conversation._id,
+                    ruleId: rule._id,
+                    waitForReplyUntil: deadline,
+                    ifRepliedAction: action.ifRepliedAction || {},
+                    ifNoReplyAction: action.ifNoReplyAction || {},
+                    status: 'pending'
+                });
+
+                // Schedule the "no reply" timeout job via Agenda
+                if (globalAgendaInstance) {
+                    const job = await globalAgendaInstance.schedule(
+                        deadline,
+                        'CHECK_REPLY_TIMEOUT',
+                        { watcherId: watcher._id.toString() }
+                    );
+                    // Store Agenda job ID on the watcher so we can cancel it if they reply
+                    await LeadAutomationWatcher.findByIdAndUpdate(watcher._id, {
+                        $set: { agendaJobId: job.attrs._id }
+                    });
+                }
+
+                console.log(`⏳ [Automation] WAIT_FOR_REPLY watcher created for lead "${lead.name}" — deadline: ${deadline.toISOString()}`);
+
+                // Add to lead history
+                historyEntries.push({
+                    type: 'System',
+                    subType: 'Auto',
+                    content: `Waiting for WhatsApp reply (Rule: ${rule.name}). Deadline: ${deadline.toISOString()}`,
+                    date: new Date()
+                });
+                changesMade = true;
+
+                // Stop processing further actions in this rule — the watcher branches from here
+                break;
             }
         }
 
-        // Apply any DB updates
+        // Apply any DB updates with all history entries at once
         if (changesMade) {
+            if (historyEntries.length > 0) {
+                updates.$push = { history: { $each: historyEntries, $slice: -100 } };
+            }
             await Lead.findByIdAndUpdate(lead._id, updates);
         }
 
-        // Increment rule execution counter
-        await AutomationRule.findByIdAndUpdate(rule._id, { $inc: { executionCount: 1 }, lastFiredAt: new Date() });
+        // Increment rule execution counter and release the one-at-a-time lock
+        await AutomationRule.findByIdAndUpdate(rule._id, {
+            $inc: { executionCount: 1 },
+            $set: {
+                lastFiredAt: new Date(),
+                currentlyProcessingLeadId: null // Release lock
+            }
+        });
 
     } catch (err) {
+        // Always release lock even if execution failed
+        await AutomationRule.findByIdAndUpdate(rule._id, {
+            $set: { currentlyProcessingLeadId: null }
+        });
         console.error(`❌ [Automation] Execution Error on Rule (${rule.name}):`, err);
     }
 };
 
 // Global Event Hook exported to leadController/etc
-let globalAgendaInstance = null; // Store reference to agenda
+let globalAgendaInstance = null;
+
 const evaluateLead = async (lead, triggerType) => {
     try {
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) {
@@ -110,6 +188,39 @@ const evaluateLead = async (lead, triggerType) => {
         if (!rules || rules.length === 0) return;
 
         for (const rule of rules) {
+            // ─── ONE-AT-A-TIME LOCK ───────────────────────────────
+            // If this rule is already actively processing another lead, skip entirely.
+            if (rule.currentlyProcessingLeadId) {
+                console.log(`⏭️ [Automation] Rule "${rule.name}" is already processing lead ${rule.currentlyProcessingLeadId}. Skipping.`);
+                continue;
+            }
+
+            // ALSO: if there's already an active watcher for this LEAD, skip —
+            // we don't stack multiple automations on the same lead simultaneously.
+            const existingWatcher = await LeadAutomationWatcher.findOne({
+                leadId: lead._id,
+                status: 'pending'
+            });
+            if (existingWatcher) {
+                console.log(`⏭️ [Automation] Lead "${lead.name}" already has a pending watcher. Skipping rule "${rule.name}".`);
+                continue;
+            }
+
+            // ⚠️ RACE CONDITION FIX: Acquire lock ATOMICALLY.
+            // Previously the check (if locked) and acquire (set lock) were separate operations.
+            // Two concurrent requests could both pass the check and both acquire the lock.
+            // Now uses findOneAndUpdate with a "not locked" condition — only one wins.
+            const lockAcquired = await AutomationRule.findOneAndUpdate(
+                { _id: rule._id, currentlyProcessingLeadId: null },
+                { $set: { currentlyProcessingLeadId: lead._id } },
+                { new: true }
+            );
+
+            if (!lockAcquired) {
+                console.log(`⏭️ [Automation] Rule "${rule.name}" lock busy. Skipping.`);
+                continue;
+            }
+
             // Check AND conditions
             let allConditionsMet = true;
             for (const condition of rule.conditions) {
@@ -123,16 +234,21 @@ const evaluateLead = async (lead, triggerType) => {
             if (allConditionsMet) {
                 if (rule.delayMinutes > 0 && globalAgendaInstance) {
                     console.log(`🤖 [Automation] Scheduling Rule: "${rule.name}" in ${rule.delayMinutes} mins.`);
-                    // Schedule Job
                     await globalAgendaInstance.schedule(
                         new Date(Date.now() + rule.delayMinutes * 60000), 
                         'EXECUTE_AUTOMATION_ACTION', 
                         { ruleId: rule._id, leadId: lead._id }
                     );
+                    // Note: lock will be released when the scheduled job fires
                 } else {
-                    // Execute immediately
+                    // Execute immediately and release lock inside
                     await executeRuleActions(rule, lead);
                 }
+            } else {
+                // Release lock if conditions not met
+                await AutomationRule.findByIdAndUpdate(rule._id, {
+                    $set: { currentlyProcessingLeadId: null }
+                });
             }
         }
     } catch (err) {
@@ -144,6 +260,7 @@ const evaluateLead = async (lead, triggerType) => {
 const defineAutomationJobs = (agenda) => {
     globalAgendaInstance = agenda;
     
+    // ── Original EXECUTE_AUTOMATION_ACTION job ────────────────────
     agenda.define('EXECUTE_AUTOMATION_ACTION', async (job) => {
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) {
             console.log(`🛑 AUTOMATION KILL SWITCH ACTIVE. Blocked scheduled background job.`);
@@ -151,16 +268,15 @@ const defineAutomationJobs = (agenda) => {
         }
 
         const { ruleId, leadId } = job.attrs.data;
+        const attempt = (job.attrs.failCount || 0) + 1;
+        const MAX_RETRIES = 3;
         
         try {
             const rule = await AutomationRule.findById(ruleId);
             const lead = await Lead.findById(leadId);
             
-            // Only fire if rule is still active, and elements still exist
             if (rule && rule.isActive && lead) {
-                
-                // CRITICAL SAFETY CHECK: Does the lead STILL meet conditions? 
-                // Ex: If a rule says "Fire in 48 hrs if Stage == New", we ONLY fire if Stage is still "New" after 48 hrs!
+                // CRITICAL SAFETY CHECK: Does the lead STILL meet conditions?
                 let stillMet = true;
                 for (const condition of rule.conditions) {
                     const leadValue = resolveField(lead, condition.field);
@@ -173,16 +289,117 @@ const defineAutomationJobs = (agenda) => {
                 if (stillMet) {
                     await executeRuleActions(rule, lead);
                 } else {
+                    // Release lock — lead stage changed while waiting
+                    await AutomationRule.findByIdAndUpdate(ruleId, {
+                        $set: { currentlyProcessingLeadId: null }
+                    });
                     console.log(`⏱️ [Automation] Skipped Job: Lead no longer meets criteria for Rule "${rule.name}"`);
                 }
+            } else {
+                // Rule deactivated or lead deleted while job was queued
+                console.log(`⏱️ [Automation] Job skipped: rule ${ruleId} inactive or lead ${leadId} missing.`);
+                await AutomationRule.findByIdAndUpdate(ruleId, {
+                    $set: { currentlyProcessingLeadId: null }
+                });
             }
         } catch (error) {
-            console.error('❌ [Automation] Background Job Execution failed:', error.message);
+            console.error(`❌ [Automation] Background Job FAILED (attempt ${attempt}/${MAX_RETRIES}):`, error.message);
+
+            // 🔄 RETRY: If under max retries, let Agenda retry the job
+            if (attempt < MAX_RETRIES) {
+                console.log(`🔄 [Automation] Will retry job for rule ${ruleId} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+                throw error; // Throwing lets Agenda increment failCount and reschedule
+            }
+
+            // Max retries exhausted — release lock permanently
+            await AutomationRule.findByIdAndUpdate(ruleId, {
+                $set: { currentlyProcessingLeadId: null }
+            });
+            console.error(`🚨 [Automation] Job PERMANENTLY FAILED after ${MAX_RETRIES} attempts. Rule: ${ruleId}, Lead: ${leadId}`);
         }
+
+        await job.remove();
     });
+};
+
+// ─────────────────────────────────────────────────────────────────
+// Exported: called by whatsappWebhookController when an inbound
+// message arrives, to check if a WAIT_FOR_REPLY watcher is pending.
+// ─────────────────────────────────────────────────────────────────
+exports.handleWatcherReply = async (conversationId) => {
+    try {
+        // Find pending watcher for this conversation
+        const watcher = await LeadAutomationWatcher.findOne({
+            conversationId,
+            status: 'pending'
+        });
+
+        if (!watcher) return; // No active watcher — normal traffic
+
+        console.log(`✅ [Automation] Reply detected for watcher ${watcher._id} (Rule: ${watcher.ruleId})`);
+
+        // Mark as replied immediately (prevents the timeout job from double-firing)
+        await LeadAutomationWatcher.findByIdAndUpdate(watcher._id, {
+            $set: { status: 'replied' }
+        });
+
+        // Cancel the pending Agenda timeout job
+        if (watcher.agendaJobId && globalAgendaInstance) {
+            const jobs = await globalAgendaInstance.jobs({ _id: watcher.agendaJobId });
+            for (const job of jobs) {
+                await job.remove();
+            }
+            console.log(`🛑 [Automation] Cancelled no-reply timeout job for watcher ${watcher._id}`);
+        }
+
+        // Execute the ifReplied branch
+        const lead = await Lead.findById(watcher.leadId);
+        if (!lead) return;
+
+        const updates = {};
+
+        if (watcher.ifRepliedAction?.changeStage) {
+            updates.$set = { status: watcher.ifRepliedAction.changeStage };
+            updates.$push = {
+                history: {
+                    $each: [{
+                        type: 'System',
+                        subType: 'Auto',
+                        content: `Lead replied! Stage changed to "${watcher.ifRepliedAction.changeStage}" by automation.`,
+                        date: new Date()
+                    }],
+                    $slice: -100
+                }
+            };
+        }
+
+        if (Object.keys(updates).length > 0) {
+            await Lead.findByIdAndUpdate(watcher.leadId, updates);
+        }
+
+        // Send follow-up template if configured
+        if (watcher.ifRepliedAction?.sendTemplateId && lead.phone) {
+            await sendWhatsAppMessage(lead.phone, watcher.ifRepliedAction.sendTemplateId, lead.userId.toString());
+        }
+
+        // Release the one-at-a-time rule lock
+        await AutomationRule.findByIdAndUpdate(watcher.ruleId, {
+            $set: { currentlyProcessingLeadId: null }
+        });
+
+        // Apply human handoff — pause chatbot for 24hrs since a human or reply happened
+        const { cancelActiveChatbots } = require('./chatbotEngineService');
+        await cancelActiveChatbots(conversationId.toString());
+
+        console.log(`✅ [Automation] Watcher ${watcher._id} resolved: lead replied branch executed.`);
+
+    } catch (err) {
+        console.error('❌ [Automation] Error handling watcher reply:', err.message);
+    }
 };
 
 module.exports = {
     evaluateLead,
-    defineAutomationJobs
+    defineAutomationJobs,
+    handleWatcherReply: exports.handleWatcherReply
 };

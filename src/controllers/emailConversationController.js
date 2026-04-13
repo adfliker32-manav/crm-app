@@ -1,5 +1,6 @@
 const EmailConversation = require('../models/EmailConversation');
 const EmailMessage = require('../models/EmailMessage');
+const { escapeRegex } = require('../utils/controllerHelpers');
 
 exports.getConversations = async (req, res) => {
     try {
@@ -9,9 +10,10 @@ exports.getConversations = async (req, res) => {
         const query = { userId, status };
         
         if (search) {
+            const safe = escapeRegex(search);
             query.$or = [
-                { email: { $regex: search, $options: 'i' } },
-                { displayName: { $regex: search, $options: 'i' } }
+                { email: { $regex: safe, $options: 'i' } },
+                { displayName: { $regex: safe, $options: 'i' } }
             ];
         }
         

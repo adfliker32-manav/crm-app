@@ -178,27 +178,8 @@ const processEntry = async (entry) => {
                 user = config.userId;
                 debug(`✅ Found user by waPhoneNumberId: ${user.email} (${user._id})`);
             } else {
-                debug(`⚠️  No IntegrationConfig found by waPhoneNumberId. Trying environment fallback...`);
-            }
-
-            // FALLBACK: If no user found by ID, check if it matches the global environment ID
-            if (!user) {
-                const globalPhoneId = process.env.WA_PHONE_NUMBER_ID || process.env.Phone_Number_ID;
-                debug(`   Env Phone_Number_ID = "${globalPhoneId}"`);
-                debug(`   Incoming Phone ID   = "${phoneNumberId}"`);
-
-                if (phoneNumberId && globalPhoneId && phoneNumberId === globalPhoneId) {
-                    debug(`✅ Match! Falling back to Super Admin user`);
-                    // Sort by createdAt to ensure we always get the primary root admin, not a random sub-admin
-                    user = await User.findOne({ role: 'superadmin' }).sort({ createdAt: 1 });
-                    if (user) {
-                        debug(`✅ Found primary superadmin: ${user.email} (${user._id})`);
-                    } else {
-                        debug('❌ No superadmin user found in DB!');
-                    }
-                } else {
-                    debug(`❌ No match between incoming ID and env ID — cannot find owner`);
-                }
+                debug(`⚠️  No IntegrationConfig found for waPhoneNumberId "${phoneNumberId}". Message will be dropped.`);
+                console.log(`⚠️  Incoming message for unconfigured phone number ID: ${phoneNumberId}. No tenant claims this number.`);
             }
 
             if (!user) {
@@ -263,25 +244,20 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // Webhooks often resolve to the Agency/SuperAdmin `userId`, but a Manager/Agent 
         // might have sent the outbound template under their own disjoint `userId` while sharing
         // the same WhatsApp Phone Number credentials in testing/production.
-        const IntegrationConfig = require('../models/IntegrationConfig');
-        const User = require('../models/User');
+        // IntegrationConfig & User already imported at the top of this file
 
-        const safePhoneNumberId = incomingPhoneNumberId || process.env.WA_PHONE_NUMBER_ID;
+        // Phone number ID is always present in webhook payload metadata
+        const safePhoneNumberId = incomingPhoneNumberId;
 
         const messagePreview = extractMessagePreview(message);
 
         // Parallelize independent database reads to save significant overhead
-        const [lead, configs, usersProp] = await Promise.all([
-            Lead.findOne({ userId: userId, phone: { $regex: phoneLastTen, $options: 'i' } }).lean(),
-            IntegrationConfig.find({ "whatsapp.waPhoneNumberId": safePhoneNumberId }).select('userId').lean(),
-            User.find({ waPhoneNumberId: safePhoneNumberId }).select('_id').lean()
+        const { getCompanyUserIds } = require('../utils/whatsappUtils');
+        const [lead, validUserIds] = await Promise.all([
+            // ⚠️ SECURITY FIX: Use exact phone match, not $regex (prevents ReDoS + collection scans)
+            Lead.findOne({ userId: userId, phone: { $regex: phoneLastTen + '$' } }).lean(),
+            getCompanyUserIds(userId)
         ]);
-        
-        const validUserIds = [
-            userId, // The fallback owner resolved earlier
-            ...configs.map(c => c.userId),
-            ...usersProp.map(u => u._id)
-        ];
 
         // Find if any user sharing this phone number already has a conversation
         const existingConversation = await WhatsAppConversation.findOne({
@@ -373,6 +349,15 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
 
         console.log(`✅ Received message from ${from}: ${messagePreview.substring(0, 50)}...`);
 
+        // ─── AUTOMATION REPLY WATCHER ───────────────────────────────
+        // Check if this inbound message resolves a pending WAIT_FOR_REPLY watcher.
+        // Must run before chatbot so the 24-hr human handoff pause is set first.
+        setImmediate(() => {
+            const { handleWatcherReply } = require('../services/AutomationService');
+            handleWatcherReply(conversation._id)
+                .catch(err => console.error('❌ handleWatcherReply error:', err));
+        });
+
         // Trigger chatbot/auto-reply logic asynchronously (decoupled)
         debug('🤖 Queuing chatbot engine safely in background...');
         const chatbotEngine = require('../services/chatbotEngineService');
@@ -390,7 +375,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
     }
 };
 
-// Process status updates (sent, delivered, read)
+// Process status updates (sent, delivered, read, failed)
 const processStatusUpdate = async (status, userId) => {
     try {
         const waMessageId = status.id;
@@ -420,7 +405,7 @@ const processStatusUpdate = async (status, userId) => {
         const updatedMsg = await WhatsAppMessage.findOneAndUpdate(
             { waMessageId: waMessageId },
             updatePayload,
-            { new: true, select: 'conversationId userId' }
+            { new: true, select: 'conversationId userId automationSource content' }
         ).lean();
 
         if (!updatedMsg) {
@@ -442,6 +427,32 @@ const processStatusUpdate = async (status, userId) => {
             waMessageId,
             status: statusType
         });
+
+        // FIX #20: Update broadcast stats (delivered/read) if this was a broadcast message
+        if (updatedMsg.automationSource === 'broadcast' && ['delivered', 'read', 'failed'].includes(statusType)) {
+            try {
+                const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
+                await WhatsAppBroadcast.updateOne(
+                    { userId: updatedMsg.userId, status: { $in: ['COMPLETED', 'PROCESSING'] } },
+                    { $inc: { [`stats.${statusType}`]: 1 } }
+                );
+            } catch (bcErr) {
+                debug(`⚠️ Could not update broadcast stats: ${bcErr.message}`);
+            }
+        }
+
+        // FIX #21: Update template analytics counters
+        if (updatedMsg.content?.templateName && ['delivered', 'read', 'failed'].includes(statusType)) {
+            try {
+                const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+                await WhatsAppTemplate.updateOne(
+                    { userId: updatedMsg.userId, name: updatedMsg.content.templateName },
+                    { $inc: { [`analytics.${statusType}`]: 1 } }
+                );
+            } catch (tplErr) {
+                debug(`⚠️ Could not update template analytics: ${tplErr.message}`);
+            }
+        }
 
     } catch (error) {
         console.error('❌ Error processing status update:', error);

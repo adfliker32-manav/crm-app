@@ -1,57 +1,16 @@
 const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
-const crypto = require('crypto');
 const nodemailer = require('nodemailer');
-
-// Encryption/Decryption keys (should be in env in production)
-// SECURITY: Use a fixed key from environment. If not set, use a default (NOT recommended for production)
-const ENCRYPTION_KEY_STRING = process.env.ENCRYPTION_KEY || 'default-encryption-key-change-in-production-min-32-chars';
-const IV_LENGTH = 16; // For AES, this is always 16
-
-// Derive 32-byte key from string using SHA-256
-const getEncryptionKey = () => {
-    return crypto.createHash('sha256').update(ENCRYPTION_KEY_STRING).digest();
-};
-
-// Encrypt function
-function encrypt(text) {
-    if (!text) return null;
-    try {
-        const iv = crypto.randomBytes(IV_LENGTH);
-        const key = getEncryptionKey();
-        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-        let encrypted = cipher.update(text, 'utf8', 'hex');
-        encrypted += cipher.final('hex');
-        return iv.toString('hex') + ':' + encrypted;
-    } catch (error) {
-        console.error('Encryption error:', error);
-        return null;
-    }
-}
-
-// Decrypt function
-function decrypt(text) {
-    if (!text) return null;
-    try {
-        const textParts = text.split(':');
-        const iv = Buffer.from(textParts.shift(), 'hex');
-        const encryptedText = textParts.join(':');
-        const key = getEncryptionKey();
-        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-        let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-        return decrypted;
-    } catch (error) {
-        console.error('Decryption error:', error);
-        return null;
-    }
-}
+const { encrypt, decrypt } = require('../utils/emailUtils');
+const { clearTransporterCache } = require('../services/emailService');
 
 // Get email configuration
 exports.getEmailConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('email');
+        // Must use '+' to include select:false fields (emailPassword)
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+email.emailPassword email.emailUser email.emailFromName email.emailSignature email.emailServiceType email.smtpHost email.smtpPort');
 
         if (!config || !config.email) {
             return res.json({
@@ -62,19 +21,24 @@ exports.getEmailConfig = async (req, res) => {
             });
         }
 
-        // Decrypt password before returning
-        const decryptedPassword = config.email.emailPassword ? decrypt(config.email.emailPassword) : '';
+        // SECURITY FIX (A1): Never return the decrypted password to the frontend.
+        // The UI only needs to know IF a password is set, not the actual value.
+        const hasPassword = !!config.email.emailPassword;
 
-        // Return config with decrypted password
         res.json({
             emailUser: config.email.emailUser || '',
-            emailPassword: decryptedPassword || '',
+            emailPassword: hasPassword ? '••••••••' : '', // Masked — never expose real password
+            hasPassword: hasPassword,
             emailFromName: config.email.emailFromName || '',
-            isConfigured: !!(config.email.emailUser && config.email.emailPassword)
+            emailSignature: config.email.emailSignature || '',
+            emailServiceType: config.email.emailServiceType || 'gmail',
+            smtpHost: config.email.smtpHost || '',
+            smtpPort: config.email.smtpPort || 587,
+            isConfigured: !!(config.email.emailUser && hasPassword)
         });
     } catch (error) {
         console.error('Error fetching email config:', error);
-        res.status(500).json({ message: 'Error fetching email configuration', error: error.message });
+        res.status(500).json({ message: 'Error fetching email configuration', error: 'Server error' });
     }
 };
 
@@ -85,7 +49,7 @@ exports.updateEmailConfig = async (req, res) => {
         if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify email settings' });
 
         const ownerId = req.tenantId;
-        const { emailUser, emailPassword, emailFromName } = req.body;
+        const { emailUser, emailPassword, emailFromName, emailSignature, emailServiceType, smtpHost, smtpPort } = req.body;
 
         // Validation
         if (!emailUser) {
@@ -101,7 +65,11 @@ exports.updateEmailConfig = async (req, res) => {
         // If password is provided, encrypt it
         const updateData = {
             'email.emailUser': emailUser.toLowerCase().trim(),
-            'email.emailFromName': emailFromName || null
+            'email.emailFromName': emailFromName || null,
+            'email.emailSignature': emailSignature !== undefined ? emailSignature : null,
+            'email.emailServiceType': emailServiceType || 'gmail',
+            'email.smtpHost': smtpHost || null,
+            'email.smtpPort': smtpPort || 587
         };
 
         if (emailPassword) {
@@ -114,16 +82,23 @@ exports.updateEmailConfig = async (req, res) => {
             { new: true, upsert: true, select: 'email' }
         );
 
+        // Invalidate cached transporter so next send uses new credentials
+        clearTransporterCache(ownerId);
+
         res.json({
             success: true,
             message: 'Email configuration updated successfully',
             emailUser: config.email.emailUser,
             emailFromName: config.email.emailFromName,
+            emailSignature: config.email.emailSignature,
+            emailServiceType: config.email.emailServiceType,
+            smtpHost: config.email.smtpHost,
+            smtpPort: config.email.smtpPort,
             isConfigured: true
         });
     } catch (error) {
         console.error('Error updating email config:', error);
-        res.status(500).json({ message: 'Error updating email configuration', error: error.message });
+        res.status(500).json({ message: 'Error updating email configuration', error: 'Server error' });
     }
 };
 
@@ -136,9 +111,14 @@ exports.testEmailConfig = async (req, res) => {
         // Use provided credentials or get from user
         let userEmail = emailUser;
         let userPassword = emailPassword;
+        let serviceType = 'gmail';
+        let smtpHost = 'smtp.gmail.com';
+        let smtpPort = 587;
 
         if (!userEmail || !userPassword) {
-            const config = await IntegrationConfig.findOne({ userId: ownerId }).select('email');
+            // Must use '+' to include select:false fields (emailPassword)
+            const config = await IntegrationConfig.findOne({ userId: ownerId })
+                .select('+email.emailPassword email.emailUser email.emailServiceType email.smtpHost email.smtpPort');
             if (!config || !config.email?.emailUser || !config.email?.emailPassword) {
                 return res.status(400).json({
                     message: 'Email configuration not found. Please configure your email settings first.'
@@ -146,26 +126,33 @@ exports.testEmailConfig = async (req, res) => {
             }
             userEmail = config.email.emailUser;
             userPassword = decrypt(config.email.emailPassword);
+            serviceType = config.email.emailServiceType || 'gmail';
+            smtpHost = config.email.smtpHost || 'smtp.gmail.com';
+            smtpPort = config.email.smtpPort || 587;
         }
 
-        // Create test transporter
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            host: 'smtp.gmail.com',
-            port: 587,
-            secure: false,
+        // FIX A3: Build transporter dynamically based on provider type
+        const transporterConfig = {
+            host: serviceType === 'smtp' ? smtpHost : 'smtp.gmail.com',
+            port: serviceType === 'smtp' ? smtpPort : 587,
+            secure: (serviceType === 'smtp' ? smtpPort : 587) === 465,
             auth: {
                 user: userEmail,
                 pass: userPassword
             },
-            // Connection timeout settings
-            connectionTimeout: 10000, // 10 seconds
-            greetingTimeout: 10000, // 10 seconds
-            socketTimeout: 10000, // 10 seconds
+            connectionTimeout: 10000,
+            greetingTimeout: 10000,
+            socketTimeout: 10000,
             tls: {
-                rejectUnauthorized: false
+                rejectUnauthorized: true
             }
-        });
+        };
+        if (serviceType !== 'smtp') {
+            transporterConfig.service = 'gmail';
+        }
+
+        // Create test transporter
+        const transporter = nodemailer.createTransport(transporterConfig);
 
         // Verify connection with timeout handling
         try {

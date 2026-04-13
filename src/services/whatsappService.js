@@ -5,27 +5,21 @@ require('dotenv').config(); // Ensure env vars are loaded
 const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
 const { logWhatsApp } = require('./whatsAppLogService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { retryWithBackoff } = require('../utils/retryHelper');
 
-// Internal Helper: Get valid credentials for Meta API
+// Internal Helper: Get valid credentials for Meta API (per-tenant, no .env fallback)
 const getCredentials = async (userId = null) => {
-    let phoneNumberId, accessToken;
-    if (userId) {
-        const userCredentials = await getUserWhatsAppCredentials(userId);
-        if (userCredentials && userCredentials.phoneNumberId && userCredentials.accessToken) {
-            phoneNumberId = userCredentials.phoneNumberId;
-            accessToken = userCredentials.accessToken;
-        }
+    if (!userId) {
+        throw new Error("WhatsApp credentials require a userId. Each tenant must configure their own WhatsApp settings.");
     }
-    if (!phoneNumberId || !accessToken) {
-        phoneNumberId = process.env.WA_PHONE_NUMBER_ID || process.env.Phone_Number_ID;
-        accessToken = process.env.WA_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN;
+    const userCredentials = await getUserWhatsAppCredentials(userId);
+    if (!userCredentials || !userCredentials.phoneNumberId || !userCredentials.accessToken) {
+        throw new Error("WhatsApp configuration not found. Please configure your WhatsApp settings via Settings → WhatsApp Config.");
     }
-    if (!phoneNumberId || !accessToken) {
-        throw new Error(userId 
-            ? "WhatsApp configuration not found. Please configure your WhatsApp settings." 
-            : "WhatsApp credentials not configured. Please configure WhatsApp settings or set WA_PHONE_NUMBER_ID and WA_ACCESS_TOKEN in .env file");
-    }
-    return { phoneNumberId, accessToken };
+    return {
+        phoneNumberId: userCredentials.phoneNumberId,
+        accessToken: userCredentials.accessToken
+    };
 };
 
 const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null) => {
@@ -61,10 +55,19 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
             }
         };
 
-        const response = await axios.post(url, data, config);
+        // 🔄 RETRY: Wrap Meta API call with exponential backoff (retries on 5xx/timeout/429)
+        const response = await retryWithBackoff(
+            () => axios.post(url, data, config),
+            { maxRetries: 3, label: `WA-Template:${templateName}` }
+        );
+
         console.log(`✅ SUCCESS: Message Sent! Response ID: ${response.data.messages[0].id}`);
         return response.data;
     } catch (error) {
+        // 🔑 TOKEN EXPIRY DETECTION: Surface clear error for expired/invalid tokens
+        if (error.response?.data?.error?.code === 190) {
+            console.error(`🔑 WhatsApp token EXPIRED for user ${userId}. Code 190: ${error.response.data.error.message}`);
+        }
         console.error('❌ FAILED TO SEND WHATSAPP:', error.response?.data || error.message);
         throw error;
     }
@@ -93,7 +96,12 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
             }
         };
 
-        const response = await axios.post(url, data, config);
+        // 🔄 RETRY: Wrap Meta API call with exponential backoff
+        const response = await retryWithBackoff(
+            () => axios.post(url, data, config),
+            { maxRetries: 3, label: 'WA-TextMessage' }
+        );
+
         const messageId = response.data.messages?.[0]?.id;
 
         if (userId && messageId) {
@@ -104,6 +112,10 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
 
         return response.data;
     } catch (error) {
+        // 🔑 TOKEN EXPIRY DETECTION
+        if (error.response?.data?.error?.code === 190) {
+            console.error(`🔑 WhatsApp token EXPIRED for user ${userId}. Needs re-authentication.`);
+        }
         console.error('❌ FAILED TO SEND TEXT:', error.response?.data || error.message);
         if (userId) {
             logWhatsApp({
@@ -136,11 +148,18 @@ const sendMediaMessage = async (to, mediaType, mediaId, caption = null, userId =
             data[mediaType].caption = caption;
         }
 
-        const response = await axios.post(url, data, {
-            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
-        });
+        // 🔄 RETRY: Wrap Meta API call with exponential backoff
+        const response = await retryWithBackoff(
+            () => axios.post(url, data, {
+                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+            }),
+            { maxRetries: 3, label: `WA-Media:${mediaType}` }
+        );
         return response.data;
     } catch (error) {
+        if (error.response?.data?.error?.code === 190) {
+            console.error(`🔑 WhatsApp token EXPIRED for user ${userId}.`);
+        }
         console.error(`❌ Failed to send ${mediaType}:`, error.response?.data || error.message);
         throw error;
     }
@@ -148,6 +167,10 @@ const sendMediaMessage = async (to, mediaType, mediaId, caption = null, userId =
 
 const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
     try {
+        if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
+            throw new Error("Emergency: WhatsApp sending is temporarily disabled.");
+        }
+
         const { phoneNumberId, accessToken } = await getCredentials(userId);
         const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
 
@@ -167,17 +190,24 @@ const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
             }
         };
 
-        const response = await axios.post(url, data, {
-            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
-        });
+        // 🔄 RETRY: Wrap Meta API call with exponential backoff
+        const response = await retryWithBackoff(
+            () => axios.post(url, data, {
+                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+            }),
+            { maxRetries: 3, label: 'WA-Interactive' }
+        );
         return response.data;
     } catch (error) {
+        if (error.response?.data?.error?.code === 190) {
+            console.error(`🔑 WhatsApp token EXPIRED for user ${userId}.`);
+        }
         console.error('❌ Failed to send interactive:', error.response?.data || error.message);
         throw error;
     }
 };
 
-const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en', componentsData = [], userId = null) => {
+const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en', componentsData = [], userId = null, options = {}) => {
     try {
         const { phoneNumberId, accessToken } = await getCredentials(userId);
         const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
@@ -203,7 +233,9 @@ const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en'
         const messageId = response.data.messages?.[0]?.id;
         if (userId && messageId) {
             logWhatsApp({
-                userId, to, message: `[Template: ${templateName}]`, status: 'sent', messageId, isAutomated: true, triggerType: 'manual'
+                userId, to, message: `[Template: ${templateName}]`, status: 'sent', messageId,
+                isAutomated: options.isAutomated !== undefined ? options.isAutomated : false,
+                triggerType: options.triggerType || 'template'
             }).catch(err => console.error('Error logging template:', err));
         }
 
@@ -214,24 +246,36 @@ const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en'
     }
 };
 
-// Download media from WhatsApp with local disk caching
+// Download media from WhatsApp with local disk caching (async I/O)
 const downloadMedia = async (mediaId, userId = null) => {
     try {
         console.log(`🔍 Media Request: ${mediaId} (User: ${userId})`);
         const uploadsDir = path.join(process.cwd(), 'uploads', 'whatsapp');
         
-        if (!fs.existsSync(uploadsDir)) {
-            console.log('📁 Creating WhatsApp uploads directory...');
-            fs.mkdirSync(uploadsDir, { recursive: true });
-        }
+        // Ensure directory exists (async)
+        await fs.promises.mkdir(uploadsDir, { recursive: true });
 
-        const files = fs.readdirSync(uploadsDir);
-        const cachedFile = files.find(f => f.startsWith(mediaId));
+        // ⚠️ PRODUCTION NOTE:
+        // Avoid directory scans (fs.readdir) — performance degrades as files grow.
+        // Always construct direct file paths instead of scanning entire directories.
+        // This prevents O(N) disk operations on every request.
+        const commonExtensions = ['jpeg', 'jpg', 'png', 'webp', 'gif', 'pdf', 'mp4', 'ogg', 'mp3', 'bin'];
+        let cachedFile = null;
+        for (const ext of commonExtensions) {
+            const testPath = path.join(uploadsDir, `${mediaId}.${ext}`);
+            try {
+                await fs.promises.access(testPath);
+                cachedFile = `${mediaId}.${ext}`;
+                break;
+            } catch {
+                // File doesn't exist with this extension, try next
+            }
+        }
         
         if (cachedFile) {
             console.log(`✅ Cache Hit: ${cachedFile}`);
             const filePath = path.join(uploadsDir, cachedFile);
-            const data = fs.readFileSync(filePath);
+            const data = await fs.promises.readFile(filePath);
             const ext = path.extname(cachedFile).toLowerCase();
             
             const mimeMap = {
@@ -267,7 +311,7 @@ const downloadMedia = async (mediaId, userId = null) => {
 
         const fileName = `${mediaId}.${extension}`;
         const filePath = path.join(uploadsDir, fileName);
-        fs.writeFileSync(filePath, Buffer.from(mediaResponse.data));
+        await fs.promises.writeFile(filePath, Buffer.from(mediaResponse.data));
         
         console.log(`💾 WhatsApp media cached: ${fileName}`);
 
@@ -288,10 +332,10 @@ const submitTemplateToMeta = async (userId, template) => {
         const { accessToken } = await getCredentials(userId);
         const IntegrationConfig = require('../models/IntegrationConfig');
         const config = await IntegrationConfig.findOne({ userId });
-        const wabaId = config?.whatsapp?.waBusinessId || process.env.WA_BUSINESS_ID;
+        const wabaId = config?.whatsapp?.waBusinessId;
 
         if (!wabaId) {
-            return { success: false, error: 'WhatsApp Business Account ID not configured.' };
+            return { success: false, error: 'WhatsApp Business Account ID not configured. Go to Settings → WhatsApp Config.' };
         }
 
         const url = `https://graph.facebook.com/v21.0/${wabaId}/message_templates`;
@@ -355,9 +399,9 @@ const uploadMediaForTemplate = async (userId, fileBuffer, mimeType, fileName) =>
         const { accessToken } = await getCredentials(userId);
         const IntegrationConfig = require('../models/IntegrationConfig');
         const config = await IntegrationConfig.findOne({ userId });
-        const appId = config?.whatsapp?.waAppId || process.env.WA_APP_ID || process.env.META_APP_ID;
+        const appId = config?.whatsapp?.waAppId;
 
-        if (!appId) throw new Error('Meta App ID not configured.');
+        if (!appId) throw new Error('Meta App ID not configured. Go to Settings → WhatsApp Config and set your App ID.');
 
         const sessionUrl = `https://graph.facebook.com/v21.0/${appId}/uploads`;
         const sessionRes = await axios.post(sessionUrl, null, {

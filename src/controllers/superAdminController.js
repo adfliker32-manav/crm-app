@@ -13,6 +13,7 @@ const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
 const WhatsAppLog = require('../models/WhatsAppLog');
 const EmailLog = require('../models/EmailLog');
 const EmailTemplate = require('../models/EmailTemplate');
+const { escapeRegex } = require('../utils/controllerHelpers');
 const ChatbotFlow = require('../models/ChatbotFlow');
 const ChatbotSession = require('../models/ChatbotSession');
 const Stage = require('../models/Stage');
@@ -92,12 +93,11 @@ const createCompany = async (req, res) => {
             return res.status(400).json({ message: "Email already in use" });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
         const newCompany = await User.create({
             companyName,
             name,
             email: normalizedEmail,
-            password: hashedPassword,
+            password: password,
             phone,
             role: req.body.role === 'agency' ? 'agency' : 'manager',
             isOnboarded: true,
@@ -169,25 +169,73 @@ const getSaaSAnalytics = async (req, res) => {
 };
 
 // Get all companies (managers)
+// ⚠️ PRODUCTION NOTE:
+// Avoid N+1 queries — they scale linearly and will destroy DB performance at scale.
+// This aggregation replaces multiple per-document queries with a single pipeline.
+// Any future changes must NOT reintroduce per-item queries inside loops.
 const getAllCompanies = async (req, res) => {
     try {
-        const companies = await joinWorkspaceSettings({ role: COMPANY_ROLE_FILTER });
+        // Single aggregation pipeline replaces N+1 individual countDocuments calls
+        const companies = await User.aggregate([
+            { $match: { role: COMPANY_ROLE_FILTER, deletedAt: null } },
+            {
+                $lookup: {
+                    from: 'workspacesettings',
+                    localField: '_id',
+                    foreignField: 'userId',
+                    as: 'workspace'
+                }
+            },
+            { $unwind: { path: '$workspace', preserveNullAndEmptyArrays: true } },
+            // Count agents via lookup
+            {
+                $lookup: {
+                    from: 'users',
+                    let: { companyId: '$_id' },
+                    pipeline: [
+                        { $match: { $expr: { $and: [
+                            { $eq: ['$parentId', '$$companyId'] },
+                            { $eq: ['$role', 'agent'] }
+                        ]}}}
+                    ],
+                    as: '_agents'
+                }
+            },
+            // Count leads via lookup
+            {
+                $lookup: {
+                    from: 'leads',
+                    let: { companyId: '$_id' },
+                    pipeline: [
+                        { $match: { $expr: { $eq: ['$userId', '$$companyId'] } } },
+                        { $count: 'count' }
+                    ],
+                    as: '_leadCount'
+                }
+            },
+            { $sort: { createdAt: -1 } },
+            { $limit: 500 },
+            {
+                $project: {
+                    password: 0,
+                    'workspace._id': 0,
+                    'workspace.userId': 0
+                }
+            },
+            {
+                $addFields: {
+                    agentsCount: { $size: '$_agents' },
+                    leadsCount: { $ifNull: [{ $arrayElemAt: ['$_leadCount.count', 0] }, 0] }
+                }
+            },
+            { $project: { _agents: 0, _leadCount: 0 } }
+        ]);
 
-        // Get additional stats for each company
-        const companiesWithStats = await Promise.all(
-            companies.map(async (company) => {
-                const agentsCount = await User.countDocuments({ parentId: company._id, role: 'agent' });
-                const leadsCount = await Lead.countDocuments({ userId: company._id });
-
-                return {
-                    ...company,
-                    // Flatten workspace settings for frontend compatibility
-                    ...(company.workspace || {}),
-                    agentsCount,
-                    leadsCount
-                };
-            })
-        );
+        // Flatten workspace settings for frontend compatibility
+        const companiesWithStats = companies.map(company => ({
+            ...company,
+            ...(company.workspace || {})
+        }));
 
         res.json({
             success: true,
@@ -352,10 +400,16 @@ const getCompanyLeads = async (req, res) => {
         const parsedPage = parseBoundedInteger(page, 1, { min: 1 });
         const parsedLimit = parseBoundedInteger(limit, 50, { min: 1, max: 200 });
         const skip = (parsedPage - 1) * parsedLimit;
+        // ⚠️ PRODUCTION NOTE:
+        // Always use `.lean()` for read-only queries to avoid Mongoose overhead.
+        // Use `.select()` to limit fields — returning full documents increases memory + network cost.
+        // Never return large nested arrays unless explicitly required.
         const leads = await Lead.find({ userId: id })
+            .select('name phone email status source dealValue tags assignedTo createdAt updatedAt')
             .sort({ createdAt: -1 })
             .limit(parsedLimit)
-            .skip(skip);
+            .skip(skip)
+            .lean();
 
         const totalLeads = await Lead.countDocuments({ userId: id });
 
@@ -387,7 +441,7 @@ const changeCompanyPassword = async (req, res) => {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        const hashedPassword = newPassword;
         await User.findByIdAndUpdate(id, { password: hashedPassword });
 
         res.json({
@@ -459,11 +513,10 @@ const createCompanyAgent = async (req, res) => {
             return res.status(400).json({ message: "Email already in use" });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
         const newAgent = await User.create({
             name,
             email: normalizedEmail,
-            password: hashedPassword,
+            password: password,
             role: 'agent',
             parentId: id
         });
@@ -510,7 +563,7 @@ const updateCompanyAgent = async (req, res) => {
             if (!hasStrongPassword(password)) {
                 return res.status(400).json({ message: STRONG_PASSWORD_MESSAGE });
             }
-            updateData.password = await bcrypt.hash(password, 10);
+            updateData.password = password;
         }
 
         const updatedAgent = await User.findByIdAndUpdate(agentId, updateData, { new: true })
@@ -872,10 +925,11 @@ const getAuditLogs = async (req, res) => {
         if (action) query.action = action;
         
         if (search) {
+            const safe = escapeRegex(search);
             query.$or = [
-                { actorName: { $regex: search, $options: 'i' } },
-                { targetName: { $regex: search, $options: 'i' } },
-                { action: { $regex: search, $options: 'i' } }
+                { actorName: { $regex: safe, $options: 'i' } },
+                { targetName: { $regex: safe, $options: 'i' } },
+                { action: { $regex: safe, $options: 'i' } }
             ];
         }
 
@@ -1343,6 +1397,8 @@ const getPendingRequests = async (req, res) => {
 
 // @desc  Get all approved & active accounts
 // @route GET /api/superadmin/accounts/active
+// ⚠️ PRODUCTION NOTE:
+// Avoid N+1 queries — use batched lookups instead of per-account queries.
 const getActiveAccounts = async (req, res) => {
     try {
         const accounts = await User.find({ 
@@ -1354,15 +1410,33 @@ const getActiveAccounts = async (req, res) => {
         .sort({ createdAt: -1 })
         .lean();
 
-        const enriched = await Promise.all(accounts.map(async (acc) => {
+        // Batch-fetch all parent IDs and agent counts in two queries instead of N
+        const parentIds = [...new Set(accounts.filter(a => a.parentId).map(a => a.parentId.toString()))];
+        const accountIds = accounts.map(a => a._id);
+
+        const [agencies, agentCounts] = await Promise.all([
+            parentIds.length > 0
+                ? User.find({ _id: { $in: parentIds } }).select('companyName name').lean()
+                : [],
+            User.aggregate([
+                { $match: { parentId: { $in: accountIds }, role: 'agent' } },
+                { $group: { _id: '$parentId', count: { $sum: 1 } } }
+            ])
+        ]);
+
+        const agencyMap = {};
+        agencies.forEach(a => { agencyMap[a._id.toString()] = a; });
+        const agentCountMap = {};
+        agentCounts.forEach(a => { agentCountMap[a._id.toString()] = a.count; });
+
+        const enriched = accounts.map(acc => {
             if (acc.parentId) {
-                const agency = await User.findById(acc.parentId).select('companyName name').lean();
+                const agency = agencyMap[acc.parentId.toString()];
                 acc.agencyName = agency?.companyName || agency?.name;
             }
-            const agentCount = await User.countDocuments({ parentId: acc._id, role: 'agent' });
-            acc.agentCount = agentCount;
+            acc.agentCount = agentCountMap[acc._id.toString()] || 0;
             return acc;
-        }));
+        });
 
         res.json({ success: true, accounts: enriched, total: enriched.length });
     } catch (error) {

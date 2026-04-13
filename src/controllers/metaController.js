@@ -273,7 +273,9 @@ const exchangeToken = async (req, res) => {
 const getStatus = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
+        // Must use '+' to include select:false fields (metaAccessToken)
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+meta.metaAccessToken meta.metaTokenExpiry meta.metaPageId meta.metaPageName meta.metaFormId meta.metaFormName meta.metaLeadSyncEnabled meta.metaLastSyncAt');
 
         const meta = config?.meta || {};
         const isConnected = !!meta.metaAccessToken && new Date(meta.metaTokenExpiry) > new Date();
@@ -299,7 +301,9 @@ const getStatus = async (req, res) => {
 const getPages = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
+        // Must use '+' to include select:false fields (metaAccessToken)
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+meta.metaAccessToken meta.metaTokenExpiry');
 
         if (!config?.meta?.metaAccessToken) {
             return res.status(400).json({ success: false, message: 'Not connected to Facebook' });
@@ -333,7 +337,9 @@ const getForms = async (req, res) => {
     try {
         const { pageId } = req.params;
         const ownerId = req.tenantId;
-        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
+        // Must use '+' to include select:false fields (metaAccessToken)
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+meta.metaAccessToken meta.metaTokenExpiry');
 
         if (!config?.meta?.metaAccessToken) {
             return res.status(400).json({ success: false, message: 'Not connected to Facebook' });
@@ -487,14 +493,23 @@ const toggleSync = async (req, res) => {
 const getCapiSettings = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
+        // Must use '+' prefix to include select:false fields (metaCapiAccessToken)
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+meta.metaCapiAccessToken meta.metaPixelId meta.metaTestEventCode meta.metaCapiEnabled meta.metaStageMapping');
 
         const meta = config?.meta || {};
+
+        // Mask the access token — never send raw secret to frontend
+        const hasAccessToken = !!meta.metaCapiAccessToken;
+        const maskedToken = hasAccessToken
+            ? '••••••••' + meta.metaCapiAccessToken.slice(-4)
+            : '';
 
         res.json({
             success: true,
             pixelId: meta.metaPixelId,
-            capiAccessToken: meta.metaCapiAccessToken,
+            capiAccessToken: maskedToken,
+            hasAccessToken,
             testEventCode: meta.metaTestEventCode,
             capiEnabled: meta.metaCapiEnabled,
             stageMapping: meta.metaStageMapping || {
@@ -519,7 +534,10 @@ const updateCapiSettings = async (req, res) => {
         const updateData = {};
 
         if (pixelId !== undefined) updateData['meta.metaPixelId'] = pixelId;
-        if (capiAccessToken !== undefined) updateData['meta.metaCapiAccessToken'] = capiAccessToken;
+        // Only update token if user actually entered a new one (not the masked placeholder)
+        if (capiAccessToken !== undefined && !capiAccessToken.startsWith('••••')) {
+            updateData['meta.metaCapiAccessToken'] = capiAccessToken;
+        }
         if (testEventCode !== undefined) updateData['meta.metaTestEventCode'] = testEventCode;
         if (capiEnabled !== undefined) updateData['meta.metaCapiEnabled'] = capiEnabled;
         if (stageMapping !== undefined) updateData['meta.metaStageMapping'] = stageMapping;
@@ -545,7 +563,9 @@ const updateCapiSettings = async (req, res) => {
 const testCapiConnection = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const config = await IntegrationConfig.findOne({ userId: ownerId }).select('meta');
+        // Must use '+' prefix to include the select:false access token field
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+meta.metaCapiAccessToken meta.metaPixelId meta.metaTestEventCode');
 
         const meta = config?.meta || {};
 

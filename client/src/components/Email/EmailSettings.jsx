@@ -5,9 +5,13 @@ import { useNotification } from '../../context/NotificationContext';
 const EmailSettings = () => {
     const { showSuccess, showError, showInfo } = useNotification();
     const [config, setConfig] = useState({
+        emailServiceType: 'gmail',
+        smtpHost: '',
+        smtpPort: 587,
         emailUser: '',
         emailPassword: '',
         emailFromName: '',
+        emailSignature: '',
         isConfigured: false
     });
     const [loading, setLoading] = useState(true);
@@ -25,9 +29,13 @@ const EmailSettings = () => {
             const res = await api.get('/email/config');
             setConfig(prev => ({
                 ...prev,
+                emailServiceType: res.data.emailServiceType || 'gmail',
+                smtpHost: res.data.smtpHost || '',
+                smtpPort: res.data.smtpPort || 587,
                 emailUser: res.data.emailUser || '',
                 emailPassword: res.data.emailPassword || '', // Keep password if returned
                 emailFromName: res.data.emailFromName || '',
+                emailSignature: res.data.emailSignature || '',
                 isConfigured: res.data.isConfigured || false
             }));
         } catch (error) {
@@ -63,11 +71,15 @@ const EmailSettings = () => {
 
         try {
             const payload = {
+                emailServiceType: config.emailServiceType,
+                smtpHost: config.smtpHost,
+                smtpPort: parseInt(config.smtpPort, 10) || 587,
                 emailUser: config.emailUser.trim(),
-                emailFromName: config.emailFromName.trim()
+                emailFromName: config.emailFromName.trim(),
+                emailSignature: config.emailSignature
             };
 
-            if (config.emailPassword.trim()) {
+            if (config.emailPassword.trim() && config.emailPassword !== '••••••••') {
                 payload.emailPassword = config.emailPassword.trim();
             }
 
@@ -77,7 +89,7 @@ const EmailSettings = () => {
                 showSuccess('Email configuration saved successfully!');
                 setConfig(prev => ({
                     ...prev,
-                    // Keep password in state but don't clear it
+                    emailPassword: '••••••••',
                     isConfigured: true
                 }));
                 setShowCredentials(false); // Hide credentials after saving
@@ -190,29 +202,79 @@ const EmailSettings = () => {
                 )}
 
                 <form onSubmit={handleSave} className={`space-y-5 ${config.isConfigured && !showCredentials ? 'hidden' : ''}`}>
+                    {/* Service Type */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Provider Type <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                            name="emailServiceType"
+                            value={config.emailServiceType}
+                            onChange={handleChange}
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                        >
+                            <option value="gmail">Gmail / Google Workspace</option>
+                            <option value="smtp">Other Custom SMTP</option>
+                        </select>
+                    </div>
+
+                    {/* SMTP Advanced Settings */}
+                    {config.emailServiceType === 'smtp' && (
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    SMTP Host <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="text"
+                                    name="smtpHost"
+                                    value={config.smtpHost}
+                                    onChange={handleChange}
+                                    placeholder="smtp.example.com"
+                                    required={config.emailServiceType === 'smtp'}
+                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    SMTP Port <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="number"
+                                    name="smtpPort"
+                                    value={config.smtpPort}
+                                    onChange={handleChange}
+                                    placeholder="587"
+                                    required={config.emailServiceType === 'smtp'}
+                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                />
+                            </div>
+                        </div>
+                    )}
+
                     {/* Email Address */}
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Gmail Address <span className="text-red-500">*</span>
+                            {config.emailServiceType === 'gmail' ? 'Gmail Address' : 'Email Address'} <span className="text-red-500">*</span>
                         </label>
                         <input
                             type="email"
                             name="emailUser"
                             value={config.emailUser}
                             onChange={handleChange}
-                            placeholder="your-email@gmail.com"
+                            placeholder={config.emailServiceType === 'gmail' ? "your-email@gmail.com" : "you@yourcompany.com"}
                             className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
                             required
                         />
                         <p className="text-xs text-gray-500 mt-1">
-                            Your Gmail address for sending emails
+                            Your email address for sending emails
                         </p>
                     </div>
 
-                    {/* App Password */}
+                    {/* Password */}
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                            App Password <span className="text-red-500">*</span>
+                            {config.emailServiceType === 'gmail' ? 'App Password' : 'SMTP Password'} <span className="text-red-500">*</span>
                         </label>
                         <div className="relative">
                             <input
@@ -233,7 +295,7 @@ const EmailSettings = () => {
                             </button>
                         </div>
                         <p className="text-xs text-gray-500 mt-1">
-                            Use a Gmail App Password, not your regular password
+                            {config.emailServiceType === 'gmail' ? 'Use a Gmail App Password, not your regular password' : 'Your SMTP password'}
                         </p>
                     </div>
 
@@ -252,6 +314,23 @@ const EmailSettings = () => {
                         />
                         <p className="text-xs text-gray-500 mt-1">
                             The name that will appear in the "From" field
+                        </p>
+                    </div>
+
+                    {/* Signature */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Email Signature <span className="text-gray-400">(Optional)</span>
+                        </label>
+                        <textarea
+                            name="emailSignature"
+                            value={config.emailSignature}
+                            onChange={handleChange}
+                            placeholder="Best regards,&#10;John Doe"
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm min-h-[100px] resize-y"
+                        ></textarea>
+                        <p className="text-xs text-gray-500 mt-1">
+                            This signature will be automatically appended to all emails sent from this account. HTML is supported.
                         </p>
                     </div>
 
@@ -295,24 +374,26 @@ const EmailSettings = () => {
                     </div>
                 </form>
 
-                {/* Help Section */}
-                <div className="mt-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                    <h3 className="font-bold text-yellow-900 mb-2 flex items-center gap-2">
-                        <i className="fa-solid fa-lightbulb"></i>
-                        How to create a Gmail App Password
-                    </h3>
-                    <ol className="text-sm text-yellow-800 space-y-1 list-decimal list-inside">
-                        <li>Go to your <a href="https://myaccount.google.com/" target="_blank" rel="noopener noreferrer" className="underline">Google Account</a></li>
-                        <li>Select Security → 2-Step Verification (enable if not already)</li>
-                        <li>Scroll down and select "App passwords"</li>
-                        <li>Create a new app password for "Mail"</li>
-                        <li>Copy the 16-character password</li>
-                        <li>Paste it here (without spaces)</li>
-                    </ol>
-                    <p className="text-xs text-yellow-700 mt-2">
-                        ⚠️ Never use your regular Gmail password. Always use App Passwords for security.
-                    </p>
-                </div>
+                {/* Help Section for Gmail */}
+                {config.emailServiceType === 'gmail' && (
+                    <div className="mt-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <h3 className="font-bold text-yellow-900 mb-2 flex items-center gap-2">
+                            <i className="fa-solid fa-lightbulb"></i>
+                            How to create a Gmail App Password
+                        </h3>
+                        <ol className="text-sm text-yellow-800 space-y-1 list-decimal list-inside">
+                            <li>Go to your <a href="https://myaccount.google.com/" target="_blank" rel="noopener noreferrer" className="underline">Google Account</a></li>
+                            <li>Select Security → 2-Step Verification (enable if not already)</li>
+                            <li>Scroll down and select "App passwords"</li>
+                            <li>Create a new app password for "Mail"</li>
+                            <li>Copy the 16-character password</li>
+                            <li>Paste it here (without spaces)</li>
+                        </ol>
+                        <p className="text-xs text-yellow-700 mt-2">
+                            ⚠️ Never use your regular Gmail password. Always use App Passwords for security.
+                        </p>
+                    </div>
+                )}
             </div>
         </div>
     );

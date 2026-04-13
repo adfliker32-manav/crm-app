@@ -58,7 +58,8 @@ const EmailAnalytics = () => {
     const totalSent = stats.allTime?.sent || 0;
     const totalFailed = stats.allTime?.failed || 0;
     const totalReceived = stats.allTime?.received || 0;
-    const deliveryRate = totalSent > 0 ? (((totalSent - totalFailed) / totalSent) * 100).toFixed(1) : 0;
+    // FIX C5: Correct formula — sent / (sent + failed), not (sent - failed) / sent
+    const deliveryRate = (totalSent + totalFailed) > 0 ? ((totalSent / (totalSent + totalFailed)) * 100).toFixed(1) : 100;
 
     // Chart Configuration
     const labels = stats.chartData?.map(d => d.date) || [];

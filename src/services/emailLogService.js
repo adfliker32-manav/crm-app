@@ -18,11 +18,17 @@ const logEmail = async (logData) => {
             attachments = []
         } = logData;
 
+        // Truncate body to prevent database bloat (full HTML can be 50KB+)
+        const MAX_BODY_LENGTH = 200;
+        const truncatedBody = body ? body.substring(0, MAX_BODY_LENGTH) : '';
+        const wasTruncated = body ? body.length > MAX_BODY_LENGTH : false;
+
         const emailLog = new EmailLog({
             userId,
             to,
             subject,
-            body,
+            body: truncatedBody,
+            bodyTruncated: wasTruncated,
             status,
             messageId: status === 'sent' ? messageId : null,
             error: status === 'failed' ? error : null,

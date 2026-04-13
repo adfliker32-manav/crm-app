@@ -47,21 +47,17 @@ const createSuperAdmin = async () => {
             user.name = name;
 
             // Update password
-            const salt = await bcrypt.genSalt(10);
-            user.password = await bcrypt.hash(password, salt);
+            user.password = password;
 
             await user.save();
             console.log('✅ Super Admin updated successfully!');
         } else {
             console.log('👤 Super Admin not found. Creating new account...');
 
-            const salt = await bcrypt.genSalt(10);
-            const hashedPassword = await bcrypt.hash(password, salt);
-
             user = await User.create({
                 name,
                 email,
-                password: hashedPassword,
+                password: password,
                 role: 'superadmin',
                 companyName: 'Headquarters'
             });

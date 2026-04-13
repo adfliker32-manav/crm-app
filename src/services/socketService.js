@@ -15,15 +15,29 @@ let io = null;
  * Called once from index.js after creating the HTTP server.
  */
 const initSocket = (httpServer) => {
+    // ⚠️ SECURITY: Socket.IO CORS MUST match Express CORS.
+    // Previously origin: '*' which allowed any website to open WebSocket connections.
+    const allowedOrigins = [
+        process.env.FRONTEND_URL,
+        'http://localhost:5173',
+        'http://localhost:3000'
+    ].filter(Boolean);
+
     io = new Server(httpServer, {
         cors: {
-            origin: '*', // Matches existing Express CORS config
+            origin: (origin, callback) => {
+                if (!origin) return callback(null, true);
+                if (allowedOrigins.some(allowed => origin.startsWith(allowed))) {
+                    return callback(null, true);
+                }
+                callback(new Error('Not allowed by CORS'));
+            },
             methods: ['GET', 'POST'],
             credentials: true
         },
         pingTimeout: 60000,
         pingInterval: 25000,
-        transports: ['websocket', 'polling'] // Prefer WebSocket, fallback to polling
+        transports: ['websocket', 'polling']
     });
 
     // ── JWT Authentication Middleware ──
@@ -54,12 +68,30 @@ const initSocket = (httpServer) => {
         // If the user is an agent, also join their parent's room
         // so managers can see agent activity and vice versa
         // This is handled lazily — the frontend sends a join request
-        socket.on('join:company', (companyUserIds) => {
-            if (Array.isArray(companyUserIds)) {
+        // ⚠️ SECURITY: Validate ownership before joining company rooms.
+        // Previously any user could join ANY user's room by sending arbitrary IDs.
+        socket.on('join:company', async (companyUserIds) => {
+            if (!Array.isArray(companyUserIds)) return;
+            try {
+                const User = require('../models/User');
+                // Only allow joining rooms of users that belong to your company
+                const validUsers = await User.find({
+                    _id: { $in: companyUserIds },
+                    $or: [
+                        { _id: userId },           // Self
+                        { parentId: userId },       // Direct children (agents under this manager)
+                        { _id: socket.parentId }    // Parent manager
+                    ]
+                }).select('_id').lean();
+                
+                const validIds = new Set(validUsers.map(u => u._id.toString()));
                 companyUserIds.forEach(id => {
-                    socket.join(`user:${id}`);
+                    if (validIds.has(id.toString())) {
+                        socket.join(`user:${id}`);
+                    }
                 });
-                console.log(`   📂 Socket ${socket.id} joined ${companyUserIds.length} company rooms`);
+            } catch (err) {
+                console.error('Socket join:company error:', err.message);
             }
         });
 

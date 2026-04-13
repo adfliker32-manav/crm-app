@@ -16,6 +16,9 @@ const EmailInbox = () => {
     const [showContactPanel, setShowContactPanel] = useState(false);
     const [showNewChatModal, setShowNewChatModal] = useState(false);
     const [newChatEmail, setNewChatEmail] = useState('');
+    const [newChatCc, setNewChatCc] = useState('');
+    const [newChatBcc, setNewChatBcc] = useState('');
+    const [scheduleDate, setScheduleDate] = useState('');
     const [filter, setFilter] = useState('all'); 
     
     const scrollRef = useRef(null);
@@ -53,12 +56,13 @@ const EmailInbox = () => {
         fetchConversations(); 
     }, [fetchConversations]);
 
-    // Poll for new emails
+    // Poll for new emails — FIX G4: Pause when tab is not visible
     useEffect(() => {
         const interval = setInterval(() => {
+            if (document.hidden) return; // Skip poll if tab not focused
             fetchConversations();
             if (selectedChat) fetchMessages(selectedChat._id);
-        }, 10000);
+        }, 15000); // Increased from 10s to 15s for less server load
         return () => clearInterval(interval);
     }, [selectedChat, fetchConversations, fetchMessages]);
 
@@ -106,9 +110,17 @@ const EmailInbox = () => {
                 html: newMessage.trim(),
                 text: newMessage.trim()
             };
+            
+            if (newChatCc.trim()) payload.cc = newChatCc.trim();
+            if (newChatBcc.trim()) payload.bcc = newChatBcc.trim();
+            if (scheduleDate) payload.scheduledFor = new Date(scheduleDate).toISOString();
+            
             await api.post('/email/send', payload);
             setShowNewChatModal(false);
             setNewChatEmail('');
+            setNewChatCc('');
+            setNewChatBcc('');
+            setScheduleDate('');
             setNewMessage('');
             setNewSubject('');
             
@@ -407,16 +419,49 @@ const EmailInbox = () => {
                             </button>
                         </div>
                         <form onSubmit={handleStartNewChat} className="p-6 space-y-4">
-                            <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">To: Email Address</label>
-                                <input
-                                    type="email"
-                                    required
-                                    value={newChatEmail}
-                                    onChange={(e) => setNewChatEmail(e.target.value)}
-                                    placeholder="lead@example.com"
-                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
-                                />
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">To: Email Address <span className="text-red-500">*</span></label>
+                                    <input
+                                        type="email"
+                                        required
+                                        value={newChatEmail}
+                                        onChange={(e) => setNewChatEmail(e.target.value)}
+                                        placeholder="lead@example.com"
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Schedule For (Optional)</label>
+                                    <input
+                                        type="datetime-local"
+                                        value={scheduleDate}
+                                        onChange={(e) => setScheduleDate(e.target.value)}
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">CC (Optional)</label>
+                                    <input
+                                        type="text"
+                                        value={newChatCc}
+                                        onChange={(e) => setNewChatCc(e.target.value)}
+                                        placeholder="comma separated emails"
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">BCC (Optional)</label>
+                                    <input
+                                        type="text"
+                                        value={newChatBcc}
+                                        onChange={(e) => setNewChatBcc(e.target.value)}
+                                        placeholder="comma separated emails"
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
+                                    />
+                                </div>
                             </div>
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Subject</label>

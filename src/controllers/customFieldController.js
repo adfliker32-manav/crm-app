@@ -24,7 +24,7 @@ exports.getCustomFields = async (req, res) => {
         res.json(settings.customFieldDefinitions || []);
     } catch (error) {
         console.error('Error fetching custom fields:', error);
-        res.status(500).json({ message: 'Error fetching custom fields', error: error.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -75,7 +75,7 @@ exports.saveCustomFields = async (req, res) => {
         });
     } catch (error) {
         console.error('Error saving custom fields:', error);
-        res.status(500).json({ message: 'Error saving custom fields', error: error.message });
+        res.status(500).json({ message: 'Error saving custom fields', error: 'Server error' });
     }
 };
 
@@ -129,7 +129,7 @@ exports.addCustomField = async (req, res) => {
         });
     } catch (error) {
         console.error('Error adding custom field:', error);
-        res.status(500).json({ message: 'Error adding custom field', error: error.message });
+        res.status(500).json({ message: 'Error adding custom field', error: 'Server error' });
     }
 };
 
@@ -158,6 +158,6 @@ exports.deleteCustomField = async (req, res) => {
         });
     } catch (error) {
         console.error('Error deleting custom field:', error);
-        res.status(500).json({ message: 'Error deleting custom field', error: error.message });
+        res.status(500).json({ message: 'Error deleting custom field', error: 'Server error' });
     }
 };

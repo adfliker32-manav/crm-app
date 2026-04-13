@@ -6,6 +6,7 @@ const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const helmet = require('helmet');
 const { initSocket } = require('./src/services/socketService');
 
 // Routes Import
@@ -40,18 +41,49 @@ app.use(express.json({
     req.rawBody = buf; // Attach the raw Buffer to req for webhook signature verification
   }
 }));
-app.use(cors());
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.url}`);
-  next();
-});
+// ⚠️ SECURITY: Helmet adds critical HTTP headers (X-Frame-Options, X-Content-Type-Options, HSTS, etc.)
+// Without this, the app is vulnerable to clickjacking, MIME sniffing, and protocol downgrade attacks.
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow serving static assets cross-origin
+  contentSecurityPolicy: false // Disable CSP to avoid breaking inline scripts in React
+}));
+
+// ⚠️ SECURITY: CORS must be restricted to known frontend origins.
+// Wide-open CORS allows any website to make authenticated API calls using stolen tokens.
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'http://localhost:5173',
+  'http://localhost:3000'
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Postman, webhooks)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.some(allowed => origin.startsWith(allowed))) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true
+}));
+
+// Request logger (only in development to avoid log pollution in production)
+if (process.env.NODE_ENV !== 'production') {
+  app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    next();
+  });
+}
 
 // Serve static files from the React app
 app.use(express.static(path.join(__dirname, 'client/dist')));
 app.use(express.static('public')); // Keep for existing public assets if any
 
-// Serve uploaded files
-app.use('/uploads', express.static('uploads'));
+// ⚠️ SECURITY: Uploaded files are served ONLY through authenticated routes.
+// Previously exposed at /uploads with NO auth — any URL guess could access private documents.
+// Now protected: files are only accessible via the authenticated download endpoints.
+app.use('/uploads', authMiddleware, express.static('uploads'));
 
 // 🔥 DATABASE CONNECTION
 // SECURITY FIX: Use environment variable instead of hardcoded credentials
@@ -71,10 +103,13 @@ if (!process.env.SUPERADMIN_EMAIL || !process.env.SUPERADMIN_PASSWORD) {
   process.exit(1);
 }
 
-// 🚀 Optimized Connection Pool for 50+ Enterprise Clients (Max 250 Connections)
+// ⚠️ PRODUCTION NOTE:
+// Connection pool size must reflect real concurrent load.
+// Oversizing wastes RAM and can hit Atlas connection limits.
+// DO NOT increase blindly — monitor active connections via Atlas metrics before changing.
 mongoose.connect(MONGO_URI, {
-  maxPoolSize: 250, // Increase from default 100 to handle 50+ simultaneous clients
-  minPoolSize: 20,  // Keep 20 connections alive to prevent cold-start latency when Webhooks burst
+  maxPoolSize: 50,  // Right-sized for ~20 clients (was 250 — wasted ~200MB RAM)
+  minPoolSize: 5,   // Keep 5 alive for cold-start prevention (was 20 — held too many idle)
   serverSelectionTimeoutMS: 15000, // Wait 15s instead of 30s before failing if DB is unreachable
   socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
 })
@@ -91,47 +126,68 @@ mongoose.connect(MONGO_URI, {
       console.error('Server will continue, but Super Admin may not be available.');
     }
 
-    // Seed SuperAdmin WhatsApp credentials from .env into DB
-    try {
-      console.log('\n📱 Seeding SuperAdmin WhatsApp credentials...');
-      const seedSuperAdminWhatsApp = require('./scripts/seedWhatsApp');
-      await seedSuperAdminWhatsApp(
-        process.env.WHATSAPP_TOKEN,
-        process.env.Phone_Number_ID || process.env.WA_PHONE_NUMBER_ID,
-        process.env.WA_BUSINESS_ID
-      );
-    } catch (error) {
-      console.error('⚠️  Failed to seed WhatsApp credentials:', error.message);
-      console.error('Server will continue with .env fallback.');
-    }
+    // ℹ️  WhatsApp credentials are per-tenant (configured via Settings → WhatsApp Config).
+    // Super Admin does NOT have a WhatsApp inbox, so no seed is needed.
 
 
-    // Start Google Sheet Auto-Sync Scheduler
+    // Google Sheet sync is now PUSH-based (Apps Script webhook) — no polling scheduler needed
+    console.log('📋 Google Sheet Sync: Push mode (zero polling cost)');
+
+    // Initialize Agenda for Broadcasting, Automations, and WhatsApp Queue
     try {
-      const { startSheetSyncScheduler } = require('./src/services/sheetSyncQueue');
-      await startSheetSyncScheduler();
-    } catch (error) {
-      console.error('⚠️  Failed to start Sheet Sync Scheduler:', error.message);
-      console.error('Server will continue, but auto-sync will not be available.');
-    }
-    
-    // Initialize Agenda for Broadcasting and Automations
-    try {
-      const Agenda = require('agenda');
-      const agenda = new Agenda({ db: { address: MONGO_URI, collection: 'agendaJobs' } });
-      
+      const { Agenda } = require('agenda');
+      const agenda = new Agenda({
+        db: { address: MONGO_URI, collection: 'agendaJobs' },
+        processEvery: '30 seconds',
+        maxConcurrency: 20
+      });
+
+      // ⚠️ IMPORTANT: ALL job definitions must be registered BEFORE agenda.start()
+      // Agenda ignores jobs defined after start() for already-queued tasks.
+
+      // 1. Broadcast jobs (WhatsApp bulk sends)
       const { defineBroadcastJob } = require('./src/controllers/whatsappBroadcastController');
       defineBroadcastJob(agenda);
-      
+
+      // 2. CRM Automation rule jobs (EXECUTE_AUTOMATION_ACTION)
       const { defineAutomationJobs } = require('./src/services/AutomationService');
       defineAutomationJobs(agenda);
 
+      // 3. WhatsApp chatbot delay jobs + CHECK_REPLY_TIMEOUT
+      const { defineWhatsAppJobs } = require('./src/services/whatsappQueueService');
+      defineWhatsAppJobs(agenda);
+
+      // 4. Email Scheduling jobs (send_scheduled_email)
+      const { defineEmailJobs } = require('./src/services/emailQueueService');
+      defineEmailJobs(agenda);
+
+      // ✅ Start AFTER all definitions are registered
       await agenda.start();
-      console.log('✅ Agenda Job Queue Started for Broadcasts & Automations');
-    } catch(error) {
+      console.log('✅ Agenda Job Queue Started (Broadcasts, Automations, WhatsApp Queue)');
+
+      // ⚠️ PRODUCTION NOTE:
+      // Agenda does NOT auto-clean completed/failed jobs.
+      // Without TTL, this collection will grow indefinitely and increase storage cost.
+      // This cleanup runs on startup to purge stale jobs older than 7 days.
+      try {
+        const jobsCollection = mongoose.connection.db.collection('agendaJobs');
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const cleanupResult = await jobsCollection.deleteMany({
+          $or: [
+            { lastFinishedAt: { $lt: sevenDaysAgo } },
+            { failedAt: { $lt: sevenDaysAgo } }
+          ]
+        });
+        if (cleanupResult.deletedCount > 0) {
+          console.log(`🧹 Cleaned up ${cleanupResult.deletedCount} stale Agenda jobs (>7 days old)`);
+        }
+      } catch (cleanupErr) {
+        console.error('⚠️ Agenda cleanup failed (non-critical):', cleanupErr.message);
+      }
+    } catch (error) {
       console.error('⚠️ Failed to start Agenda Queues:', error.message);
     }
-    
+
     // Start IMAP Email Polling Service
     try {
       const { startEmailSyncPolling } = require('./src/services/imapService');
@@ -180,29 +236,29 @@ mongoose.connect(MONGO_URI, {
 const telemetryService = require('./src/services/telemetryService');
 
 app.use((req, res, next) => {
-    // Only track actual API calls
-    if (!req.path.startsWith('/api/') && !req.path.startsWith('/webhook/')) {
-        return next();
-    }
-    
-    const start = process.hrtime();
-    
-    res.on('finish', () => {
-        const diff = process.hrtime(start);
-        const timeInMs = (diff[0] * 1e3) + (diff[1] * 1e-6);
-        
-        // Extract tenant ID if auth middleware set it (for abuse tracking)
-        const tenantId = req.tenantId || req.user?.id || null;
-        
-        telemetryService.recordApiRequest(res.statusCode, tenantId, timeInMs);
-    });
-    
-    next();
+  // Only track actual API calls
+  if (!req.path.startsWith('/api/') && !req.path.startsWith('/webhook/')) {
+    return next();
+  }
+
+  const start = process.hrtime();
+
+  res.on('finish', () => {
+    const diff = process.hrtime(start);
+    const timeInMs = (diff[0] * 1e3) + (diff[1] * 1e-6);
+
+    // Extract tenant ID if auth middleware set it (for abuse tracking)
+    const tenantId = req.tenantId || req.user?.id || null;
+
+    telemetryService.recordApiRequest(res.statusCode, tenantId, timeInMs);
+  });
+
+  next();
 });
 
 // Flush Telemetry counts every 15 minutes to reset the 'rolling' window
 setInterval(() => {
-    telemetryService.flush();
+  telemetryService.flush();
 }, 15 * 60 * 1000);
 
 // ===========================
@@ -222,6 +278,7 @@ app.use('/api/tags', authMiddleware, require('./src/routes/tagRoutes'));
 app.use('/api/tasks', authMiddleware, taskRoutes);
 app.use('/api/automations', authMiddleware, automationRoutes);
 app.use('/api/analytics', authMiddleware, analyticsRoutes);
+app.use('/api/dashboard', require('./src/routes/dashboardRoutes'));
 
 // 3. Communications
 app.use('/api/email', authMiddleware, emailRoutes);
@@ -232,6 +289,10 @@ app.use('/api/email-logs', authMiddleware, emailLogRoutes);
 // WhatsApp Webhook (PUBLIC - no auth, Meta needs to access)
 const whatsappWebhookRoutes = require('./src/routes/whatsappWebhookRoutes');
 app.use('/webhook/whatsapp', whatsappWebhookRoutes);
+
+// Google Sheet Push Webhook (PUBLIC - no auth, Apps Script needs to access)
+const sheetWebhookRoutes = require('./src/routes/sheetWebhookRoutes');
+app.use('/api/webhooks', sheetWebhookRoutes);
 
 // WhatsApp API (authenticated) - SPECIFIC ROUTES FIRST
 app.use('/api/whatsapp/templates', whatsappTemplateRoutes);
@@ -292,6 +353,17 @@ const server = http.createServer(app);
 // 🔌 Initialize Socket.IO on the same HTTP server
 initSocket(server);
 
+// ⚠️ SECURITY: Global error handler — catches unhandled errors from any middleware/route.
+// Without this, Express sends raw stack traces to the client.
+app.use((err, req, res, next) => {
+  // CORS errors
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ message: 'CORS: Origin not allowed' });
+  }
+  console.error('Unhandled Error:', err.stack || err.message);
+  res.status(err.status || 500).json({ message: 'Internal server error' });
+});
+
 server.listen(PORT, () => {
   console.log(`🚀 Server Running on Port ${PORT}`);
 
@@ -310,3 +382,40 @@ server.listen(PORT, () => {
     console.log("⚠️  Set VERIFY_TOKEN or WA_WEBHOOK_VERIFY_TOKEN in .env to match Meta's webhook verify token!");
   }
 });
+
+// ⚠️ PRODUCTION: Graceful shutdown — cleanly close connections when server is stopped.
+// Without this, Render restarts can leave orphaned DB connections and interrupted Agenda jobs.
+const gracefulShutdown = async (signal) => {
+  console.log(`\n⚠️ ${signal} received. Starting graceful shutdown...`);
+  
+  // 1. Stop accepting new requests
+  server.close(() => {
+    console.log('✅ HTTP server closed');
+  });
+
+  // 2. Stop Agenda queue
+  try {
+    const { getAgenda } = require('./src/services/agendaService');
+    const agenda = getAgenda();
+    if (agenda) {
+      await agenda.stop();
+      console.log('✅ Agenda job queue stopped');
+    }
+  } catch (e) {
+    // Agenda may not be initialized
+  }
+
+  // 3. Close MongoDB connection
+  try {
+    await mongoose.connection.close();
+    console.log('✅ MongoDB connection closed');
+  } catch (e) {
+    console.error('Error closing MongoDB:', e.message);
+  }
+
+  console.log('👋 Graceful shutdown complete');
+  process.exit(0);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

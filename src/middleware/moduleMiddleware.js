@@ -1,14 +1,9 @@
-const User = require('../models/User');
-const WorkspaceSettings = require('../models/WorkspaceSettings');
-
 /**
  * Module Middleware
  * 
- * Verifies if the Tenant (Workspace Owner) has an active plan that includes the requested module.
- * If the tenant doesn't have the module enabled via `activeModules`, the API request is blocked.
- * 
- * Usage:
- * router.post('/whatsapp/send', authMiddleware, requireModule('whatsapp'), sendMessage);
+ * Verifies if the Tenant (Workspace Owner) has the requested module active.
+ * ⚠️ OPTIMIZED: Uses req.workspace (already loaded by authMiddleware)
+ * instead of making a duplicate DB query.
  */
 const requireModule = (moduleName) => {
     return async (req, res, next) => {
@@ -18,20 +13,17 @@ const requireModule = (moduleName) => {
                 return next();
             }
 
-            // The tenantId is resolved via authMiddleware.js
-            const tenantId = req.tenantId;
+            // ⚠️ PERFORMANCE: Use req.workspace from authMiddleware (already loaded)
+            // Previously this middleware made a SECOND DB query for the same data.
+            const activeModules = req.workspace?.activeModules;
 
-            // Fetch from WorkspaceSettings ensuring real-time accuracy against sudden downgrades.
-            const workspace = await WorkspaceSettings.findOne({ userId: tenantId }).select('activeModules').lean();
-
-            if (!workspace) {
+            if (!activeModules) {
+                // Fallback: workspace not loaded (shouldn't happen if authMiddleware runs first)
                 return res.status(404).json({ message: "Workspace settings not found" });
             }
 
             // Check if moduleName exists in the tenant's allowed features array
-            const hasModule = workspace.activeModules && workspace.activeModules.includes(moduleName);
-
-            if (!hasModule) {
+            if (!activeModules.includes(moduleName)) {
                 return res.status(403).json({
                     success: false,
                     error: 'module_locked',

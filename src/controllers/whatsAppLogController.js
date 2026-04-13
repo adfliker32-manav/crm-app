@@ -1,5 +1,6 @@
 const WhatsAppLog = require('../models/WhatsAppLog');
 const mongoose = require('mongoose');
+const { escapeRegex } = require('../utils/controllerHelpers');
 
 // Get WhatsApp analytics - Optimized with single aggregation pipeline
 exports.getAnalytics = async (req, res) => {
@@ -109,7 +110,7 @@ exports.getAnalytics = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching WhatsApp analytics:', error);
-        res.status(500).json({ message: 'Error fetching analytics', error: error.message });
+        res.status(500).json({ message: 'Error fetching analytics', error: 'Server error' });
     }
 };
 
@@ -136,9 +137,10 @@ exports.getLogs = async (req, res) => {
         }
         
         if (search) {
+            const safe = escapeRegex(search);
             query.$or = [
-                { to: { $regex: search, $options: 'i' } },
-                { message: { $regex: search, $options: 'i' } }
+                { to: { $regex: safe, $options: 'i' } },
+                { message: { $regex: safe, $options: 'i' } }
             ];
         }
         
@@ -165,7 +167,7 @@ exports.getLogs = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching WhatsApp logs:', error);
-        res.status(500).json({ message: 'Error fetching logs', error: error.message });
+        res.status(500).json({ message: 'Error fetching logs', error: 'Server error' });
     }
 };
 
@@ -185,6 +187,6 @@ exports.getLog = async (req, res) => {
         res.json(log);
     } catch (error) {
         console.error('Error fetching WhatsApp log:', error);
-        res.status(500).json({ message: 'Error fetching log', error: error.message });
+        res.status(500).json({ message: 'Error fetching log', error: 'Server error' });
     }
 };

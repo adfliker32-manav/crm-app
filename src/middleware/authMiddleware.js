@@ -1,4 +1,14 @@
 const jwt = require('jsonwebtoken');
+const NodeCache = require('node-cache'); // 🚀 PERFORMANCE FIX: LRU cache
+const tenantCache = new NodeCache({ stdTTL: 300, checkperiod: 120 }); // 5 minutes TTL
+
+// Export utility to clear cache when users update their settings
+const clearTenantCache = (tenantId) => {
+    if (tenantId) {
+        tenantCache.del(`workspace_${tenantId}`);
+        tenantCache.del(`integrations_${tenantId}`);
+    }
+};
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -40,15 +50,20 @@ const authMiddleware = async (req, res, next) => {
             req.tenantId = ownerId;
         }
 
-        // FETCH WORKSPACE & INTEGRATIONS ONCE FOR ALL DOWNSTREAM ROUTES
-        // We use Promise.all to fetch both simultaneously (non-blocking)
+        // 🚀 FETCH WORKSPACE & INTEGRATIONS WITH IN-MEMORY CACHE
+        // Eliminates 2 database queries per API request
         if (req.tenantId) {
-            const [workspace, integrations] = await Promise.all([
-                WorkspaceSettings.findOne({ userId: req.tenantId }).lean(),
-                IntegrationConfig.findOne({ userId: req.tenantId }).lean()
-            ]);
-            req.workspace = workspace || {};
-            req.integrations = integrations || {};
+            let workspace = tenantCache.get(`workspace_${req.tenantId}`);
+            let integrations = tenantCache.get(`integrations_${req.tenantId}`);
+
+            const misses = [];
+            if (!workspace) misses.push(WorkspaceSettings.findOne({ userId: req.tenantId }).lean().then(w => { workspace = w || {}; tenantCache.set(`workspace_${req.tenantId}`, workspace); }));
+            if (!integrations) misses.push(IntegrationConfig.findOne({ userId: req.tenantId }).lean().then(i => { integrations = i || {}; tenantCache.set(`integrations_${req.tenantId}`, integrations); }));
+            
+            if (misses.length > 0) await Promise.all(misses);
+
+            req.workspace = workspace;
+            req.integrations = integrations;
         } else {
             req.workspace = {};
             req.integrations = {};
@@ -103,18 +118,47 @@ const requireAgency = (req, res, next) => {
     next();
 };
 
-// ==========================================
-// ✅ SUBSCRIPTION CHECK — PERMANENTLY REMOVED
-// System now uses approval-based access control.
-// Super Admin manually approves/rejects accounts.
-// ==========================================
+// ✅ APPROVAL-BASED ACCESS CONTROL
+// Subscription Payment restrictions permanently removed.
 const requireActiveSubscription = (req, res, next) => {
-    next(); // Payment restrictions removed — approval-based system in place
+    next(); 
 };
 
-// 🎚️ FEATURE GATE — PERMANENTLY REMOVED
+// 🎚️ FEATURE GATE
+// All features available to approved accounts.
 const requireFeature = (featureKey) => (req, res, next) => {
-    next(); // Feature gates removed — all features available to approved accounts
+    next(); 
 };
 
-module.exports = { authMiddleware, requireSuperAdmin, requireAgency, requireActiveSubscription, requireFeature };
+// 🛡️ STRICT ROLE-BASED ACCESS CONTROL (RBAC) WRAPPER
+// Ensures users without the requisite permission flag cannot hit the backend endpoint.
+const requirePermission = (permissionKey) => {
+    return (req, res, next) => {
+        // Superadmins and agency owners bypass permission checks
+        if (['superadmin', 'agency'].includes(req.user.role)) {
+            return next();
+        }
+
+        // Managers and agents must have the specific boolean flag in their token/DB
+        const hasPermission = req.user.permissions?.[permissionKey];
+        
+        if (!hasPermission) {
+            console.warn(`🛑 RBAC Blocked: User ${req.user.userId} attempted unauthorized access requiring '${permissionKey}'.`);
+            return res.status(403).json({ 
+                message: `Action Denied. You lack the necessary permission (${permissionKey}). Contact your administrator.` 
+            });
+        }
+        
+        next();
+    };
+};
+
+module.exports = { 
+    authMiddleware, 
+    requireSuperAdmin, 
+    requireAgency, 
+    requireActiveSubscription, 
+    requireFeature, 
+    requirePermission,
+    clearTenantCache 
+};

@@ -6,66 +6,7 @@ const WhatsAppMessage = require('../models/WhatsAppMessage');
 const User = require('../models/User');
 const { sendWhatsAppMessage } = require('../services/whatsappService');
 
-// Helper to resolve specific mapped variables
-const resolveVariable = (mappingObj, varNum, data) => {
-    // Handle Mongoose Map vs plain object
-    const mapType = (mappingObj && typeof mappingObj.get === 'function') 
-        ? mappingObj.get(varNum.toString()) 
-        : (mappingObj?.[varNum.toString()] || '');
-        
-    switch (mapType) {
-        case 'lead.name': return data.leadName || '';
-        case 'lead.phone': return data.leadPhone || '';
-        case 'lead.email': return data.leadEmail || '';
-        case 'lead.status': return data.stageName || '';
-        case 'company.name': return data.companyName || '';
-        case 'user.name': return data.userName || '';
-        case 'custom': 
-            const customVal = (mappingObj && typeof mappingObj.get === 'function') 
-                ? mappingObj.get(`${varNum}_custom`) 
-                : (mappingObj?.[`${varNum}_custom`] || '');
-            return customVal || '';
-        default: 
-            // Fallback to older static convention if unmapped
-            if (varNum === 1) return data.leadName || 'Customer';
-            if (varNum === 2) return data.stageName || 'New';
-            if (varNum === 3) return data.companyName || 'Our Company';
-            if (varNum === 4) return data.userName || 'Representative';
-            return '';
-    }
-};
-
-// Helper to build Meta API components from the database components
-const buildMetaComponents = (dbComponents, variableMapping, data) => {
-    const metaComponents = [];
-
-    for (const comp of dbComponents) {
-        if (comp.type === 'BODY' && comp.text) {
-            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
-            if (matches && matches.length > 0) {
-                const parameters = [];
-                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
-                
-                for (const n of nums) {
-                    parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
-                }
-                metaComponents.push({ type: 'body', parameters: parameters });
-            }
-        }
-        if (comp.type === 'HEADER' && comp.format === 'TEXT' && comp.text) {
-            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
-            if (matches && matches.length > 0) {
-                const parameters = [];
-                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
-                for (const n of nums) {
-                    parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
-                }
-                metaComponents.push({ type: 'header', parameters: parameters });
-            }
-        }
-    }
-    return metaComponents;
-};
+const { buildMetaComponents } = require('../utils/templateVariableResolver');
 
 // Job processor definition (this could live in a separate worker file, but placing here for simplicity)
 let agendaInstance = null;
@@ -106,8 +47,8 @@ const defineBroadcastJob = (agenda) => {
             // Only grab leads with valid phone numbers
             const leads = await Lead.find({
                 ...leadQuery,
-                phone: { $exists: true, $ne: null, $ne: '' }
-            }).select('_id name phone customData');
+                phone: { $exists: true, $nin: [null, ''] }
+            }).select('_id name phone email status customData');
 
             console.log(`[Broadcast ${broadcastId}] Found ${leads.length} valid lead targets.`);
 
@@ -154,21 +95,29 @@ const defineBroadcastJob = (agenda) => {
                         const waMessageId = result.messages?.[0]?.id;
                         if (waMessageId) {
                             try {
+                                // ⚠️ PRODUCTION NOTE:
+                                // waContactId is the PRIMARY identifier for conversations.
+                                // Must always be set using normalized phone format.
+                                // Queries MUST use indexed fields (userId + waContactId).
+                                // Using non-indexed fields (e.g., phone) will trigger full collection scans.
+                                const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
                                 let conversation = await WhatsAppConversation.findOne({
-                                    phone: lead.phone,
-                                    userId: userId
+                                    userId: userId,
+                                    waContactId: normalizedPhone  // Use indexed field instead of phone
                                 });
 
                                 if (!conversation) {
                                     conversation = new WhatsAppConversation({
                                         userId: userId,
                                         leadId: lead._id,
-                                        phone: lead.phone,
+                                        waContactId: normalizedPhone,  // Required field — was missing!
+                                        phone: normalizedPhone,
                                         displayName: lead.name,
                                         status: 'active',
                                         unreadCount: 0,
                                         metadata: { totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
                                     });
+                                    await conversation.save();
                                 }
 
                                 const messageRecord = new WhatsAppMessage({
@@ -177,21 +126,30 @@ const defineBroadcastJob = (agenda) => {
                                     waMessageId: waMessageId,
                                     direction: 'outbound',
                                     type: 'template',
-                                    content: { text: `[Broadcast] Template: ${broadcast.templateId.name}` },
+                                    content: {
+                                        text: `[Broadcast] Template: ${broadcast.templateId.name}`,
+                                        templateName: broadcast.templateId.name
+                                    },
                                     status: 'sent',
                                     timestamp: new Date(),
-                                    isAutomated: true
+                                    isAutomated: true,
+                                    automationSource: 'broadcast'
                                 });
 
                                 await messageRecord.save();
 
-                                conversation.lastMessage = `[Broadcast] ${broadcast.templateId.name}`;
-                                conversation.lastMessageAt = new Date();
-                                conversation.lastMessageDirection = 'outbound';
-                                conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
-                                conversation.metadata.totalOutbound = (conversation.metadata.totalOutbound || 0) + 1;
-                                
-                                await conversation.save();
+                                // FIX: Use atomic update to prevent race conditions
+                                await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                                    $set: {
+                                        lastMessage: `[Broadcast] ${broadcast.templateId.name}`,
+                                        lastMessageAt: new Date(),
+                                        lastMessageDirection: 'outbound'
+                                    },
+                                    $inc: {
+                                        'metadata.totalMessages': 1,
+                                        'metadata.totalOutbound': 1
+                                    }
+                                });
                             } catch (syncErr) {
                                 console.error(`[Broadcast ${broadcastId}] DB Sync failed for lead ${lead.phone}:`, syncErr.message);
                             }
@@ -202,9 +160,17 @@ const defineBroadcastJob = (agenda) => {
                         broadcast.stats.failed = failCount;
                     }
 
-                    // Optional: Save small progress interval (e.g. every 10 messages)
+                    // ⚠️ PRODUCTION NOTE:
+                    // Avoid saving entire documents for small updates.
+                    // Use atomic updates ($set) to reduce write load and prevent large document rewrites.
+                    // Important for high-frequency operations like broadcasts.
                     if ((successCount + failCount) % 10 === 0) {
-                        await broadcast.save();
+                        await WhatsAppBroadcast.findByIdAndUpdate(broadcast._id, {
+                            $set: {
+                                'stats.sent': successCount,
+                                'stats.failed': failCount
+                            }
+                        });
                     }
 
                     // Sleep 1000ms (1 second) to enforce a STRICT limit of ~60 messages per minute
@@ -245,7 +211,7 @@ exports.getBroadcasts = async (req, res) => {
         res.json({ broadcasts });
     } catch (error) {
         console.error('Error fetching broadcasts:', error);
-        res.status(500).json({ message: 'Error fetching broadcasts', error: error.message });
+        res.status(500).json({ message: 'Error fetching broadcasts', error: 'Server error' });
     }
 };
 
@@ -259,7 +225,7 @@ exports.getBroadcast = async (req, res) => {
         res.json({ broadcast });
     } catch (error) {
         console.error('Error fetching broadcast:', error);
-        res.status(500).json({ message: 'Error fetching broadcast', error: error.message });
+        res.status(500).json({ message: 'Error fetching broadcast', error: 'Server error' });
     }
 };
 
@@ -296,7 +262,7 @@ exports.createBroadcast = async (req, res) => {
         res.status(201).json({ broadcast });
     } catch (error) {
         console.error('Error creating broadcast:', error);
-        res.status(500).json({ message: 'Error creating broadcast', error: error.message });
+        res.status(500).json({ message: 'Error creating broadcast', error: 'Server error' });
     }
 };
 
@@ -349,7 +315,7 @@ exports.startBroadcast = async (req, res) => {
         res.json({ message: 'Broadcast started', broadcast });
     } catch (error) {
         console.error('Error starting broadcast:', error);
-        res.status(500).json({ message: 'Error starting broadcast', error: error.message });
+        res.status(500).json({ message: 'Error starting broadcast', error: 'Server error' });
     }
 };
 
@@ -379,7 +345,7 @@ exports.cancelBroadcast = async (req, res) => {
         res.json({ message: 'Broadcast cancelled', broadcast });
     } catch (error) {
         console.error('Error cancelling broadcast:', error);
-        res.status(500).json({ message: 'Error cancelling broadcast', error: error.message });
+        res.status(500).json({ message: 'Error cancelling broadcast', error: 'Server error' });
     }
 };
 
@@ -397,7 +363,7 @@ exports.deleteBroadcast = async (req, res) => {
         res.json({ message: 'Broadcast deleted' });
     } catch (error) {
         console.error('Error deleting broadcast:', error);
-        res.status(500).json({ message: 'Error deleting broadcast', error: error.message });
+        res.status(500).json({ message: 'Error deleting broadcast', error: 'Server error' });
     }
 };
 

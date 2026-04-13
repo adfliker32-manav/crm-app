@@ -9,7 +9,25 @@ const getEncryptionKey = () => {
     return crypto.createHash('sha256').update(ENCRYPTION_KEY_STRING).digest();
 };
 
-// Decrypt function (for email service)
+const IV_LENGTH = 16;
+
+// Encrypt function (shared — used by emailConfigController)
+function encrypt(text) {
+    if (!text) return null;
+    try {
+        const iv = crypto.randomBytes(IV_LENGTH);
+        const key = getEncryptionKey();
+        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+        let encrypted = cipher.update(text, 'utf8', 'hex');
+        encrypted += cipher.final('hex');
+        return iv.toString('hex') + ':' + encrypted;
+    } catch (error) {
+        console.error('Encryption error:', error);
+        return null;
+    }
+}
+
+// Decrypt function (shared — used by emailConfigController & emailService)
 function decrypt(text) {
     if (!text) return null;
     try {
@@ -46,7 +64,9 @@ async function getUserEmailCredentials(userId) {
             if (parentUser) tenantName = parentUser.name;
         }
 
-        const config = await IntegrationConfig.findOne({ userId: tenantId }).select('email');
+        // Must use '+' to include select:false fields (emailPassword)
+        const config = await IntegrationConfig.findOne({ userId: tenantId })
+            .select('+email.emailPassword email.emailUser email.emailFromName email.emailSignature email.emailServiceType email.smtpHost email.smtpPort email.businessAddress');
 
         if (!config || !config.email?.emailUser || !config.email?.emailPassword) {
             return null;
@@ -54,7 +74,12 @@ async function getUserEmailCredentials(userId) {
         return {
             email: config.email.emailUser,
             password: decrypt(config.email.emailPassword),
-            fromName: config.email.emailFromName || tenantName || 'CRM Pro'
+            fromName: config.email.emailFromName || tenantName || 'CRM Pro',
+            signature: config.email.emailSignature || '',
+            serviceType: config.email.emailServiceType || 'gmail',
+            smtpHost: config.email.smtpHost,
+            smtpPort: config.email.smtpPort,
+            businessAddress: config.email.businessAddress || ''
         };
     } catch (error) {
         console.error('Error getting user email credentials:', error);
@@ -62,4 +87,4 @@ async function getUserEmailCredentials(userId) {
     }
 }
 
-module.exports = { getUserEmailCredentials };
+module.exports = { getUserEmailCredentials, encrypt, decrypt, getEncryptionKey };

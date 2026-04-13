@@ -20,8 +20,7 @@ const AttachmentUploadModal = ({ isOpen, onClose, templateId, onSuccess }) => {
         'image/jpg',
         'image/png',
         'image/gif',
-        'text/plain',
-        'application/zip'
+        'text/plain'
     ];
 
     const validateFile = (file) => {
@@ -182,7 +181,7 @@ const AttachmentUploadModal = ({ isOpen, onClose, templateId, onSuccess }) => {
                                 multiple
                                 onChange={handleFileSelect}
                                 className="hidden"
-                                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,.txt,.zip"
+                                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,.txt"
                             />
                         </label>
                     </div>

@@ -15,7 +15,7 @@ exports.getFlows = async (req, res) => {
         res.json({ success: true, flows });
     } catch (error) {
         console.error('Error fetching flows:', error);
-        res.status(500).json({ message: 'Error fetching flows', error: error.message });
+        res.status(500).json({ message: 'Error fetching flows', error: 'Server error' });
     }
 };
 
@@ -34,7 +34,7 @@ exports.getFlow = async (req, res) => {
         res.json({ success: true, flow });
     } catch (error) {
         console.error('Error fetching flow:', error);
-        res.status(500).json({ message: 'Error fetching flow', error: error.message });
+        res.status(500).json({ message: 'Error fetching flow', error: 'Server error' });
     }
 };
 
@@ -75,7 +75,7 @@ exports.createFlow = async (req, res) => {
         res.json({ success: true, flow: flow.toObject() });
     } catch (error) {
         console.error('Error creating flow:', error);
-        res.status(500).json({ message: 'Error creating flow', error: error.message });
+        res.status(500).json({ message: 'Error creating flow', error: 'Server error' });
     }
 };
 
@@ -110,7 +110,7 @@ exports.updateFlow = async (req, res) => {
         res.json({ success: true, flow: flow.toObject() });
     } catch (error) {
         console.error('Error updating flow:', error);
-        res.status(500).json({ message: 'Error updating flow', error: error.message });
+        res.status(500).json({ message: 'Error updating flow', error: 'Server error' });
     }
 };
 
@@ -146,7 +146,7 @@ exports.deleteFlow = async (req, res) => {
         res.json({ success: true, message: 'Flow deleted successfully' });
     } catch (error) {
         console.error('Error deleting flow:', error);
-        res.status(500).json({ message: 'Error deleting flow', error: error.message });
+        res.status(500).json({ message: 'Error deleting flow', error: 'Server error' });
     }
 };
 
@@ -169,7 +169,7 @@ exports.toggleFlow = async (req, res) => {
         res.json({ success: true, flow: flow.toObject() });
     } catch (error) {
         console.error('Error toggling flow:', error);
-        res.status(500).json({ message: 'Error toggling flow', error: error.message });
+        res.status(500).json({ message: 'Error toggling flow', error: 'Server error' });
     }
 };
 
@@ -206,7 +206,7 @@ exports.duplicateFlow = async (req, res) => {
         res.json({ success: true, flow: duplicate.toObject() });
     } catch (error) {
         console.error('Error duplicating flow:', error);
-        res.status(500).json({ message: 'Error duplicating flow', error: error.message });
+        res.status(500).json({ message: 'Error duplicating flow', error: 'Server error' });
     }
 };
 
@@ -235,6 +235,6 @@ exports.getFlowAnalytics = async (req, res) => {
         res.json({ success: true, analytics });
     } catch (error) {
         console.error('Error fetching analytics:', error);
-        res.status(500).json({ message: 'Error fetching analytics', error: error.message });
+        res.status(500).json({ message: 'Error fetching analytics', error: 'Server error' });
     }
 };

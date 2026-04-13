@@ -47,119 +47,111 @@ async function findDuplicates(userId, phone, email, excludeId = null) {
 }
 
 // Find ALL duplicate groups for a user
-// Groups leads that share the same normalized phone or email
+// ⚡ PERFORMANCE: Uses two targeted MongoDB aggregation pipelines (phone + email)
+// instead of loading ALL leads into Node.js memory.
+// For 5,000 leads: ~50KB aggregation result vs ~5MB full document load.
 async function findAllDuplicateGroups(userId) {
-    const allLeads = await Lead.find({ userId })
-        .select('name phone email status source createdAt updatedAt')
-        .sort({ createdAt: 1 })
-        .lean();
+    // Step 1: Find phone duplicates using aggregation (normalizes via $substr to last 10 digits)
+    const [phoneDups, emailDups] = await Promise.all([
+        Lead.aggregate([
+            { $match: { userId: userId, phone: { $ne: null, $exists: true } } },
+            { $addFields: { normPhone: { $substr: [ { $replaceAll: { input: '$phone', find: ' ', replacement: '' } }, -10, 10 ] } } },
+            { $group: {
+                _id: '$normPhone',
+                count: { $sum: 1 },
+                leads: { $push: { _id: '$_id', name: '$name', phone: '$phone', email: '$email', status: '$status', source: '$source', createdAt: '$createdAt', updatedAt: '$updatedAt' } }
+            }},
+            { $match: { count: { $gte: 2 } } }
+        ]),
+        Lead.aggregate([
+            { $match: { userId: userId, email: { $ne: null, $exists: true } } },
+            { $addFields: { normEmail: { $toLower: { $trim: { input: '$email' } } } } },
+            { $group: {
+                _id: '$normEmail',
+                count: { $sum: 1 },
+                leads: { $push: { _id: '$_id', name: '$name', phone: '$phone', email: '$email', status: '$status', source: '$source', createdAt: '$createdAt', updatedAt: '$updatedAt' } }
+            }},
+            { $match: { count: { $gte: 2 } } }
+        ])
+    ]);
 
-    // Build lookup maps
-    const phoneMap = {};  // normalizedPhone -> [leads]
-    const emailMap = {};  // lowerEmail -> [leads]
-    const leadGroups = {}; // groupId -> Set of lead IDs
-    const leadToGroup = {}; // leadId -> groupId
-
+    // Step 2: Merge phone and email duplicate groups
+    // Use a union-find approach to merge groups that share any lead
+    const leadToGroup = {};  // leadId -> groupId
+    const groups = {};       // groupId -> Set of lead objects
     let groupCounter = 0;
 
-    allLeads.forEach(lead => {
-        const leadId = lead._id.toString();
-        const normPhone = normalizePhone(lead.phone);
-        const normEmail = lead.email ? lead.email.trim().toLowerCase() : null;
+    const mergeLeadsIntoGroup = (leads, reason) => {
+        let targetGroupId = null;
 
-        let assignedGroup = null;
-
-        // Check phone match
-        if (normPhone) {
-            const last10 = normPhone.slice(-10);
-            if (phoneMap[last10]) {
-                // Found phone match — use existing group
-                const existingLeadId = phoneMap[last10][0]._id.toString();
-                assignedGroup = leadToGroup[existingLeadId];
-                phoneMap[last10].push(lead);
-            } else {
-                phoneMap[last10] = [lead];
+        // Check if any lead in this batch already belongs to a group
+        for (const lead of leads) {
+            const lid = lead._id.toString();
+            if (leadToGroup[lid]) {
+                targetGroupId = leadToGroup[lid];
+                break;
             }
         }
 
-        // Check email match
-        if (normEmail) {
-            if (emailMap[normEmail]) {
-                const existingLeadId = emailMap[normEmail][0]._id.toString();
-                const emailGroup = leadToGroup[existingLeadId];
+        if (!targetGroupId) {
+            targetGroupId = `group_${groupCounter++}`;
+            groups[targetGroupId] = { leads: new Map(), reasons: new Set() };
+        }
 
-                if (assignedGroup && assignedGroup !== emailGroup) {
-                    // Merge two groups
-                    const mergeFrom = emailGroup;
-                    const mergeTo = assignedGroup;
-                    if (leadGroups[mergeFrom]) {
-                        leadGroups[mergeFrom].forEach(id => {
-                            leadToGroup[id] = mergeTo;
-                            leadGroups[mergeTo].add(id);
-                        });
-                        delete leadGroups[mergeFrom];
+        groups[targetGroupId].reasons.add(reason);
+
+        for (const lead of leads) {
+            const lid = lead._id.toString();
+            const existingGroupId = leadToGroup[lid];
+
+            if (existingGroupId && existingGroupId !== targetGroupId) {
+                // Merge existing group into target
+                const mergeFrom = groups[existingGroupId];
+                if (mergeFrom) {
+                    for (const [id, l] of mergeFrom.leads) {
+                        groups[targetGroupId].leads.set(id, l);
+                        leadToGroup[id] = targetGroupId;
                     }
-                } else if (!assignedGroup) {
-                    assignedGroup = emailGroup;
+                    for (const r of mergeFrom.reasons) {
+                        groups[targetGroupId].reasons.add(r);
+                    }
+                    delete groups[existingGroupId];
                 }
-
-                emailMap[normEmail].push(lead);
-            } else {
-                emailMap[normEmail] = [lead];
             }
+
+            leadToGroup[lid] = targetGroupId;
+            groups[targetGroupId].leads.set(lid, lead);
         }
+    };
 
-        // Assign to group
-        if (assignedGroup) {
-            leadToGroup[leadId] = assignedGroup;
-            if (!leadGroups[assignedGroup]) leadGroups[assignedGroup] = new Set();
-            leadGroups[assignedGroup].add(leadId);
-        } else {
-            // New group
-            const newGroupId = `group_${groupCounter++}`;
-            leadToGroup[leadId] = newGroupId;
-            leadGroups[newGroupId] = new Set([leadId]);
-        }
-    });
+    // Process phone duplicate groups
+    for (const dup of phoneDups) {
+        mergeLeadsIntoGroup(dup.leads, 'Same Phone');
+    }
 
-    // Build result — only groups with 2+ leads are duplicates
-    const leadMap = {};
-    allLeads.forEach(lead => {
-        leadMap[lead._id.toString()] = lead;
-    });
+    // Process email duplicate groups
+    for (const dup of emailDups) {
+        mergeLeadsIntoGroup(dup.leads, 'Same Email');
+    }
 
+    // Step 3: Build result — only groups with 2+ leads
     const duplicateGroups = [];
-    Object.entries(leadGroups).forEach(([groupId, leadIds]) => {
-        if (leadIds.size >= 2) {
-            const leads = Array.from(leadIds).map(id => leadMap[id]).filter(Boolean);
+    for (const [groupId, group] of Object.entries(groups)) {
+        if (group.leads.size >= 2) {
+            const leads = Array.from(group.leads.values());
             // Sort by createdAt ascending (oldest first — oldest = the one to keep)
             leads.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
             duplicateGroups.push({
                 groupId,
-                matchReason: getMatchReason(leads),
+                matchReason: Array.from(group.reasons).join(' & '),
                 keep: leads[0],       // Oldest lead
                 duplicates: leads.slice(1), // Newer leads to delete
                 totalCount: leads.length
             });
         }
-    });
+    }
 
     return duplicateGroups;
-}
-
-// Determine why leads matched
-function getMatchReason(leads) {
-    const reasons = [];
-    const phones = leads.map(l => normalizePhone(l.phone)).filter(Boolean);
-    const emails = leads.map(l => l.email?.trim().toLowerCase()).filter(Boolean);
-
-    const uniquePhones = new Set(phones.map(p => p.slice(-10)));
-    const uniqueEmails = new Set(emails);
-
-    if (uniquePhones.size < phones.length) reasons.push('Same Phone');
-    if (uniqueEmails.size < emails.length) reasons.push('Same Email');
-
-    return reasons.length > 0 ? reasons.join(' & ') : 'Phone/Email Match';
 }
 
 module.exports = {

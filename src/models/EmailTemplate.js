@@ -50,6 +50,9 @@ const emailTemplateSchema = new mongoose.Schema({
     }]
 }, { timestamps: true });
 
+// Compound index for automation hot path queries
+emailTemplateSchema.index({ userId: 1, isActive: 1, isAutomated: 1, triggerType: 1 });
+
 emailTemplateSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('EmailTemplate', emailTemplateSchema);

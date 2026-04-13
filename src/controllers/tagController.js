@@ -7,7 +7,7 @@ exports.getTags = async (req, res) => {
         res.json(settings?.tags || []);
     } catch (err) {
         console.error("Get Tags Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -35,7 +35,7 @@ exports.createTag = async (req, res) => {
         res.json(settings.tags[settings.tags.length - 1]);
     } catch (err) {
         console.error("Create Tag Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -58,7 +58,7 @@ exports.updateTag = async (req, res) => {
         res.json(tag);
     } catch (err) {
         console.error("Update Tag Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -76,6 +76,6 @@ exports.deleteTag = async (req, res) => {
         res.json({ success: true, message: 'Tag deleted successfully' });
     } catch (err) {
         console.error("Delete Tag Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };

@@ -95,7 +95,7 @@ const getGoals = async (req, res) => {
         res.json({ month: currentMonth, agents: agentsWithProgress });
     } catch (err) {
         console.error('getGoals error:', err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -116,7 +116,7 @@ const setGoal = async (req, res) => {
         res.json({ success: true, goal });
     } catch (err) {
         console.error('setGoal error:', err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -217,7 +217,7 @@ const getFunnelAnalysis = async (req, res) => {
         });
     } catch (err) {
         console.error('getFunnelAnalysis error:', err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -250,7 +250,7 @@ const getActivityMetrics = async (req, res) => {
             ]),
             // 2. Follow-ups Done (Unwind and match exact follow-up dates)
             Lead.aggregate([
-                { $match: { ...req.dataScope, assignedTo: { $in: agentIds } } },
+                { $match: { ...req.dataScope, assignedTo: { $in: agentIds }, 'followUpHistory.completedDate': { $gte: start, $lte: end } } },
                 { $project: { assignedTo: 1, followUpHistory: 1 } },
                 { $unwind: "$followUpHistory" },
                 { $match: { 
@@ -295,7 +295,7 @@ const getActivityMetrics = async (req, res) => {
         res.json({ period, agents: agentActivity });
     } catch (err) {
         console.error('getActivityMetrics error:', err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 

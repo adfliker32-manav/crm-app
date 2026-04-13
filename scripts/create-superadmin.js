@@ -20,13 +20,10 @@ const MONGO_URI = "mongodb+srv://adfliker32_db_user:ZI6MC0UABVQ4XH8l@cluster0.jx
         }
 
         // Create superadmin
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash('admin123', salt);
-
         superadmin = await User.create({
             name: 'Super Admin',
             email: 'superadmin@admin.com',
-            password: hashedPassword,
+            password: 'admin123',
             companyName: 'Admin',
             role: 'superadmin'
         });

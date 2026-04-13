@@ -38,6 +38,11 @@ const emailConversationSchema = new mongoose.Schema({
         type: String,
         enum: ['inbound', 'outbound']
     },
+    // FIX F4: Track last inbound Message-ID for reply threading (In-Reply-To header)
+    lastInboundMessageId: {
+        type: String,
+        default: null
+    },
     metadata: {
         totalMessages: { type: Number, default: 0 },
         totalInbound: { type: Number, default: 0 },

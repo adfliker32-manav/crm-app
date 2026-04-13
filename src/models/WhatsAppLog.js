@@ -56,6 +56,12 @@ whatsAppLogSchema.index({ userId: 1, sentAt: -1 });
 whatsAppLogSchema.index({ userId: 1, status: 1 });
 whatsAppLogSchema.index({ userId: 1, isAutomated: 1 });
 
+// ⚠️ PRODUCTION NOTE:
+// Logs grow indefinitely without TTL — major long-term cost risk.
+// TTL index ensures automatic cleanup after retention period.
+// Adjust retention carefully — shorter TTL reduces cost, longer TTL improves traceability.
+whatsAppLogSchema.index({ sentAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 }); // Auto-delete after 90 days
+
 whatsAppLogSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('WhatsAppLog', whatsAppLogSchema);

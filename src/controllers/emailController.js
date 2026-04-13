@@ -9,7 +9,7 @@ const sendEmailController = async (req, res) => {
         console.log("📧 Email Controller Hit!");
         console.log("Request Data:", req.body);
 
-        const { to, subject, text, html } = req.body;
+        const { to, subject, text, html, cc, bcc, scheduledFor } = req.body;
 
         // Validation
         if (!to) {
@@ -51,8 +51,47 @@ const sendEmailController = async (req, res) => {
             subject: subject,
             text: text,
             html: html,
-            userId: userId // Pass userId to use user-specific email config
+            userId: userId, // Pass userId to use user-specific email config
+            cc: cc || null,
+            bcc: bcc || null
         };
+
+        // FIX F4: Add In-Reply-To / References headers for proper email threading
+        try {
+            const Lead = require('../models/Lead');
+            const EmailConversation = require('../models/EmailConversation');
+            const lead = await Lead.findOne({ email: to, userId }).lean();
+            if (lead) {
+                const conversation = await EmailConversation.findOne({ userId, leadId: lead._id }).lean();
+                if (conversation?.lastInboundMessageId) {
+                    emailOptions.inReplyTo = conversation.lastInboundMessageId;
+                    emailOptions.references = conversation.lastInboundMessageId;
+                }
+            }
+        } catch (threadErr) {
+            // Non-critical — continue without threading headers
+            console.warn('⚠️ Could not set reply threading headers:', threadErr.message);
+        }
+
+        // If scheduledFor is provided, queue the email instead of sending now
+        if (scheduledFor) {
+            try {
+                const { scheduleEmail } = require('../services/emailQueueService');
+                await scheduleEmail(emailOptions, new Date(scheduledFor));
+                return res.status(200).json({
+                    success: true,
+                    message: `Email scheduled for ${new Date(scheduledFor).toLocaleString()}`,
+                    scheduled: true,
+                    scheduledFor: scheduledFor
+                });
+            } catch (scheduleErr) {
+                console.error('❌ Email scheduling failed:', scheduleErr);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to schedule email. Sending immediately instead.'
+                });
+            }
+        }
 
         // Send email
         const result = await sendEmail(emailOptions);
@@ -86,6 +125,7 @@ const sendEmailController = async (req, res) => {
                 let conversation = await EmailConversation.findOne({ userId, leadId: lead._id });
                 if (!conversation) {
                     conversation = new EmailConversation({ userId, leadId: lead._id, email: to, displayName: lead.name });
+                    await conversation.save(); // FIX C2: Must save before referencing conversation._id
                 }
                 
                 const messageRecord = new EmailMessage({
@@ -133,11 +173,11 @@ const sendEmailController = async (req, res) => {
         if (userId) {
             await logEmail({
                 userId: userId,
-                to: to || 'unknown',
-                subject: subject || 'No subject',
-                body: html || text || '',
+                to: req.body?.to || 'unknown',
+                subject: req.body?.subject || 'No subject',
+                body: req.body?.html || req.body?.text || '',
                 status: 'failed',
-                error: error.message,
+                error: 'Server error',
                 isAutomated: false,
                 triggerType: 'manual',
                 attachments: []
@@ -163,4 +203,16 @@ const sendEmailController = async (req, res) => {
     }
 };
 
-module.exports = { sendEmail: sendEmailController };
+// Phase 3 Feature Stubs
+const sendBulkCampaign = async (req, res) => res.status(501).json({ message: "Bulk campaigns not yet implemented." });
+const getDrafts = async (req, res) => res.status(501).json({ message: "Drafts not yet implemented." });
+const saveDraft = async (req, res) => res.status(501).json({ message: "Drafts not yet implemented." });
+const deleteDraft = async (req, res) => res.status(501).json({ message: "Drafts not yet implemented." });
+
+module.exports = { 
+    sendEmail: sendEmailController,
+    sendBulkCampaign,
+    getDrafts,
+    saveDraft,
+    deleteDraft
+};

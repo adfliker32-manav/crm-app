@@ -12,6 +12,11 @@ const taskSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now },
 });
 
+// Compound indexes for common query patterns
+taskSchema.index({ userId: 1, status: 1, dueDate: 1 }); // Dashboard: pending tasks today
+taskSchema.index({ userId: 1, leadId: 1 }); // Task-by-lead lookups
+taskSchema.index({ createdBy: 1, status: 1 }); // Analytics: agent task completion
+
 taskSchema.plugin(saasPlugin);
 
 module.exports = mongoose.model('Task', taskSchema);

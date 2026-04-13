@@ -30,6 +30,10 @@ const emailLogSchema = new mongoose.Schema({
     error: {
         type: String // Error message if failed
     },
+    bodyTruncated: {
+        type: Boolean,
+        default: false
+    },
     isAutomated: {
         type: Boolean,
         default: false
@@ -54,6 +58,12 @@ const emailLogSchema = new mongoose.Schema({
         originalName: String,
         size: Number
     }],
+    // F1: Open/Click tracking
+    openedAt: { type: Date, default: null },
+    opens: { type: Number, default: 0 },
+    clickedAt: { type: Date, default: null },
+    clicks: { type: Number, default: 0 },
+    clickedLinks: [{ url: String, clickedAt: Date }],
     sentAt: {
         type: Date,
         default: Date.now
@@ -64,6 +74,11 @@ const emailLogSchema = new mongoose.Schema({
 emailLogSchema.index({ userId: 1, sentAt: -1 });
 emailLogSchema.index({ userId: 1, status: 1 });
 emailLogSchema.index({ userId: 1, isAutomated: 1 });
+
+// ⚠️ PRODUCTION NOTE:
+// Logs grow indefinitely without TTL — major long-term cost risk.
+// TTL index ensures automatic cleanup after retention period.
+emailLogSchema.index({ sentAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 }); // Auto-delete after 90 days
 
 emailLogSchema.plugin(saasPlugin);
 

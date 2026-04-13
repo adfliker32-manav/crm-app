@@ -42,27 +42,7 @@ const upload = multer({
     }
 });
 
-// Helper function to replace template variables
-const replaceVariables = (template, data) => {
-    let result = template;
-    const variables = {
-        '{{leadName}}': data.leadName || '',
-        '{{leadEmail}}': data.leadEmail || '',
-        '{{leadPhone}}': data.leadPhone || '',
-        '{{companyName}}': data.companyName || '',
-        '{{userName}}': data.userName || '',
-        '{{stageName}}': data.stageName || '',
-        '{{date}}': new Date().toLocaleDateString(),
-        '{{time}}': new Date().toLocaleTimeString()
-    };
-
-    Object.keys(variables).forEach(key => {
-        const regex = new RegExp(key.replace(/[{}]/g, '\\$&'), 'g');
-        result = result.replace(regex, variables[key]);
-    });
-
-    return result;
-};
+const { replaceVariables } = require('../utils/emailTemplateUtils');
 
 // Get all email templates
 exports.getTemplates = async (req, res) => {
@@ -72,7 +52,7 @@ exports.getTemplates = async (req, res) => {
         res.json(templates);
     } catch (error) {
         console.error('Error fetching templates:', error);
-        res.status(500).json({ message: 'Error fetching templates', error: error.message });
+        res.status(500).json({ message: 'Error fetching templates', error: 'Server error' });
     }
 };
 
@@ -89,7 +69,7 @@ exports.getTemplate = async (req, res) => {
         res.json(template);
     } catch (error) {
         console.error('Error fetching template:', error);
-        res.status(500).json({ message: 'Error fetching template', error: error.message });
+        res.status(500).json({ message: 'Error fetching template', error: 'Server error' });
     }
 };
 
@@ -119,7 +99,7 @@ exports.createTemplate = async (req, res) => {
         res.status(201).json(template);
     } catch (error) {
         console.error('Error creating template:', error);
-        res.status(500).json({ message: 'Error creating template', error: error.message });
+        res.status(500).json({ message: 'Error creating template', error: 'Server error' });
     }
 };
 
@@ -147,7 +127,7 @@ exports.updateTemplate = async (req, res) => {
         res.json(template);
     } catch (error) {
         console.error('Error updating template:', error);
-        res.status(500).json({ message: 'Error updating template', error: error.message });
+        res.status(500).json({ message: 'Error updating template', error: 'Server error' });
     }
 };
 
@@ -175,7 +155,7 @@ exports.deleteTemplate = async (req, res) => {
         res.json({ message: 'Template deleted successfully' });
     } catch (error) {
         console.error('Error deleting template:', error);
-        res.status(500).json({ message: 'Error deleting template', error: error.message });
+        res.status(500).json({ message: 'Error deleting template', error: 'Server error' });
     }
 };
 
@@ -226,7 +206,7 @@ exports.uploadAttachment = [
                 }
             });
         }
-        res.status(500).json({ message: 'Error uploading attachment', error: error.message });
+        res.status(500).json({ message: 'Error uploading attachment', error: 'Server error' });
     }
     }
 ];
@@ -259,7 +239,7 @@ exports.removeAttachment = async (req, res) => {
         res.json(template);
     } catch (error) {
         console.error('Error removing attachment:', error);
-        res.status(500).json({ message: 'Error removing attachment', error: error.message });
+        res.status(500).json({ message: 'Error removing attachment', error: 'Server error' });
     }
 };
 
@@ -315,10 +295,14 @@ exports.sendTemplateEmail = async (req, res) => {
         const body = replaceVariables(template.body, finalData);
 
         // Prepare attachments
-        const attachments = template.attachments.map(att => ({
-            filename: att.originalName || att.filename,
-            path: att.path
-        }));
+        // FIX A5: Validate attachment paths to prevent path traversal
+        const ALLOWED_ATTACHMENT_PREFIX = 'uploads/email-attachments/';
+        const attachments = template.attachments
+            .filter(att => att.path && att.path.startsWith(ALLOWED_ATTACHMENT_PREFIX))
+            .map(att => ({
+                filename: att.originalName || att.filename,
+                path: att.path
+            }));
 
         // Send email
         const emailOptions = {
@@ -354,26 +338,34 @@ exports.sendTemplateEmail = async (req, res) => {
     } catch (error) {
         console.error('Error sending template email:', error);
         
+        // Ensure userId is defined
+        const safeUserId = (req.user?.userId || req.user?.id) || null;
+        const reqTo = req.body?.to || 'unknown';
+        const reqLeadId = req.body?.leadId || null;
+        const reqTemplateId = req.body?.templateId || null;
+
         // Log failed email
         try {
-            await logEmail({
-                userId: userId,
-                to: to || leadData?.leadEmail || 'unknown',
-                subject: template.subject,
-                body: template.body,
-                status: 'failed',
-                error: error.message,
-                isAutomated: false,
-                triggerType: 'template',
-                templateId: template._id,
-                leadId: leadId || null,
-                attachments: template.attachments || []
-            });
+            if (safeUserId) {
+                await logEmail({
+                    userId: safeUserId,
+                    to: reqTo,
+                    subject: 'Template Email Failed',
+                    body: '',
+                    status: 'failed',
+                    error: error.message || 'Server error',
+                    isAutomated: false,
+                    triggerType: 'template',
+                    templateId: reqTemplateId,
+                    leadId: reqLeadId,
+                    attachments: []
+                });
+            }
         } catch (logError) {
             console.error('Error logging failed email:', logError);
         }
         
-        res.status(500).json({ message: 'Error sending email', error: error.message });
+        res.status(500).json({ message: 'Error sending email', error: 'Server error' });
     }
 };
 

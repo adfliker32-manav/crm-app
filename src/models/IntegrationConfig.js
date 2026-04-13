@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const saasPlugin = require('./plugins/saasPlugin');
+const { encryptToken, decryptToken } = require('../utils/encryptionUtils');
 
 const integrationConfigSchema = new mongoose.Schema({
     // Hard link back to the Tenant Owner (Manager/Agency)
@@ -15,7 +16,7 @@ const integrationConfigSchema = new mongoose.Schema({
         waBusinessId: { type: String, default: null },
         waPhoneNumberId: { type: String, default: null, index: true }, // Unique constraint removed to fix null duplicates
         // FIX 4.3: select:false prevents token leakage if a route returns the full config document
-        waAccessToken: { type: String, default: null, select: false },
+        waAccessToken: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         waAppId: { type: String, default: null },
         businessHours: {
             timezone: { type: String, default: 'UTC' }, // e.g. 'Asia/Kolkata'
@@ -37,21 +38,25 @@ const integrationConfigSchema = new mongoose.Schema({
 
     // 📧 Email SMTP/IMAP Configuration
     email: {
+        emailServiceType: { type: String, enum: ['gmail', 'smtp'], default: 'gmail' },
         emailUser: { type: String, default: null },
         // FIX 4.3: Gmail app password must never be exposed in API responses
-        emailPassword: { type: String, default: null, select: false },
-        emailFromName: { type: String, default: null }
+        emailPassword: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
+        emailFromName: { type: String, default: null },
+        emailSignature: { type: String, default: null },
+        smtpHost: { type: String, default: null },
+        smtpPort: { type: Number, default: 587 }
     },
 
     // 🟦 Meta (Facebook/Meta Ads) Lead Sync & CAPI
     meta: {
         // FIX 4.3: All Meta tokens are select:false — never exposed in standard API responses
-        metaAccessToken: { type: String, default: null, select: false },
+        metaAccessToken: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         metaTokenExpiry: { type: Date, default: null },
         metaUserId: { type: String, default: null },
         metaPageId: { type: String, default: null },
         metaPageName: { type: String, default: null },
-        metaPageAccessToken: { type: String, default: null, select: false },
+        metaPageAccessToken: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         metaFormId: { type: String, default: null },
         metaFormName: { type: String, default: null },
         metaLeadSyncEnabled: { type: Boolean, default: false },
@@ -60,7 +65,7 @@ const integrationConfigSchema = new mongoose.Schema({
         // Conversion API (CAPI)
         metaPixelId: { type: String, default: null },
         metaCapiEnabled: { type: Boolean, default: false },
-        metaCapiAccessToken: { type: String, default: null, select: false },
+        metaCapiAccessToken: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         // FIX 1.4: metaTestEventCode was being saved by updateCapiSettings but silently
         // discarded by Mongoose because it wasn't declared in the schema.
         metaTestEventCode: { type: String, default: null },
@@ -80,22 +85,28 @@ const integrationConfigSchema = new mongoose.Schema({
         }
     },
 
-    // 📊 Google Sheet Sync Configuration
+    // 📊 Google Sheet Push-Based Sync Configuration
     googleSheet: {
-        sheetUrl: { type: String, default: null },
+        sheetId: { type: String, default: null },       // Google Spreadsheet ID
+        sheetName: { type: String, default: null },      // Display name of the sheet
+        sheetUrl: { type: String, default: null },       // Full URL for reference
         syncEnabled: { type: Boolean, default: false },
-        syncIntervalMinutes: {
-            type: Number,
-            enum: [5, 15, 30, 60],
-            default: 15
-        },
-        lastSyncAt: { type: Date, default: null },
-        lastSyncStatus: {
+        webhookSecret: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },  // Secret token to validate incoming pushes
+        lastPushAt: { type: Date, default: null },
+        lastPushStatus: {
             type: String,
-            enum: ['success', 'error', 'rate_limited', null],
+            enum: ['success', 'error', null],
             default: null
         },
-        lastSyncError: { type: String, default: null }
+        lastPushError: { type: String, default: null },
+        totalPushes: { type: Number, default: 0 },       // Track total pushes received
+        // User-defined column mapping: { name: 'Full Name', phone: 'Mobile', email: 'Email ID', cfKey: 'Col Header' }
+        fieldMapping: { type: mongoose.Schema.Types.Mixed, default: {} },
+        // Cached sheet headers (column names from row 1 of picked sheet)
+        sheetHeaders: { type: [String], default: [] },
+        // User-selected fields for sync: [{ key, label, enabled, required }]
+        // When empty, falls back to legacy core fields (name, phone, email)
+        selectedFields: { type: [mongoose.Schema.Types.Mixed], default: [] }
     },
 
     createdAt: {
@@ -106,7 +117,26 @@ const integrationConfigSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     }
-}, { timestamps: true });
+}, { timestamps: true, toJSON: { getters: true }, toObject: { getters: true } });
+
+// Hook to clear cache globally on update
+integrationConfigSchema.post('save', function(doc) {
+    if (doc && doc.userId) {
+        try {
+            const { clearTenantCache } = require('../middleware/authMiddleware');
+            clearTenantCache(doc.userId);
+        } catch (e) {}
+    }
+});
+
+integrationConfigSchema.post('findOneAndUpdate', function(doc) {
+    if (doc && doc.userId) {
+        try {
+            const { clearTenantCache } = require('../middleware/authMiddleware');
+            clearTenantCache(doc.userId);
+        } catch (e) {}
+    }
+});
 
 integrationConfigSchema.plugin(saasPlugin);
 

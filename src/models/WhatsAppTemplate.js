@@ -133,6 +133,7 @@ const whatsappTemplateSchema = new mongoose.Schema({
 whatsappTemplateSchema.index({ userId: 1, status: 1 });
 whatsappTemplateSchema.index({ userId: 1, category: 1 });
 whatsappTemplateSchema.index({ userId: 1, name: 1 }, { unique: true });
+whatsappTemplateSchema.index({ userId: 1, isActive: 1, isAutomated: 1, triggerType: 1 }); // Automation hot path
 
 // Helper method to get component by type
 whatsappTemplateSchema.methods.getComponent = function (type) {

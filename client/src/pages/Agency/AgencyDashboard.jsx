@@ -45,7 +45,7 @@ const AgencyDashboard = () => {
                     <h3 className="text-4xl font-black text-slate-900">{stats.totalClients || 0}</h3>
                     <p className="text-emerald-500 text-sm font-semibold mt-2"><i className="fa-solid fa-arrow-up mr-1"></i> 2 this week</p>
                 </div>
-                
+
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden relative">
                     <div className="absolute top-0 right-0 p-4 opacity-10"><i className="fa-solid fa-check-circle text-6xl text-emerald-600"></i></div>
                     <p className="text-sm font-bold tracking-wider text-slate-500 uppercase mb-2">Active Subscriptions</p>
@@ -90,9 +90,8 @@ const AgencyDashboard = () => {
                                     </td>
                                     <td className="p-4 text-slate-500 font-medium">{new Date(client.createdAt).toLocaleDateString()}</td>
                                     <td className="p-4">
-                                        <span className={`px-2 py-1 rounded text-xs font-bold ${
-                                            client.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                                        }`}>
+                                        <span className={`px-2 py-1 rounded text-xs font-bold ${client.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                                            }`}>
                                             {client.status}
                                         </span>
                                     </td>

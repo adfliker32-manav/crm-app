@@ -86,6 +86,14 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const [saving, setSaving] = useState(false);
     const [selectedNode, setSelectedNode] = useState(null);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const [approvedTemplates, setApprovedTemplates] = useState([]);
+
+    // Fetch approved WhatsApp templates for Template node selector
+    useEffect(() => {
+        api.get('/whatsapp/templates?status=APPROVED')
+            .then(res => setApprovedTemplates(res.data.templates || []))
+            .catch(err => console.error('Failed to fetch approved templates:', err));
+    }, []);
 
     const nodeTypes = useMemo(() => ({
         message: CompactFlowNode,
@@ -222,6 +230,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
             media: { text: 'Check out this!', mediaUrl: 'https://via.placeholder.com/300x200/e74c3c/ffffff?text=Product' },
             product: { text: 'Premium Backpack', price: '$89.99', image: 'https://via.placeholder.com/150/e74c3c/ffffff?text=Product' },
             list: { text: 'Choose a category:', items: ['Electronics', 'Fashion', 'Home'] },
+            template: { text: 'Send approved template', templateName: '', templateLanguage: 'en' },
             handoff: { text: 'Connecting you to an agent...' }
         };
 
@@ -426,6 +435,58 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                             <option value="email">Email address</option>
                                             <option value="phone">Phone number</option>
                                         </select>
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'template' && (
+                                    <div className="bg-amber-50 p-4 rounded-xl border border-amber-200">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <i className="fa-solid fa-lock text-amber-500 text-xs"></i>
+                                            <label className="block text-sm font-bold text-amber-700">Approved Template</label>
+                                        </div>
+                                        <p className="text-xs text-amber-600 mb-3">Only Meta-approved templates can be sent to users outside the 24-hour window.</p>
+                                        <select
+                                            value={selectedNode.data.templateName || ''}
+                                            onChange={(e) => {
+                                                const selected = approvedTemplates.find(t => t.name === e.target.value);
+                                                updateSelectedNodeData({
+                                                    templateName: e.target.value,
+                                                    templateLanguage: selected?.language || selectedNode.data.templateLanguage || 'en',
+                                                    text: selected ? `📄 Template: ${selected.name}` : 'Send approved template'
+                                                });
+                                            }}
+                                            className="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-amber-400 focus:border-amber-400 bg-white mb-3"
+                                        >
+                                            <option value="">— Select an approved template —</option>
+                                            {approvedTemplates.map(t => (
+                                                <option key={t._id} value={t.name}>{t.name} ({t.language || 'en'})</option>
+                                            ))}
+                                        </select>
+                                        {approvedTemplates.length === 0 && (
+                                            <p className="text-[11px] text-red-500 mb-2">
+                                                <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                                                No approved templates found. Create and submit templates for Meta approval first.
+                                            </p>
+                                        )}
+                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Language</label>
+                                        <select
+                                            value={selectedNode.data.templateLanguage || 'en'}
+                                            onChange={(e) => updateSelectedNodeData({ templateLanguage: e.target.value })}
+                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                        >
+                                            <option value="en">English</option>
+                                            <option value="en_US">English (US)</option>
+                                            <option value="hi">Hindi</option>
+                                            <option value="ar">Arabic</option>
+                                        </select>
+                                        {selectedNode.data.templateName && (
+                                            <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded-lg">
+                                                <p className="text-xs text-green-700 font-semibold">
+                                                    <i className="fa-solid fa-check-circle mr-1"></i>
+                                                    Selected: {selectedNode.data.templateName}
+                                                </p>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>

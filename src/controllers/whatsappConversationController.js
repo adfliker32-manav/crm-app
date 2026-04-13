@@ -2,89 +2,17 @@ const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const { sendWhatsAppTextMessage } = require('../services/whatsappService');
 const { cancelActiveChatbots } = require('../services/chatbotEngineService');
 const { emitToUser, emitToConversation } = require('../services/socketService');
 const mongoose = require('mongoose');
 
-// Helper to resolve specific mapped variables
-const resolveVariable = (mappingObj, varNum, data) => {
-    // Handle Mongoose Map vs plain object
-    const mapType = (mappingObj && typeof mappingObj.get === 'function') 
-        ? mappingObj.get(varNum.toString()) 
-        : (mappingObj?.[varNum.toString()] || '');
-        
-    switch (mapType) {
-        case 'lead.name': return data.leadName || '';
-        case 'lead.phone': return data.leadPhone || '';
-        case 'lead.email': return data.leadEmail || '';
-        case 'lead.status': return data.stageName || '';
-        case 'company.name': return data.companyName || '';
-        case 'user.name': return data.userName || '';
-        case 'custom': 
-            const customVal = (mappingObj && typeof mappingObj.get === 'function') 
-                ? mappingObj.get(`${varNum}_custom`) 
-                : (mappingObj?.[`${varNum}_custom`] || '');
-            return customVal || '';
-        default: 
-            // Fallback to older static convention if unmapped
-            if (varNum === 1) return data.leadName || 'Customer';
-            if (varNum === 2) return data.stageName || 'New';
-            if (varNum === 3) return data.companyName || 'Our Company';
-            if (varNum === 4) return data.userName || 'Representative';
-            return '';
-    }
-};
+const { buildMetaComponents } = require('../utils/templateVariableResolver');
+const { escapeRegex } = require('../utils/controllerHelpers');
 
-// Helper to build Meta API components
-const buildMetaComponents = (dbComponents, variableMapping, data) => {
-    const metaComponents = [];
-
-    for (const comp of dbComponents) {
-        if (comp.type === 'BODY' && comp.text) {
-            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
-            if (matches && matches.length > 0) {
-                const parameters = [];
-                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a,b)=>a-b);
-                for (const n of nums) parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
-                metaComponents.push({ type: 'body', parameters });
-            }
-        }
-        if (comp.type === 'HEADER' && comp.format === 'TEXT' && comp.text) {
-            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
-            if (matches && matches.length > 0) {
-                const parameters = [];
-                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a,b)=>a-b);
-                for (const n of nums) parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
-                metaComponents.push({ type: 'header', parameters });
-            }
-        }
-    }
-    return metaComponents;
-};
-
-// Helper: Get all user IDs within the same company tree
-const getCompanyUserIds = async (userId) => {
-    const currentUser = await User.findById(userId).select('waPhoneNumberId role parentId').lean();
-    const companyManagerId = currentUser.role === 'agent' ? currentUser.parentId : userId;
-
-    let userIds = [new mongoose.Types.ObjectId(userId)];
-    if (currentUser?.waPhoneNumberId) {
-        const sharedUsers = await User.find(
-            {
-                waPhoneNumberId: currentUser.waPhoneNumberId,
-                $or: [{ _id: companyManagerId }, { parentId: companyManagerId }]
-            },
-            { _id: 1 }
-        ).lean();
-        userIds = sharedUsers.map(u => new mongoose.Types.ObjectId(u._id));
-    }
-    if (!userIds.some(id => id.equals(new mongoose.Types.ObjectId(userId)))) {
-        userIds.push(new mongoose.Types.ObjectId(userId));
-    }
-    return userIds;
-};
+const { getUserWhatsAppCredentials, getCompanyUserIds } = require('../utils/whatsappUtils');
 
 // Get all conversations for the user (shared across same WhatsApp phone number within same company)
 exports.getConversations = async (req, res) => {
@@ -102,9 +30,10 @@ exports.getConversations = async (req, res) => {
         }
 
         if (search) {
+            const safe = escapeRegex(search);
             query.$or = [
-                { displayName: { $regex: search, $options: 'i' } },
-                { phone: { $regex: search, $options: 'i' } }
+                { displayName: { $regex: safe, $options: 'i' } },
+                { phone: { $regex: safe, $options: 'i' } }
             ];
         }
 
@@ -133,7 +62,7 @@ exports.getConversations = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching conversations:', error);
-        res.status(500).json({ message: 'Error fetching conversations', error: error.message });
+        res.status(500).json({ message: 'Error fetching conversations', error: 'Server error' });
     }
 };
 
@@ -185,7 +114,7 @@ exports.getConversation = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching conversation:', error);
-        res.status(500).json({ message: 'Error fetching conversation', error: error.message });
+        res.status(500).json({ message: 'Error fetching conversation', error: 'Server error' });
     }
 };
 
@@ -234,13 +163,18 @@ exports.sendMessage = async (req, res) => {
 
         await message.save();
 
-        // Update conversation
-        conversation.lastMessage = text.trim().substring(0, 100);
-        conversation.lastMessageAt = new Date();
-        conversation.lastMessageDirection = 'outbound';
-        conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
-        conversation.metadata.totalOutbound = (conversation.metadata.totalOutbound || 0) + 1;
-        await conversation.save();
+        // Update conversation atomically to avoid race conditions with concurrent sends
+        await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+            $set: {
+                lastMessage: text.trim().substring(0, 100),
+                lastMessageAt: new Date(),
+                lastMessageDirection: 'outbound'
+            },
+            $inc: {
+                'metadata.totalMessages': 1,
+                'metadata.totalOutbound': 1
+            }
+        });
 
         res.json({
             success: true,
@@ -314,7 +248,7 @@ exports.markAsRead = async (req, res) => {
         res.json({ success: true, conversation });
     } catch (error) {
         console.error('Error marking as read:', error);
-        res.status(500).json({ message: 'Error marking as read', error: error.message });
+        res.status(500).json({ message: 'Error marking as read', error: 'Server error' });
     }
 };
 
@@ -348,7 +282,7 @@ exports.linkToLead = async (req, res) => {
         res.json({ success: true, conversation });
     } catch (error) {
         console.error('Error linking to lead:', error);
-        res.status(500).json({ message: 'Error linking to lead', error: error.message });
+        res.status(500).json({ message: 'Error linking to lead', error: 'Server error' });
     }
 };
 
@@ -378,7 +312,7 @@ exports.updateStatus = async (req, res) => {
         res.json({ success: true, conversation });
     } catch (error) {
         console.error('Error updating status:', error);
-        res.status(500).json({ message: 'Error updating status', error: error.message });
+        res.status(500).json({ message: 'Error updating status', error: 'Server error' });
     }
 };
 
@@ -398,7 +332,7 @@ exports.getUnreadCount = async (req, res) => {
         res.json({ success: true, unreadCount: totalUnread });
     } catch (error) {
         console.error('Error getting unread count:', error);
-        res.status(500).json({ message: 'Error getting unread count', error: error.message });
+        res.status(500).json({ message: 'Error getting unread count', error: 'Server error' });
     }
 };
 
@@ -449,7 +383,7 @@ exports.startConversation = async (req, res) => {
             
             if (templateObj) {
                 const userObj = await User.findById(userId);
-                const leadObj = leadId ? await Lead.findById(leadId) : await Lead.findOne({ user: userId, phone: normalizedPhone });
+                const leadObj = leadId ? await Lead.findById(leadId) : await Lead.findOne({ userId: userId, phone: normalizedPhone });
                 
                 const templateData = {
                     leadName: leadObj?.name || '',
@@ -574,16 +508,13 @@ exports.sendMediaMessage = async (req, res) => {
         // Step 1: Upload file to Meta via Resumable Upload API
         const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
         const axios = require('axios');
-        let phoneNumberId, accessToken;
-
         const creds = await getUserWhatsAppCredentials(userId);
-        if (creds?.phoneNumberId && creds?.accessToken) {
-            phoneNumberId = creds.phoneNumberId;
-            accessToken = creds.accessToken;
-        } else {
-            phoneNumberId = process.env.WA_PHONE_NUMBER_ID;
-            accessToken = process.env.WA_ACCESS_TOKEN;
+        if (!creds?.phoneNumberId || !creds?.accessToken) {
+            return res.status(400).json({ 
+                message: 'WhatsApp not configured. Go to Settings → WhatsApp Config to set up your credentials.' 
+            });
         }
+        const { phoneNumberId, accessToken } = creds;
 
         // Upload media to WhatsApp
         const uploadUrl = `https://graph.facebook.com/v21.0/${phoneNumberId}/media`;

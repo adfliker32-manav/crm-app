@@ -67,6 +67,15 @@ const chatbotSessionSchema = new mongoose.Schema({
     timestamps: true
 });
 
+// Ensure Map updates persist and arrays don't bloat
+chatbotSessionSchema.pre('save', function(next) {
+    if (this.visitedNodes && this.visitedNodes.length > 200) {
+        this.visitedNodes = this.visitedNodes.slice(-200);
+    }
+    this.markModified('variables');
+    next();
+});
+
 // Index for efficient queries
 chatbotSessionSchema.index({ conversationId: 1, status: 1 });
 chatbotSessionSchema.index({ userId: 1, flowId: 1 });

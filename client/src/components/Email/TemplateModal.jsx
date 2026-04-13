@@ -143,7 +143,7 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                             className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm"
                             placeholder="Hello {{name}}, ..."
                         ></textarea>
-                        <p className="text-xs text-gray-500 mt-1">Available variables: {'{{name}}'}, {'{{phone}}'}, {'{{email}}'}, {'{{companyName}}'}</p>
+                        <p className="text-xs text-gray-500 mt-1">Available variables: {'{{leadName}}'}, {'{{leadPhone}}'}, {'{{leadEmail}}'}, {'{{companyName}}'}</p>
                     </div>
 
                     <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-3">

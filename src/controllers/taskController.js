@@ -36,12 +36,13 @@ const getTasks = async (req, res) => {
 
         const tasks = await Task.find(query)
             .populate('leadId', 'name phone email status')
-            .sort({ dueDate: 1 });
+            .sort({ dueDate: 1 })
+            .lean();
 
         res.json(tasks);
     } catch (err) {
         console.error("Get Tasks Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -53,11 +54,11 @@ const getTasksByLead = async (req, res) => {
         let ownerId = req.tenantId;
 
         const { leadId } = req.params;
-        const tasks = await Task.find({ userId: ownerId, leadId }).sort({ dueDate: 1 });
+        const tasks = await Task.find({ userId: ownerId, leadId }).sort({ dueDate: 1 }).lean();
         res.json(tasks);
     } catch (err) {
         console.error("Get Lead Tasks Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -92,10 +93,13 @@ const createTask = async (req, res) => {
         await Lead.findByIdAndUpdate(leadId, {
             $push: {
                 history: {
-                    type: 'Task',
-                    subType: 'Created',
-                    content: `Task Created: ${title} (Due: ${new Date(dueDate).toLocaleDateString()})`,
-                    date: new Date()
+                    $each: [{
+                        type: 'Task',
+                        subType: 'Created',
+                        content: `Task Created: ${title} (Due: ${new Date(dueDate).toLocaleDateString()})`,
+                        date: new Date()
+                    }],
+                    $slice: -100
                 }
             }
         });
@@ -103,7 +107,7 @@ const createTask = async (req, res) => {
         res.json(newTask);
     } catch (err) {
         console.error("Create Task Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -129,10 +133,13 @@ const updateTaskStatus = async (req, res) => {
             await Lead.findByIdAndUpdate(task.leadId._id, {
                 $push: {
                     history: {
-                        type: 'Task',
-                        subType: 'Completed',
-                        content: `Task Completed: ${task.title}`,
-                        date: new Date()
+                        $each: [{
+                            type: 'Task',
+                            subType: 'Completed',
+                            content: `Task Completed: ${task.title}`,
+                            date: new Date()
+                        }],
+                        $slice: -100
                     }
                 }
             });
@@ -141,7 +148,7 @@ const updateTaskStatus = async (req, res) => {
         res.json(task);
     } catch (err) {
         console.error("Update Task Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -159,7 +166,7 @@ const deleteTask = async (req, res) => {
         res.json({ success: true, message: "Task deleted" });
     } catch (err) {
         console.error("Delete Task Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 

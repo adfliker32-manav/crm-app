@@ -2,6 +2,7 @@ const EmailTemplate = require('../models/EmailTemplate');
 const User = require('../models/User');
 const { sendEmail, sendEmailWithRetry } = require('./emailService');
 const { logEmail } = require('./emailLogService');
+const { replaceVariables } = require('../utils/emailTemplateUtils');
 
 // Send automated email when lead is created
 const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
@@ -12,7 +13,7 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
             isActive: true,
             isAutomated: true,
             triggerType: 'on_lead_create'
-        });
+        }).lean();
 
         if (!templates || templates.length === 0) {
             console.log('No automated email templates found for lead creation');
@@ -20,7 +21,7 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
         }
 
         // Get user info
-        const user = await User.findById(userId);
+        const user = await User.findById(userId).select('name companyName').lean();
         if (!user) {
             console.error('User not found for email automation');
             return;
@@ -42,27 +43,7 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
             stageName: lead.status || 'New'
         };
 
-        // Replace variables helper
-        const replaceVariables = (template, data) => {
-            let result = template;
-            const variables = {
-                '{{leadName}}': data.leadName || '',
-                '{{leadEmail}}': data.leadEmail || '',
-                '{{leadPhone}}': data.leadPhone || '',
-                '{{companyName}}': data.companyName || '',
-                '{{userName}}': data.userName || '',
-                '{{stageName}}': data.stageName || '',
-                '{{date}}': new Date().toLocaleDateString(),
-                '{{time}}': new Date().toLocaleTimeString()
-            };
 
-            Object.keys(variables).forEach(key => {
-                const regex = new RegExp(key.replace(/[{}]/g, '\\$&'), 'g');
-                result = result.replace(regex, variables[key]);
-            });
-
-            return result;
-        };
 
         // Send email for each matching template
         for (const template of templates) {
@@ -142,7 +123,7 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
             isAutomated: true,
             triggerType: 'on_stage_change',
             stage: newStage // Template must match the new stage
-        });
+        }).lean();
 
         if (!templates || templates.length === 0) {
             console.log(`No automated email templates found for stage: ${newStage}`);
@@ -150,7 +131,7 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
         }
 
         // Get user info
-        const user = await User.findById(userId);
+        const user = await User.findById(userId).select('name companyName').lean();
         if (!user) {
             console.error('User not found for email automation');
             return;
@@ -172,27 +153,7 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
             stageName: newStage || ''
         };
 
-        // Replace variables helper
-        const replaceVariables = (template, data) => {
-            let result = template;
-            const variables = {
-                '{{leadName}}': data.leadName || '',
-                '{{leadEmail}}': data.leadEmail || '',
-                '{{leadPhone}}': data.leadPhone || '',
-                '{{companyName}}': data.companyName || '',
-                '{{userName}}': data.userName || '',
-                '{{stageName}}': data.stageName || '',
-                '{{date}}': new Date().toLocaleDateString(),
-                '{{time}}': new Date().toLocaleTimeString()
-            };
 
-            Object.keys(variables).forEach(key => {
-                const regex = new RegExp(key.replace(/[{}]/g, '\\$&'), 'g');
-                result = result.replace(regex, variables[key]);
-            });
-
-            return result;
-        };
 
         // Send email for each matching template
         for (const template of templates) {

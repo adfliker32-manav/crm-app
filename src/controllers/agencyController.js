@@ -259,13 +259,11 @@ const createClient = async (req, res) => {
 
         // 2. Generate password (use provided or auto-generate)
         const rawPassword = password || crypto.randomBytes(5).toString('hex');
-        const hashedPassword = await bcrypt.hash(rawPassword, 10);
-
         // 3. Create sub-client with PENDING status — requires Super Admin approval
         const newClient = await User.create({
             name: adminName || companyName,
             email: adminEmail.toLowerCase().trim(),
-            password: hashedPassword,
+            password: rawPassword,
             phone: phone || null,
             role: 'manager',
             parentId: agencyId,

@@ -182,7 +182,7 @@ const getConversionReport = async (req, res) => {
 
     } catch (err) {
         console.error("Conversion Report Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -264,7 +264,7 @@ const getAgentPerformance = async (req, res) => {
 
     } catch (err) {
         console.error("Agent Performance Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -395,7 +395,7 @@ const getRevenueReport = async (req, res) => {
 
     } catch (err) {
         console.error("Revenue Report Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -500,7 +500,7 @@ const getComprehensiveReport = async (req, res) => {
 
     } catch (err) {
         console.error("Comprehensive Report Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 // ==========================================
@@ -801,7 +801,7 @@ const getAgentDetailedPerformance = async (req, res) => {
 
     } catch (err) {
         console.error("Detailed Agent Performance Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 

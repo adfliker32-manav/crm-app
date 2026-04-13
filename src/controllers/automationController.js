@@ -3,11 +3,11 @@ const AutomationRule = require('../models/AutomationRule');
 // Get all rules for the tenant
 const getRules = async (req, res) => {
     try {
-        const rules = await AutomationRule.find({ tenantId: req.tenantId }).sort({ createdAt: -1 });
+        const rules = await AutomationRule.find({ tenantId: req.tenantId }).sort({ createdAt: -1 }).lean();
         res.json(rules);
     } catch (err) {
         console.error('Error fetching automations:', err);
-        res.status(500).json({ message: 'Failed to fetch automations', error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -34,7 +34,7 @@ const createRule = async (req, res) => {
         res.status(201).json(newRule);
     } catch (err) {
         console.error('Error creating automation:', err);
-        res.status(500).json({ message: 'Failed to create automation', error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -42,11 +42,21 @@ const createRule = async (req, res) => {
 const updateRule = async (req, res) => {
     try {
         const { id } = req.params;
-        const updates = req.body;
+        // ⚠️ SECURITY: Whitelist allowed fields to prevent mass assignment.
+        // Previously req.body was passed directly to $set, allowing users to
+        // overwrite tenantId, executionCount, currentlyProcessingLeadId, etc.
+        const { name, trigger, delayMinutes, conditions, actions, isActive } = req.body;
+        const safeUpdates = {};
+        if (name !== undefined) safeUpdates.name = name;
+        if (trigger !== undefined) safeUpdates.trigger = trigger;
+        if (delayMinutes !== undefined) safeUpdates.delayMinutes = delayMinutes;
+        if (conditions !== undefined) safeUpdates.conditions = conditions;
+        if (actions !== undefined) safeUpdates.actions = actions;
+        if (isActive !== undefined) safeUpdates.isActive = isActive;
 
         const rule = await AutomationRule.findOneAndUpdate(
             { _id: id, tenantId: req.tenantId },
-            { $set: updates },
+            { $set: safeUpdates },
             { new: true }
         );
 
@@ -55,7 +65,7 @@ const updateRule = async (req, res) => {
         res.json(rule);
     } catch (err) {
         console.error('Error updating automation:', err);
-        res.status(500).json({ message: 'Failed to update automation', error: err.message });
+        res.status(500).json({ message: 'Failed to update automation' });
     }
 };
 
@@ -70,7 +80,7 @@ const deleteRule = async (req, res) => {
         res.json({ success: true, message: 'Automation rule deleted' });
     } catch (err) {
         console.error('Error deleting automation:', err);
-        res.status(500).json({ message: 'Failed to delete automation', error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -91,7 +101,7 @@ const toggleRule = async (req, res) => {
         res.json(rule);
     } catch (err) {
         console.error('Error toggling automation:', err);
-        res.status(500).json({ message: 'Failed to toggle automation state', error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 

@@ -169,6 +169,6 @@ exports.getDashboardStats = async (req, res) => {
 
     } catch (error) {
         console.error('Error fetching analytics:', error);
-        res.status(500).json({ success: false, message: 'Failed to load analytics data', error: error.message });
+        res.status(500).json({ success: false, message: 'Failed to load analytics data', error: 'Server error' });
     }
 };

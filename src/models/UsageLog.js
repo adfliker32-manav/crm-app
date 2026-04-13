@@ -26,4 +26,7 @@ const usageLogSchema = new mongoose.Schema({
 // Compound index: one log per workspace per day
 usageLogSchema.index({ workspaceId: 1, date: 1 }, { unique: true });
 
+// Auto-delete usage logs older than 1 year to prevent long-term DB bloat
+usageLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 365 * 24 * 60 * 60 });
+
 module.exports = mongoose.model('UsageLog', usageLogSchema);

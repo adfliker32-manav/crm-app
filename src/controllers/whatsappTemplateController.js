@@ -1,6 +1,8 @@
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const User = require('../models/User');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const { submitTemplateToMeta, syncTemplateFromMeta } = require('../services/whatsappService');
+const { escapeRegex } = require('../utils/controllerHelpers');
 
 // Get all templates (shared across users with same WhatsApp phone number)
 exports.getTemplates = async (req, res) => {
@@ -8,17 +10,20 @@ exports.getTemplates = async (req, res) => {
         const userId = req.user.userId || req.user.id;
         const { status, category, search } = req.query;
 
-        // Find current user's WhatsApp phone number
-        const currentUser = await User.findById(userId).select('waPhoneNumberId').lean();
-        
+        // Find current user's tenant (manager or self) and their WhatsApp phone number
+        const currentUser = await User.findById(userId).select('role parentId').lean();
+        const tenantId = (currentUser?.role === 'agent' && currentUser?.parentId) ? currentUser.parentId : userId;
+        const tenantConfig = await IntegrationConfig.findOne({ userId: tenantId })
+            .select('whatsapp.waPhoneNumberId').lean();
+
         // Build userId filter: include ALL users sharing the same WhatsApp phone number
         let userFilter;
-        if (currentUser?.waPhoneNumberId) {
-            const sharedUsers = await User.find(
-                { waPhoneNumberId: currentUser.waPhoneNumberId },
-                { _id: 1 }
+        if (tenantConfig?.whatsapp?.waPhoneNumberId) {
+            const sharedConfigs = await IntegrationConfig.find(
+                { 'whatsapp.waPhoneNumberId': tenantConfig.whatsapp.waPhoneNumberId },
+                { userId: 1 }
             ).lean();
-            const sharedIds = sharedUsers.map(u => u._id);
+            const sharedIds = sharedConfigs.map(c => c.userId);
             userFilter = { userId: { $in: sharedIds } };
         } else {
             userFilter = { userId };
@@ -28,7 +33,7 @@ exports.getTemplates = async (req, res) => {
         if (status) query.status = status;
         if (category) query.category = category;
         if (search) {
-            query.name = { $regex: search, $options: 'i' };
+            query.name = { $regex: escapeRegex(search), $options: 'i' };
         }
 
         const templates = await WhatsAppTemplate.find(query)
@@ -37,7 +42,7 @@ exports.getTemplates = async (req, res) => {
         res.json({ templates });
     } catch (error) {
         console.error('Error fetching templates:', error);
-        res.status(500).json({ message: 'Error fetching templates', error: error.message });
+        res.status(500).json({ message: 'Error fetching templates', error: 'Server error' });
     }
 };
 
@@ -54,7 +59,7 @@ exports.getTemplate = async (req, res) => {
         res.json({ template });
     } catch (error) {
         console.error('Error fetching template:', error);
-        res.status(500).json({ message: 'Error fetching template', error: error.message });
+        res.status(500).json({ message: 'Error fetching template', error: 'Server error' });
     }
 };
 
@@ -100,7 +105,7 @@ exports.createTemplate = async (req, res) => {
         res.status(201).json({ template });
     } catch (error) {
         console.error('Error creating template:', error);
-        res.status(500).json({ message: 'Error creating template', error: error.message });
+        res.status(500).json({ message: 'Error creating template', error: 'Server error' });
     }
 };
 
@@ -138,7 +143,7 @@ exports.updateTemplate = async (req, res) => {
         res.json({ template });
     } catch (error) {
         console.error('Error updating template:', error);
-        res.status(500).json({ message: 'Error updating template', error: error.message });
+        res.status(500).json({ message: 'Error updating template', error: 'Server error' });
     }
 };
 
@@ -174,7 +179,7 @@ exports.submitTemplate = async (req, res) => {
         }
     } catch (error) {
         console.error('Error submitting template:', error);
-        res.status(500).json({ message: 'Error submitting template', error: error.message });
+        res.status(500).json({ message: 'Error submitting template', error: 'Server error' });
     }
 };
 
@@ -192,7 +197,7 @@ exports.deleteTemplate = async (req, res) => {
         res.json({ message: 'Template deleted successfully' });
     } catch (error) {
         console.error('Error deleting template:', error);
-        res.status(500).json({ message: 'Error deleting template', error: error.message });
+        res.status(500).json({ message: 'Error deleting template', error: 'Server error' });
     }
 };
 
@@ -229,7 +234,7 @@ exports.syncTemplate = async (req, res) => {
         }
     } catch (error) {
         console.error('Error syncing template:', error);
-        res.status(500).json({ message: 'Error syncing template', error: error.message });
+        res.status(500).json({ message: 'Error syncing template', error: 'Server error' });
     }
 };
 
@@ -257,7 +262,7 @@ exports.duplicateTemplate = async (req, res) => {
         res.status(201).json({ template: duplicate });
     } catch (error) {
         console.error('Error duplicating template:', error);
-        res.status(500).json({ message: 'Error duplicating template', error: error.message });
+        res.status(500).json({ message: 'Error duplicating template', error: 'Server error' });
     }
 };
 
@@ -274,7 +279,7 @@ exports.getTemplateAnalytics = async (req, res) => {
         res.json({ analytics: template.analytics });
     } catch (error) {
         console.error('Error fetching analytics:', error);
-        res.status(500).json({ message: 'Error fetching analytics', error: error.message });
+        res.status(500).json({ message: 'Error fetching analytics', error: 'Server error' });
     }
 };
 

@@ -130,4 +130,23 @@ workspaceSettingsSchema.pre('validate', function () {
     }
 });
 
+// Hook to clear cache globally on update
+workspaceSettingsSchema.post('save', function(doc) {
+    if (doc && doc.userId) {
+        try {
+            const { clearTenantCache } = require('../middleware/authMiddleware');
+            clearTenantCache(doc.userId);
+        } catch (e) {}
+    }
+});
+
+workspaceSettingsSchema.post('findOneAndUpdate', function(doc) {
+    if (doc && doc.userId) {
+        try {
+            const { clearTenantCache } = require('../middleware/authMiddleware');
+            clearTenantCache(doc.userId);
+        } catch (e) {}
+    }
+});
+
 module.exports = mongoose.model('WorkspaceSettings', workspaceSettingsSchema);
