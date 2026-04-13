@@ -349,24 +349,27 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
 
         console.log(`✅ Received message from ${from}: ${messagePreview.substring(0, 50)}...`);
 
-        // ─── AUTOMATION REPLY WATCHER ───────────────────────────────
-        // Check if this inbound message resolves a pending WAIT_FOR_REPLY watcher.
-        // Must run before chatbot so the 24-hr human handoff pause is set first.
-        setImmediate(() => {
-            const { handleWatcherReply } = require('../services/AutomationService');
-            handleWatcherReply(conversation._id)
-                .catch(err => console.error('❌ handleWatcherReply error:', err));
-        });
+        // ─── AUTOMATION + CHATBOT (Sequential, non-blocking) ────────────
+        // CRITICAL: Run watcher FIRST (it may set chatbotPausedUntil), then chatbot.
+        // Previously these ran in separate setImmediate blocks causing a race condition.
+        setImmediate(async () => {
+            try {
+                // Step 1: Check if this inbound message resolves a pending WAIT_FOR_REPLY watcher
+                const { handleWatcherReply } = require('../services/AutomationService');
+                await handleWatcherReply(conversation._id);
+            } catch (err) {
+                console.error('❌ handleWatcherReply error:', err);
+            }
 
-        // Trigger chatbot/auto-reply logic asynchronously (decoupled)
-        debug('🤖 Queuing chatbot engine safely in background...');
-        const chatbotEngine = require('../services/chatbotEngineService');
-        
-        // Execute in next tick of event loop without blocking current execution
-        setImmediate(() => {
-            chatbotEngine.processIncomingMessage(messageDoc, conversation._id, targetUserId)
-                .then(() => debug('🤖 Chatbot engine finished in background'))
-                .catch(err => console.error('❌ Background chatbot error:', err));
+            try {
+                // Step 2: Trigger chatbot/auto-reply logic (runs AFTER watcher completes)
+                debug('🤖 Running chatbot engine in background...');
+                const chatbotEngine = require('../services/chatbotEngineService');
+                await chatbotEngine.processIncomingMessage(messageDoc, conversation._id, targetUserId);
+                debug('🤖 Chatbot engine finished in background');
+            } catch (err) {
+                console.error('❌ Background chatbot error:', err);
+            }
         });
 
     } catch (error) {

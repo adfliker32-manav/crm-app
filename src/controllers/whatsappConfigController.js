@@ -2,48 +2,7 @@ const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const crypto = require('crypto');
 const axios = require('axios');
-
-// Encryption key (should match emailConfigController)
-const ENCRYPTION_KEY_STRING = process.env.ENCRYPTION_KEY || 'default-encryption-key-change-in-production-min-32-chars';
-
-// Derive 32-byte key from string using SHA-256
-const getEncryptionKey = () => {
-    return crypto.createHash('sha256').update(ENCRYPTION_KEY_STRING).digest();
-};
-
-// Encrypt function
-function encrypt(text) {
-    if (!text) return null;
-    try {
-        const iv = crypto.randomBytes(16);
-        const key = getEncryptionKey();
-        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-        let encrypted = cipher.update(text, 'utf8', 'hex');
-        encrypted += cipher.final('hex');
-        return iv.toString('hex') + ':' + encrypted;
-    } catch (error) {
-        console.error('Encryption error:', error);
-        return null;
-    }
-}
-
-// Decrypt function
-function decrypt(text) {
-    if (!text) return null;
-    try {
-        const textParts = text.split(':');
-        const iv = Buffer.from(textParts.shift(), 'hex');
-        const encryptedText = textParts.join(':');
-        const key = getEncryptionKey();
-        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-        let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-        return decrypted;
-    } catch (error) {
-        console.error('Decryption error:', error);
-        return null;
-    }
-}
+const { encryptToken, decryptToken } = require('../utils/encryptionUtils');
 
 // Get WhatsApp configuration
 exports.getWhatsAppConfig = async (req, res) => {
@@ -90,8 +49,8 @@ exports.updateWhatsAppConfig = async (req, res) => {
             return res.status(400).json({ message: 'Access Token is required' });
         }
         
-        // Encrypt access token
-        const encryptedToken = encrypt(waAccessToken);
+        // Encrypt access token using SHARED encryptionUtils (same key as IntegrationConfig model)
+        const encryptedToken = encryptToken(waAccessToken);
         if (!encryptedToken) {
             return res.status(500).json({ message: 'Error encrypting access token' });
         }
@@ -144,7 +103,7 @@ exports.testWhatsAppConfig = async (req, res) => {
                 });
             }
             phoneNumberId = config.whatsapp.waPhoneNumberId;
-            accessToken = decrypt(config.whatsapp.waAccessToken);
+            accessToken = decryptToken(config.whatsapp.waAccessToken);
             if (!accessToken) {
                 return res.status(500).json({ message: 'Error decrypting access token' });
             }

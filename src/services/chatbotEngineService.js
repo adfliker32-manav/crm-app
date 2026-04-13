@@ -189,51 +189,55 @@ const isWithinBusinessHours = (settings) => {
 exports.processIncomingMessage = async (message, conversationId, userId) => {
     try {
         const conversation = await WhatsAppConversation.findById(conversationId);
-        if (!conversation) return null;
-        const { tenantId, flowOwnerIds } = await resolveChatbotContext(userId);
-
-        // Check if chatbot is paused due to human handoff (Agent reply)
-        if (conversation.chatbotPausedUntil && new Date() < conversation.chatbotPausedUntil) {
-            console.log(`⏸️ Chatbot paused for conversation ${conversationId} until ${conversation.chatbotPausedUntil}`);
+        if (!conversation) {
+            console.log(`🤖 [Chatbot] Conversation ${conversationId} not found. Skipping.`);
             return null;
         }
+        const { tenantId, flowOwnerIds } = await resolveChatbotContext(userId);
 
-        // 1. Check Global Automations (Welcome & Out-of-Office)
-        const IntegrationConfig = require('../models/IntegrationConfig');
+        const isPaused = conversation.chatbotPausedUntil && new Date() < conversation.chatbotPausedUntil;
+        if (isPaused) {
+            console.log(`⏸️ [Chatbot] Conversation ${conversationId} is paused until ${conversation.chatbotPausedUntil} (will check if keyword can bypass)`);
+        }
 
-        const config = await IntegrationConfig.findOne({ userId: tenantId }).select('whatsapp').lean();
-        
-        if (config && config.whatsapp && config.whatsapp.autoReply) {
-            const autoReply = config.whatsapp.autoReply;
-            const settings = config.whatsapp;
+        // 1. Check Global Automations (Welcome & Out-of-Office) — only when NOT paused
+        if (!isPaused) {
+            const IntegrationConfig = require('../models/IntegrationConfig');
+            const config = await IntegrationConfig.findOne({ userId: tenantId }).select('whatsapp').lean();
+            
+            if (config && config.whatsapp && config.whatsapp.autoReply) {
+                const autoReply = config.whatsapp.autoReply;
+                const settings = config.whatsapp;
 
-            // Out-Of-Office logic (checked first — takes priority over welcome)
-            let sentOOO = false;
-            if (autoReply.outOfOfficeEnabled && autoReply.outOfOfficeMessage) {
-                const isOpen = isWithinBusinessHours(settings);
-                if (!isOpen) {
-                    const isNewConversationBurst = !conversation.lastMessageAt ||
-                        (new Date() - new Date(conversation.lastMessageAt)) > (4 * 60 * 60 * 1000);
+                // Out-Of-Office logic (checked first — takes priority over welcome)
+                let sentOOO = false;
+                if (autoReply.outOfOfficeEnabled && autoReply.outOfOfficeMessage) {
+                    const isOpen = isWithinBusinessHours(settings);
+                    if (!isOpen) {
+                        const isNewConversationBurst = !conversation.lastMessageAt ||
+                            (new Date() - new Date(conversation.lastMessageAt)) > (4 * 60 * 60 * 1000);
 
-                    if (conversation.metadata.totalInbound === 1 || isNewConversationBurst) {
-                        const oooResult = await sendWhatsAppTextMessage(conversation.phone, autoReply.outOfOfficeMessage, tenantId);
-                        await saveBotMessage(conversationId, tenantId, autoReply.outOfOfficeMessage, 'text', oooResult);
-                        sentOOO = true;
+                        if (conversation.metadata.totalInbound === 1 || isNewConversationBurst) {
+                            const oooResult = await sendWhatsAppTextMessage(conversation.phone, autoReply.outOfOfficeMessage, tenantId);
+                            await saveBotMessage(conversationId, tenantId, autoReply.outOfOfficeMessage, 'text', oooResult);
+                            sentOOO = true;
+                        }
                     }
                 }
-            }
 
-            // Welcome Message logic — ONLY fires if OOO was NOT sent (mutually exclusive)
-            if (!sentOOO && autoReply.welcomeEnabled && autoReply.welcomeMessage) {
-                if (conversation.metadata.totalInbound === 1) {
-                    const welcomeResult = await sendWhatsAppTextMessage(conversation.phone, autoReply.welcomeMessage, tenantId);
-                    await saveBotMessage(conversationId, tenantId, autoReply.welcomeMessage, 'text', welcomeResult);
+                // Welcome Message logic — ONLY fires if OOO was NOT sent (mutually exclusive)
+                if (!sentOOO && autoReply.welcomeEnabled && autoReply.welcomeMessage) {
+                    if (conversation.metadata.totalInbound === 1) {
+                        const welcomeResult = await sendWhatsAppTextMessage(conversation.phone, autoReply.welcomeMessage, tenantId);
+                        await saveBotMessage(conversationId, tenantId, autoReply.welcomeMessage, 'text', welcomeResult);
+                    }
                 }
             }
         }
 
         // 2. Chatbot Flow Evaluation
         const messageText = message.content?.text?.toLowerCase().trim();
+        console.log(`🤖 [Chatbot] Message text: "${messageText || '(empty/media)'}" | Conversation: ${conversationId} | Paused: ${isPaused}`);
         
         // FIX: Handle media messages — acknowledge receipt instead of silently ignoring
         if (!messageText) {
@@ -242,31 +246,39 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                 conversationId: conversationId,
                 status: 'active'
             });
-            if (activeSession) {
+            if (activeSession && !isPaused) {
                 // Let the user know we need a text response
-                const conversation = await WhatsAppConversation.findById(conversationId);
-                if (conversation) {
-                    const replyText = 'Please send a text message to continue. Media files are not supported in this conversation flow.';
-                    const result = await sendWhatsAppTextMessage(conversation.phone, replyText, tenantId);
-                    await saveBotMessage(conversationId, tenantId, replyText, 'text', result);
-                }
+                const replyText = 'Please send a text message to continue. Media files are not supported in this conversation flow.';
+                const result = await sendWhatsAppTextMessage(conversation.phone, replyText, tenantId);
+                await saveBotMessage(conversationId, tenantId, replyText, 'text', result);
             }
             return null;
         }
 
-        // Check for active session first
-        let session = await ChatbotSession.findOne({
-            conversationId: conversationId,
-            status: 'active'
-        }).populate('flowId');
+        // Check for active session first (only if NOT paused)
+        if (!isPaused) {
+            let session = await ChatbotSession.findOne({
+                conversationId: conversationId,
+                status: 'active'
+            }).populate('flowId');
 
-        if (session) {
-            // Continue existing session
-            return await continueSession(session, messageText, conversationId, userId);
+            if (session) {
+                console.log(`🤖 [Chatbot] Continuing active session ${session._id} for flow "${session.flowId?.name || 'unknown'}"`);
+                return await continueSession(session, messageText, conversationId, userId);
+            }
         }
 
-        // Check for keyword triggers using memory cache
+        // ─── KEYWORD + FLOW MATCHING ───────────────────────────────
+        // NOTE: Keyword matching runs EVEN when paused — a keyword trigger is an
+        // explicit new intent from the customer and should restart the chatbot.
         const allActiveFlows = await getActiveFlows(flowOwnerIds, tenantId);
+        console.log(`🤖 [Chatbot] Found ${allActiveFlows.length} active flow(s) for owners: [${flowOwnerIds.join(', ')}]`);
+        
+        if (allActiveFlows.length === 0) {
+            console.log(`🤖 [Chatbot] No active flows found. Chatbot will not trigger.`);
+            return null;
+        }
+
         let targetFlow = null;
 
         // Function to calculate Levenshtein distance for typo tolerance
@@ -285,6 +297,12 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             return matrix[a.length][b.length];
         };
 
+        // Log all keyword flows for diagnostics
+        const keywordFlows = allActiveFlows.filter(f => f.triggerType === 'keyword');
+        for (const f of keywordFlows) {
+            console.log(`🤖 [Chatbot] Keyword flow "${f.name}" (ID: ${f._id}) | Keywords: [${(f.triggerKeywords || []).join(', ')}] | Active: ${f.isActive}`);
+        }
+
         // 1. Fuzzy Keyword Flow Match (Intent parsing with typo-tolerance)
         targetFlow = allActiveFlows.find(f => {
             if (f.triggerType !== 'keyword' || !f.triggerKeywords || f.triggerKeywords.length === 0) return false;
@@ -295,7 +313,10 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                 const kl = k.toLowerCase().trim();
                 
                 // Exact or inclusion match
-                if (messageText.includes(kl)) return true;
+                if (messageText.includes(kl)) {
+                    console.log(`🎯 [Chatbot] Exact keyword match: "${kl}" found in message "${messageText}"`);
+                    return true;
+                }
                 
                 // Fuzzy match for typo tolerance (distance of 1 for short words, 2 for longer words)
                 // We compare the keyword against every word in the message
@@ -305,7 +326,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                     if (Math.abs(cleanWord.length - kl.length) <= maxDistance) {
                         const distance = getLevenshteinDistance(cleanWord, kl);
                         if (distance <= maxDistance) {
-                            console.log(`🎯 Fuzzy matched keyword '${kl}' with typed word '${cleanWord}' (distance: ${distance})`);
+                            console.log(`🎯 [Chatbot] Fuzzy matched keyword '${kl}' with typed word '${cleanWord}' (distance: ${distance})`);
                             return true;
                         }
                     }
@@ -315,23 +336,46 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             });
         });
 
-        // 2. First Message Match (Completely new contact)
-        if (!targetFlow && conversation.metadata.totalInbound === 1) {
-            targetFlow = allActiveFlows.find(f => f.triggerType === 'first_message' || f.triggerType === 'any_message');
+        // If a keyword matched AND chatbot is paused → BYPASS the pause (keyword = new intent)
+        if (targetFlow && isPaused) {
+            console.log(`🔓 [Chatbot] Keyword trigger "${targetFlow.name}" bypassing chatbot pause for conversation ${conversationId}`);
+            // Clear the pause so the flow can execute
+            await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+                $set: { chatbotPausedUntil: null }
+            });
+            // Also end any stale active sessions
+            await ChatbotSession.updateMany(
+                { conversationId: conversationId, status: 'active' },
+                { $set: { status: 'abandoned', completedAt: new Date() } }
+            );
         }
 
-        // 3. Existing Contact Match (They have messaged before)
-        if (!targetFlow && conversation.metadata.totalInbound > 1) {
+        // 2. First Message Match (Completely new contact) — only if NOT paused
+        if (!targetFlow && !isPaused && conversation.metadata.totalInbound === 1) {
+            targetFlow = allActiveFlows.find(f => f.triggerType === 'first_message' || f.triggerType === 'any_message');
+            if (targetFlow) console.log(`🤖 [Chatbot] First-message trigger matched: "${targetFlow.name}"`);
+        }
+
+        // 3. Existing Contact Match (They have messaged before) — only if NOT paused
+        if (!targetFlow && !isPaused && conversation.metadata.totalInbound > 1) {
             targetFlow = allActiveFlows.find(f => f.triggerType === 'existing_contact_message' || f.triggerType === 'any_message');
+            if (targetFlow) console.log(`🤖 [Chatbot] Existing-contact trigger matched: "${targetFlow.name}"`);
         }
 
         if (targetFlow) {
+            console.log(`🚀 [Chatbot] Starting flow "${targetFlow.name}" (ID: ${targetFlow._id}) for conversation ${conversationId}`);
             // Start new session with first matching flow
             return await startSession(
                 targetFlow,
                 conversationId,
                 normalizeId(targetFlow.userId) || tenantId
             );
+        }
+
+        if (isPaused) {
+            console.log(`⏸️ [Chatbot] No keyword match found. Chatbot remains paused for conversation ${conversationId}`);
+        } else {
+            console.log(`🤖 [Chatbot] No matching flow found for message "${messageText}" in conversation ${conversationId}`);
         }
 
         return null;

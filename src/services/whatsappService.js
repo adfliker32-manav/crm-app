@@ -344,17 +344,40 @@ const submitTemplateToMeta = async (userId, template) => {
             const metaComp = { type: comp.type };
             if (comp.type === 'HEADER') {
                 metaComp.format = comp.format || 'TEXT';
-                if (metaComp.format === 'TEXT') metaComp.text = comp.text;
-                else if (comp.example?.header_handle) metaComp.example = { header_handle: comp.example.header_handle };
+                if (metaComp.format === 'TEXT') {
+                    metaComp.text = comp.text;
+                    // If header text has variables, add example values
+                    const headerVars = (comp.text || '').match(/\{\{\d+\}\}/g);
+                    if (headerVars && headerVars.length > 0) {
+                        const headerExamples = comp.example?.header_text && comp.example.header_text.length > 0
+                            ? comp.example.header_text
+                            : headerVars.map((_, i) => `sample_value_${i + 1}`);
+                        metaComp.example = { header_text: headerExamples };
+                    }
+                } else if (comp.example?.header_handle) {
+                    metaComp.example = { header_handle: comp.example.header_handle };
+                }
             } else if (comp.type === 'BODY') {
                 metaComp.text = comp.text;
-                if (comp.example?.body_text) metaComp.example = { body_text: comp.example.body_text };
+                // Meta REQUIRES example.body_text when body has variables like {{1}}, {{2}}
+                const bodyVars = (comp.text || '').match(/\{\{\d+\}\}/g);
+                if (bodyVars && bodyVars.length > 0) {
+                    // Use user-provided examples if available, otherwise auto-generate placeholders
+                    const userExamples = comp.example?.body_text?.[0];
+                    const exampleValues = bodyVars.map((_, i) => {
+                        return (userExamples && userExamples[i]) ? userExamples[i] : `sample_value_${i + 1}`;
+                    });
+                    metaComp.example = { body_text: [exampleValues] };
+                }
             } else if (comp.type === 'FOOTER') {
                 metaComp.text = comp.text;
             } else if (comp.type === 'BUTTONS') {
-                metaComp.buttons = comp.buttons.map(btn => ({
-                    type: btn.type, text: btn.text, url: btn.url, phone_number: btn.phone_number
-                }));
+                metaComp.buttons = comp.buttons.map(btn => {
+                    const metaBtn = { type: btn.type, text: btn.text };
+                    if (btn.type === 'URL' && btn.url) metaBtn.url = btn.url;
+                    if (btn.type === 'PHONE_NUMBER' && btn.phone_number) metaBtn.phone_number = btn.phone_number;
+                    return metaBtn;
+                });
             }
             return metaComp;
         });

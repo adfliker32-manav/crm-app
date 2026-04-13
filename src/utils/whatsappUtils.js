@@ -1,31 +1,6 @@
 const User = require('../models/User');
 const crypto = require('crypto');
-
-// Encryption key (should match whatsappConfigController)
-const ENCRYPTION_KEY_STRING = process.env.ENCRYPTION_KEY || 'default-encryption-key-change-in-production-min-32-chars';
-
-// Derive 32-byte key from string using SHA-256
-const getEncryptionKey = () => {
-    return crypto.createHash('sha256').update(ENCRYPTION_KEY_STRING).digest();
-};
-
-// Decrypt function (for WhatsApp service)
-function decrypt(text) {
-    if (!text) return null;
-    try {
-        const textParts = text.split(':');
-        const iv = Buffer.from(textParts.shift(), 'hex');
-        const encryptedText = textParts.join(':');
-        const key = getEncryptionKey();
-        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-        let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-        return decrypted;
-    } catch (error) {
-        console.error('Decryption error:', error);
-        return null;
-    }
-}
+const { decryptToken } = require('./encryptionUtils');
 
 // Get user WhatsApp credentials
 async function getUserWhatsAppCredentials(userId) {
@@ -46,9 +21,20 @@ async function getUserWhatsAppCredentials(userId) {
         if (!config || !config.whatsapp?.waPhoneNumberId || !config.whatsapp?.waAccessToken) {
             return null;
         }
+
+        // Use the SAME decryptToken from encryptionUtils that IntegrationConfig uses
+        // NOTE: IntegrationConfig has a getter that auto-decrypts, but when using
+        // select('+field') the getter may or may not fire depending on the access pattern.
+        // We decrypt manually to be safe.
+        const rawToken = config.whatsapp.waAccessToken;
+        // If the getter already decrypted it (no ':' separator), use as-is
+        const accessToken = (rawToken && rawToken.includes(':') && rawToken.split(':')[0].length === 32)
+            ? decryptToken(rawToken)
+            : rawToken;
+
         return {
             phoneNumberId: config.whatsapp.waPhoneNumberId,
-            accessToken: decrypt(config.whatsapp.waAccessToken),
+            accessToken: accessToken,
             businessId: config.whatsapp.waBusinessId
         };
     } catch (error) {
