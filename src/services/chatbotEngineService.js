@@ -131,6 +131,37 @@ const buildLeadPayloadFromSession = (session, conversation, overrides = {}) => {
     return payload;
 };
 
+const getSafeLeadCustomDataEntries = (leadCustomData) => {
+    if (!leadCustomData) {
+        return [];
+    }
+
+    const entries = [];
+
+    if (typeof leadCustomData.forEach === 'function') {
+        leadCustomData.forEach((value, key) => {
+            if (typeof key === 'string' && key && !key.startsWith('$')) {
+                entries.push([key, value]);
+            }
+        });
+
+        if (entries.length > 0) {
+            return entries;
+        }
+    }
+
+    const plainObject =
+        typeof leadCustomData.toJSON === 'function'
+            ? leadCustomData.toJSON({ flattenMaps: true })
+            : (leadCustomData instanceof Map
+                ? Object.fromEntries(leadCustomData)
+                : leadCustomData);
+
+    return Object.entries(plainObject || {}).filter(([key]) =>
+        typeof key === 'string' && key && !key.startsWith('$')
+    );
+};
+
 const triggerChatbotLeadCreatedEffects = (lead, userId, leadStatus = null) => {
     setImmediate(async () => {
         try {
@@ -534,13 +565,14 @@ const startSession = async (flow, conversationId, userId) => {
             const lead = conversation.leadId;
             initialVariables.set('lead_name', lead.name || '');
             initialVariables.set('lead_email', lead.email || '');
+            initialVariables.set('lead_phone', lead.phone || conversation.phone || '');
             initialVariables.set('lead_status', lead.status || '');
             initialVariables.set('lead_tags', (lead.tags || []).join(', '));
             
             if (lead.customData) {
                 // Populate custom fields as variables
-                Object.entries(lead.customData).forEach(([key, value]) => {
-                    initialVariables.set(key, (value || '').toString());
+                getSafeLeadCustomDataEntries(lead.customData).forEach(([key, value]) => {
+                    initialVariables.set(key, value == null ? '' : value.toString());
                 });
             }
         }
