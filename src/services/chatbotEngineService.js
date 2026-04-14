@@ -12,6 +12,144 @@ const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const normalizeId = (value) => value ? value.toString() : null;
 const buildFlowCacheKey = (ownerIds) => `flows_${[...new Set(ownerIds.map(normalizeId).filter(Boolean))].sort().join('|')}`;
 const getSessionFlowId = (session) => session?.flowId?._id || session?.flowId || null;
+const RESERVED_LEAD_VARIABLES = new Set([
+    'name',
+    'full_name',
+    'fullName',
+    'customer_name',
+    'customerName',
+    'email',
+    'email_address',
+    'emailAddress',
+    'phone',
+    'phone_number',
+    'phoneNumber',
+    'mobile',
+    'mobile_number',
+    'mobileNumber',
+    'status',
+    'source',
+    'tags',
+    'lead_name',
+    'lead_email',
+    'lead_phone',
+    'lead_status',
+    'lead_tags'
+]);
+
+const getFirstPopulatedVariable = (variables, candidateKeys = []) => {
+    for (const key of candidateKeys) {
+        const value = variables?.get?.(key);
+        if (value !== undefined && value !== null && value.toString().trim() !== '') {
+            return value.toString().trim();
+        }
+    }
+
+    return '';
+};
+
+const buildLeadCustomDataFromVariables = (variables) => {
+    const customData = {};
+
+    if (!variables?.forEach) {
+        return customData;
+    }
+
+    variables.forEach((value, key) => {
+        if (!key || RESERVED_LEAD_VARIABLES.has(key) || key.startsWith('lead_')) {
+            return;
+        }
+
+        if (value === undefined || value === null) {
+            return;
+        }
+
+        const normalizedValue = typeof value === 'string' ? value.trim() : value;
+        if (normalizedValue === '') {
+            return;
+        }
+
+        customData[key] = normalizedValue;
+    });
+
+    return customData;
+};
+
+const buildLeadPayloadFromSession = (session, conversation, overrides = {}) => {
+    const variables = session?.variables;
+    const mergedTags = [
+        ...(conversation?.tags || []),
+        ...(overrides.tags || [])
+    ].filter(Boolean);
+
+    const payload = {
+        userId: session.userId,
+        name:
+            getFirstPopulatedVariable(variables, [
+                'name',
+                'full_name',
+                'fullName',
+                'customer_name',
+                'customerName',
+                'lead_name'
+            ]) || conversation?.displayName || 'WhatsApp Lead',
+        phone:
+            getFirstPopulatedVariable(variables, [
+                'phone',
+                'phone_number',
+                'phoneNumber',
+                'mobile',
+                'mobile_number',
+                'mobileNumber',
+                'lead_phone'
+            ]) || conversation?.phone,
+        email:
+            getFirstPopulatedVariable(variables, [
+                'email',
+                'email_address',
+                'emailAddress',
+                'lead_email'
+            ]) || null,
+        source: overrides.source || 'WhatsApp Chatbot',
+        status: overrides.status || 'New',
+        customData: buildLeadCustomDataFromVariables(variables),
+        tags: [...new Set(mergedTags)]
+    };
+
+    if (conversation?.assignedTo) {
+        payload.assignedTo = conversation.assignedTo;
+    }
+
+    if (overrides.qualificationLevel) {
+        payload.qualificationLevel = overrides.qualificationLevel;
+    }
+
+    if (overrides.history) {
+        payload.history = overrides.history;
+    }
+
+    return payload;
+};
+
+const triggerChatbotLeadCreatedEffects = (lead, userId, leadStatus = null) => {
+    setImmediate(async () => {
+        try {
+            const { evaluateLead } = require('./AutomationService');
+            evaluateLead(lead, 'LEAD_CREATED').catch(e => console.error('[Chatbot] Automation engine error:', e));
+
+            const IntegrationConfig = require('../models/IntegrationConfig');
+            const config = await IntegrationConfig.findOne({ userId })
+                .select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
+
+            if (config?.meta?.metaCapiEnabled) {
+                const { sendMetaEvent } = require('./metaConversionService');
+                sendMetaEvent(config, lead, leadStatus || lead.status, null).catch(e => console.error('[Chatbot] Meta CAPI error:', e));
+            }
+        } catch (err) {
+            console.error('[Chatbot] Background trigger error:', err);
+        }
+    });
+};
 
 // ============================================================
 // 🔧 HELPER: Persist automated outbound messages to the DB
@@ -438,13 +576,7 @@ const evaluateSmartLead = async (session, flow, conversation) => {
     let currentLevel = session.qualificationLevel || 'None';
     const numAnswers = session.variables ? session.variables.size : 0;
     
-    // Convert map to plain object for customData
-    const customData = {};
-    if (session.variables) {
-        session.variables.forEach((val, key) => {
-            customData[key] = val;
-        });
-    }
+    const customData = buildLeadCustomDataFromVariables(session.variables);
 
     const levelWeight = { 'None': 0, 'Partial': 1, 'Engaged': 2, 'Qualified': 3 };
     let bestRule = null;
@@ -562,17 +694,9 @@ const evaluateSmartLead = async (session, flow, conversation) => {
             qualificationReason += `Crossed baseline threshold.`;
         }
 
-        const lead = new Lead({
-            userId: session.userId,
-            name: session.variables.get('name') || conversation.displayName || 'WhatsApp Lead',
-            phone: conversation.phone,
-            email: session.variables.get('email') || null,
-            source: 'WhatsApp Chatbot',
+        const lead = new Lead(buildLeadPayloadFromSession(session, conversation, {
             status: newLeadStatus,
             qualificationLevel: currentLevel,
-            // FIX 3a: customData is already a plain object, safe to set directly on new lead creation
-            customData: customData,
-            // FIX 3b: Seed tags onto the new Lead from the qualifying rule
             tags: bestRule?.assignTags?.length > 0 ? bestRule.assignTags : [],
             history: [{
                 type: 'System',
@@ -580,26 +704,11 @@ const evaluateSmartLead = async (session, flow, conversation) => {
                 content: qualificationReason,
                 date: new Date()
             }]
-        });
+        }));
         await lead.save();
         leadIdToUpdate = lead._id;
-        
-        // Fire Automation & Meta CAPI hooks for newly generated Lead
-        setImmediate(async () => {
-            try {
-                const { evaluateLead } = require('./AutomationService');
-                evaluateLead(lead, 'LEAD_CREATED').catch(e => console.error('[Chatbot] Automation engine error:', e));
 
-                const IntegrationConfig = require('../models/IntegrationConfig');
-                const config = await IntegrationConfig.findOne({ userId: session.userId }).select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
-                if (config?.meta?.metaCapiEnabled) {
-                    const { sendMetaEvent } = require('./metaConversionService');
-                    sendMetaEvent(config, lead, newLeadStatus, null).catch(e => console.error('[Chatbot] Meta CAPI error:', e));
-                }
-            } catch(err) {
-                console.error('[Chatbot] Background trigger error:', err);
-            }
-        });
+        triggerChatbotLeadCreatedEffects(lead, session.userId, newLeadStatus);
         
         // Dynamically track new lead generation in flow analytics
         await ChatbotFlow.findByIdAndUpdate(flow._id, {
@@ -1058,19 +1167,57 @@ const executeAction = async (actionData, session, conversation) => {
 
             case 'create_lead':
                 if (!conversation.leadId) {
-                    const lead = new Lead({
-                        userId: session.userId,
-                        name: session.variables.get('name') || conversation.displayName || 'WhatsApp Lead',
-                        phone: conversation.phone,
-                        email: session.variables.get('email') || null,
-                        source: 'WhatsApp Chatbot',
-                        status: 'New'
-                    });
-                    await lead.save();
+                    const { findDuplicates } = require('./duplicateService');
+                    const actionTags = Array.isArray(actionData.actionData?.tags)
+                        ? actionData.actionData.tags
+                        : (actionData.actionData?.tag ? [actionData.actionData.tag] : []);
+                    const leadEmail = getFirstPopulatedVariable(session.variables, [
+                        'email',
+                        'email_address',
+                        'emailAddress',
+                        'lead_email'
+                    ]) || null;
 
-                    await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
-                        $set: { leadId: lead._id }
-                    });
+                    const duplicates = await findDuplicates(session.userId, conversation.phone, leadEmail);
+                    let lead = null;
+
+                    if (duplicates.length > 0) {
+                        lead = await Lead.findById(duplicates[0]._id);
+                    }
+
+                    if (!lead) {
+                        lead = new Lead(buildLeadPayloadFromSession(session, conversation, {
+                            source: actionData.actionData?.source || 'WhatsApp Chatbot',
+                            status: actionData.actionData?.status || 'New',
+                            tags: actionTags,
+                            history: [{
+                                type: 'System',
+                                subType: 'Created',
+                                content: 'Lead created by chatbot action node.',
+                                date: new Date()
+                            }]
+                        }));
+                        await lead.save();
+
+                        const flowId = getSessionFlowId(session);
+                        if (flowId) {
+                            await ChatbotFlow.findByIdAndUpdate(flowId, {
+                                $inc: { 'analytics.leadsGenerated': 1 }
+                            });
+                        }
+
+                        triggerChatbotLeadCreatedEffects(lead, session.userId, lead.status);
+                    }
+
+                    conversation.leadId = lead._id;
+                    conversation.tags = [...new Set([...(conversation.tags || []), ...(lead.tags || [])])];
+
+                    const conversationUpdate = { $set: { leadId: lead._id } };
+                    if (lead.tags?.length > 0) {
+                        conversationUpdate.$addToSet = { tags: { $each: lead.tags } };
+                    }
+
+                    await WhatsAppConversation.findByIdAndUpdate(conversation._id, conversationUpdate);
                 }
                 break;
 

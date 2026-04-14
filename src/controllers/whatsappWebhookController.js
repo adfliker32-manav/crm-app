@@ -253,11 +253,14 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
 
         // Parallelize independent database reads to save significant overhead
         const { getCompanyUserIds } = require('../utils/whatsappUtils');
-        const [lead, validUserIds] = await Promise.all([
-            // ⚠️ SECURITY FIX: Use exact phone match, not $regex (prevents ReDoS + collection scans)
-            Lead.findOne({ userId: userId, phone: { $regex: phoneLastTen + '$' } }).lean(),
-            getCompanyUserIds(userId)
-        ]);
+        const validUserIds = await getCompanyUserIds(userId);
+        // Match across the whole company so shared WhatsApp inboxes still link the right CRM lead.
+        const lead = await Lead.findOne({
+            userId: { $in: validUserIds },
+            phone: { $regex: phoneLastTen + '$' }
+        })
+            .sort({ createdAt: 1 })
+            .lean();
 
         // Find if any user sharing this phone number already has a conversation
         const existingConversation = await WhatsAppConversation.findOne({

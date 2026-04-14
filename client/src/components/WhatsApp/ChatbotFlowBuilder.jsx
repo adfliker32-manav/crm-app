@@ -19,7 +19,7 @@ import SmartLeadSettingsModal from './SmartLeadSettingsModal';
 const CompactFlowNode = ({ data, id, selected }) => {
     const type = data.blockType || 'message';
     const icon = {
-        message: '💬', media: '🖼️', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓'
+        message: '💬', media: '🖼️', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️'
     }[type] || '💬';
 
     return (
@@ -87,6 +87,10 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const [selectedNode, setSelectedNode] = useState(null);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [approvedTemplates, setApprovedTemplates] = useState([]);
+    const flowVariables = useMemo(() => nodes
+        .filter((node) => node.type === 'question' && node.data?.variableName)
+        .map((node) => node.data.variableName)
+        .filter(Boolean), [nodes]);
 
     // Fetch approved WhatsApp templates for Template node selector
     useEffect(() => {
@@ -104,6 +108,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         template: CompactFlowNode,
         handoff: CompactFlowNode,
         question: CompactFlowNode,
+        action: CompactFlowNode,
         start: CompactFlowNode // Fallback for old custom types
     }), []);
 
@@ -115,6 +120,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         { type: 'product', icon: '🛍️', label: 'Single Product', desc: 'Show one product' },
         { type: 'products', icon: '🛒', label: 'Multi Product', desc: 'Show product catalog' },
         { type: 'template', icon: '📄', label: 'Template', desc: 'Use message template' },
+        { type: 'action', icon: '⚙️', label: 'Lead Action', desc: 'Create lead or update CRM fields' },
         { type: 'handoff', icon: '👤', label: 'Request Intervention', desc: 'Transfer to agent' }
     ];
 
@@ -231,6 +237,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
             product: { text: 'Premium Backpack', price: '$89.99', image: 'https://via.placeholder.com/150/e74c3c/ffffff?text=Product' },
             list: { text: 'Choose a category:', items: ['Electronics', 'Fashion', 'Home'] },
             template: { text: 'Send approved template', templateName: '', templateLanguage: 'en' },
+            action: { text: 'Action: Create Lead', actionType: 'create_lead', actionData: { source: 'WhatsApp Chatbot', status: 'New' } },
             handoff: { text: 'Connecting you to an agent...' }
         };
 
@@ -255,6 +262,16 @@ const FlowBuilder = ({ flowId, onBack }) => {
             }
             return n;
         }));
+    };
+
+    const updateSelectedActionData = (updates) => {
+        if (!selectedNode) return;
+        updateSelectedNodeData({
+            actionData: {
+                ...(selectedNode.data.actionData || {}),
+                ...updates
+            }
+        });
     };
 
     const deleteSelectedNode = () => {
@@ -435,6 +452,171 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                             <option value="email">Email address</option>
                                             <option value="phone">Phone number</option>
                                         </select>
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'action' && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-4 space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Action Type</label>
+                                            <select
+                                                value={selectedNode.data.actionType || 'create_lead'}
+                                                onChange={(e) => {
+                                                    const nextType = e.target.value;
+                                                    const nextTextMap = {
+                                                        create_lead: 'Action: Create Lead',
+                                                        update_field: 'Action: Update Lead Field',
+                                                        assign_tag: 'Action: Assign Tag',
+                                                        change_stage: 'Action: Change Stage',
+                                                        notify_agent: 'Action: Notify Agent',
+                                                        send_email: 'Action: Send Email'
+                                                    };
+
+                                                    updateSelectedNodeData({
+                                                        actionType: nextType,
+                                                        text: nextTextMap[nextType] || 'Action Node',
+                                                        actionData: {}
+                                                    });
+                                                }}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                            >
+                                                <option value="create_lead">Create Lead</option>
+                                                <option value="update_field">Update Lead Field</option>
+                                                <option value="assign_tag">Assign Tag</option>
+                                                <option value="change_stage">Change Lead Stage</option>
+                                                <option value="notify_agent">Notify Agent</option>
+                                                <option value="send_email">Send Email</option>
+                                            </select>
+                                        </div>
+
+                                        {selectedNode.data.actionType === 'create_lead' && (
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Lead Source</label>
+                                                    <input
+                                                        value={selectedNode.data.actionData?.source || 'WhatsApp Chatbot'}
+                                                        onChange={(e) => updateSelectedActionData({ source: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                        placeholder="WhatsApp Chatbot"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Initial Status</label>
+                                                    <input
+                                                        value={selectedNode.data.actionData?.status || 'New'}
+                                                        onChange={(e) => updateSelectedActionData({ status: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                        placeholder="New"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {selectedNode.data.actionType === 'update_field' && (
+                                            <div className="space-y-3">
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Lead Field Key</label>
+                                                    <input
+                                                        value={selectedNode.data.actionData?.fieldName || ''}
+                                                        onChange={(e) => updateSelectedActionData({ fieldName: e.target.value.toLowerCase().replace(/\s+/g, '_') })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                        placeholder="budget, city, company_size"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Use Variable</label>
+                                                    <select
+                                                        value={selectedNode.data.actionData?.fromVariable || ''}
+                                                        onChange={(e) => updateSelectedActionData({ fromVariable: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                    >
+                                                        <option value="">Select a saved answer</option>
+                                                        {flowVariables.map((variable) => (
+                                                            <option key={variable} value={variable}>{variable}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Fallback Static Value</label>
+                                                    <input
+                                                        value={selectedNode.data.actionData?.fieldValue || ''}
+                                                        onChange={(e) => updateSelectedActionData({ fieldValue: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                        placeholder="Used when no variable is selected"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {selectedNode.data.actionType === 'assign_tag' && (
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-600 mb-1">Tag Name</label>
+                                                <input
+                                                    value={selectedNode.data.actionData?.tag || ''}
+                                                    onChange={(e) => updateSelectedActionData({ tag: e.target.value })}
+                                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                    placeholder="hot-lead"
+                                                />
+                                            </div>
+                                        )}
+
+                                        {selectedNode.data.actionType === 'change_stage' && (
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-600 mb-1">Lead Stage</label>
+                                                <input
+                                                    value={selectedNode.data.actionData?.stage || ''}
+                                                    onChange={(e) => updateSelectedActionData({ stage: e.target.value })}
+                                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                    placeholder="Qualified"
+                                                />
+                                            </div>
+                                        )}
+
+                                        {selectedNode.data.actionType === 'notify_agent' && (
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-600 mb-1">Notification Message</label>
+                                                <textarea
+                                                    value={selectedNode.data.actionData?.message || ''}
+                                                    onChange={(e) => updateSelectedActionData({ message: e.target.value })}
+                                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                    rows="3"
+                                                    placeholder="Chatbot needs agent attention for this conversation."
+                                                />
+                                            </div>
+                                        )}
+
+                                        {selectedNode.data.actionType === 'send_email' && (
+                                            <div className="space-y-3">
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Send To</label>
+                                                    <input
+                                                        value={selectedNode.data.actionData?.to || ''}
+                                                        onChange={(e) => updateSelectedActionData({ to: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                        placeholder="{{email}} or fallback@example.com"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Email Subject</label>
+                                                    <input
+                                                        value={selectedNode.data.actionData?.subject || ''}
+                                                        onChange={(e) => updateSelectedActionData({ subject: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                        placeholder="Thanks for chatting with us"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Email Body</label>
+                                                    <textarea
+                                                        value={selectedNode.data.actionData?.body || ''}
+                                                        onChange={(e) => updateSelectedActionData({ body: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                        rows="4"
+                                                        placeholder="Use variables like {{name}} or {{email}}"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
 
