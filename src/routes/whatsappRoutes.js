@@ -51,6 +51,9 @@ router.post('/conversations/new', authMiddleware, requireModule('whatsapp'), wha
 // Get single conversation with messages
 router.get('/conversations/:id', authMiddleware, requireModule('whatsapp'), whatsappConversationController.getConversation);
 
+// Clear all stored messages in a conversation
+router.delete('/conversations/:id/messages', authMiddleware, requireModule('whatsapp'), whatsappConversationController.clearConversationMessages);
+
 // Send message in conversation
 router.post('/conversations/:id/send', authMiddleware, requireModule('whatsapp'), whatsappConversationController.sendMessage);
 

@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { useConfirm } from '../../context/ConfirmContext';
 import useSocket from '../../hooks/useSocket';
 
 const WhatsAppInbox = () => {
     const { showSuccess, showError } = useNotification();
+    const { showDanger } = useConfirm();
     const [conversations, setConversations] = useState([]);
     const [selectedChat, setSelectedChat] = useState(null);
     const [messages, setMessages] = useState([]);
@@ -216,14 +218,30 @@ const WhatsAppInbox = () => {
             }
         };
 
+        const handleConversationCleared = ({ conversationId, updates }) => {
+            setConversations(prev =>
+                prev.map(c => c._id === conversationId ? { ...c, ...updates } : c)
+            );
+
+            const currentChat = selectedChatRef.current;
+            if (currentChat && currentChat._id === conversationId) {
+                setMessages([]);
+                setPage(1);
+                setHasMore(false);
+                setSelectedChat(prev => prev ? { ...prev, ...updates } : prev);
+            }
+        };
+
         socket.on('whatsapp:newMessage', handleNewMessage);
         socket.on('whatsapp:conversationUpdate', handleConversationUpdate);
         socket.on('whatsapp:statusUpdate', handleStatusUpdate);
+        socket.on('whatsapp:conversationCleared', handleConversationCleared);
 
         return () => {
             socket.off('whatsapp:newMessage', handleNewMessage);
             socket.off('whatsapp:conversationUpdate', handleConversationUpdate);
             socket.off('whatsapp:statusUpdate', handleStatusUpdate);
+            socket.off('whatsapp:conversationCleared', handleConversationCleared);
         };
     }, [socket, fetchConversations]);
 
@@ -477,6 +495,35 @@ const WhatsAppInbox = () => {
         }
     };
 
+    const handleClearChat = async (chatId) => {
+        const confirmed = await showDanger(
+            'This will remove all saved messages from this inbox conversation. The contact and linked lead will stay intact.',
+            'Clear Chat History'
+        );
+
+        if (!confirmed) return;
+
+        try {
+            const res = await api.delete(`/whatsapp/conversations/${chatId}/messages`);
+            const updates = res.data.updates || {};
+
+            setConversations(prev =>
+                prev.map(c => c._id === chatId ? { ...c, ...updates } : c)
+            );
+
+            if (selectedChat?._id === chatId) {
+                setMessages([]);
+                setPage(1);
+                setHasMore(false);
+                setSelectedChat(prev => prev ? { ...prev, ...updates } : prev);
+            }
+
+            showSuccess('Chat history cleared');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to clear chat');
+        }
+    };
+
     const handleSelectChat = (chat) => {
         setSelectedChat(chat);
         fetchMessages(chat._id, 1, true); // initial load
@@ -722,7 +769,7 @@ const WhatsAppInbox = () => {
                                     </div>
                                     <div className="flex justify-between items-center">
                                         <p className="text-[13px] text-[#8696a0] truncate flex items-center gap-1">
-                                            {chat.lastMessageDirection === 'outbound' && (
+                                            {chat.lastMessageDirection === 'outbound' && chat.lastMessage && (
                                                 <span className="flex-shrink-0">{getStatusIcon('delivered', 'outbound')}</span>
                                             )}
                                             <span className={`truncate ${chat.unreadCount > 0 ? 'text-[#111b21] font-medium' : ''}`}>{chat.lastMessage || 'Start a conversation'}</span>
@@ -768,6 +815,9 @@ const WhatsAppInbox = () => {
                                 <button onClick={() => setShowContactPanel(!showContactPanel)} className="w-9 h-9 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition">
                                     <i className="fa-solid fa-user-circle text-xl"></i>
                                 </button>
+                                <button onClick={() => handleClearChat(selectedChat._id)} className="w-9 h-9 rounded-full hover:bg-red-50 flex items-center justify-center text-[#54656f] hover:text-red-500 transition" title="Clear chat history">
+                                    <i className="fa-solid fa-trash-can"></i>
+                                </button>
                                 <button onClick={() => handleArchive(selectedChat._id, selectedChat.status === 'archived' ? 'active' : 'archived')} className="w-9 h-9 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition" title={selectedChat.status === 'archived' ? 'Unarchive' : 'Archive'}>
                                     <i className={`fa-solid ${selectedChat.status === 'archived' ? 'fa-box-open' : 'fa-box-archive'}`}></i>
                                 </button>
@@ -794,6 +844,16 @@ const WhatsAppInbox = () => {
                                         <span className="bg-white text-[#8696a0] text-[11px] font-medium px-3 py-1.5 rounded-lg shadow-sm">
                                             {new Date(messages[0].timestamp).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
                                         </span>
+                                    </div>
+                                )}
+
+                                {messages.length === 0 && !loadingMore && (
+                                    <div className="py-16 text-center">
+                                        <div className="inline-flex w-14 h-14 rounded-full bg-white shadow-sm items-center justify-center text-[#8696a0] mb-4">
+                                            <i className="fa-regular fa-comment-dots text-2xl"></i>
+                                        </div>
+                                        <p className="text-sm font-medium text-[#54656f]">No messages in this chat</p>
+                                        <p className="text-xs text-[#8696a0] mt-1">Send a message to start a fresh conversation.</p>
                                     </div>
                                 )}
 

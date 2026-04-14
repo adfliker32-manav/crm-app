@@ -316,6 +316,68 @@ exports.updateStatus = async (req, res) => {
     }
 };
 
+// Clear all message history for a conversation while keeping the contact/thread itself
+exports.clearConversationMessages = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const { id } = req.params;
+
+        const companyUserIds = await getCompanyUserIds(userId);
+
+        const conversation = await WhatsAppConversation.findOne({
+            _id: id,
+            userId: { $in: companyUserIds }
+        });
+
+        if (!conversation) {
+            return res.status(404).json({ message: 'Conversation not found' });
+        }
+
+        await WhatsAppMessage.deleteMany({ conversationId: conversation._id });
+
+        const updates = {
+            lastMessage: '',
+            unreadCount: 0,
+            metadata: {
+                ...((conversation.metadata && conversation.metadata.toObject)
+                    ? conversation.metadata.toObject()
+                    : (conversation.metadata || {})),
+                totalMessages: 0,
+                totalInbound: 0,
+                totalOutbound: 0
+            }
+        };
+
+        conversation.lastMessage = updates.lastMessage;
+        conversation.unreadCount = updates.unreadCount;
+        conversation.metadata.totalMessages = 0;
+        conversation.metadata.totalInbound = 0;
+        conversation.metadata.totalOutbound = 0;
+        await conversation.save();
+
+        const payload = {
+            conversationId: conversation._id,
+            updates
+        };
+
+        companyUserIds.forEach((companyUserId) => {
+            emitToUser(companyUserId, 'whatsapp:conversationUpdate', payload);
+            emitToUser(companyUserId, 'whatsapp:conversationCleared', payload);
+        });
+
+        emitToConversation(conversation._id.toString(), 'whatsapp:conversationCleared', payload);
+
+        res.json({
+            success: true,
+            message: 'Chat history cleared successfully',
+            updates
+        });
+    } catch (error) {
+        console.error('Error clearing conversation messages:', error);
+        res.status(500).json({ message: 'Error clearing chat history', error: 'Server error' });
+    }
+};
+
 // Get unread count for badge
 exports.getUnreadCount = async (req, res) => {
     try {
