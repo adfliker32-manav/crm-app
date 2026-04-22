@@ -60,7 +60,7 @@ const Login = () => {
             <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center transition-transform duration-500 group-hover:rotate-12">
               <span className="text-black font-black text-xl">C</span>
             </div>
-            <span className="text-white font-bold text-xl tracking-tighter">CRM<span className="text-neutral-500">PRO</span></span>
+            <span className="text-white font-bold text-xl tracking-tighter">Adfliker<span className="text-neutral-500"></span></span>
           </div>
         </div>
 
