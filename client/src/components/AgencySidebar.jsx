@@ -31,7 +31,7 @@ const AgencySidebar = () => {
     const { logout, user } = useAuth();
     const { showDanger } = useConfirm();
     const [collapsed, setCollapsed] = useState(false);
-    const [appName, setAppName] = useState('CRM Pro');
+    const [appName, setAppName] = useState('Adfliker');
 
     useEffect(() => {
         const fetchAppName = async () => {

@@ -42,7 +42,7 @@ const Sidebar = () => {
     const { logout, user } = useAuth();
     const { showDanger } = useConfirm();
     const [collapsed, setCollapsed] = useState(true);
-    const [appName, setAppName] = useState('CRM Pro');
+    const [appName, setAppName] = useState('Adfliker');
     const [dueTaskCount, setDueTaskCount] = useState(0);
 
     const canManageTeam = ['superadmin', 'agency', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;

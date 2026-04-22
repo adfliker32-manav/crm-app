@@ -171,21 +171,21 @@ exports.testEmailConfig = async (req, res) => {
 
         // Send test email to the user's own email
         const testEmail = {
-            from: `"CRM Pro" <${userEmail}>`,
+            from: `"Adfliker" <${userEmail}>`,
             to: userEmail,
-            subject: 'Test Email from CRM Pro',
+            subject: 'Test Email from Adfliker',
             html: `
                 <div style="font-family: Arial, sans-serif; padding: 20px;">
                     <h2 style="color: #4CAF50;">✅ Email Configuration Successful!</h2>
-                    <p>This is a test email from your CRM Pro account.</p>
+                    <p>This is a test email from your Adfliker account.</p>
                     <p>Your email configuration is working correctly.</p>
                     <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
                     <p style="color: #666; font-size: 12px;">
-                        Sent from CRM Pro Email Management System
+                        Sent from Adfliker Email Management System
                     </p>
                 </div>
             `,
-            text: 'Test Email from CRM Pro - Your email configuration is working correctly!'
+            text: 'Test Email from Adfliker - Your email configuration is working correctly!'
         };
 
         const info = await Promise.race([

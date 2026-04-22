@@ -8,7 +8,7 @@ const agencySettingsSchema = new mongoose.Schema({
         unique: true
     },
     // White-Label Branding
-    brandName: { type: String, default: 'CRM Pro' },
+    brandName: { type: String, default: 'Adfliker' },
     logoUrl: { type: String, default: '' },
     faviconUrl: { type: String, default: '' },
     primaryColor: { type: String, default: '#6366f1' },

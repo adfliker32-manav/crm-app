@@ -3,7 +3,7 @@ import api from '../services/api';
 import { useAuth } from './AuthContext';
 
 const BrandingContext = createContext({
-    brandName: 'CRM Pro',
+    brandName: 'Adfliker',
     primaryColor: '#6366f1',
     secondaryColor: '#8b5cf6',
     logoUrl: ''
@@ -14,7 +14,7 @@ export const useBranding = () => useContext(BrandingContext);
 export const BrandingProvider = ({ children }) => {
     const { user } = useAuth();
     const [branding, setBranding] = useState({
-        brandName: 'CRM Pro',
+        brandName: 'Adfliker',
         primaryColor: '#6366f1',
         secondaryColor: '#8b5cf6',
         logoUrl: '',

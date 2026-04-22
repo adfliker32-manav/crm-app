@@ -5,7 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 const AgencyWhiteLabel = () => {
     const { user } = useAuth();
     const [settings, setSettings] = useState({
-        brandName: 'CRM Pro',
+        brandName: 'Adfliker',
         logoUrl: '',
         primaryColor: '#6366f1',
         secondaryColor: '#8b5cf6',

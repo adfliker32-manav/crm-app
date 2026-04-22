@@ -167,7 +167,7 @@ const sendEmail = async (options) => {
 
     // Get user credentials if userId provided
     let userCredentials = null;
-    let fromName = process.env.EMAIL_FROM_NAME || 'CRM Pro';
+    let fromName = process.env.EMAIL_FROM_NAME || 'Adfliker';
 
     if (userId) {
         userCredentials = await getUserEmailCredentials(userId);

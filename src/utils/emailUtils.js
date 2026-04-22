@@ -74,7 +74,7 @@ async function getUserEmailCredentials(userId) {
         return {
             email: config.email.emailUser,
             password: decrypt(config.email.emailPassword),
-            fromName: config.email.emailFromName || tenantName || 'CRM Pro',
+            fromName: config.email.emailFromName || tenantName || 'Adfliker',
             signature: config.email.emailSignature || '',
             serviceType: config.email.emailServiceType || 'gmail',
             smtpHost: config.email.smtpHost,

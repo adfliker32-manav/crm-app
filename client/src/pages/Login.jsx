@@ -76,7 +76,7 @@ const Login = () => {
         </div>
 
         <div className="relative z-10 flex items-center gap-6 text-neutral-600 text-xs font-medium uppercase tracking-widest">
-          <span>© 2026 CRM Pro</span>
+          <span>© 2026 Adfliker</span>
           <div className="w-1 h-1 bg-neutral-800 rounded-full" />
           <a href="#" className="hover:text-white transition-colors">Privacy</a>
           <a href="#" className="hover:text-white transition-colors">Terms</a>
@@ -92,7 +92,7 @@ const Login = () => {
             <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center">
               <span className="text-white font-black text-sm">C</span>
             </div>
-            <span className="text-black font-bold text-lg tracking-tighter">CRM PRO</span>
+            <span className="text-black font-bold text-lg tracking-tighter">Adfliker</span>
           </div>
 
           <div className="mb-10 text-center lg:text-left">

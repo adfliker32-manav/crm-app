@@ -10,7 +10,7 @@ const getAgencyBranding = async (req, res) => {
             .select('brandName logoUrl faviconUrl primaryColor secondaryColor customDomain');
         if (!settings) {
             return res.status(200).json({
-                brandName: 'CRM Pro',
+                brandName: 'Adfliker',
                 primaryColor: '#6366f1',
                 secondaryColor: '#8b5cf6',
                 logoUrl: '',

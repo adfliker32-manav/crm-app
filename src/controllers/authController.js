@@ -433,10 +433,10 @@ exports.getAppName = async (req, res) => {
 
         res.json({
             success: true,
-            appName: appNameSetting?.value || 'CRM Pro'
+            appName: appNameSetting?.value || 'Adfliker'
         });
     } catch (err) {
         console.error(err);
-        res.json({ success: true, appName: 'CRM Pro' });
+        res.json({ success: true, appName: 'Adfliker' });
     }
 };
