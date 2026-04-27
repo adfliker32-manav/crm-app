@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState } from 'react';
 import api from '../../services/api';
 

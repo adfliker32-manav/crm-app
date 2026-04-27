@@ -73,6 +73,12 @@ router.post('/duplicates/auto-delete', authMiddleware, deleteLimiter, checkPermi
 // 7.6 Bulk Import CSV (MUST BE BEFORE /:id routes!)
 router.post('/bulk-import', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.bulkImportLeads);
 
+// 7.7 Bulk Delete Leads (single DB query — replaces N individual deletes)
+router.post('/bulk-delete', authMiddleware, deleteLimiter, checkPermission('deleteLeads'), leadController.bulkDeleteLeads);
+
+// 7.8 Bulk Status Update (single DB query — replaces N individual updates)
+router.post('/bulk-status', authMiddleware, checkPermission('editLeads'), leadController.bulkUpdateStatus);
+
 // 8. Get All Leads
 router.get('/', authMiddleware, checkPermission('viewLeads'), leadController.getLeads);
 

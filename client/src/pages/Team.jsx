@@ -13,16 +13,19 @@ const Team = () => {
     const { showSuccess, showError } = useNotification();
     const [team, setTeam] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [selectedAgent, setSelectedAgent] = useState(null);
 
     const fetchTeam = async () => {
         try {
+            setError(null);
             const res = await api.get('/auth/my-team');
             setTeam(res.data);
         } catch (err) {
             console.error("Failed to load team", err);
+            setError(err.response?.data?.message || err.message || 'Failed to load team');
         } finally {
             setLoading(false);
         }
@@ -54,6 +57,18 @@ const Team = () => {
     if (!canManageTeam) return <Navigate to="/dashboard" replace />;
     
     if (loading) return <div className="p-10 text-center text-slate-500">Loading Team...</div>;
+
+    if (error) return (
+        <div className="p-10 text-center">
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-rose-500/25">
+                <i className="fa-solid fa-exclamation text-white text-2xl"></i>
+            </div>
+            <p className="text-rose-600 font-semibold text-lg mb-2">{error}</p>
+            <button onClick={() => { setLoading(true); fetchTeam(); }} className="mt-3 px-6 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 text-white rounded-xl font-medium text-sm shadow-lg hover:shadow-xl transition-all">
+                <i className="fa-solid fa-arrows-rotate mr-2"></i>Try Again
+            </button>
+        </div>
+    );
 
     return (
         <div className="space-y-8 animate-fade-in-up">

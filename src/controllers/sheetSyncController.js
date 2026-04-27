@@ -54,7 +54,7 @@ const updateSheetSyncConfig = async (req, res) => {
         });
     } catch (err) {
         console.error('Sheet Sync Config Error:', err);
-        res.status(500).json({ message: 'Error updating sync config: ' + err.message });
+        res.status(500).json({ message: 'Error updating sync config' });
     }
 };
 
@@ -81,7 +81,7 @@ const getSheetSyncConfig = async (req, res) => {
         });
     } catch (err) {
         console.error('Get Sheet Sync Config Error:', err);
-        res.status(500).json({ message: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -120,7 +120,7 @@ const listGoogleSheets = async (req, res) => {
             return res.status(401).json({ message: 'Google token expired. Please reconnect.' });
         }
 
-        res.status(500).json({ message: 'Failed to fetch Google Sheets: ' + err.message });
+        res.status(500).json({ message: 'Failed to fetch Google Sheets' });
     }
 };
 
@@ -147,7 +147,7 @@ const regenerateWebhookSecret = async (req, res) => {
         });
     } catch (err) {
         console.error('Regenerate Secret Error:', err);
-        res.status(500).json({ message: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -190,7 +190,7 @@ const fetchSheetHeaders = async (req, res) => {
         if (err.response?.status === 403) {
             return res.status(403).json({ message: 'Access denied. Make sure Google Sheets API is enabled in your Google Cloud project.' });
         }
-        res.status(500).json({ message: 'Failed to fetch sheet headers: ' + err.message });
+        res.status(500).json({ message: 'Failed to fetch sheet headers' });
     }
 };
 

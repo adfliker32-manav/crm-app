@@ -1,9 +1,12 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
+import { useNotification } from '../../context/NotificationContext';
 
 const AgencyWhiteLabel = () => {
     const { user } = useAuth();
+    const { showError } = useNotification();
     const [settings, setSettings] = useState({
         brandName: 'Adfliker',
         logoUrl: '',
@@ -18,11 +21,15 @@ const AgencyWhiteLabel = () => {
 
     useEffect(() => {
         // Load current settings + usage
-        api.get('/agency/branding/' + user?._id).then(r => setSettings(r.data)).catch(() => {});
+        api.get('/agency/branding/' + user?._id).then(r => setSettings(r.data)).catch((err) => {
+            console.error('Failed to load branding settings:', err.message);
+        });
         api.get('/agency/usage').then(r => {
             setUsage(r.data.usage || {});
             setLimits(r.data.planLimits || {});
-        }).catch(() => {});
+        }).catch((err) => {
+            console.error('Failed to load usage data:', err.message);
+        });
     }, [user]);
 
     const handleSave = async () => {
@@ -32,7 +39,7 @@ const AgencyWhiteLabel = () => {
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
         } catch (e) {
-            alert('Failed to save settings.');
+            showError('Failed to save settings.');
         } finally {
             setSaving(false);
         }

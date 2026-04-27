@@ -103,6 +103,24 @@ if (!process.env.SUPERADMIN_EMAIL || !process.env.SUPERADMIN_PASSWORD) {
   process.exit(1);
 }
 
+// ⚠️ NON-CRITICAL STARTUP WARNINGS — won't block startup but flags config gaps
+if (!process.env.META_APP_SECRET) {
+  console.warn('⚠️  WARNING: META_APP_SECRET is not set in .env');
+  console.warn('   → WhatsApp webhook signature verification is DISABLED.');
+  console.warn('   → Anyone can send fake webhook events to your server.');
+  console.warn('   → Set META_APP_SECRET from your Meta App Dashboard → Settings → Basic.');
+}
+if (!process.env.META_APP_ID || process.env.META_APP_ID === 'YOUR_META_APP_ID') {
+  console.warn('⚠️  WARNING: META_APP_ID is not configured in .env');
+  console.warn('   → Meta Lead Sync (Facebook Lead Ads) will NOT work.');
+  console.warn('   → Set META_APP_ID from your Meta App Dashboard → Settings → Basic.');
+}
+if (!process.env.FRONTEND_URL) {
+  console.warn('⚠️  WARNING: FRONTEND_URL is not set in .env');
+  console.warn('   → CORS will only allow localhost origins.');
+  console.warn('   → Set FRONTEND_URL to your production domain before deploying (e.g. https://your-app.onrender.com)');
+}
+
 // ⚠️ PRODUCTION NOTE:
 // Connection pool size must reflect real concurrent load.
 // Oversizing wastes RAM and can hit Atlas connection limits.
@@ -314,7 +332,12 @@ app.use('/api/reports', reportRoutes); // Reports & Analytics
 
 // Meta Webhook URL: /api/meta/webhook
 
-// 5. CATCH-ALL HANDLER FOR REACT SPA
+// 5. HEALTH CHECK & KEEP-ALIVE (must be BEFORE catch-all)
+app.get('/api/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
+// 6. CATCH-ALL HANDLER FOR REACT SPA
 // Must be AFTER all API routes - serves React app for client-side routing
 app.use((req, res, next) => {
   // Only handle GET requests that aren't for API endpoints
@@ -331,10 +354,6 @@ app.use((req, res, next) => {
   }
 });
 
-// 6. HEALTH CHECK & KEEP-ALIVE (Prevent Render Free Tier Step)
-app.get('/api/health', (req, res) => {
-  res.status(200).send('OK');
-});
 
 // Self-Ping Mechanism (Runs every 10 minutes)
 const axios = require('axios');
@@ -418,4 +437,22 @@ const gracefulShutdown = async (signal) => {
 };
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// ⚠️ CRASH PROTECTION: Catch unhandled promise rejections and uncaught exceptions.
+// Without these, a single unhandled rejection (e.g. a DB query inside setImmediate)
+// will crash the entire Node.js process — taking down ALL users simultaneously.
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ Unhandled Promise Rejection:', reason);
+  // Do NOT exit — keep the server alive for other users
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('💥 UNCAUGHT EXCEPTION:', error);
+  // For truly fatal errors, log and exit gracefully
+  if (error.message?.includes('ENOMEM') || error.message?.includes('out of memory')) {
+    console.error('🔥 Fatal memory error — shutting down...');
+    process.exit(1);
+  }
+  // For non-fatal exceptions, keep running
+});

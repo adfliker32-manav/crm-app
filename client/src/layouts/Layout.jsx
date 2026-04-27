@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import useSocket from '../hooks/useSocket';
 
 const Layout = () => {
     useEffect(() => {
@@ -21,6 +22,20 @@ const Layout = () => {
         const timer = setTimeout(preloadCoreModules, 2000);
         return () => clearTimeout(timer);
     }, []);
+
+    // ⚠️ Listen for account deletion — auto-logout if admin removes this agent
+    const { socket } = useSocket();
+    useEffect(() => {
+        if (!socket) return;
+        const handleAccountDeleted = (data) => {
+            alert(data?.message || 'Your account has been removed. You will be logged out.');
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            window.location.href = '/login';
+        };
+        socket.on('account:deleted', handleAccountDeleted);
+        return () => socket.off('account:deleted', handleAccountDeleted);
+    }, [socket]);
 
     return (
         <div className="flex h-screen bg-slate-900 overflow-hidden font-sans">

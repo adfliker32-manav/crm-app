@@ -18,6 +18,11 @@ const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
 const Goal = require('../models/Goal');
 const Task = require('../models/Task');
 const UsageLog = require('../models/UsageLog');
+// 🔴 DATA LOSS FIX: These models were NOT cleaned up on account deletion,
+// leaving sensitive API tokens, subscription data, and billing info orphaned forever.
+const WorkspaceSettings = require('../models/WorkspaceSettings');
+const IntegrationConfig = require('../models/IntegrationConfig');
+const AgencySettings = require('../models/AgencySettings');
 
 const USER_OWNED_MODELS = [
     Lead,
@@ -37,7 +42,11 @@ const USER_OWNED_MODELS = [
     LeadAutomationWatcher,
     Goal,
     Task,
-    UsageLog
+    UsageLog,
+    // 🔴 FIX: Previously missing — credentials and settings were orphaned on delete
+    WorkspaceSettings,
+    IntegrationConfig,
+    AgencySettings
 ];
 
 const buildUserIdFilter = (userIds) => {

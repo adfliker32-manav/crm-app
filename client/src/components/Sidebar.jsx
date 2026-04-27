@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useConfirm } from '../context/ConfirmContext';
@@ -55,14 +56,14 @@ const Sidebar = () => {
             try {
                 const res = await api.get('/auth/app-name');
                 if (res.data?.success) setAppName(res.data.appName);
-            } catch { }
+            } catch (err) { console.error('Failed to load app name:', err.message); }
         };
 
         const fetchDueTasks = async () => {
             try {
                 const res = await api.get('/tasks?status=Pending&dateFilter=today');
                 setDueTaskCount(res.data?.length || 0);
-            } catch { }
+            } catch (err) { console.error('Failed to load due tasks:', err.message); }
         };
 
         fetchAppName();

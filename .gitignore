@@ -1,7 +1,21 @@
 node_modules
+client/node_modules
+
+# Environment & Secrets (NEVER commit these)
 .env
 .env.local
 .env.*.local
+
+# Build output
+client/dist
+dist
+
+# Uploads & logs
 uploads/
 *.log
+
+# OS / IDE
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/

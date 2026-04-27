@@ -39,6 +39,7 @@ const Onboarding = () => {
             }
             // Resume wizard from saved step
             const savedStep = user.onboardingStep || 0;
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setStep(savedStep < 3 ? savedStep + 1 : 3);
         }
     }, [user, navigate]);

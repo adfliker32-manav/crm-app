@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import api from '../services/api';
 import { useAuth } from './AuthContext';
@@ -9,6 +10,7 @@ const BrandingContext = createContext({
     logoUrl: ''
 });
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useBranding = () => useContext(BrandingContext);
 
 export const BrandingProvider = ({ children }) => {

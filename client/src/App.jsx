@@ -13,6 +13,7 @@ import Layout from './layouts/Layout';
 import AgencyLayout from './layouts/AgencyLayout';
 import React, { Suspense, lazy } from 'react';
 import GlobalLoader from './components/GlobalLoader';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Direct import for Login (critical path)
 import Login from './pages/Login';
@@ -43,6 +44,7 @@ function App() {
           <ConfirmProvider>
             <PromptProvider>
               <BrowserRouter>
+                <ErrorBoundary>
                 <Suspense fallback={<GlobalLoader />}>
                   <Routes>
                     <Route path="/login" element={<Login />} />
@@ -79,6 +81,7 @@ function App() {
 
                 <ConfirmDialog />
                 <PromptDialog />
+                </ErrorBoundary>
               </BrowserRouter>
             </PromptProvider>
           </ConfirmProvider>

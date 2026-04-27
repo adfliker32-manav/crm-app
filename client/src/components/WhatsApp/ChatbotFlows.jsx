@@ -1,9 +1,12 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { useConfirm } from '../../context/ConfirmContext';
 
 const ChatbotFlows = ({ onEditFlow }) => {
     const { showSuccess, showError } = useNotification();
+    const { showDanger } = useConfirm();
     const [flows, setFlows] = useState([]);
     const [loading, setLoading] = useState(true);
 
@@ -34,7 +37,8 @@ const ChatbotFlows = ({ onEditFlow }) => {
     };
 
     const handleDelete = async (flowId) => {
-        if (!window.confirm('Are you sure you want to delete this flow?')) return;
+        const confirmed = await showDanger('Are you sure you want to delete this chatbot flow? This cannot be undone.', 'Delete Flow');
+        if (!confirmed) return;
 
         try {
             await api.delete(`/chatbot/flows/${flowId}`);

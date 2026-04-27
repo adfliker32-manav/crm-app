@@ -13,7 +13,9 @@ let agendaInstance = null;
 const defineBroadcastJob = (agenda) => {
     agendaInstance = agenda;
     agenda.define('process whatsapp broadcast', async (job) => {
-        const { broadcastId, userId } = job.attrs.data;
+        const { broadcastId, userId, tenantId } = job.attrs.data;
+        // Use tenantId (company) for lead queries — agents' leads are stored under the company ID
+        const leadOwnerId = tenantId || userId;
         
         try {
             const broadcast = await WhatsAppBroadcast.findById(broadcastId)
@@ -32,7 +34,8 @@ const defineBroadcastJob = (agenda) => {
             }
 
             // Find target leads based on audience selection
-            let leadQuery = { userId };
+            // 🔴 BUG FIX: Use tenantId (company) not userId (could be agent) for lead queries
+            let leadQuery = { userId: leadOwnerId };
             
             // Basic filtering logic (assuming Lead schema has these fields based on CRM structure)
             if (broadcast.targetAudience.selectionType === 'STAGES' && broadcast.targetAudience.stages.length > 0) {
@@ -270,7 +273,8 @@ exports.createBroadcast = async (req, res) => {
 exports.startBroadcast = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const broadcast = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId });
+        const tenantId = req.tenantId || userId;
+        const broadcast = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId: tenantId });
 
         if (!broadcast) return res.status(404).json({ message: 'Broadcast not found' });
 
@@ -290,7 +294,8 @@ exports.startBroadcast = async (req, res) => {
             
             const job = await agendaInstance.schedule(broadcast.scheduledFor, 'process whatsapp broadcast', {
                 broadcastId: broadcast._id,
-                userId
+                userId,
+                tenantId
             });
             
             broadcast.jobId = job.attrs._id;
@@ -306,7 +311,8 @@ exports.startBroadcast = async (req, res) => {
 
         const job = await agendaInstance.now('process whatsapp broadcast', {
             broadcastId: broadcast._id,
-            userId
+            userId,
+            tenantId
         });
 
         broadcast.jobId = job.attrs._id;

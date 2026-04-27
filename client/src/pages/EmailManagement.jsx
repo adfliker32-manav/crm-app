@@ -8,6 +8,26 @@ import EmailInbox from '../components/Email/EmailInbox';
 import EmailSettings from '../components/Email/EmailSettings';
 import EmailAnalytics from '../components/Email/EmailAnalytics';
 
+const StatCard = ({ title, value, label, icon, color, bgColor }) => (
+    <div className="bg-white rounded-2xl p-6 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07),0_10px_20px_-2px_rgba(0,0,0,0.04)] hover:shadow-lg transition-all duration-300 border border-slate-100 group">
+        <div className="flex justify-between items-start">
+            <div>
+                <p className="text-slate-500 text-sm font-medium mb-1">{title}</p>
+                <h3 className="text-3xl font-bold text-slate-800 tracking-tight">{value}</h3>
+            </div>
+            <div className={`${bgColor} ${color} p-3 rounded-xl transform group-hover:scale-110 transition-transform duration-300`}>
+                <i className={`fa-solid ${icon} text-lg`}></i>
+            </div>
+        </div>
+        <div className="mt-4 pt-4 border-t border-slate-50 flex items-center gap-2">
+            <span className={`text-xs font-semibold ${color} bg-opacity-10 px-2 py-1 rounded-full ${bgColor}`}>
+                {label}
+            </span>
+            <span className="text-slate-400 text-xs">updated just now</span>
+        </div>
+    </div>
+);
+
 const EmailManagement = () => {
     const { user } = useAuth();
     const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
@@ -18,8 +38,6 @@ const EmailManagement = () => {
         today: { sent: 0, failed: 0, automated: { sent: 0 } },
         thisMonth: { sent: 0 }
     });
-
-    if (!canViewEmails) return <Navigate to="/dashboard" replace />;
 
     const fetchAnalytics = useCallback(async () => {
         try {
@@ -34,25 +52,9 @@ const EmailManagement = () => {
         fetchAnalytics();
     }, [fetchAnalytics]);
 
-    const StatCard = ({ title, value, label, icon, color, bgColor }) => (
-        <div className="bg-white rounded-2xl p-6 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07),0_10px_20px_-2px_rgba(0,0,0,0.04)] hover:shadow-lg transition-all duration-300 border border-slate-100 group">
-            <div className="flex justify-between items-start">
-                <div>
-                    <p className="text-slate-500 text-sm font-medium mb-1">{title}</p>
-                    <h3 className="text-3xl font-bold text-slate-800 tracking-tight">{value}</h3>
-                </div>
-                <div className={`${bgColor} ${color} p-3 rounded-xl transform group-hover:scale-110 transition-transform duration-300`}>
-                    <i className={`fa-solid ${icon} text-lg`}></i>
-                </div>
-            </div>
-            <div className="mt-4 pt-4 border-t border-slate-50 flex items-center gap-2">
-                <span className={`text-xs font-semibold ${color} bg-opacity-10 px-2 py-1 rounded-full ${bgColor}`}>
-                    {label}
-                </span>
-                <span className="text-slate-400 text-xs">updated just now</span>
-            </div>
-        </div>
-    );
+
+
+    if (!canViewEmails) return <Navigate to="/dashboard" replace />;
 
     return (
         <div className="min-h-screen bg-slate-50/50 p-8 font-sans space-y-8 animate-fade-in-up">

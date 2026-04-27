@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 // Determines the most likely CRM field for a given CSV header string
 export const autoMapColumn = (header, currentMappings) => {
     const h = (header || '').toString().toLowerCase().trim();

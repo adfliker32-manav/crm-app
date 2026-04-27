@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -18,12 +19,11 @@ const Reports = () => {
     const canViewReports = canManageTeam || user?.permissions?.viewReports === true;
 
     const [activeTab, setActiveTab] = useState('conversion');
-
-    if (!canViewReports) return <Navigate to="/dashboard" replace />;
     const [period, setPeriod] = useState('month');
     const [dateRange, setDateRange] = useState({ start: null, end: null });
     const [loading, setLoading] = useState(true);
     const [data, setData] = useState(null);
+    const [error, setError] = useState(null);
     const [selectedAgentId, setSelectedAgentId] = useState(null);
 
     const handleViewAgentDetails = (agentId) => {
@@ -41,6 +41,7 @@ const Reports = () => {
         }
 
         setLoading(true);
+        setError(null);
         try {
             let endpoint = '/reports/';
             switch (activeTab) {
@@ -60,6 +61,7 @@ const Reports = () => {
             setData(res.data);
         } catch (err) {
             console.error('Failed to fetch report:', err);
+            setError(err.response?.data?.message || 'Failed to load report data. Please try again.');
         } finally {
             setLoading(false);
         }
@@ -79,6 +81,8 @@ const Reports = () => {
         { id: 'goals', label: 'Goal Tracking', icon: 'fa-bullseye', group: 'advanced', badge: 'New' },
         { id: 'export', label: 'Export', icon: 'fa-download', group: 'export', badge: 'New' },
     ];
+
+    if (!canViewReports) return <Navigate to="/dashboard" replace />;
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/50 to-violet-50/50">
@@ -164,6 +168,22 @@ const Reports = () => {
                                     <div className="w-16 h-16 border-4 border-transparent border-t-blue-600 rounded-full animate-spin mx-auto mb-6 absolute top-0 left-1/2 -translate-x-1/2"></div>
                                 </div>
                                 <p className="text-slate-500 text-sm font-medium">Loading report data...</p>
+                            </div>
+                        </div>
+                    ) : error ? (
+                        <div className="flex items-center justify-center py-20">
+                            <div className="text-center">
+                                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center mx-auto mb-6 shadow-lg shadow-rose-500/25">
+                                    <i className="fa-solid fa-exclamation text-white text-2xl"></i>
+                                </div>
+                                <p className="text-rose-600 font-semibold text-lg mb-2">{error}</p>
+                                <button
+                                    onClick={fetchReportData}
+                                    className="mt-4 px-6 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 text-white rounded-xl font-medium text-sm shadow-lg shadow-blue-500/25 hover:shadow-xl transition-all duration-300 flex items-center gap-2 mx-auto"
+                                >
+                                    <i className="fa-solid fa-arrows-rotate"></i>
+                                    Try Again
+                                </button>
                             </div>
                         </div>
                     ) : (

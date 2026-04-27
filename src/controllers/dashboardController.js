@@ -20,19 +20,18 @@ const getDashboardSummary = async (req, res) => {
             leadQuery.assignedTo = new mongoose.Types.ObjectId(leadQuery.assignedTo);
         }
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const nextWeek = new Date(today);
-        nextWeek.setDate(nextWeek.getDate() + 7);
+        // 🇮🇳 IST (UTC+5:30) — "today" = Indian midnight to midnight
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // +5:30 in milliseconds
+        const nowIST = new Date(Date.now() + IST_OFFSET_MS);
+        const today = new Date(Date.UTC(nowIST.getUTCFullYear(), nowIST.getUTCMonth(), nowIST.getUTCDate()));
+        today.setTime(today.getTime() - IST_OFFSET_MS); // Convert IST midnight back to UTC
+        const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+        const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
 
         // Setup dates array for trend chart (last 7 days)
         const dates = [];
         for (let i = 6; i >= 0; i--) {
-            const d = new Date(today);
-            d.setDate(d.getDate() - i);
-            dates.push(d);
+            dates.push(new Date(today.getTime() - i * 24 * 60 * 60 * 1000));
         }
 
         // ---- FACETED AGGREGATION (single DB query for all lead stats) ----
@@ -94,8 +93,7 @@ const getDashboardSummary = async (req, res) => {
 
         // Dynamically add facet branches for the last 7 days chart
         dates.forEach((date, i) => {
-            const nextDate = new Date(date);
-            nextDate.setDate(nextDate.getDate() + 1);
+            const nextDate = new Date(date.getTime() + 24 * 60 * 60 * 1000);
             facets[`date_${i}`] = [
                 {
                     $match: {

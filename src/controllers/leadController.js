@@ -302,7 +302,7 @@ const createLead = async (req, res) => {
         res.json(newLead);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -351,7 +351,7 @@ const sendManualEmail = async (req, res) => {
         res.json({ success: true, message: "Email sent successfully" });
     } catch (err) {
         console.error("Manual Email Error:", err);
-        res.status(500).json({ message: "Failed to send email", error: err.message });
+        res.status(500).json({ message: "Failed to send email" });
     }
 };
 
@@ -479,7 +479,7 @@ const updateLead = async (req, res) => {
         res.json({ success: true, lead });
     } catch (err) {
         console.error("Update Lead Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -515,7 +515,7 @@ const deleteLead = async (req, res) => {
         res.json({ success: true, message: "Lead deleted successfully" });
     } catch (err) {
         console.error("Delete Lead Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -576,7 +576,7 @@ const addNote = async (req, res) => {
 
         res.json(updatedLead);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -599,7 +599,7 @@ const getStages = async (req, res) => {
         }
         res.json(stages);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -616,7 +616,7 @@ const createStage = async (req, res) => {
         });
         res.json(newStage);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -631,17 +631,19 @@ const deleteStage = async (req, res) => {
         if (!stage) return res.status(404).json({ message: 'Stage not found' });
         if (stage.name === 'New') return res.status(400).json({ message: "Cannot delete 'New' stage" });
 
-        await Stage.deleteOne({ _id: stage._id });
-
-        // Move leads to 'New'
+        // 🔴 DATA SAFETY: Move leads FIRST, then delete stage.
+        // If server crashes after move but before delete, stage still exists (retryable).
+        // Old order (delete first, then move) could leave leads stuck in a deleted stage.
         await Lead.updateMany(
             { userId: ownerId, status: stage.name },
             { $set: { status: 'New' } }
         );
 
+        await Stage.deleteOne({ _id: stage._id });
+
         return res.json({ success: true });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -673,7 +675,7 @@ const updateStage = async (req, res) => {
 
         return res.json({ success: true, stage });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -820,7 +822,7 @@ const syncLeads = async (req, res) => {
         res.json({ success: true, message: `${count} New Leads Imported!` });
     } catch (err) {
         console.error("Sync Sheet Error:", err);
-        res.status(500).json({ message: "Error syncing sheet: " + (err.message || "Unknown error") });
+        res.status(500).json({ message: "Error syncing sheet" });
     }
 };
 
@@ -971,7 +973,7 @@ const getAnalyticsData = async (req, res) => {
         });
     } catch (err) {
         console.error("Get Analytics Data Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1014,7 +1016,7 @@ const getFollowUpLeads = async (req, res) => {
         });
     } catch (err) {
         console.error("Get Follow-up Leads Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1047,7 +1049,7 @@ const updateFollowUpDate = async (req, res) => {
         res.json({ success: true, lead });
     } catch (err) {
         console.error("Update Follow-up Date Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1133,7 +1135,7 @@ const completeFollowUp = async (req, res) => {
         res.json({ success: true, lead });
     } catch (err) {
         console.error("Complete Follow-up Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1167,7 +1169,7 @@ const getFollowUpDoneLeads = async (req, res) => {
         });
     } catch (err) {
         console.error("Get Follow-up Done Leads Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1218,7 +1220,7 @@ const assignLead = async (req, res) => {
         res.json({ success: true, message: agentId ? "Lead assigned" : "Lead unassigned", lead: updatedLead });
     } catch (err) {
         console.error("Assign Lead Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1251,7 +1253,7 @@ const bulkAssignLeads = async (req, res) => {
         res.json({ success: true, message: `${result.modifiedCount} leads updated`, modifiedCount: result.modifiedCount });
     } catch (err) {
         console.error("Bulk Assign Error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1268,7 +1270,7 @@ const checkDuplicates = async (req, res) => {
         res.json({ hasDuplicates: duplicates.length > 0, duplicates });
     } catch (err) {
         console.error('Check Duplicates Error:', err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1289,7 +1291,7 @@ const getDuplicateGroups = async (req, res) => {
         });
     } catch (err) {
         console.error('Get Duplicate Groups Error:', err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1333,7 +1335,7 @@ const autoDeleteDuplicates = async (req, res) => {
         });
     } catch (err) {
         console.error('Auto Delete Duplicates Error:', err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1416,7 +1418,7 @@ const bulkImportLeads = async (req, res) => {
 
     } catch (err) {
         console.error("Bulk Import Error:", err);
-        res.status(500).json({ message: "Error importing leads: " + (err.message || "Unknown error") });
+        res.status(500).json({ message: "Error importing leads" });
     }
 };
 
@@ -1457,7 +1459,85 @@ const bulkAddTags = async (req, res) => {
         res.json({ success: true, message: `${result.modifiedCount} leads tagged successfully` });
     } catch (err) {
         console.error("Bulk Add Tags Error:", err);
-        res.status(500).json({ message: "Error updating tags", error: err.message });
+        res.status(500).json({ message: "Error updating tags" });
+    }
+};
+
+// ==========================================
+// NEW: BULK DELETE LEADS (single DB query replaces N individual deletes)
+// ==========================================
+const bulkDeleteLeads = async (req, res) => {
+    try {
+        const { ids } = req.body;
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ message: "No leads selected for deletion" });
+        }
+
+        // Tenant-scoped delete — can only delete leads you own
+        const result = await Lead.deleteMany({
+            _id: { $in: ids },
+            ...req.dataScope
+        });
+
+        logActivity({
+            userId: getRequestUserId(req.user),
+            userName: req.user.name || 'Unknown',
+            actionType: 'LEAD_DELETED',
+            entityType: 'Lead',
+            entityName: 'Bulk Delete',
+            metadata: { deletedCount: result.deletedCount, requestedCount: ids.length },
+            companyId: req.tenantId
+        }).catch(err => console.error('Audit log error:', err));
+
+        res.json({
+            success: true,
+            message: `${result.deletedCount} leads deleted successfully`,
+            deletedCount: result.deletedCount
+        });
+    } catch (err) {
+        console.error("Bulk Delete Error:", err);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// ==========================================
+// NEW: BULK UPDATE STATUS (single DB query replaces N individual updates)
+// ==========================================
+const bulkUpdateStatus = async (req, res) => {
+    try {
+        const { ids, status } = req.body;
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ message: "No leads selected" });
+        }
+        if (!status) {
+            return res.status(400).json({ message: "Status is required" });
+        }
+
+        const result = await Lead.updateMany(
+            { _id: { $in: ids }, ...req.dataScope },
+            { $set: { status } }
+        );
+
+        logActivity({
+            userId: getRequestUserId(req.user),
+            userName: req.user.name || 'Unknown',
+            actionType: 'LEAD_EDITED',
+            entityType: 'Lead',
+            entityName: 'Bulk Status Update',
+            metadata: { updatedCount: result.modifiedCount, newStatus: status },
+            companyId: req.tenantId
+        }).catch(err => console.error('Audit log error:', err));
+
+        res.json({
+            success: true,
+            message: `${result.modifiedCount} leads updated to "${status}"`,
+            modifiedCount: result.modifiedCount
+        });
+    } catch (err) {
+        console.error("Bulk Status Update Error:", err);
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
@@ -1486,5 +1566,7 @@ module.exports = {
     getDuplicateGroups,
     autoDeleteDuplicates,
     bulkImportLeads,
-    bulkAddTags
+    bulkAddTags,
+    bulkDeleteLeads,
+    bulkUpdateStatus
 };

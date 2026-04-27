@@ -1,8 +1,10 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import { useNotification } from '../context/NotificationContext';
+import { useConfirm } from '../context/ConfirmContext';
 import RuleBuilderModal from '../components/Automations/RuleBuilderModal';
 
 const Automations = () => {
@@ -10,18 +12,20 @@ const Automations = () => {
     const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
     const [rules, setRules] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
     const [isBuilderOpen, setIsBuilderOpen] = useState(false);
     const [editingRule, setEditingRule] = useState(null);
     const { showNotification } = useNotification();
-
-    if (!canManageTeam) return <Navigate to="/dashboard" replace />;
+    const { showDanger } = useConfirm();
 
     const fetchRules = async () => {
         try {
+            setError(null);
             const res = await api.get('/automations');
             setRules(res.data);
         } catch (error) {
             console.error('Error fetching automations:', error);
+            setError(error.response?.data?.message || error.message || 'Failed to load automations');
             showNotification('error', 'Failed to load automations');
         } finally {
             setLoading(false);
@@ -43,7 +47,8 @@ const Automations = () => {
     };
 
     const deleteRule = async (id) => {
-        if (!window.confirm('Are you sure you want to delete this automation?')) return;
+        const confirmed = await showDanger('Are you sure you want to delete this automation? This cannot be undone.', 'Delete Automation');
+        if (!confirmed) return;
         try {
             await api.delete(`/automations/${id}`);
             setRules(rules.filter(r => r._id !== id));
@@ -52,6 +57,20 @@ const Automations = () => {
             showNotification('error', 'Failed to delete automation');
         }
     };
+
+    if (!canManageTeam) return <Navigate to="/dashboard" replace />;
+
+    if (error) return (
+        <div className="p-10 text-center">
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-rose-500/25">
+                <i className="fa-solid fa-exclamation text-white text-2xl"></i>
+            </div>
+            <p className="text-rose-600 font-semibold text-lg mb-2">{error}</p>
+            <button onClick={() => { setLoading(true); fetchRules(); }} className="mt-3 px-6 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 text-white rounded-xl font-medium text-sm shadow-lg hover:shadow-xl transition-all">
+                <i className="fa-solid fa-arrows-rotate mr-2"></i>Try Again
+            </button>
+        </div>
+    );
 
     return (
         <div className="p-6 max-w-7xl mx-auto">

@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { useNotification } from '../../context/NotificationContext';
 
 const DuplicateLeadsModal = ({ isOpen, onClose, onSuccess }) => {
+    const { showSuccess, showError } = useNotification();
     const [loading, setLoading] = useState(true);
     const [deleting, setDeleting] = useState(false);
     const [data, setData] = useState(null);
@@ -36,7 +38,7 @@ const DuplicateLeadsModal = ({ isOpen, onClose, onSuccess }) => {
             onSuccess?.();
             // Show brief success then close
             setError(null);
-            alert(`✅ ${res.data.deletedCount} duplicate leads deleted!`);
+            showSuccess(`${res.data.deletedCount} duplicate leads deleted!`);
             onClose();
         } catch (err) {
             setError('Failed to delete duplicates');

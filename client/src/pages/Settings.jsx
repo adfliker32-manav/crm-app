@@ -16,8 +16,6 @@ const Settings = () => {
     const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
     const canAccessSettings = canManageTeam || user?.permissions?.accessSettings === true;
 
-    if (!canAccessSettings) return <Navigate to="/dashboard" replace />;
-
     // Read tab from query param if present
     const initialTab = searchParams.get('tab') || 'profile';
     const [activeTab, setActiveTab] = useState(initialTab);
@@ -68,11 +66,6 @@ const Settings = () => {
             showSuccess("Profile updated successfully");
             setPassword('');
             setConfirmPassword('');
-
-            // Reload page to ensure all components reflect the new name
-            setTimeout(() => {
-                window.location.reload();
-            }, 1000);
         } catch (error) {
             console.error("Update failed", error);
             showError(error.response?.data?.message || "Failed to update profile");
@@ -88,6 +81,8 @@ const Settings = () => {
         { id: 'sheetSync', label: 'Sheet Sync', icon: 'fa-table' },
         { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' },
     ];
+
+    if (!canAccessSettings) return <Navigate to="/dashboard" replace />;
 
     return (
         <div className="max-w-5xl mx-auto p-4 md:p-8 animate-fade-in-up">

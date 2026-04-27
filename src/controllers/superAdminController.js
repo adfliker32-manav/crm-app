@@ -441,8 +441,8 @@ const changeCompanyPassword = async (req, res) => {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        const hashedPassword = newPassword;
-        await User.findByIdAndUpdate(id, { password: hashedPassword });
+        // Password hashing is handled automatically by User model's pre('findOneAndUpdate') hook
+        await User.findByIdAndUpdate(id, { password: newPassword });
 
         res.json({
             success: true,

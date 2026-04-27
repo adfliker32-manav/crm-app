@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef */
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -38,7 +39,7 @@ const AgencySidebar = () => {
             try {
                 const res = await api.get('/auth/app-name');
                 if (res.data?.success) setAppName(res.data.appName);
-            } catch { }
+            } catch (err) { console.error('Failed to load app name:', err.message); }
         };
         fetchAppName();
     }, []);

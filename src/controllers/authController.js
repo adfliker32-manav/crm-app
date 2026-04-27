@@ -313,6 +313,15 @@ exports.deleteAgent = async (req, res) => {
         await deleteOwnedRecords(agentId);
         await User.findByIdAndDelete(agentId);
 
+        // ⚠️ Proactively kick the deleted agent's active sessions via Socket.IO
+        // Without this, the agent sees random API errors until they manually refresh.
+        try {
+            const { emitToUser } = require('../services/socketService');
+            emitToUser(agentId, 'account:deleted', {
+                message: 'Your account has been removed by your administrator. You will be logged out.'
+            });
+        } catch (_) { /* Socket not initialized — agent will get 401 on next API call */ }
+
         res.json({ success: true, message: 'Agent and all associated data deleted successfully' });
     } catch (err) {
         console.error(err);
@@ -372,7 +381,7 @@ exports.updateAgent = async (req, res) => {
 exports.getMyTeam = async (req, res) => {
     try {
         const managerId = getRequestUserId(req.user);
-        const agents = await User.find({ parentId: managerId }).select('-password');
+        const agents = await User.find({ parentId: managerId, role: 'agent' }).select('-password');
         res.json(agents);
     } catch (err) {
         console.error(err);

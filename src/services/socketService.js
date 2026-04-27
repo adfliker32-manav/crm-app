@@ -48,7 +48,8 @@ const initSocket = (httpServer) => {
         }
 
         try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            const cleanToken = token.replace(/^Bearer\s+/i, '').trim();
+            const decoded = jwt.verify(cleanToken, process.env.JWT_SECRET);
             socket.userId = decoded.userId || decoded.id;
             socket.userRole = decoded.role;
             next();
@@ -96,8 +97,23 @@ const initSocket = (httpServer) => {
         });
 
         // Client can request to watch a specific conversation
-        socket.on('watch:conversation', (conversationId) => {
-            socket.join(`conversation:${conversationId}`);
+        // 🔴 BUG FIX: Validate ownership — prevent cross-tenant conversation spying
+        socket.on('watch:conversation', async (conversationId) => {
+            try {
+                if (!conversationId) return;
+                const WhatsAppConversation = require('../models/WhatsAppConversation');
+                const { getCompanyUserIds } = require('../utils/whatsappUtils');
+                const companyUserIds = await getCompanyUserIds(userId);
+                const owns = await WhatsAppConversation.exists({
+                    _id: conversationId,
+                    userId: { $in: companyUserIds }
+                });
+                if (owns) {
+                    socket.join(`conversation:${conversationId}`);
+                }
+            } catch (err) {
+                console.error('watch:conversation auth error:', err.message);
+            }
         });
 
         socket.on('unwatch:conversation', (conversationId) => {

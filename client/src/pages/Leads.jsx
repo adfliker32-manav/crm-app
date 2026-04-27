@@ -131,10 +131,11 @@ const Leads = () => {
                     return dateB - dateA;
                 case "oldest":
                     return dateA - dateB;
-                case "last_updated":
+                case "last_updated": {
                     const updateA = new Date(a.updatedAt || a.createdAt).getTime();
                     const updateB = new Date(b.updatedAt || b.createdAt).getTime();
                     return updateB - updateA;
+                }
                 case "name_asc":
                     return a.name.localeCompare(b.name);
                 case "name_desc":
@@ -259,7 +260,7 @@ const Leads = () => {
             await api.delete(`/stages/${stageId}`);
             showSuccess('Stage deleted');
             fetchData();
-        } catch (error) { showError("Failed to delete stage"); }
+        } catch { showError("Failed to delete stage"); }
     };
 
     // Table handlers
@@ -314,23 +315,25 @@ const Leads = () => {
         if (!confirmed) return;
 
         try {
-            await Promise.all(ids.map(id => api.delete(`/leads/${id}`)));
+            // Single bulk API call instead of N individual deletes
+            await api.post('/leads/bulk-delete', { ids });
             showSuccess(`${ids.length} leads deleted successfully`);
             fetchData();
         } catch (err) {
             console.error("Failed to delete leads", err);
-            showError("Failed to delete leads");
+            showError(err.response?.data?.message || "Failed to delete leads");
         }
     };
 
     const handleBulkStatusUpdate = async (ids, newStatus) => {
         try {
-            await Promise.all(ids.map(id => api.put(`/leads/${id}`, { status: newStatus })));
+            // Single bulk API call instead of N individual updates
+            await api.post('/leads/bulk-status', { ids, status: newStatus });
             showSuccess(`${ids.length} leads updated successfully`);
             fetchData();
         } catch (err) {
             console.error("Failed to update leads", err);
-            showError("Failed to update leads");
+            showError(err.response?.data?.message || "Failed to update leads");
         }
     };
 

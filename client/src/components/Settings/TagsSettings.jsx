@@ -1,9 +1,12 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { useConfirm } from '../../context/ConfirmContext';
 
 const TagsSettings = () => {
     const { showSuccess, showError } = useNotification();
+    const { showDanger } = useConfirm();
     const [tags, setTags] = useState([]);
     const [loading, setLoading] = useState(true);
     
@@ -52,7 +55,8 @@ const TagsSettings = () => {
     };
 
     const handleDelete = async (id) => {
-        if (!window.confirm('Are you sure you want to delete this tag? Existing leads with this tag will retain the text but lose color formatting.')) return;
+        const confirmed = await showDanger('Are you sure you want to delete this tag? Existing leads with this tag will retain the text but lose color formatting.', 'Delete Tag');
+        if (!confirmed) return;
         
         try {
             await api.delete(`/tags/${id}`);

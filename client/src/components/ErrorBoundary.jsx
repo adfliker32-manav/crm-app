@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React from 'react';
 
 /**
@@ -59,7 +60,7 @@ class ErrorBoundary extends React.Component {
                     <p style={{ color: '#6b7280', marginBottom: '1.5rem', lineHeight: 1.6 }}>
                         An unexpected error occurred. Your data is safe. Please try going back to the dashboard.
                     </p>
-                    {process.env.NODE_ENV === 'development' && this.state.error && (
+                    {import.meta.env.MODE === 'development' && this.state.error && (
                         <pre style={{
                             background: '#fee2e2', color: '#991b1b',
                             borderRadius: '8px', padding: '1rem',

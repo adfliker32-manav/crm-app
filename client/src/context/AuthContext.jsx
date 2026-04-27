@@ -6,10 +6,17 @@ const AuthContext = createContext(null);
 export const AuthProvider = ({ children }) => {
     // Lazy initialization to avoid useEffect setState warning
     const [user, setUser] = useState(() => {
-        const storedUser = localStorage.getItem('user');
-        const token = localStorage.getItem('token');
-        if (storedUser && token) {
-            return JSON.parse(storedUser);
+        try {
+            const storedUser = localStorage.getItem('user');
+            const token = localStorage.getItem('token');
+            if (storedUser && token) {
+                return JSON.parse(storedUser);
+            }
+        } catch (e) {
+            // Corrupted localStorage — clear it and start fresh
+            console.warn('Corrupted user data in localStorage, clearing:', e.message);
+            localStorage.removeItem('user');
+            localStorage.removeItem('token');
         }
         return null;
     });

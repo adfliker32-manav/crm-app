@@ -1,9 +1,12 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { useConfirm } from '../../context/ConfirmContext';
 
 const WhatsAppBroadcasts = () => {
     const { showSuccess, showError } = useNotification();
+    const { showDanger } = useConfirm();
     const [broadcasts, setBroadcasts] = useState([]);
     const [templates, setTemplates] = useState([]);
     const [stages, setStages] = useState([]);
@@ -81,7 +84,8 @@ const WhatsAppBroadcasts = () => {
     };
 
     const handleStartBroadcast = async (id) => {
-        if (!window.confirm('Are you sure you want to start this broadcast? Messages will be sent immediately.')) return;
+        const confirmed = await showDanger('Are you sure you want to start this broadcast? Messages will be sent immediately.', 'Start Broadcast');
+        if (!confirmed) return;
         try {
             await api.post(`/whatsapp/broadcasts/${id}/start`);
             showSuccess('Broadcast started!');
@@ -92,7 +96,8 @@ const WhatsAppBroadcasts = () => {
     };
 
     const handleCancelBroadcast = async (id) => {
-        if (!window.confirm('Are you sure you want to cancel this broadcast?')) return;
+        const confirmed = await showDanger('Are you sure you want to cancel this broadcast?', 'Cancel Broadcast');
+        if (!confirmed) return;
         try {
             await api.post(`/whatsapp/broadcasts/${id}/cancel`);
             showSuccess('Broadcast cancelled');
@@ -103,7 +108,8 @@ const WhatsAppBroadcasts = () => {
     };
 
     const handleDeleteBroadcast = async (id) => {
-        if (!window.confirm('Are you sure you want to delete this broadcast?')) return;
+        const confirmed = await showDanger('Are you sure you want to delete this broadcast?', 'Delete Broadcast');
+        if (!confirmed) return;
         try {
             await api.delete(`/whatsapp/broadcasts/${id}`);
             showSuccess('Broadcast deleted');

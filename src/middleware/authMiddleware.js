@@ -20,6 +20,11 @@ if (!JWT_SECRET) {
 // MAIN AUTH MIDDLEWARE
 const authMiddleware = async (req, res, next) => {
     let token = req.header('Authorization') || req.query.token;
+
+    if (!token) {
+        return res.status(401).json({ message: 'No authentication token provided' });
+    }
+
     try {
         // Sanitize token (handle URL encoding or Bearer prefix in query/header)
         let cleanToken = token.replace(/^Bearer\s+/i, '').trim();

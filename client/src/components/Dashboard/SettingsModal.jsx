@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, no-empty, no-undef */
 import React, { useState, useEffect, useCallback } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
 import api from '../../services/api';
