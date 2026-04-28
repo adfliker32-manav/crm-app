@@ -102,6 +102,9 @@ exports.getConversation = async (req, res) => {
         // Reverse to show oldest first in UI
         messages.reverse();
 
+        // 🐛 DEBUG: Track down messages not showing after clear
+        console.log(`[MSG-DEBUG] getConversation id=${id}, page=${page}, totalMessages=${totalMessages}, returned=${messages.length}, convStatus=${conversation.status}, lastMsg="${conversation.lastMessage?.substring(0,30)}"`);
+
         res.json({
             success: true,
             conversation,
