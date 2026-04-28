@@ -69,7 +69,11 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
             onSuccess();
             onClose();
         } catch (err) {
-            setError(err.response?.data?.message || 'Failed to update lead');
+            if (err.response?.data?.error === 'validation_failed' && err.response?.data?.errors) {
+                setError(err.response.data.errors.map(e => e.message).join(', '));
+            } else {
+                setError(err.response?.data?.message || 'Failed to update lead');
+            }
         } finally {
             setLoading(false);
         }

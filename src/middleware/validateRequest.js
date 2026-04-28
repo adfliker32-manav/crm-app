@@ -86,11 +86,11 @@ const schemas = {
         email:      Joi.string().email().lowercase().trim().optional().allow('', null),
         status:     Joi.string().trim().max(50).optional(),
         source:     Joi.string().trim().max(100).optional(),
-        dealValue:  Joi.number().min(0).optional(),
+        dealValue:  Joi.number().min(0).optional().allow('', null),
         tags:       Joi.array().items(Joi.string()).optional(),
         customData: Joi.object().optional(),
-        assignedTo: Joi.string().hex().length(24).optional().allow(null),
-        nextFollowUpDate: Joi.date().optional().allow(null)
+        assignedTo: Joi.string().hex().length(24).optional().allow('', null),
+        nextFollowUpDate: Joi.date().optional().allow('', null)
     }),
 
     // Agent creation
