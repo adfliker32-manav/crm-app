@@ -56,6 +56,9 @@ const Reports = () => {
                 params.append('startDate', dateRange.start);
                 params.append('endDate', dateRange.end);
             }
+            if (activeTab === 'revenue') {
+                params.append('basis', 'closed');
+            }
 
             const res = await api.get(`${endpoint}?${params.toString()}`);
             setData(res.data);
@@ -192,8 +195,8 @@ const Reports = () => {
                             {activeTab === 'agents' && <AgentPerformance data={data} onViewDetails={handleViewAgentDetails} />}
                             {activeTab === 'agent-detail' && <AgentPerformanceDetail period={period} dateRange={dateRange} preSelectedAgentId={selectedAgentId} />}
                             {activeTab === 'revenue' && <RevenueReport data={data} />}
-                            {activeTab === 'funnel' && <FunnelChart period={period} />}
-                            {activeTab === 'activity' && <ActivityMetrics period={period} />}
+                            {activeTab === 'funnel' && <FunnelChart period={period} dateRange={dateRange} />}
+                            {activeTab === 'activity' && <ActivityMetrics period={period} dateRange={dateRange} />}
                             {activeTab === 'goals' && <GoalTracker period={period} />}
                             {activeTab === 'export' && <ExportReport period={period} dateRange={dateRange} />}
                         </>

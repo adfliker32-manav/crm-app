@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 
-const ActivityMetrics = ({ period }) => {
+const ActivityMetrics = ({ period, dateRange }) => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
 
@@ -10,7 +10,12 @@ const ActivityMetrics = ({ period }) => {
         const fetch = async () => {
             setLoading(true);
             try {
-                const res = await api.get(`/analytics/activity?period=${period}`);
+                const params = new URLSearchParams({ period });
+                if (period === 'custom' && dateRange?.start && dateRange?.end) {
+                    params.append('startDate', dateRange.start);
+                    params.append('endDate', dateRange.end);
+                }
+                const res = await api.get(`/analytics/activity?${params.toString()}`);
                 setData(res.data);
             } catch (err) {
                 console.error('ActivityMetrics fetch error:', err);
@@ -19,7 +24,7 @@ const ActivityMetrics = ({ period }) => {
             }
         };
         fetch();
-    }, [period]);
+    }, [period, dateRange]);
 
     if (loading) return <div className="text-center py-10 text-slate-400 text-sm animate-pulse">Loading activity data...</div>;
     if (!data?.agents?.length) return (

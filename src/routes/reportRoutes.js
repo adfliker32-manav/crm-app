@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const reportsController = require('../controllers/reportsController');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const checkPermission = require('../middleware/checkPermission');
 
 // All routes require authentication
 router.use(authMiddleware);
+router.use(checkPermission('viewReports'));
 
 // 1. Conversion Report
 router.get('/conversion', reportsController.getConversionReport);

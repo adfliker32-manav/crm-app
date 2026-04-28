@@ -103,6 +103,18 @@ const LeadSchema = new mongoose.Schema({
         default: 0
     },
 
+    // Deal Close Tracking (for "closed revenue" reporting)
+    wonAt: {
+        type: Date,
+        default: null,
+        index: true
+    },
+    lostAt: {
+        type: Date,
+        default: null,
+        index: true
+    },
+
     // Lead Assignment (for permission-based filtering)
     assignedTo: {
         type: mongoose.Schema.Types.ObjectId,
@@ -128,6 +140,8 @@ LeadSchema.index({ userId: 1, status: 1 });
 LeadSchema.index({ userId: 1, assignedTo: 1 });
 LeadSchema.index({ userId: 1, phone: 1 });
 LeadSchema.index({ userId: 1, email: 1 });
+LeadSchema.index({ userId: 1, wonAt: -1 });
+LeadSchema.index({ userId: 1, lostAt: -1 });
 
 // Auto-truncate arrays to prevent document bloat (16MB limits)
 LeadSchema.pre('save', function() {
@@ -142,6 +156,16 @@ LeadSchema.pre('save', function() {
     }
     if (this.notes && this.notes.length > 50) {
         this.notes = this.notes.slice(-50);
+    }
+
+    // Auto-fill close dates if a lead is created directly in a terminal stage
+    if (typeof this.status === 'string') {
+        if (/won/i.test(this.status) && !this.wonAt) {
+            this.wonAt = new Date();
+        }
+        if ((/lost/i.test(this.status) || /dead/i.test(this.status)) && !this.lostAt) {
+            this.lostAt = new Date();
+        }
     }
     this.markModified('customData');
 });

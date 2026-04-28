@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 
-const FunnelChart = ({ period }) => {
+const FunnelChart = ({ period, dateRange }) => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
 
@@ -9,7 +9,12 @@ const FunnelChart = ({ period }) => {
         const fetch = async () => {
             setLoading(true);
             try {
-                const res = await api.get(`/analytics/funnel?period=${period}`);
+                const params = new URLSearchParams({ period });
+                if (period === 'custom' && dateRange?.start && dateRange?.end) {
+                    params.append('startDate', dateRange.start);
+                    params.append('endDate', dateRange.end);
+                }
+                const res = await api.get(`/analytics/funnel?${params.toString()}`);
                 setData(res.data);
             } catch (err) {
                 console.error('FunnelChart fetch error:', err);
@@ -18,7 +23,7 @@ const FunnelChart = ({ period }) => {
             }
         };
         fetch();
-    }, [period]);
+    }, [period, dateRange]);
 
     if (loading) return <div className="text-center py-10 text-slate-400 text-sm animate-pulse">Loading funnel...</div>;
     if (!data) return null;

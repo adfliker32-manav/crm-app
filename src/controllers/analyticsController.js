@@ -3,6 +3,10 @@ const Lead = require('../models/Lead');
 const User = require('../models/User');
 const Task = require('../models/Task');
 const mongoose = require('mongoose');
+const { getDateRange, isValidDate } = require('../utils/dateRange');
+
+const hasValidDateRange = (start, end) =>
+    isValidDate(start) && isValidDate(end) && start <= end;
 
 // GET all goals for a given month
 const getGoals = async (req, res) => {
@@ -124,13 +128,11 @@ const setGoal = async (req, res) => {
 const getFunnelAnalysis = async (req, res) => {
     try {
         const { period = 'month', startDate, endDate } = req.query;
+        const { start, end } = getDateRange(period, startDate, endDate);
 
-        const now = new Date();
-        let start, end;
-        if (period === 'week') { start = new Date(now); start.setDate(start.getDate() - 7); end = new Date(); }
-        else if (period === 'year') { start = new Date(now.getFullYear(), 0, 1); end = new Date(); }
-        else if (period === 'custom' && startDate && endDate) { start = new Date(startDate); end = new Date(endDate); }
-        else { start = new Date(now.getFullYear(), now.getMonth(), 1); end = new Date(); }
+        if (!hasValidDateRange(start, end)) {
+            return res.status(400).json({ message: 'Invalid date range' });
+        }
 
         const [aggResult] = await Lead.aggregate([
             { $match: { ...req.dataScope, createdAt: { $gte: start, $lte: end } } },
@@ -226,13 +228,11 @@ const getActivityMetrics = async (req, res) => {
     try {
         const ownerId = req.tenantId; // ABAC Fix
         const { period = 'month', startDate, endDate } = req.query;
+        const { start, end } = getDateRange(period, startDate, endDate);
 
-        const now = new Date();
-        let start, end;
-        if (period === 'week') { start = new Date(now); start.setDate(start.getDate() - 7); end = new Date(); }
-        else if (period === 'year') { start = new Date(now.getFullYear(), 0, 1); end = new Date(); }
-        else if (period === 'custom' && startDate && endDate) { start = new Date(startDate); end = new Date(endDate); }
-        else { start = new Date(now.getFullYear(), now.getMonth(), 1); end = new Date(); }
+        if (!hasValidDateRange(start, end)) {
+            return res.status(400).json({ message: 'Invalid date range' });
+        }
 
         let agentQuery = { $or: [{ parentId: ownerId, role: 'agent' }, { _id: ownerId }] }; // ABAC: Include manager
         if (req.user.role === 'agent' && !req.user.permissions?.viewAllLeads) {

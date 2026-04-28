@@ -31,6 +31,8 @@ const createIndexes = async () => {
     await Lead.collection.createIndex({ userId: 1, phone: 1 },      { background: true }); // Dup check
     await Lead.collection.createIndex({ userId: 1, email: 1 },      { background: true }); // Dup check
     await Lead.collection.createIndex({ userId: 1, nextFollowUpDate: 1 }, { background: true }); // Follow-up queries
+    await Lead.collection.createIndex({ userId: 1, wonAt: -1 }, { background: true }); // Closed-won revenue reporting
+    await Lead.collection.createIndex({ userId: 1, lostAt: -1 }, { background: true }); // Closed-lost revenue reporting
     console.log('✅ Lead indexes created');
 
     // ── USERS ──────────────────────────────────────────────

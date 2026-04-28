@@ -4,7 +4,9 @@ import { Pie, Bar, Line } from 'react-chartjs-2';
 const RevenueReport = ({ data }) => {
     if (!data) return null;
 
-    const { summary, revenueBySource, monthlyTrend, topDeals } = data;
+    const { summary, revenueBySource, monthlyTrend, topDeals, basis } = data;
+    const isClosedBasis = (basis || '').toLowerCase() === 'closed';
+    const potentialLabel = isClosedBasis ? 'Closed Value' : 'Potential';
 
     // Source revenue pie chart
     const sourceLabels = Object.keys(revenueBySource || {});
@@ -24,7 +26,7 @@ const RevenueReport = ({ data }) => {
         labels: (monthlyTrend || []).map(m => m.month),
         datasets: [
             {
-                label: 'Potential',
+                label: potentialLabel,
                 data: (monthlyTrend || []).map(m => m.potential),
                 backgroundColor: 'rgba(99, 102, 241, 0.5)',
                 borderRadius: 6
@@ -51,11 +53,11 @@ const RevenueReport = ({ data }) => {
             {/* Summary Cards */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-100">
-                    <p className="text-sm text-blue-600 font-medium">Total Potential</p>
+                    <p className="text-sm text-blue-600 font-medium">{isClosedBasis ? 'Total Closed Value' : 'Total Potential'}</p>
                     <p className="text-2xl font-bold text-blue-700">{formatCurrency(summary?.totalPotential)}</p>
                 </div>
                 <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
-                    <p className="text-sm text-green-600 font-medium">Won Revenue</p>
+                    <p className="text-sm text-green-600 font-medium">{isClosedBasis ? 'Closed Won Revenue' : 'Won Revenue'}</p>
                     <p className="text-2xl font-bold text-green-700">{formatCurrency(summary?.wonRevenue)}</p>
                 </div>
                 <div className="bg-gradient-to-br from-red-50 to-rose-50 rounded-xl p-4 border border-red-100">

@@ -28,9 +28,15 @@ const ExportReport = ({ period, dateRange }) => {
     const handleExport = async (type) => {
         setLoading(type);
         try {
+            const params = new URLSearchParams({ period });
+            if (period === 'custom' && dateRange?.start && dateRange?.end) {
+                params.append('startDate', dateRange.start);
+                params.append('endDate', dateRange.end);
+            }
+
             let rows = [];
             if (type === 'conversion') {
-                const res = await api.get(`/reports/conversion?period=${period}`);
+                const res = await api.get(`/reports/conversion?${params.toString()}`);
                 const d = res.data;
                 rows = Object.entries(d.sourceConversion || {}).map(([source, stats]) => ({
                     Source: source,
@@ -46,7 +52,7 @@ const ExportReport = ({ period, dateRange }) => {
                 });
                 downloadCSV(rows, `conversion_report_${period}.csv`);
             } else if (type === 'agents') {
-                const res = await api.get(`/reports/agent-performance?period=${period}`);
+                const res = await api.get(`/reports/agent-performance?${params.toString()}`);
                 rows = (res.data.agentMetrics || []).map(a => ({
                     Agent_Name: a.name,
                     Email: a.email,
@@ -58,7 +64,9 @@ const ExportReport = ({ period, dateRange }) => {
                 }));
                 downloadCSV(rows, `agent_performance_${period}.csv`);
             } else if (type === 'revenue') {
-                const res = await api.get(`/reports/revenue?period=${period}`);
+                const revenueParams = new URLSearchParams(params.toString());
+                revenueParams.set('basis', 'closed');
+                const res = await api.get(`/reports/revenue?${revenueParams.toString()}`);
                 const d = res.data;
                 rows = (d.monthlyTrend || []).map(m => ({
                     Month: m.month,
@@ -68,7 +76,7 @@ const ExportReport = ({ period, dateRange }) => {
                 }));
                 downloadCSV(rows, `revenue_report_${period}.csv`);
             } else if (type === 'funnel') {
-                const res = await api.get(`/analytics/funnel?period=${period}`);
+                const res = await api.get(`/analytics/funnel?${params.toString()}`);
                 rows = (res.data.funnel || []).map(f => ({
                     Stage: f.stage,
                     Count: f.count,
@@ -77,7 +85,7 @@ const ExportReport = ({ period, dateRange }) => {
                 }));
                 downloadCSV(rows, `funnel_report_${period}.csv`);
             } else if (type === 'activity') {
-                const res = await api.get(`/analytics/activity?period=${period}`);
+                const res = await api.get(`/analytics/activity?${params.toString()}`);
                 rows = (res.data.agents || []).map(a => ({
                     Agent: a.agentName,
                     Leads_Handled: a.leadsHandled,

@@ -226,7 +226,7 @@ const getLeadById = async (req, res) => {
 // ==========================================
 // 2. CREATE LEAD
 // ==========================================
-const createLead = async (req, res) => {
+    const createLead = async (req, res) => {
     try {
         const { name, email, phone, status, source, customData, force } = req.body;
         const ownerId = req.tenantId;
@@ -274,6 +274,15 @@ const createLead = async (req, res) => {
             source: source || DEFAULT_LEAD_SOURCE,
             customData: customData || {}
         });
+
+        // If the lead is created directly as closed, capture close timestamp
+        if (typeof newLead.status === 'string') {
+            if (/won/i.test(newLead.status)) {
+                newLead.wonAt = new Date();
+            } else if (/lost/i.test(newLead.status) || /dead/i.test(newLead.status)) {
+                newLead.lostAt = new Date();
+            }
+        }
 
         // Enterprise ABAC: Auto-assign lead to agent if they created it
         if (req.user.role === 'agent') {
@@ -378,13 +387,24 @@ const updateLead = async (req, res) => {
         applyNextFollowUpDateUpdate(lead, updates);
 
         const oldStatus = lead.status;
+        const nextStatus = updates.status;
+        const stageChanged = hasStageChanged(oldStatus, nextStatus);
         applyLeadUpdates(lead, updates);
+
+        if (stageChanged) {
+            const now = new Date();
+            if (typeof nextStatus === 'string' && /won/i.test(nextStatus)) {
+                lead.wonAt = now;
+                // If a deal is re-won after being marked lost, keep data consistent
+                lead.lostAt = null;
+            } else if (typeof nextStatus === 'string' && (/lost/i.test(nextStatus) || /dead/i.test(nextStatus))) {
+                lead.lostAt = now;
+            }
+        }
 
         await lead.save();
 
         const initiatorName = await resolveActorName(req.user);
-        const nextStatus = updates.status;
-        const stageChanged = hasStageChanged(oldStatus, nextStatus);
 
         const changesObj = {};
         if (stageChanged) {

@@ -1,79 +1,45 @@
 const Lead = require('../models/Lead');
 const User = require('../models/User');
 const mongoose = require('mongoose');
+const { getDateRange, isValidDate } = require('../utils/dateRange');
 
-// Helper function to get owner ID (handles agent/manager logic)
-const getOwnerId = async (req) => {
-    let ownerId = req.user.userId || req.user.id;
-
-    if (req.user.role === 'agent') {
-        const agentUser = await User.findById(ownerId).select('parentId').lean();
-        if (agentUser && agentUser.parentId) {
-            ownerId = agentUser.parentId;
-        }
-    }
-
-    return mongoose.Types.ObjectId.isValid(ownerId)
-        ? new mongoose.Types.ObjectId(ownerId)
-        : ownerId;
+const castObjectId = (value) => {
+    if (!value) return value;
+    if (value instanceof mongoose.Types.ObjectId) return value;
+    return mongoose.Types.ObjectId.isValid(value) ? new mongoose.Types.ObjectId(value) : value;
 };
 
-// Helper function to get date range
-const getDateRange = (period, customStart, customEnd) => {
-    const now = new Date();
-    let start, end;
-
-    switch (period) {
-        case 'today':
-            start = new Date(now.setHours(0, 0, 0, 0));
-            end = new Date();
-            break;
-        case 'week':
-            start = new Date(now);
-            start.setDate(start.getDate() - 7);
-            start.setHours(0, 0, 0, 0);
-            end = new Date();
-            break;
-        case 'month':
-            start = new Date(now.getFullYear(), now.getMonth(), 1);
-            end = new Date();
-            break;
-        case 'quarter':
-            const quarterStart = Math.floor(now.getMonth() / 3) * 3;
-            start = new Date(now.getFullYear(), quarterStart, 1);
-            end = new Date();
-            break;
-        case 'year':
-            start = new Date(now.getFullYear(), 0, 1);
-            end = new Date();
-            break;
-        case 'custom':
-            start = customStart ? new Date(customStart) : new Date(now.getFullYear(), 0, 1);
-            end = customEnd ? new Date(customEnd) : new Date();
-            break;
-        default:
-            start = new Date(now.getFullYear(), now.getMonth(), 1);
-            end = new Date();
-    }
-
-    return { start, end };
+const getDataScope = (req) => {
+    const scope = { ...(req.dataScope || {}) };
+    if (!scope.userId && req.tenantId) scope.userId = req.tenantId;
+    if (scope.userId) scope.userId = castObjectId(scope.userId);
+    if (scope.assignedTo) scope.assignedTo = castObjectId(scope.assignedTo);
+    return scope;
 };
+
+const hasValidDateRange = (start, end) =>
+    isValidDate(start) && isValidDate(end) && start <= end;
 
 // ==========================================
 // 1. CONVERSION REPORT
 // ==========================================
 const getConversionReport = async (req, res) => {
     try {
-        const ownerId = await getOwnerId(req);
+        const ownerId = castObjectId(req.tenantId);
+        const dataScope = getDataScope(req);
         const { period = 'month', startDate, endDate } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
+
+        if (!hasValidDateRange(start, end)) {
+            return res.status(400).json({ message: 'Invalid date range' });
+        }
 
         // Calculate days difference for daily trend
         const daysDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
         const groupBy = daysDiff > 60 ? 'month' : daysDiff > 14 ? 'week' : 'day';
 
         const [results] = await Lead.aggregate([
-            { $match: { userId: ownerId, createdAt: { $gte: start, $lte: end } } },
+            { $match: { ...dataScope, createdAt: { $gte: start, $lte: end } } },
             {
                 $facet: {
                     summaryStats: [
@@ -191,19 +157,26 @@ const getConversionReport = async (req, res) => {
 // ==========================================
 const getAgentPerformance = async (req, res) => {
     try {
-        const ownerId = await getOwnerId(req);
+        const ownerId = castObjectId(req.tenantId);
+        const dataScope = getDataScope(req);
         const { period = 'month', startDate, endDate } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
 
+        if (!hasValidDateRange(start, end)) {
+            return res.status(400).json({ message: 'Invalid date range' });
+        }
+
+        const currentUserId = castObjectId(req.user.userId || req.user.id);
+        const isRestrictedAgent = req.user.role === 'agent' && !req.user.permissions?.viewAllLeads;
+
         // Get all agents under this manager
-        const agents = await User.find({
-            parentId: ownerId,
-            role: 'agent'
-        }).select('_id name email createdAt').lean();
+        const agents = isRestrictedAgent
+            ? (await User.find({ _id: currentUserId }).select('_id name email createdAt').lean())
+            : (await User.find({ parentId: ownerId, role: 'agent' }).select('_id name email createdAt').lean());
 
         // Calculate metrics via MongoDB aggregation instead of pulling all leads into memory
         const results = await Lead.aggregate([
-            { $match: { userId: ownerId, createdAt: { $gte: start, $lte: end } } },
+            { $match: { ...dataScope, createdAt: { $gte: start, $lte: end } } },
             {
                 $group: {
                     _id: "$assignedTo",
@@ -273,59 +246,225 @@ const getAgentPerformance = async (req, res) => {
 // ==========================================
 const getRevenueReport = async (req, res) => {
     try {
-        const ownerId = await getOwnerId(req);
-        const { period = 'month', startDate, endDate } = req.query;
+        const ownerId = castObjectId(req.tenantId);
+        const dataScope = getDataScope(req);
+        const { period = 'month', startDate, endDate, basis = 'created' } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
 
+        if (!hasValidDateRange(start, end)) {
+            return res.status(400).json({ message: 'Invalid date range' });
+        }
+
+        const isClosedBasis = String(basis).toLowerCase() === 'closed';
+
         // Calculate main metrics via Aggregation
-        const [results] = await Lead.aggregate([
-            { $match: { userId: ownerId, createdAt: { $gte: start, $lte: end } } },
-            {
-                $facet: {
-                    summaryStats: [
-                        {
-                            $group: {
-                                _id: null,
-                                totalPotential: { $sum: { $ifNull: ["$dealValue", 0] } },
-                                wonRevenue: { 
-                                    $sum: { 
-                                        $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] 
-                                    } 
-                                },
-                                lostRevenue: { 
-                                    $sum: { 
-                                        $cond: [{ $or: [
-                                            { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /lost/i } },
-                                            { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /dead/i } }
-                                        ]}, { $ifNull: ["$dealValue", 0] }, 0] 
-                                    } 
-                                }
-                            }
-                        }
-                    ],
-                    sourceDistribution: [
-                        {
-                            $group: {
-                                _id: { $ifNull: ["$source", "Unknown"] },
-                                potential: { $sum: { $ifNull: ["$dealValue", 0] } },
-                                leads: { $sum: 1 },
-                                won: { 
-                                    $sum: { 
-                                        $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] 
-                                    } 
-                                }
-                            }
-                        }
-                    ],
-                    topDeals: [
-                        { $match: { dealValue: { $gt: 0 } } },
-                        { $sort: { dealValue: -1 } },
-                        { $limit: 5 },
-                        { $project: { name: 1, dealValue: 1, status: 1, source: 1 } }
-                    ]
-                }
-            }
-        ]);
+        const [results] = await Lead.aggregate(
+            isClosedBasis
+                ? [
+                      { $match: { ...dataScope } },
+                      {
+                          $addFields: {
+                              closeDate: {
+                                  $switch: {
+                                      branches: [
+                                          {
+                                              case: {
+                                                  $regexMatch: {
+                                                      input: { $ifNull: ["$status", ""] },
+                                                      regex: /won/i
+                                                  }
+                                              },
+                                              then: { $ifNull: ["$wonAt", "$updatedAt"] }
+                                          },
+                                          {
+                                              case: {
+                                                  $or: [
+                                                      {
+                                                          $regexMatch: {
+                                                              input: { $ifNull: ["$status", ""] },
+                                                              regex: /lost/i
+                                                          }
+                                                      },
+                                                      {
+                                                          $regexMatch: {
+                                                              input: { $ifNull: ["$status", ""] },
+                                                              regex: /dead/i
+                                                          }
+                                                      }
+                                                  ]
+                                              },
+                                              then: { $ifNull: ["$lostAt", "$updatedAt"] }
+                                          }
+                                      ],
+                                      default: null
+                                  }
+                              }
+                          }
+                      },
+                      { $match: { closeDate: { $gte: start, $lte: end } } },
+                      {
+                          $facet: {
+                              summaryStats: [
+                                  {
+                                      $group: {
+                                          _id: null,
+                                          totalPotential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                          wonRevenue: {
+                                              $sum: {
+                                                  $cond: [
+                                                      {
+                                                          $regexMatch: {
+                                                              input: { $ifNull: ["$status", ""] },
+                                                              regex: /won/i
+                                                          }
+                                                      },
+                                                      { $ifNull: ["$dealValue", 0] },
+                                                      0
+                                                  ]
+                                              }
+                                          },
+                                          lostRevenue: {
+                                              $sum: {
+                                                  $cond: [
+                                                      {
+                                                          $or: [
+                                                              {
+                                                                  $regexMatch: {
+                                                                      input: { $ifNull: ["$status", ""] },
+                                                                      regex: /lost/i
+                                                                  }
+                                                              },
+                                                              {
+                                                                  $regexMatch: {
+                                                                      input: { $ifNull: ["$status", ""] },
+                                                                      regex: /dead/i
+                                                                  }
+                                                              }
+                                                          ]
+                                                      },
+                                                      { $ifNull: ["$dealValue", 0] },
+                                                      0
+                                                  ]
+                                              }
+                                          }
+                                      }
+                                  }
+                              ],
+                              sourceDistribution: [
+                                  {
+                                      $group: {
+                                          _id: { $ifNull: ["$source", "Unknown"] },
+                                          potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                          leads: { $sum: 1 },
+                                          won: {
+                                              $sum: {
+                                                  $cond: [
+                                                      {
+                                                          $regexMatch: {
+                                                              input: { $ifNull: ["$status", ""] },
+                                                              regex: /won/i
+                                                          }
+                                                      },
+                                                      { $ifNull: ["$dealValue", 0] },
+                                                      0
+                                                  ]
+                                              }
+                                          }
+                                      }
+                                  }
+                              ],
+                              topDeals: [
+                                  { $match: { dealValue: { $gt: 0 }, status: { $regex: /won/i } } },
+                                  { $sort: { dealValue: -1 } },
+                                  { $limit: 5 },
+                                  { $project: { name: 1, dealValue: 1, status: 1, source: 1, closeDate: 1 } }
+                              ]
+                          }
+                      }
+                  ]
+                : [
+                      { $match: { ...dataScope, createdAt: { $gte: start, $lte: end } } },
+                      {
+                          $facet: {
+                              summaryStats: [
+                                  {
+                                      $group: {
+                                          _id: null,
+                                          totalPotential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                          wonRevenue: {
+                                              $sum: {
+                                                  $cond: [
+                                                      {
+                                                          $regexMatch: {
+                                                              input: { $ifNull: ["$status", ""] },
+                                                              regex: /won/i
+                                                          }
+                                                      },
+                                                      { $ifNull: ["$dealValue", 0] },
+                                                      0
+                                                  ]
+                                              }
+                                          },
+                                          lostRevenue: {
+                                              $sum: {
+                                                  $cond: [
+                                                      {
+                                                          $or: [
+                                                              {
+                                                                  $regexMatch: {
+                                                                      input: { $ifNull: ["$status", ""] },
+                                                                      regex: /lost/i
+                                                                  }
+                                                              },
+                                                              {
+                                                                  $regexMatch: {
+                                                                      input: { $ifNull: ["$status", ""] },
+                                                                      regex: /dead/i
+                                                                  }
+                                                              }
+                                                          ]
+                                                      },
+                                                      { $ifNull: ["$dealValue", 0] },
+                                                      0
+                                                  ]
+                                              }
+                                          }
+                                      }
+                                  }
+                              ],
+                              sourceDistribution: [
+                                  {
+                                      $group: {
+                                          _id: { $ifNull: ["$source", "Unknown"] },
+                                          potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                          leads: { $sum: 1 },
+                                          won: {
+                                              $sum: {
+                                                  $cond: [
+                                                      {
+                                                          $regexMatch: {
+                                                              input: { $ifNull: ["$status", ""] },
+                                                              regex: /won/i
+                                                          }
+                                                      },
+                                                      { $ifNull: ["$dealValue", 0] },
+                                                      0
+                                                  ]
+                                              }
+                                          }
+                                      }
+                                  }
+                              ],
+                              topDeals: [
+                                  { $match: { dealValue: { $gt: 0 } } },
+                                  { $sort: { dealValue: -1 } },
+                                  { $limit: 5 },
+                                  { $project: { name: 1, dealValue: 1, status: 1, source: 1 } }
+                              ]
+                          }
+                      }
+                  ]
+        );
 
         const summary = results.summaryStats[0] || { totalPotential: 0, wonRevenue: 0, lostRevenue: 0 };
         const pendingRevenue = summary.totalPotential - summary.wonRevenue - summary.lostRevenue;
@@ -346,20 +485,103 @@ const getRevenueReport = async (req, res) => {
         sixMonthsAgo.setDate(1);
         sixMonthsAgo.setHours(0, 0, 0, 0);
 
-        const trendResults = await Lead.aggregate([
-            { $match: { userId: ownerId, createdAt: { $gte: sixMonthsAgo } } },
-            {
-                $group: {
-                    _id: {
-                        year: { $year: { date: "$createdAt", timezone: "UTC" } },
-                        month: { $month: { date: "$createdAt", timezone: "UTC" } }
-                    },
-                    potential: { $sum: { $ifNull: ["$dealValue", 0] } },
-                    won: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] } },
-                    leads: { $sum: 1 }
-                }
-            }
-        ]);
+        const trendResults = await Lead.aggregate(
+            isClosedBasis
+                ? [
+                      { $match: { ...dataScope } },
+                      {
+                          $addFields: {
+                              closeDate: {
+                                  $switch: {
+                                      branches: [
+                                          {
+                                              case: {
+                                                  $regexMatch: {
+                                                      input: { $ifNull: ["$status", ""] },
+                                                      regex: /won/i
+                                                  }
+                                              },
+                                              then: { $ifNull: ["$wonAt", "$updatedAt"] }
+                                          },
+                                          {
+                                              case: {
+                                                  $or: [
+                                                      {
+                                                          $regexMatch: {
+                                                              input: { $ifNull: ["$status", ""] },
+                                                              regex: /lost/i
+                                                          }
+                                                      },
+                                                      {
+                                                          $regexMatch: {
+                                                              input: { $ifNull: ["$status", ""] },
+                                                              regex: /dead/i
+                                                          }
+                                                      }
+                                                  ]
+                                              },
+                                              then: { $ifNull: ["$lostAt", "$updatedAt"] }
+                                          }
+                                      ],
+                                      default: null
+                                  }
+                              }
+                          }
+                      },
+                      { $match: { closeDate: { $gte: sixMonthsAgo } } },
+                      {
+                          $group: {
+                              _id: {
+                                  year: { $year: { date: "$closeDate", timezone: "UTC" } },
+                                  month: { $month: { date: "$closeDate", timezone: "UTC" } }
+                              },
+                              potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                              won: {
+                                  $sum: {
+                                      $cond: [
+                                          {
+                                              $regexMatch: {
+                                                  input: { $ifNull: ["$status", ""] },
+                                                  regex: /won/i
+                                              }
+                                          },
+                                          { $ifNull: ["$dealValue", 0] },
+                                          0
+                                      ]
+                                  }
+                              },
+                              leads: { $sum: 1 }
+                          }
+                      }
+                  ]
+                : [
+                      { $match: { ...dataScope, createdAt: { $gte: sixMonthsAgo } } },
+                      {
+                          $group: {
+                              _id: {
+                                  year: { $year: { date: "$createdAt", timezone: "UTC" } },
+                                  month: { $month: { date: "$createdAt", timezone: "UTC" } }
+                              },
+                              potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                              won: {
+                                  $sum: {
+                                      $cond: [
+                                          {
+                                              $regexMatch: {
+                                                  input: { $ifNull: ["$status", ""] },
+                                                  regex: /won/i
+                                              }
+                                          },
+                                          { $ifNull: ["$dealValue", 0] },
+                                          0
+                                      ]
+                                  }
+                              },
+                              leads: { $sum: 1 }
+                          }
+                      }
+                  ]
+        );
 
         const monthlyTrend = [];
         for (let i = 5; i >= 0; i--) {
@@ -379,6 +601,7 @@ const getRevenueReport = async (req, res) => {
         }
 
         res.json({
+            basis: isClosedBasis ? 'closed' : 'created',
             period,
             dateRange: { start, end },
             summary: {
@@ -404,11 +627,16 @@ const getRevenueReport = async (req, res) => {
 // ==========================================
 const getComprehensiveReport = async (req, res) => {
     try {
-        const ownerId = await getOwnerId(req);
+        const ownerId = castObjectId(req.tenantId);
+        const dataScope = getDataScope(req);
         const { period = 'month', startDate, endDate } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
 
-        const allTimeLeads = await Lead.countDocuments({ userId: ownerId });
+        if (!hasValidDateRange(start, end)) {
+            return res.status(400).json({ message: 'Invalid date range' });
+        }
+
+        const allTimeLeads = await Lead.countDocuments({ ...dataScope });
 
         // Previous period comparison calculation
         const periodDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
@@ -420,7 +648,7 @@ const getComprehensiveReport = async (req, res) => {
         const [results] = await Lead.aggregate([
             { 
                 $match: { 
-                    userId: ownerId, 
+                    ...dataScope,
                     createdAt: { $gte: prevStart, $lte: end }
                 } 
             },
@@ -508,15 +736,22 @@ const getComprehensiveReport = async (req, res) => {
 // ==========================================
 const getAgentDetailedPerformance = async (req, res) => {
     try {
-        const ownerId = await getOwnerId(req);
+        const ownerId = castObjectId(req.tenantId);
+        const dataScope = getDataScope(req);
         const { period = 'month', startDate, endDate, agentId } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
 
+        if (!hasValidDateRange(start, end)) {
+            return res.status(400).json({ message: 'Invalid date range' });
+        }
+
+        const currentUserId = castObjectId(req.user.userId || req.user.id);
+        const isRestrictedAgent = req.user.role === 'agent' && !req.user.permissions?.viewAllLeads;
+
         // Get all agents under this manager (for dropdown)
-        const agents = await User.find({
-            parentId: ownerId,
-            role: 'agent'
-        }).select('_id name email').lean();
+        const agents = isRestrictedAgent
+            ? (await User.find({ _id: currentUserId }).select('_id name email').lean())
+            : (await User.find({ parentId: ownerId, role: 'agent' }).select('_id name email').lean());
 
         // If no specific agent selected, return just the agent list
         if (!agentId) {
@@ -528,11 +763,19 @@ const getAgentDetailedPerformance = async (req, res) => {
         }
 
         // Get leads for the selected agent in date range
+        if (!mongoose.Types.ObjectId.isValid(agentId)) {
+            return res.status(400).json({ message: 'Invalid agentId' });
+        }
+
+        if (isRestrictedAgent && String(agentId) !== String(currentUserId)) {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+
         const selectedAgentId = new mongoose.Types.ObjectId(agentId);
         
         // 1. AGGREGATION FOR SUMMARY METRICS (Avoids pulling full lead data)
         const [aggSummary] = await Lead.aggregate([
-            { $match: { userId: ownerId, assignedTo: selectedAgentId, createdAt: { $gte: start, $lte: end } } },
+            { $match: { ...dataScope, assignedTo: selectedAgentId, createdAt: { $gte: start, $lte: end } } },
             {
                 $facet: {
                     stats: [
@@ -570,7 +813,7 @@ const getAgentDetailedPerformance = async (req, res) => {
         // 2. LEAN QUERY FOR COMPLEX TIME CALCULATIONS
         // Only pull strictly necessary arrays to prevent Node.js RAM exhaustion
         const agentLeads = await Lead.find({
-            userId: ownerId,
+            ...dataScope,
             assignedTo: selectedAgentId,
             createdAt: { $gte: start, $lte: end }
         }).select('name status createdAt firstContactedAt history.type history.subType history.date history.metadata history.content messages.from messages.timestamp followUpHistory.completedDate').lean();
@@ -628,54 +871,110 @@ const getAgentDetailedPerformance = async (req, res) => {
             ? ((dealsClosed / leadsAssigned) * 100).toFixed(1)
             : 0;
 
-        // 2. PIPELINE LEAKAGE TABLE
-        const stageCounts = {};
-        const stageOrder = ['New', 'Contacted', 'Qualified', 'Proposal Sent', 'Negotiation', 'Won', 'Lost', 'Dead Lead'];
+        // 2. PIPELINE LEAKAGE TABLE (funnel-style drop-off)
+        const pipelineStages = ['New', 'Contacted', 'Qualified', 'Proposal Sent', 'Negotiation', 'Won'];
+        const pipelineStageIndex = new Map(pipelineStages.map((s, i) => [s.toLowerCase(), i]));
 
-        // Extract Current resting stage from Aggregation (Faster)
-        const currentStageRaw = aggSummary.stageCounts || [];
-        currentStageRaw.forEach(s => {
-            stageCounts[s._id] = { entered: 0, current: s.count };
+        const canonicalizeStage = (stage) => {
+            if (!stage) return null;
+            const s = stage.toString().trim();
+            if (!s) return null;
+            const lower = s.toLowerCase();
+
+            // Common aliases
+            if (lower === 'dead' || lower === 'deadlead' || lower === 'dead lead') return 'Dead Lead';
+            if (lower === 'lostlead' || lower === 'lost lead') return 'Lost';
+            if (lower === 'proposal' || lower === 'proposal_sent') return 'Proposal Sent';
+
+            // Exact match to pipeline stages (case-insensitive)
+            const exact = pipelineStages.find(p => p.toLowerCase() === lower);
+            return exact || s;
+        };
+
+        const extractNewStage = (historyItem) => {
+            const fromMeta = historyItem?.metadata?.newStatus;
+            if (typeof fromMeta === 'string' && fromMeta.trim()) {
+                return canonicalizeStage(fromMeta);
+            }
+
+            const content = typeof historyItem?.content === 'string' ? historyItem.content : '';
+            if (!content) return null;
+
+            // Example: "Stage updated: Old âž” New by Name"
+            let match = content.match(/Stage updated:\\s*(.*?)\\s*(?:→|âž”|->|=>|»|›|>|\\u2192)\\s*(.*?)\\s*(?:by|$)/i);
+            if (match && match[2]) return canonicalizeStage(match[2]);
+
+            // Example: "Stage changed to X"
+            match = content.match(/Stage changed to\\s*(.*?)\\s*(?:by|$)/i);
+            if (match && match[1]) return canonicalizeStage(match[1]);
+
+            // Fallback: split on arrow-like delimiter
+            const arrowDelims = ['âž”', '→', '->', '=>'];
+            for (const delim of arrowDelims) {
+                if (content.includes(delim)) {
+                    const after = content.split(delim).slice(1).join(delim);
+                    const cleaned = after.split(' by ')[0];
+                    const stage = cleaned?.trim();
+                    if (stage) return canonicalizeStage(stage);
+                }
+            }
+
+            return null;
+        };
+
+        const reachedCounts = {};
+        pipelineStages.forEach(s => { reachedCounts[s] = 0; });
+
+        // Current stage distribution (as-of now) for context
+        const currentStageCounts = {};
+        (aggSummary.stageCounts || []).forEach(s => {
+            const key = canonicalizeStage(s?._id);
+            if (key) currentStageCounts[key] = s.count;
         });
 
-        // Track stage transitions from history
+        const isWithinRange = (value) => {
+            const d = new Date(value);
+            return isValidDate(d) && d >= start && d <= end;
+        };
+
         agentLeads.forEach(lead => {
+            let maxIdx = 0; // At least "New"
+
             const stageChanges = (lead.history || [])
-                .filter(h => h.subType === 'Stage Change')
+                .filter(h => h && h.subType === 'Stage Change' && isWithinRange(h.date))
                 .sort((a, b) => new Date(a.date) - new Date(b.date));
 
-            // Initial stage
-            stageCounts['New'] = stageCounts['New'] || { entered: 0, current: 0 };
-            stageCounts['New'].entered++;
-
-            // Each stage change represents entering a new stage
             stageChanges.forEach(change => {
-                const newStage = change.metadata?.newStatus || change.content?.split(' to ')?.pop()?.trim();
-                if (newStage && stageCounts[newStage]) {
-                    stageCounts[newStage].entered++;
+                const newStage = extractNewStage(change);
+                if (!newStage) return;
+
+                const idx = pipelineStageIndex.get(newStage.toLowerCase());
+                if (idx !== undefined && idx > maxIdx) {
+                    maxIdx = idx;
                 }
             });
+
+            for (let i = 0; i <= maxIdx; i++) {
+                reachedCounts[pipelineStages[i]]++;
+            }
         });
 
-        const pipelineLeakage = Object.entries(stageCounts)
-            .map(([stage, data]) => {
-                const entered = data.entered || data.current;
-                const current = data.current;
-                const dropped = Math.max(0, entered - current);
-                const dropOffRate = entered > 0 ? ((dropped / entered) * 100).toFixed(1) : 0;
+        const pipelineLeakage = pipelineStages.map((stage, i) => {
+            const reached = reachedCounts[stage] || 0;
+            const nextStage = pipelineStages[i + 1];
+            const nextReached = nextStage ? (reachedCounts[nextStage] || 0) : 0;
 
-                return {
-                    stage,
-                    leadsEntered: entered,
-                    leadsDropped: dropped,
-                    dropOffPercent: parseFloat(dropOffRate)
-                };
-            })
-            .sort((a, b) => {
-                const orderA = stageOrder.indexOf(a.stage);
-                const orderB = stageOrder.indexOf(b.stage);
-                return (orderA === -1 ? 999 : orderA) - (orderB === -1 ? 999 : orderB);
-            });
+            const dropped = nextStage ? Math.max(0, reached - nextReached) : 0;
+            const dropOffRate = reached > 0 && nextStage ? ((dropped / reached) * 100).toFixed(1) : 0;
+
+            return {
+                stage,
+                leadsEntered: reached,
+                leadsDropped: dropped,
+                dropOffPercent: parseFloat(dropOffRate),
+                currentInStage: currentStageCounts[stage] || 0
+            };
+        });
 
         // 3. SPEED ENFORCEMENT WIDGET
         const uncontactedLeads = agentLeads.filter(lead => {
