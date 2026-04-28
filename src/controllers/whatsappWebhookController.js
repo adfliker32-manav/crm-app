@@ -303,7 +303,8 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                 lastMessage: messagePreview,
                 lastMessageAt: timestamp,
                 lastInboundMessageAt: timestamp,
-                lastMessageDirection: 'inbound'
+                lastMessageDirection: 'inbound',
+                status: 'active' // Re-activate archived/spam conversations on new inbound message
             },
             $inc: {
                 unreadCount: 1,
