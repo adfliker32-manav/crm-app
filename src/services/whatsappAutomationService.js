@@ -4,6 +4,7 @@ const WhatsAppMessage = require('../models/WhatsAppMessage');
 const User = require('../models/User');
 const { sendWhatsAppMessage } = require('./whatsappService');
 const { buildMetaComponents } = require('../utils/templateVariableResolver');
+const { isFeatureDisabled } = require('../utils/systemConfig');
 
 /**
  * FIX #79: Helper to sync automated send to conversation DB.
@@ -70,6 +71,7 @@ const syncAutomatedSendToConversation = async (lead, userId, templateName, waMes
 // Send automated WhatsApp message when lead is created
 const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
     try {
+        if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return false;
         const templates = await WhatsAppTemplate.find({
             userId: userId,
             isActive: true,
@@ -118,6 +120,7 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
 // Send automated WhatsApp message when stage changes
 const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, userId) => {
     try {
+        if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return false;
         // Find templates with automation enabled for stage change
         const templates = await WhatsAppTemplate.find({
             userId: userId,

@@ -19,6 +19,7 @@ router.post('/send', authMiddleware, requireModule('email'), emailSendLimiter, m
 
 // Email Configuration Routes
 const emailConfigController = require('../controllers/emailConfigController');
+const validateObjectId = require('../middleware/validateObjectId');
 router.get('/config', authMiddleware, requireModule('email'), emailConfigController.getEmailConfig);
 router.put('/config', authMiddleware, requireModule('email'), emailConfigController.updateEmailConfig);
 router.post('/config/test', authMiddleware, requireModule('email'), emailTestLimiter, emailConfigController.testEmailConfig);
@@ -29,8 +30,8 @@ router.get('/unsubscribe', handleUnsubscribe);
 
 // F1: Public tracking endpoints (no auth — embedded in email HTML)
 const { trackOpen, trackClick } = require('../controllers/emailTrackingController');
-router.get('/track/open/:logId', trackOpen);
-router.get('/track/click/:logId', trackClick);
+router.get('/track/open/:logId', validateObjectId({ params: ['logId'] }), trackOpen);
+router.get('/track/click/:logId', validateObjectId({ params: ['logId'] }), trackClick);
 
 // F2: Bulk campaign send
 router.post('/campaign', authMiddleware, requireModule('email'), emailSendLimiter, emailController.sendBulkCampaign);
@@ -38,6 +39,6 @@ router.post('/campaign', authMiddleware, requireModule('email'), emailSendLimite
 // F3: Email drafts
 router.get('/drafts', authMiddleware, requireModule('email'), emailController.getDrafts);
 router.post('/drafts', authMiddleware, requireModule('email'), emailController.saveDraft);
-router.delete('/drafts/:draftId', authMiddleware, requireModule('email'), emailController.deleteDraft);
+router.delete('/drafts/:draftId', validateObjectId({ params: ['draftId'] }), authMiddleware, requireModule('email'), emailController.deleteDraft);
 
 module.exports = router;

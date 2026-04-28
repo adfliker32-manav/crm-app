@@ -1,4 +1,5 @@
 const express = require('express');
+const validateObjectId = require('../middleware/validateObjectId');
 const router = express.Router();
 const { authMiddleware, requireSuperAdmin } = require('../middleware/authMiddleware');
 const {
@@ -50,28 +51,28 @@ router.get('/cloud-usage', authMiddleware, requireSuperAdmin, getCloudUsage);
 // Company Management Routes
 router.post('/companies', authMiddleware, requireSuperAdmin, createCompany);
 router.get('/companies', authMiddleware, requireSuperAdmin, getAllCompanies);
-router.get('/companies/:id', authMiddleware, requireSuperAdmin, getCompanyById);
-router.put('/companies/:id', authMiddleware, requireSuperAdmin, updateCompany);
-router.delete('/companies/:id', authMiddleware, requireSuperAdmin, deleteCompany);
-router.put('/companies/:id/freeze', authMiddleware, requireSuperAdmin, freezeTenant);
+router.get('/companies/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getCompanyById);
+router.put('/companies/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updateCompany);
+router.delete('/companies/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deleteCompany);
+router.put('/companies/:id/freeze', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, freezeTenant);
 
 // Company Leads
-router.get('/companies/:id/leads', authMiddleware, requireSuperAdmin, getCompanyLeads);
+router.get('/companies/:id/leads', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getCompanyLeads);
 
 // Agency Resource Limits (Controlled Autonomy)
-router.put('/companies/:id/limits', authMiddleware, requireSuperAdmin, updateAgencyLimits);
+router.put('/companies/:id/limits', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updateAgencyLimits);
 
 // Company Password
-router.put('/companies/:id/change-password', authMiddleware, requireSuperAdmin, changeCompanyPassword);
+router.put('/companies/:id/change-password', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, changeCompanyPassword);
 
 // Company Agents
-router.get('/companies/:id/agents', authMiddleware, requireSuperAdmin, getCompanyAgents);
-router.post('/companies/:id/agents', authMiddleware, requireSuperAdmin, createCompanyAgent);
-router.put('/companies/:id/agents/:agentId', authMiddleware, requireSuperAdmin, updateCompanyAgent);
-router.delete('/agents/:agentId', authMiddleware, requireSuperAdmin, deleteCompanyAgent);
+router.get('/companies/:id/agents', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getCompanyAgents);
+router.post('/companies/:id/agents', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, createCompanyAgent);
+router.put('/companies/:id/agents/:agentId', validateObjectId({ params: ['id', 'agentId'] }), authMiddleware, requireSuperAdmin, updateCompanyAgent);
+router.delete('/agents/:agentId', validateObjectId({ params: ['agentId'] }), authMiddleware, requireSuperAdmin, deleteCompanyAgent);
 
 // Agent Limit
-router.put('/companies/:id/agent-limit', authMiddleware, requireSuperAdmin, updateAgentLimit);
+router.put('/companies/:id/agent-limit', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updateAgentLimit);
 
 // Billing removed
 // Phase 2: Core Platform Features
@@ -99,8 +100,8 @@ router.get('/workspace-analytics', authMiddleware, requireSuperAdmin, getWorkspa
 router.get('/accounts/pending', authMiddleware, requireSuperAdmin, getPendingRequests);
 router.get('/accounts/active', authMiddleware, requireSuperAdmin, getActiveAccounts);
 router.get('/accounts/rejected', authMiddleware, requireSuperAdmin, getRejectedAccounts);
-router.put('/accounts/:id/approve', authMiddleware, requireSuperAdmin, approveAccount);
-router.put('/accounts/:id/reject', authMiddleware, requireSuperAdmin, rejectAccount);
-router.put('/accounts/:id/deactivate', authMiddleware, requireSuperAdmin, deactivateAccount);
+router.put('/accounts/:id/approve', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, approveAccount);
+router.put('/accounts/:id/reject', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, rejectAccount);
+router.put('/accounts/:id/deactivate', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deactivateAccount);
 
 module.exports = router;

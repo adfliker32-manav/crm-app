@@ -3,10 +3,12 @@ const User = require('../models/User');
 const { sendEmail, sendEmailWithRetry } = require('./emailService');
 const { logEmail } = require('./emailLogService');
 const { replaceVariables } = require('../utils/emailTemplateUtils');
+const { isFeatureDisabled } = require('../utils/systemConfig');
 
 // Send automated email when lead is created
 const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
     try {
+        if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return false;
         // Find templates with automation enabled for lead creation
         const templates = await EmailTemplate.find({
             userId: userId,
@@ -53,7 +55,7 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                 const body = replaceVariables(template.body, templateData);
 
                 // Prepare attachments
-                const attachments = template.attachments.map(att => ({
+                const attachments = (template.attachments || []).map(att => ({
                     filename: att.originalName || att.filename,
                     path: att.path
                 }));
@@ -116,6 +118,7 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
 // Send automated email when stage changes
 const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId) => {
     try {
+        if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return false;
         // Find templates with automation enabled for stage change
         const templates = await EmailTemplate.find({
             userId: userId,
@@ -163,7 +166,7 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                 const body = replaceVariables(template.body, templateData);
 
                 // Prepare attachments
-                const attachments = template.attachments.map(att => ({
+                const attachments = (template.attachments || []).map(att => ({
                     filename: att.originalName || att.filename,
                     path: att.path
                 }));

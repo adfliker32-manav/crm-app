@@ -3,6 +3,7 @@ const router = express.Router();
 const chatbotController = require('../controllers/chatbotController');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
+const validateObjectId = require('../middleware/validateObjectId');
 
 // All routes require authentication and the explicit chatbot module
 router.use(authMiddleware, requireModule('chatbot'));
@@ -14,21 +15,21 @@ router.get('/', chatbotController.getFlows);
 router.post('/', chatbotController.createFlow);
 
 // Get single flow
-router.get('/:id', chatbotController.getFlow);
+router.get('/:id', validateObjectId({ params: ['id'] }), chatbotController.getFlow);
 
 // Update flow
-router.put('/:id', chatbotController.updateFlow);
+router.put('/:id', validateObjectId({ params: ['id'] }), chatbotController.updateFlow);
 
 // Delete flow
-router.delete('/:id', chatbotController.deleteFlow);
+router.delete('/:id', validateObjectId({ params: ['id'] }), chatbotController.deleteFlow);
 
 // Toggle flow active status
-router.post('/:id/toggle', chatbotController.toggleFlow);
+router.post('/:id/toggle', validateObjectId({ params: ['id'] }), chatbotController.toggleFlow);
 
 // Duplicate flow
-router.post('/:id/duplicate', chatbotController.duplicateFlow);
+router.post('/:id/duplicate', validateObjectId({ params: ['id'] }), chatbotController.duplicateFlow);
 
 // Get flow analytics
-router.get('/:id/analytics', chatbotController.getFlowAnalytics);
+router.get('/:id/analytics', validateObjectId({ params: ['id'] }), chatbotController.getFlowAnalytics);
 
 module.exports = router;

@@ -1,4 +1,5 @@
 const express = require('express');
+const validateObjectId = require('../middleware/validateObjectId');
 const router = express.Router();
 const { 
     impersonateClient, getAgencyClients, getAgencyAnalytics, toggleClientFreeze, createClient, updateClient
@@ -7,7 +8,7 @@ const { getAgencyBranding, updateAgencyBranding, getUsageStats } = require('../c
 const { authMiddleware, requireAgency } = require('../middleware/authMiddleware');
 
 // @route   GET /api/agency/impersonate/:clientId
-router.get('/impersonate/:clientId', authMiddleware, requireAgency, impersonateClient);
+router.get('/impersonate/:clientId', validateObjectId({ params: ['clientId'] }), authMiddleware, requireAgency, impersonateClient);
 
 // @route   GET /api/agency/clients
 router.get('/clients', authMiddleware, requireAgency, getAgencyClients);
@@ -16,16 +17,16 @@ router.get('/clients', authMiddleware, requireAgency, getAgencyClients);
 router.post('/clients', authMiddleware, requireAgency, createClient);
 
 // @route   PUT /api/agency/clients/:clientId/freeze
-router.put('/clients/:clientId/freeze', authMiddleware, requireAgency, toggleClientFreeze);
+router.put('/clients/:clientId/freeze', validateObjectId({ params: ['clientId'] }), authMiddleware, requireAgency, toggleClientFreeze);
 
 // @route   PUT /api/agency/clients/:clientId — Update client properties and modules
-router.put('/clients/:clientId', authMiddleware, requireAgency, updateClient);
+router.put('/clients/:clientId', validateObjectId({ params: ['clientId'] }), authMiddleware, requireAgency, updateClient);
 
 // @route   GET /api/agency/analytics
 router.get('/analytics', authMiddleware, requireAgency, getAgencyAnalytics);
 
 // @route   GET /api/agency/branding/:agencyId
-router.get('/branding/:agencyId', getAgencyBranding);
+router.get('/branding/:agencyId', validateObjectId({ params: ['agencyId'] }), getAgencyBranding);
 
 // @route   PUT /api/agency/branding
 router.put('/branding', authMiddleware, requireAgency, updateAgencyBranding);

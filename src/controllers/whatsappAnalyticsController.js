@@ -4,23 +4,28 @@ const ChatbotFlow = require('../models/ChatbotFlow');
 const ChatbotSession = require('../models/ChatbotSession');
 const mongoose = require('mongoose');
 
-// Helper: Build date filter from query param (days)
 const buildDateFilter = (days) => {
     if (!days || days === 'all') return null;
+    const parsedDays = parseInt(days);
+    if (isNaN(parsedDays) || parsedDays < 0) return null;
     const date = new Date();
-    date.setDate(date.getDate() - parseInt(days));
+    date.setDate(date.getDate() - parsedDays);
     return date;
 };
 
 exports.getDashboardStats = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return res.status(400).json({ success: false, message: 'Invalid user ID' });
+        }
         const objectId = new mongoose.Types.ObjectId(userId);
+        
         const { days } = req.query;
+        if (days && days !== 'all' && isNaN(parseInt(days))) {
+            return res.status(400).json({ success: false, message: 'Invalid days parameter' });
+        }
         const dateFrom = buildDateFilter(days);
-
-        // Date match clause for time-filtered queries
-        const dateMatch = dateFrom ? { createdAt: { $gte: dateFrom } } : {};
 
         // 1. Conversation Metrics (all-time — conversations persist)
         const [convStats = { totalReceived: 0, totalManualSent: 0, activeChats: 0, unreadChats: 0 }] = await WhatsAppConversation.aggregate([
@@ -30,7 +35,7 @@ exports.getDashboardStats = async (req, res) => {
                     _id: null,
                     totalReceived: { $sum: { $ifNull: ['$metadata.totalInbound', 0] } },
                     totalManualSent: { $sum: { $ifNull: ['$metadata.totalOutbound', 0] } },
-                    activeChats: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ['$status', ''] }, regex: /^active$/i } }, 1, 0] } },
+                    activeChats: { $sum: { $cond: [{ $eq: [{ $toLower: { $ifNull: ['$status', ''] } }, 'active'] }, 1, 0] } },
                     unreadChats: { $sum: { $cond: [{ $gt: [{ $ifNull: ['$unreadCount', 0] }, 0] }, 1, 0] } }
                 }
             }

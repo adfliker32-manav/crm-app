@@ -6,6 +6,7 @@ const { authMiddleware } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
 const { validate, schemas } = require('../middleware/validateRequest');
 const rateLimit = require('express-rate-limit');
+const validateObjectId = require('../middleware/validateObjectId');
 
 // Rate limit for bulk/sync actions (prevent abuse)
 const bulkLimiter = rateLimit({
@@ -83,24 +84,24 @@ router.post('/bulk-status', authMiddleware, checkPermission('editLeads'), leadCo
 router.get('/', authMiddleware, checkPermission('viewLeads'), leadController.getLeads);
 
 // 8.5 Get Single Lead
-router.get('/:id', authMiddleware, checkPermission('viewLeads'), leadController.getLeadById);
+router.get('/:id', validateObjectId({ params: ['id'] }), authMiddleware, checkPermission('viewLeads'), leadController.getLeadById);
 
 // 9. Create Lead
 router.post('/', authMiddleware, writeLimiter, checkPermission('createLeads'), validate(schemas.createLead), leadController.createLead);
 
 // 10. Assign Lead (PARAMETERIZED ROUTE)
-router.put('/:id/assign', authMiddleware, checkPermission('assignLeads'), leadController.assignLead);
+router.put('/:id/assign', validateObjectId({ params: ['id'] }), authMiddleware, checkPermission('assignLeads'), leadController.assignLead);
 
 // 11. Update Lead (PARAMETERIZED ROUTE)
-router.put('/:id', authMiddleware, checkPermission('editLeads'), validate(schemas.updateLead), leadController.updateLead);
+router.put('/:id', validateObjectId({ params: ['id'] }), authMiddleware, checkPermission('editLeads'), validate(schemas.updateLead), leadController.updateLead);
 
 // 12. Delete Lead (PARAMETERIZED ROUTE)
-router.delete('/:id', authMiddleware, deleteLimiter, checkPermission('deleteLeads'), leadController.deleteLead);
+router.delete('/:id', validateObjectId({ params: ['id'] }), authMiddleware, deleteLimiter, checkPermission('deleteLeads'), leadController.deleteLead);
 
 // 13. Add Note (PARAMETERIZED ROUTE)
-router.post('/:id/notes', authMiddleware, checkPermission('createNotes'), leadController.addNote);
+router.post('/:id/notes', validateObjectId({ params: ['id'] }), authMiddleware, checkPermission('createNotes'), leadController.addNote);
 
 // 14. Send Manual Email (PARAMETERIZED ROUTE)
-router.post('/:id/send-email', authMiddleware, checkPermission('sendEmails'), leadController.sendManualEmail);
+router.post('/:id/send-email', validateObjectId({ params: ['id'] }), authMiddleware, checkPermission('sendEmails'), leadController.sendManualEmail);
 
 module.exports = router;

@@ -102,8 +102,53 @@ const defineWhatsAppJobs = (agenda) => {
             }
 
             if (watcher.ifNoReplyAction?.sendTemplateId && lead.phone) {
-                await sendWhatsAppMessage(lead.phone, watcher.ifNoReplyAction.sendTemplateId, watcher.tenantId.toString());
+                const result = await sendWhatsAppMessage(lead.phone, watcher.ifNoReplyAction.sendTemplateId, watcher.tenantId.toString());
                 console.log(`📤 [Timeout] No-reply follow-up template sent to ${lead.phone}`);
+
+                // FIX: Sync the no-reply template to conversation DB (was a ghost message)
+                try {
+                    const waMessageId = result?.messages?.[0]?.id;
+                    if (waMessageId) {
+                        const WhatsAppConversation = require('../models/WhatsAppConversation');
+                        const WhatsAppMessage = require('../models/WhatsAppMessage');
+                        const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
+
+                        let conversation = await WhatsAppConversation.findOne({
+                            userId: watcher.tenantId,
+                            waContactId: { $regex: normalizedPhone.slice(-10) + '$' }
+                        });
+
+                        if (conversation) {
+                            const messageRecord = new WhatsAppMessage({
+                                conversationId: conversation._id,
+                                userId: watcher.tenantId,
+                                waMessageId: waMessageId,
+                                direction: 'outbound',
+                                type: 'template',
+                                content: { text: `[Auto] No-reply follow-up: ${watcher.ifNoReplyAction.sendTemplateId}` },
+                                status: 'sent',
+                                timestamp: new Date(),
+                                isAutomated: true,
+                                automationSource: 'automation'
+                            });
+                            await messageRecord.save();
+
+                            await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                                $set: {
+                                    lastMessage: `[Auto] No-reply follow-up`,
+                                    lastMessageAt: new Date(),
+                                    lastMessageDirection: 'outbound'
+                                },
+                                $inc: {
+                                    'metadata.totalMessages': 1,
+                                    'metadata.totalOutbound': 1
+                                }
+                            });
+                        }
+                    }
+                } catch (syncErr) {
+                    console.error(`⚠️ [Timeout] No-reply template sent but DB sync failed:`, syncErr.message);
+                }
             }
 
             // Release the one-at-a-time automation lock

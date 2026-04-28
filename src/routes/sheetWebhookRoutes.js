@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const { receiveSheetPush } = require('../controllers/sheetWebhookController');
 const rateLimit = require('express-rate-limit');
+const validateObjectId = require('../middleware/validateObjectId');
 
 // Rate limit webhook to prevent abuse (100 pushes per 15 minutes per IP)
 const webhookLimiter = rateLimit({
@@ -15,6 +16,6 @@ const webhookLimiter = rateLimit({
 });
 
 // POST /api/webhooks/google-sheet/:userId
-router.post('/google-sheet/:userId', webhookLimiter, receiveSheetPush);
+router.post('/google-sheet/:userId', validateObjectId({ params: ['userId'] }), webhookLimiter, receiveSheetPush);
 
 module.exports = router;

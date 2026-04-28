@@ -133,7 +133,7 @@ const queueLeadCreatedEffects = (lead, ownerId) => {
 
 const queueLeadStageChangeEffects = (lead) => {
     runInBackground('Auto Error (STAGE_CHANGED):', () => evaluateLead(lead, 'STAGE_CHANGED'));
-    runInBackground('Auto Error (TIME_IN_STAGE):', () => evaluateLead(lead, 'TIME_IN_STAGE'));
+    // NOTE: TIME_IN_STAGE removed - it is time-based, not event-based. Needs a cron/Agenda job.
 };
 
 const sendMetaEventIfEnabled = async (lead, newStatus, oldStatus) => {
@@ -424,8 +424,7 @@ const updateLead = async (req, res) => {
 
         // Send automated email if stage changed
         if (stageChanged && lead.email) {
-            const ownerId = lead.userId;
-            sendAutomatedEmailOnStageChange(lead, oldStatus, nextStatus, ownerId)
+            sendAutomatedEmailOnStageChange(lead, oldStatus, nextStatus, lead.userId)
                 .then(sent => {
                     if (sent) {
                         Lead.findByIdAndUpdate(lead._id, {
@@ -440,7 +439,7 @@ const updateLead = async (req, res) => {
                                     $slice: -100
                                 }
                             }
-                        }).exec();
+                        }).exec().catch(err => console.error('Email auto history error:', err.message));
                     }
                 })
                 .catch(err => {
@@ -450,8 +449,7 @@ const updateLead = async (req, res) => {
 
         // Send automated WhatsApp if stage changed
         if (stageChanged && lead.phone) {
-            const ownerId = lead.userId;
-            sendAutomatedWhatsAppOnStageChange(lead, oldStatus, nextStatus, ownerId)
+            sendAutomatedWhatsAppOnStageChange(lead, oldStatus, nextStatus, lead.userId)
                 .then(sent => {
                     if (sent) {
                         Lead.findByIdAndUpdate(lead._id, {
@@ -466,7 +464,7 @@ const updateLead = async (req, res) => {
                                     $slice: -100
                                 }
                             }
-                        }).exec();
+                        }).exec().catch(err => console.error('WA auto history error:', err.message));
                     }
                 })
                 .catch(err => {

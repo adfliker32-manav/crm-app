@@ -188,9 +188,22 @@ const evaluateLead = async (lead, triggerType) => {
         if (!rules || rules.length === 0) return;
 
         for (const rule of rules) {
-            // ─── ONE-AT-A-TIME LOCK ───────────────────────────────
-            // If this rule is already actively processing another lead, skip entirely.
-            if (rule.currentlyProcessingLeadId) {
+            // ─── STALE LOCK RECOVERY ──────────────────────────────
+            // If a lock has been held for >1 hour, the process likely crashed.
+            // Release it so the rule isn't permanently stuck.
+            if (rule.currentlyProcessingLeadId && rule.lastFiredAt) {
+                const lockAge = Date.now() - new Date(rule.lastFiredAt).getTime();
+                const ONE_HOUR = 60 * 60 * 1000;
+                if (lockAge > ONE_HOUR) {
+                    console.warn(`⚠️ [Automation] Stale lock detected on rule "${rule.name}" (held ${Math.round(lockAge / 60000)}min). Releasing.`);
+                    await AutomationRule.findByIdAndUpdate(rule._id, {
+                        $set: { currentlyProcessingLeadId: null }
+                    });
+                } else {
+                    console.log(`⏭️ [Automation] Rule "${rule.name}" is already processing lead ${rule.currentlyProcessingLeadId}. Skipping.`);
+                    continue;
+                }
+            } else if (rule.currentlyProcessingLeadId) {
                 console.log(`⏭️ [Automation] Rule "${rule.name}" is already processing lead ${rule.currentlyProcessingLeadId}. Skipping.`);
                 continue;
             }
@@ -233,13 +246,22 @@ const evaluateLead = async (lead, triggerType) => {
 
             if (allConditionsMet) {
                 if (rule.delayMinutes > 0 && globalAgendaInstance) {
-                    console.log(`🤖 [Automation] Scheduling Rule: "${rule.name}" in ${rule.delayMinutes} mins.`);
-                    await globalAgendaInstance.schedule(
-                        new Date(Date.now() + rule.delayMinutes * 60000), 
-                        'EXECUTE_AUTOMATION_ACTION', 
-                        { ruleId: rule._id, leadId: lead._id }
-                    );
-                    // Note: lock will be released when the scheduled job fires
+                    // FIX: Wrap schedule in try-catch — if scheduling fails, release the lock.
+                    // Previously a schedule failure left the lock permanently acquired.
+                    try {
+                        console.log(`🤖 [Automation] Scheduling Rule: "${rule.name}" in ${rule.delayMinutes} mins.`);
+                        await globalAgendaInstance.schedule(
+                            new Date(Date.now() + rule.delayMinutes * 60000), 
+                            'EXECUTE_AUTOMATION_ACTION', 
+                            { ruleId: rule._id, leadId: lead._id }
+                        );
+                        // Note: lock will be released when the scheduled job fires
+                    } catch (scheduleErr) {
+                        console.error(`❌ [Automation] Failed to schedule Rule "${rule.name}":`, scheduleErr.message);
+                        await AutomationRule.findByIdAndUpdate(rule._id, {
+                            $set: { currentlyProcessingLeadId: null }
+                        });
+                    }
                 } else {
                     // Execute immediately and release lock inside
                     await executeRuleActions(rule, lead);
@@ -309,16 +331,16 @@ const defineAutomationJobs = (agenda) => {
             if (attempt < MAX_RETRIES) {
                 console.log(`🔄 [Automation] Will retry job for rule ${ruleId} (attempt ${attempt + 1}/${MAX_RETRIES})`);
                 throw error; // Throwing lets Agenda increment failCount and reschedule
+                // FIX: Do NOT call job.remove() here — Agenda needs the job to retry
             }
 
-            // Max retries exhausted — release lock permanently
+            // Max retries exhausted — release lock permanently and clean up
             await AutomationRule.findByIdAndUpdate(ruleId, {
                 $set: { currentlyProcessingLeadId: null }
             });
             console.error(`🚨 [Automation] Job PERMANENTLY FAILED after ${MAX_RETRIES} attempts. Rule: ${ruleId}, Lead: ${leadId}`);
+            await job.remove();
         }
-
-        await job.remove();
     });
 };
 
@@ -326,22 +348,27 @@ const defineAutomationJobs = (agenda) => {
 // Exported: called by whatsappWebhookController when an inbound
 // message arrives, to check if a WAIT_FOR_REPLY watcher is pending.
 // ─────────────────────────────────────────────────────────────────
-exports.handleWatcherReply = async (conversationId) => {
+// FIX: Moved to a regular function (not exports.X) to avoid mixed export confusion.
+const handleWatcherReply = async (conversationId) => {
     try {
-        // Find pending watcher for this conversation
-        const watcher = await LeadAutomationWatcher.findOne({
-            conversationId,
-            status: 'pending'
-        });
+        // FIX: Kill switch check — watcher reply actions should also respect the global switch
+        if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) {
+            console.log(`🛑 AUTOMATION KILL SWITCH ACTIVE. Blocked watcher reply action.`);
+            return;
+        }
+
+        // FIX: RACE CONDITION — Use atomic findOneAndUpdate to claim the watcher.
+        // Previously used findOne then findByIdAndUpdate — two concurrent webhook
+        // deliveries could both find the same pending watcher and both execute.
+        const watcher = await LeadAutomationWatcher.findOneAndUpdate(
+            { conversationId, status: 'pending' },
+            { $set: { status: 'replied' } },
+            { new: false } // Return the ORIGINAL document (before update) so we get the old status
+        );
 
         if (!watcher) return; // No active watcher — normal traffic
 
         console.log(`✅ [Automation] Reply detected for watcher ${watcher._id} (Rule: ${watcher.ruleId})`);
-
-        // Mark as replied immediately (prevents the timeout job from double-firing)
-        await LeadAutomationWatcher.findByIdAndUpdate(watcher._id, {
-            $set: { status: 'replied' }
-        });
 
         // Cancel the pending Agenda timeout job
         if (watcher.agendaJobId && globalAgendaInstance) {
@@ -401,5 +428,5 @@ exports.handleWatcherReply = async (conversationId) => {
 module.exports = {
     evaluateLead,
     defineAutomationJobs,
-    handleWatcherReply: exports.handleWatcherReply
+    handleWatcherReply
 };

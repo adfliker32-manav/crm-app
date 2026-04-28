@@ -25,7 +25,6 @@ const hasValidDateRange = (start, end) =>
 // ==========================================
 const getConversionReport = async (req, res) => {
     try {
-        const ownerId = castObjectId(req.tenantId);
         const dataScope = getDataScope(req);
         const { period = 'month', startDate, endDate } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
@@ -157,7 +156,6 @@ const getConversionReport = async (req, res) => {
 // ==========================================
 const getAgentPerformance = async (req, res) => {
     try {
-        const ownerId = castObjectId(req.tenantId);
         const dataScope = getDataScope(req);
         const { period = 'month', startDate, endDate } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
@@ -208,7 +206,7 @@ const getAgentPerformance = async (req, res) => {
                 totalLeads: agentStats.totalLeads,
                 wonLeads: agentStats.wonLeads,
                 conversionRate: agentStats.totalLeads > 0
-                    ? ((agentStats.wonLeads / agentStats.totalLeads) * 100).toFixed(1)
+                    ? parseFloat(((agentStats.wonLeads / agentStats.totalLeads) * 100).toFixed(1))
                     : 0,
                 followUpsCompleted: agentStats.followUpsCompleted,
                 totalDealValue: agentStats.totalDealValue,
@@ -230,7 +228,7 @@ const getAgentPerformance = async (req, res) => {
                 totalLeads: unassignedStats.totalLeads,
                 wonLeads: unassignedStats.wonLeads,
                 conversionRate: unassignedStats.totalLeads > 0
-                    ? ((unassignedStats.wonLeads / unassignedStats.totalLeads) * 100).toFixed(1)
+                    ? parseFloat(((unassignedStats.wonLeads / unassignedStats.totalLeads) * 100).toFixed(1))
                     : 0
             }
         });
@@ -246,7 +244,6 @@ const getAgentPerformance = async (req, res) => {
 // ==========================================
 const getRevenueReport = async (req, res) => {
     try {
-        const ownerId = castObjectId(req.tenantId);
         const dataScope = getDataScope(req);
         const { period = 'month', startDate, endDate, basis = 'created' } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
@@ -627,7 +624,6 @@ const getRevenueReport = async (req, res) => {
 // ==========================================
 const getComprehensiveReport = async (req, res) => {
     try {
-        const ownerId = castObjectId(req.tenantId);
         const dataScope = getDataScope(req);
         const { period = 'month', startDate, endDate } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
@@ -736,7 +732,6 @@ const getComprehensiveReport = async (req, res) => {
 // ==========================================
 const getAgentDetailedPerformance = async (req, res) => {
     try {
-        const ownerId = castObjectId(req.tenantId);
         const dataScope = getDataScope(req);
         const { period = 'month', startDate, endDate, agentId } = req.query;
         const { start, end } = getDateRange(period, startDate, endDate);
@@ -868,7 +863,7 @@ const getAgentDetailedPerformance = async (req, res) => {
         const avgFirstResponseHours = (avgFirstResponseMs / (1000 * 60 * 60)).toFixed(1);
 
         const conversionRate = leadsAssigned > 0
-            ? ((dealsClosed / leadsAssigned) * 100).toFixed(1)
+            ? parseFloat(((dealsClosed / leadsAssigned) * 100).toFixed(1))
             : 0;
 
         // 2. PIPELINE LEAKAGE TABLE (funnel-style drop-off)
@@ -901,11 +896,11 @@ const getAgentDetailedPerformance = async (req, res) => {
             if (!content) return null;
 
             // Example: "Stage updated: Old âž” New by Name"
-            let match = content.match(/Stage updated:\\s*(.*?)\\s*(?:→|âž”|->|=>|»|›|>|\\u2192)\\s*(.*?)\\s*(?:by|$)/i);
+            let match = content.match(/Stage updated:\s*(.*?)\s*(?:→|➔|->|=>|»|›|>|\u2192)\s*(.*?)\s*(?:by|$)/i);
             if (match && match[2]) return canonicalizeStage(match[2]);
 
             // Example: "Stage changed to X"
-            match = content.match(/Stage changed to\\s*(.*?)\\s*(?:by|$)/i);
+            match = content.match(/Stage changed to\s*(.*?)\s*(?:by|$)/i);
             if (match && match[1]) return canonicalizeStage(match[1]);
 
             // Fallback: split on arrow-like delimiter

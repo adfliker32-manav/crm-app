@@ -1,5 +1,7 @@
 const { getActivityLogs, getEntityActivityLogs } = require('../services/auditService');
 const User = require('../models/User');
+const Lead = require('../models/Lead');
+const mongoose = require('mongoose');
 
 /**
  * Get activity logs with filtering and pagination
@@ -7,17 +9,17 @@ const User = require('../models/User');
  */
 exports.getActivityLogs = async (req, res) => {
     try {
-        const { page = 1, limit = 50, actionType, userId, entityType, startDate, endDate } = req.query;
+        const { actionType, userId, entityType, startDate, endDate } = req.query;
 
-        let companyId = req.user.userId || req.user.id;
+        // Fix pagination safely
+        let page = parseInt(req.query.page) || 1;
+        if (page < 1) page = 1;
+        
+        let limit = parseInt(req.query.limit) || 50;
+        if (limit < 1) limit = 1;
+        if (limit > 100) limit = 100;
 
-        // Determine company ID based on role
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(companyId);
-            if (agentUser && agentUser.parentId) {
-                companyId = agentUser.parentId;
-            }
-        }
+        const companyId = req.tenantId;
 
         // Build filters
         const filters = { companyId };
@@ -25,16 +27,19 @@ exports.getActivityLogs = async (req, res) => {
         // Agents can only see their own actions (unless they have viewActivityLogs permission)
         if (req.user.role === 'agent' && !req.user.permissions?.viewActivityLogs) {
             filters.userId = req.user.userId || req.user.id;
+        } else if (userId) {
+            filters.userId = userId;
         }
 
         // Apply additional filters
         if (actionType) filters.actionType = actionType;
-        if (userId) filters.userId = userId;
         if (entityType) filters.entityType = entityType;
-        if (startDate) filters.startDate = startDate;
-        if (endDate) filters.endDate = endDate;
+        
+        // Validate date filters
+        if (startDate && !isNaN(Date.parse(startDate))) filters.startDate = startDate;
+        if (endDate && !isNaN(Date.parse(endDate))) filters.endDate = endDate;
 
-        const result = await getActivityLogs(filters, parseInt(page), parseInt(limit));
+        const result = await getActivityLogs(filters, page, limit);
 
         res.json({
             success: true,
@@ -55,28 +60,40 @@ exports.getActivityLogs = async (req, res) => {
 exports.getLeadActivityLogs = async (req, res) => {
     try {
         const { leadId } = req.params;
-        const { limit = 50 } = req.query;
-
-        // Verify user has access to this lead
-        const Lead = require('../models/Lead');
-        let ownerId = req.user.userId || req.user.id;
-
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(ownerId);
-            if (agentUser && agentUser.parentId) {
-                ownerId = agentUser.parentId;
-            }
+        
+        // Add ObjectId validation
+        if (!mongoose.Types.ObjectId.isValid(leadId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid lead ID format'
+            });
         }
 
-        const lead = await Lead.findOne({ _id: leadId, userId: ownerId });
-        if (!lead) {
+        // Standardize limit
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 100);
+
+        // Verify user has access to this lead
+        const companyId = req.tenantId;
+        const currentUserId = req.user.userId || req.user.id;
+
+        // NOTE: In this schema, userId represents the Tenant/Company ID
+        const query = { _id: leadId, userId: companyId };
+        
+        // If agent without viewAllLeads permission, restrict to assigned leads
+        if (req.user.role === 'agent' && !req.user.permissions?.viewAllLeads) {
+            query.assignedTo = currentUserId;
+        }
+
+        // Use exists() instead of findOne() for faster access verification
+        const leadExists = await Lead.exists(query);
+        if (!leadExists) {
             return res.status(404).json({
                 success: false,
                 message: 'Lead not found or access denied'
             });
         }
 
-        const logs = await getEntityActivityLogs(leadId, 'Lead', parseInt(limit));
+        const logs = await getEntityActivityLogs(leadId, 'Lead', limit);
 
         res.json({
             success: true,
@@ -96,21 +113,17 @@ exports.getLeadActivityLogs = async (req, res) => {
  */
 exports.getRecentActivity = async (req, res) => {
     try {
-        const { limit = 10 } = req.query;
+        // Apply same limit validation
+        let limit = parseInt(req.query.limit) || 10;
+        if (limit < 1) limit = 1;
+        if (limit > 100) limit = 100;
 
-        let companyId = req.user.userId || req.user.id;
-
-        if (req.user.role === 'agent') {
-            const agentUser = await User.findById(companyId);
-            if (agentUser && agentUser.parentId) {
-                companyId = agentUser.parentId;
-            }
-        }
+        const companyId = req.tenantId;
 
         const result = await getActivityLogs(
             { companyId },
             1,
-            parseInt(limit)
+            limit
         );
 
         res.json({

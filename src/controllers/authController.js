@@ -3,6 +3,7 @@ const WorkspaceSettings = require('../models/WorkspaceSettings');
 const GlobalSetting = require('../models/GlobalSetting');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const { OAuth2Client } = require('google-auth-library');
 const auditLogger = require('../services/auditLogger');
 const { BASIC_AGENT } = require('../constants/permissionPresets');
@@ -299,6 +300,10 @@ exports.deleteAgent = async (req, res) => {
     try {
         const agentId = req.params.id;
 
+        if (!mongoose.Types.ObjectId.isValid(agentId)) {
+            return res.status(400).json({ message: 'Invalid agent ID format' });
+        }
+
         if (!hasManageTeamAccess(req.user)) {
             return res.status(403).json({ message: 'Unauthorized to manage team' });
         }
@@ -334,6 +339,10 @@ exports.updateAgent = async (req, res) => {
     try {
         const { id } = req.params;
         const { name, permissions, password } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid agent ID format' });
+        }
 
         if (!hasManageTeamAccess(req.user)) {
             return res.status(403).json({ message: 'Unauthorized to manage team' });

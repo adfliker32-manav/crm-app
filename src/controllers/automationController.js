@@ -1,4 +1,5 @@
 const AutomationRule = require('../models/AutomationRule');
+const mongoose = require('mongoose');
 
 // Get all rules for the tenant
 const getRules = async (req, res) => {
@@ -42,6 +43,9 @@ const createRule = async (req, res) => {
 const updateRule = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid automation rule ID' });
+        }
         // ⚠️ SECURITY: Whitelist allowed fields to prevent mass assignment.
         // Previously req.body was passed directly to $set, allowing users to
         // overwrite tenantId, executionCount, currentlyProcessingLeadId, etc.
@@ -73,6 +77,9 @@ const updateRule = async (req, res) => {
 const deleteRule = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid automation rule ID' });
+        }
         const rule = await AutomationRule.findOneAndDelete({ _id: id, tenantId: req.tenantId });
 
         if (!rule) return res.status(404).json({ message: 'Automation rule not found' });
@@ -88,6 +95,9 @@ const deleteRule = async (req, res) => {
 const toggleRule = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid automation rule ID' });
+        }
         const { isActive } = req.body;
 
         const rule = await AutomationRule.findOneAndUpdate(

@@ -4,6 +4,7 @@ const authController = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const { validate, schemas } = require('../middleware/validateRequest');
 const rateLimit = require('express-rate-limit');
+const validateObjectId = require('../middleware/validateObjectId');
 
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -20,8 +21,8 @@ router.post('/add-agent', authMiddleware, validate(schemas.createAgent), authCon
 
 // 3. Team Management
 router.get('/my-team', authMiddleware, authController.getMyTeam);
-router.delete('/remove-agent/:id', authMiddleware, authController.deleteAgent);
-router.put('/update-agent/:id', authMiddleware, authController.updateAgent);
+router.delete('/remove-agent/:id', validateObjectId({ params: ['id'] }), authMiddleware, authController.deleteAgent);
+router.put('/update-agent/:id', validateObjectId({ params: ['id'] }), authMiddleware, authController.updateAgent);
 
 // 4. Profile & Plans
 router.put('/profile', authMiddleware, authController.updateProfile);
