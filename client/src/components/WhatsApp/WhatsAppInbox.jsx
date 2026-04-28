@@ -154,9 +154,11 @@ const WhatsAppInbox = () => {
         // --- New message arrives (inbound from customer, outbound from bot/agent) ---
         const handleNewMessage = ({ conversationId, message }) => {
             const currentChat = selectedChatRef.current;
+            // Normalize to string — socket may send ObjectId or string
+            const convId = typeof conversationId === 'string' ? conversationId : String(conversationId);
 
             // If this message is for the currently open conversation, append it
-            if (currentChat && currentChat._id === conversationId) {
+            if (currentChat && currentChat._id === convId) {
                 // If it's the current chat, we WANT to scroll down for the new message
                 shouldScrollToBottomRef.current = true; 
                 setMessages(prev => {
@@ -173,17 +175,17 @@ const WhatsAppInbox = () => {
 
             // Update conversation list sidebar
             setConversations(prev => {
-                const exists = prev.some(c => c._id === conversationId);
+                const exists = prev.some(c => c._id === convId);
                 if (exists) {
                     return prev.map(c => {
-                        if (c._id !== conversationId) return c;
+                        if (c._id !== convId) return c;
                         return {
                             ...c,
                             lastMessage: message.content?.text?.substring(0, 100) || 'Message',
                             lastMessageAt: message.timestamp,
                             lastMessageDirection: message.direction,
                             // Increment unread only for inbound messages not from currently viewed chat
-                            unreadCount: (message.direction === 'inbound' && (!currentChat || currentChat._id !== conversationId))
+                            unreadCount: (message.direction === 'inbound' && (!currentChat || currentChat._id !== convId))
                                 ? (c.unreadCount || 0) + 1
                                 : c.unreadCount
                         };
@@ -198,12 +200,13 @@ const WhatsAppInbox = () => {
 
         // --- Conversation metadata update (lastMessage, unread, etc.) ---
         const handleConversationUpdate = ({ conversationId, updates }) => {
+            const convId = typeof conversationId === 'string' ? conversationId : String(conversationId);
             setConversations(prev =>
-                prev.map(c => c._id === conversationId ? { ...c, ...updates } : c)
+                prev.map(c => c._id === convId ? { ...c, ...updates } : c)
             );
             // Also update selectedChat if it matches
             const currentChat = selectedChatRef.current;
-            if (currentChat && currentChat._id === conversationId) {
+            if (currentChat && currentChat._id === convId) {
                 setSelectedChat(prev => prev ? { ...prev, ...updates } : prev);
             }
         };

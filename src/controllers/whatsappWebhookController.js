@@ -330,17 +330,15 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         debug(`✅ WhatsAppMessage saved to DB: ${messageDoc._id}`);
 
         // 🔌 Push to frontend via Socket.IO (real-time)
+        // Emit to ALL company users (not just targetUserId) so shared WhatsApp inboxes update for agents/managers
         const savedMsg = messageDoc.toObject();
-        emitToUser(targetUserId, 'whatsapp:newMessage', {
-            conversationId: conversation._id,
+        const conversationIdStr = conversation._id.toString();
+        const socketPayload = {
+            conversationId: conversationIdStr,
             message: savedMsg
-        });
-        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
-            conversationId: conversation._id,
-            message: savedMsg
-        });
-        emitToUser(targetUserId, 'whatsapp:conversationUpdate', {
-            conversationId: conversation._id,
+        };
+        const updatePayloadSocket = {
+            conversationId: conversationIdStr,
             updates: {
                 lastMessage: messagePreview.substring(0, 100),
                 lastMessageAt: timestamp,
@@ -348,7 +346,14 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                 unreadCount: conversation.unreadCount,
                 displayName: displayName || conversation.displayName
             }
-        });
+        };
+
+        // Emit to all users in the company (handles shared inbox across agents/managers)
+        for (const uid of validUserIds) {
+            emitToUser(uid, 'whatsapp:newMessage', socketPayload);
+            emitToUser(uid, 'whatsapp:conversationUpdate', updatePayloadSocket);
+        }
+        emitToConversation(conversationIdStr, 'whatsapp:newMessage', socketPayload);
 
         console.log(`✅ Received message from ${from}: ${messagePreview.substring(0, 50)}...`);
 
