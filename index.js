@@ -52,6 +52,8 @@ app.use(helmet({
 // Wide-open CORS allows any website to make authenticated API calls using stolen tokens.
 const allowedOrigins = [
   process.env.FRONTEND_URL,
+  'https://app.adfliker.com',
+  'https://adfliker.onrender.com',
   'http://localhost:5173',
   'http://localhost:3000'
 ].filter(Boolean);
