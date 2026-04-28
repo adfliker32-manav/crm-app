@@ -847,7 +847,7 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
                 // Verify the edge actually exists in the flow to prevent phantom connections from legacy bugs
                 let isValidConnection = !!button.nextNodeId;
                 if (isValidConnection && flow.edges && flow.edges.length > 0) {
-                    isValidConnection = flow.edges.some(e => e.source === currentNode.id && e.sourceHandle === button.id && e.target === button.nextNodeId);
+                    isValidConnection = flow.edges.some(e => e.source === currentNode.id && e.target === button.nextNodeId);
                 }
 
                 if (isValidConnection) {

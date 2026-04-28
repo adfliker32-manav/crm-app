@@ -106,6 +106,8 @@ const chatbotFlowSchema = new mongoose.Schema({
         id: String,
         source: String,
         target: String,
+        sourceHandle: String,
+        targetHandle: String,
         label: String
     }],
     startNodeId: {
