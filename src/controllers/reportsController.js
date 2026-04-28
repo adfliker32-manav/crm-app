@@ -10,10 +10,14 @@ const castObjectId = (value) => {
 };
 
 const getDataScope = (req) => {
+    // Standardize data scope to always use companyId (userId in Lead model)
     const scope = { ...(req.dataScope || {}) };
-    if (!scope.userId && req.tenantId) scope.userId = req.tenantId;
-    if (scope.userId) scope.userId = castObjectId(scope.userId);
-    if (scope.assignedTo) scope.assignedTo = castObjectId(scope.assignedTo);
+    if (req.tenantId) scope.userId = new mongoose.Types.ObjectId(req.tenantId);
+    
+    // Ensure assignedTo is cast to ObjectId if present in scope (e.g. from middleware)
+    if (scope.assignedTo && typeof scope.assignedTo === 'string') {
+        scope.assignedTo = new mongoose.Types.ObjectId(scope.assignedTo);
+    }
     return scope;
 };
 
@@ -167,10 +171,12 @@ const getAgentPerformance = async (req, res) => {
         const currentUserId = castObjectId(req.user.userId || req.user.id);
         const isRestrictedAgent = req.user.role === 'agent' && !req.user.permissions?.viewAllLeads;
 
+        const companyId = new mongoose.Types.ObjectId(req.tenantId);
+
         // Get all agents under this manager
         const agents = isRestrictedAgent
             ? (await User.find({ _id: currentUserId }).select('_id name email createdAt').lean())
-            : (await User.find({ parentId: ownerId, role: 'agent' }).select('_id name email createdAt').lean());
+            : (await User.find({ parentId: companyId, role: 'agent' }).select('_id name email createdAt').lean());
 
         // Calculate metrics via MongoDB aggregation instead of pulling all leads into memory
         const results = await Lead.aggregate([
@@ -743,10 +749,12 @@ const getAgentDetailedPerformance = async (req, res) => {
         const currentUserId = castObjectId(req.user.userId || req.user.id);
         const isRestrictedAgent = req.user.role === 'agent' && !req.user.permissions?.viewAllLeads;
 
+        const companyId = new mongoose.Types.ObjectId(req.tenantId);
+
         // Get all agents under this manager (for dropdown)
         const agents = isRestrictedAgent
             ? (await User.find({ _id: currentUserId }).select('_id name email').lean())
-            : (await User.find({ parentId: ownerId, role: 'agent' }).select('_id name email').lean());
+            : (await User.find({ parentId: companyId, role: 'agent' }).select('_id name email').lean());
 
         // If no specific agent selected, return just the agent list
         if (!agentId) {

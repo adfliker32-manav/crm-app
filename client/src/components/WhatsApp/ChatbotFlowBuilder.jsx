@@ -198,7 +198,29 @@ const FlowBuilder = ({ flowId, onBack }) => {
     }, []);
 
     const onEdgesChange = useCallback((changes) => {
-        setEdges((eds) => applyEdgeChanges(changes, eds));
+        const removedEdges = changes.filter(c => c.type === 'remove');
+        if (removedEdges.length > 0) {
+            setEdges((eds) => {
+                const edgesToRemove = removedEdges.map(r => eds.find(e => e.id === r.id)).filter(Boolean);
+                if (edgesToRemove.length > 0) {
+                    setNodes((nds) => nds.map(n => {
+                        const affectedEdge = edgesToRemove.find(e => e.source === n.id);
+                        if (!affectedEdge) return n;
+                        if (affectedEdge.sourceHandle && n.data.buttons) {
+                            const newButtons = n.data.buttons.map(btn =>
+                                btn.id === affectedEdge.sourceHandle ? { ...btn, nextNodeId: undefined } : btn
+                            );
+                            return { ...n, data: { ...n.data, buttons: newButtons } };
+                        } else {
+                            return { ...n, data: { ...n.data, nextNodeId: undefined } };
+                        }
+                    }));
+                }
+                return applyEdgeChanges(changes, eds);
+            });
+        } else {
+            setEdges((eds) => applyEdgeChanges(changes, eds));
+        }
     }, []);
 
     const onConnect = useCallback((connection) => {

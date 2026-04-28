@@ -3,6 +3,7 @@ const router = express.Router();
 const reportsController = require('../controllers/reportsController');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
+const validateObjectId = require('../middleware/validateObjectId');
 
 // All routes require authentication
 router.use(authMiddleware);
@@ -21,6 +22,6 @@ router.get('/revenue', reportsController.getRevenueReport);
 router.get('/comprehensive', reportsController.getComprehensiveReport);
 
 // 5. Detailed Agent Performance (per-agent drill-down)
-router.get('/agent-detailed', reportsController.getAgentDetailedPerformance);
+router.get('/agent-detailed', validateObjectId({ query: ['agentId'] }), reportsController.getAgentDetailedPerformance);
 
 module.exports = router;

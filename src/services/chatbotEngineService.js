@@ -843,14 +843,22 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
                 b.text.toLowerCase().trim() === normalizedResponse || b.id === normalizedResponse
             );
 
-            if (button && button.nextNodeId) {
-                session.currentNodeId = button.nextNodeId;
-                session.lastInteractionAt = new Date();
-                await session.save();
-                return await executeNode(session, flow, button.nextNodeId, conversation);
+            if (button) {
+                if (button.nextNodeId) {
+                    // Button matched AND has a connected next node → navigate
+                    session.currentNodeId = button.nextNodeId;
+                    session.lastInteractionAt = new Date();
+                    await session.save();
+                    return await executeNode(session, flow, button.nextNodeId, conversation);
+                } else {
+                    // Button matched but NO next node connected → dead-end path, end session gracefully
+                    console.log(`🤖 [Chatbot] Button "${button.text}" selected but has no connected node. Ending session.`);
+                    await endSession(session, 'completed');
+                    return null;
+                }
             }
             
-            // FIX: Send retry prompt if no button matched instead of silently doing nothing
+            // No button matched at all → send retry prompt
             if (conversation) {
                 const buttonOptions = currentNode.data.buttons.map(b => `• ${b.text}`).join('\n');
                 const retryText = `I didn't understand that. Please choose one of the following options:\n${buttonOptions}`;

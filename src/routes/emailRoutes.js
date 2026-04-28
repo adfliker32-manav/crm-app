@@ -30,8 +30,8 @@ router.get('/unsubscribe', handleUnsubscribe);
 
 // F1: Public tracking endpoints (no auth — embedded in email HTML)
 const { trackOpen, trackClick } = require('../controllers/emailTrackingController');
-router.get('/track/open/:logId', validateObjectId({ params: ['logId'] }), trackOpen);
-router.get('/track/click/:logId', validateObjectId({ params: ['logId'] }), trackClick);
+router.get('/track/open/:logId', trackOpen);
+router.get('/track/click/:logId', trackClick);
 
 // F2: Bulk campaign send
 router.post('/campaign', authMiddleware, requireModule('email'), emailSendLimiter, emailController.sendBulkCampaign);
