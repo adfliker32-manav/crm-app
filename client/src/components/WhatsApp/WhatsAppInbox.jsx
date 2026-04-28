@@ -223,15 +223,16 @@ const WhatsAppInbox = () => {
         };
 
         const handleConversationCleared = ({ conversationId, updates }) => {
+            const convId = typeof conversationId === 'string' ? conversationId : String(conversationId);
             setConversations(prev =>
-                prev.map(c => c._id === conversationId ? { ...c, ...updates } : c)
+                prev.map(c => c._id === convId ? { ...c, ...updates } : c)
             );
 
             const currentChat = selectedChatRef.current;
-            if (currentChat && currentChat._id === conversationId) {
+            if (currentChat && currentChat._id === convId) {
                 setMessages([]);
                 setPage(1);
-                setHasMore(false);
+                setHasMore(true);
                 setSelectedChat(prev => prev ? { ...prev, ...updates } : prev);
             }
         };
@@ -262,7 +263,7 @@ const WhatsAppInbox = () => {
     useEffect(() => {
         const interval = setInterval(() => {
             fetchConversations();
-            if (selectedChatRef.current) fetchMessages(selectedChatRef.current._id);
+            if (selectedChatRef.current) fetchMessages(selectedChatRef.current._id, 1, true);
         }, 60000); // 60 seconds
         return () => clearInterval(interval);
     }, [fetchConversations, fetchMessages]);
@@ -518,7 +519,7 @@ const WhatsAppInbox = () => {
             if (selectedChat?._id === chatId) {
                 setMessages([]);
                 setPage(1);
-                setHasMore(false);
+                setHasMore(true);
                 setSelectedChat(prev => prev ? { ...prev, ...updates } : prev);
             }
 
