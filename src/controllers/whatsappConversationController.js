@@ -102,8 +102,6 @@ exports.getConversation = async (req, res) => {
         // Reverse to show oldest first in UI
         messages.reverse();
 
-        // 🐛 DEBUG: Track down messages not showing after clear
-        console.log(`[MSG-DEBUG] getConversation id=${id}, page=${page}, totalMessages=${totalMessages}, returned=${messages.length}, convStatus=${conversation.status}, lastMsg="${conversation.lastMessage?.substring(0,30)}"`);
 
         res.json({
             success: true,
@@ -416,16 +414,29 @@ exports.startConversation = async (req, res) => {
             return res.status(400).json({ message: 'Template name or message text is required' });
         }
 
-        // Normalize phone number
-        const normalizedPhone = phone.replace(/[^0-9]/g, '');
+        // Normalize phone number — ensure country code is present for Indian numbers
+        let normalizedPhone = phone.replace(/[^0-9]/g, '');
+        // If only 10 digits (no country code), prepend India code
+        if (normalizedPhone.length === 10) {
+            normalizedPhone = '91' + normalizedPhone;
+        }
 
         const companyUserIds = await getCompanyUserIds(userId);
+        const phoneLast10 = normalizedPhone.slice(-10);
 
-        // Check if conversation already exists
+        // Check if conversation already exists (flexible phone match to avoid duplicates)
         let conversation = await WhatsAppConversation.findOne({
             userId: { $in: companyUserIds },
             waContactId: normalizedPhone
         });
+
+        if (!conversation) {
+            // Fallback: try matching by last 10 digits
+            conversation = await WhatsAppConversation.findOne({
+                userId: { $in: companyUserIds },
+                waContactId: { $regex: phoneLast10 + '$' }
+            });
+        }
 
         if (!conversation) {
             // Create new conversation

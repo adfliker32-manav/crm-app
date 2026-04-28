@@ -263,22 +263,38 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
             .lean();
 
         // Find if any user sharing this phone number already has a conversation
-        const existingConversation = await WhatsAppConversation.findOne({
+        // Use flexible matching: try exact match first, then last-10-digits suffix match
+        // This prevents duplicate conversations when phone formats differ
+        // (e.g., "New Chat" stores "9427177611" but webhook sends "919427177611")
+        let existingConversation = await WhatsAppConversation.findOne({
             userId: { $in: validUserIds },
             waContactId: from
         }).sort({ lastMessageAt: -1 }).lean();
 
+        if (!existingConversation) {
+            // Fallback: match by last 10 digits (handles country code mismatches)
+            existingConversation = await WhatsAppConversation.findOne({
+                userId: { $in: validUserIds },
+                waContactId: { $regex: phoneLastTen + '$' }
+            }).sort({ lastMessageAt: -1 }).lean();
+            if (existingConversation) {
+                debug(`📱 Found existing conversation via phone suffix match: ${existingConversation._id} (waContactId: ${existingConversation.waContactId} → incoming: ${from})`);
+            }
+        }
+
         // If found, append to that specific user's conversation to prevent duplicates.
         const targetUserId = existingConversation ? existingConversation.userId : userId;
+        // Use the EXISTING conversation's waContactId to prevent creating a duplicate
+        const upsertContactId = existingConversation ? existingConversation.waContactId : from;
 
         // --- 4. ATOMIC UPSERT ---
         // Guaranteed to never throw duplicate key exceptions on concurrent inserts
-        debug(`🔎 Upserting conversation: targetUserId=${targetUserId}, waContactId=${from}`);
+        debug(`🔎 Upserting conversation: targetUserId=${targetUserId}, waContactId=${upsertContactId} (incoming from: ${from})`);
 
         const updatePayload = {
             $setOnInsert: {
                 userId: targetUserId,
-                waContactId: from,
+                waContactId: upsertContactId,
                 phone: from,
                 leadId: lead?._id || null,
                 'metadata.firstMessageAt': timestamp
@@ -301,7 +317,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         }
 
         const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { userId: targetUserId, waContactId: from },
+            { userId: targetUserId, waContactId: upsertContactId },
             updatePayload,
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
