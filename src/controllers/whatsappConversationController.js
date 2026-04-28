@@ -50,6 +50,17 @@ exports.getConversations = async (req, res) => {
             WhatsAppConversation.countDocuments(query)
         ]);
 
+        // TEMP DEBUG: Track down missing conversation bug
+        console.log('[INBOX-DEBUG] userId=' + userId + ', query.status=' + query.status + ', userIds=' + JSON.stringify(userIds.map(id => id.toString())) + ', found=' + total + ' conversations');
+        if (total === 0) {
+            const allConvos = await WhatsAppConversation.countDocuments({ userId: { $in: userIds } });
+            console.log('[INBOX-DEBUG] Without status filter: ' + allConvos + ' conversations found');
+            if (allConvos > 0) {
+                const samples = await WhatsAppConversation.find({ userId: { $in: userIds } }).select('status lastMessage phone').limit(5).lean();
+                console.log('[INBOX-DEBUG] Sample conversations:', JSON.stringify(samples));
+            }
+        }
+
         res.json({
             success: true,
             conversations,
