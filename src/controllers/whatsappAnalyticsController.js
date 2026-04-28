@@ -163,7 +163,17 @@ exports.getDashboardStats = async (req, res) => {
                 },
                 recentCampaigns,
                 chatbotKpi,
-                chatbotFlows
+                chatbotFlows,
+                // FIX #114: Tell frontend which metrics are time-filtered vs all-time
+                _meta: {
+                    dateFilter: days || 'all',
+                    scopes: {
+                        conversations: 'all-time',
+                        broadcasts: dateFrom ? `last ${days} days` : 'all-time',
+                        chatbotSessions: dateFrom ? `last ${days} days` : 'all-time',
+                        chatbotLeads: 'all-time'
+                    }
+                }
             }
         });
 

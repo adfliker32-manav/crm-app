@@ -274,6 +274,7 @@ exports.startBroadcast = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const tenantId = req.tenantId || userId;
+        // FIX #70: Use tenantId consistently — broadcasts belong to the tenant, not the agent
         const broadcast = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId: tenantId });
 
         if (!broadcast) return res.status(404).json({ message: 'Broadcast not found' });
@@ -294,7 +295,7 @@ exports.startBroadcast = async (req, res) => {
             
             const job = await agendaInstance.schedule(broadcast.scheduledFor, 'process whatsapp broadcast', {
                 broadcastId: broadcast._id,
-                userId,
+                userId: tenantId,
                 tenantId
             });
             
@@ -311,7 +312,7 @@ exports.startBroadcast = async (req, res) => {
 
         const job = await agendaInstance.now('process whatsapp broadcast', {
             broadcastId: broadcast._id,
-            userId,
+            userId: tenantId,
             tenantId
         });
 

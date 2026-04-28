@@ -50,7 +50,15 @@ exports.getTemplates = async (req, res) => {
 exports.getTemplate = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const template = await WhatsAppTemplate.findOne({ _id: req.params.id, userId });
+        
+        // FIX #53: Use shared user IDs so agents can view manager's templates
+        const { getCompanyUserIds } = require('../utils/whatsappUtils');
+        const companyUserIds = await getCompanyUserIds(userId);
+        
+        const template = await WhatsAppTemplate.findOne({ 
+            _id: req.params.id, 
+            userId: { $in: companyUserIds } 
+        });
 
         if (!template) {
             return res.status(404).json({ message: 'Template not found' });

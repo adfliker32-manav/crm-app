@@ -600,7 +600,7 @@ const WhatsAppInbox = () => {
                 );
             case 'video':
                 return (
-                    <div className="mb-1 relative group cursor-pointer" onClick={() => mediaUrl && window.open(mediaUrl, '_blank')}>
+                    <div className="mb-1 relative group cursor-pointer" onClick={() => fullMediaUrl && window.open(fullMediaUrl, '_blank')}>
                         <div className="bg-[#111b21]/10 rounded-lg p-10 flex flex-col items-center justify-center gap-3 max-w-[280px] border border-slate-200 relative overflow-hidden">
                             <i className="fa-solid fa-circle-play text-5xl text-[#00a884]"></i>
                             <span className="text-[11px] font-bold text-slate-600 uppercase tracking-widest leading-none">Play Video</span>
@@ -619,8 +619,8 @@ const WhatsAppInbox = () => {
                             <p className="text-[13px] font-bold text-slate-800 truncate leading-tight mb-0.5">{msg.content?.fileName || 'Document'}</p>
                             <p className="text-[10px] text-slate-400 font-medium uppercase tracking-tight">{(msg.content?.fileSize / 1024).toFixed(0) || '0'} KB • Document</p>
                         </div>
-                        {mediaUrl && (
-                            <a href={mediaUrl} target="_blank" rel="noopener noreferrer" className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 hover:text-[#00a884] hover:bg-slate-200 transition-colors">
+                        {fullMediaUrl && (
+                            <a href={fullMediaUrl} target="_blank" rel="noopener noreferrer" className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 hover:text-[#00a884] hover:bg-slate-200 transition-colors">
                                 <i className="fa-solid fa-arrow-down-to-bracket"></i>
                             </a>
                         )}

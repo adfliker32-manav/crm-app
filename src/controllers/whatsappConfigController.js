@@ -86,6 +86,10 @@ exports.updateWhatsAppConfig = async (req, res) => {
 // Test WhatsApp configuration
 exports.testWhatsAppConfig = async (req, res) => {
     try {
+        // FIX #101: Restrict test endpoint to managers/admins (same as update)
+        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
+        if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to test WhatsApp settings' });
+
         const ownerId = req.tenantId;
         const { waPhoneNumberId, waAccessToken } = req.body;
         

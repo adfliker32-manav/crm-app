@@ -69,8 +69,9 @@ const verifySignature = (req) => {
 
     const appSecret = process.env.META_APP_SECRET;
     if (!appSecret) {
-        console.warn('⚠️ META_APP_SECRET not set, skipping signature verification');
-        return true; // Skip verification if no secret configured
+        // FIX #6: Fail closed — do NOT skip verification in production
+        console.error('❌ META_APP_SECRET not set. Rejecting webhook for security.');
+        return false;
     }
 
     // FIX: Use req.rawBody (the exact bytes Meta signed) instead of JSON.stringify(req.body).

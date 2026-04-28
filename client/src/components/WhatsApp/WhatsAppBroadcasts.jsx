@@ -207,7 +207,7 @@ const WhatsAppBroadcasts = () => {
 
                             {/* Stats Bar */}
                             {(broadcast.status === 'COMPLETED' || broadcast.status === 'PROCESSING') && (
-                                <div className="mt-5 pt-4 border-t border-slate-100 grid grid-cols-4 gap-4">
+                                <div className="mt-5 pt-4 border-t border-slate-100 grid grid-cols-5 gap-4">
                                     <div className="bg-slate-50 rounded-lg p-3">
                                         <div className="text-[11px] font-bold text-slate-500 uppercase mb-1">Total Targets</div>
                                         <div className="text-xl font-bold text-slate-800">{broadcast.stats?.totalTargets || 0}</div>
@@ -215,6 +215,14 @@ const WhatsAppBroadcasts = () => {
                                     <div className="bg-blue-50 rounded-lg p-3">
                                         <div className="text-[11px] font-bold text-blue-600 uppercase mb-1">Sent</div>
                                         <div className="text-xl font-bold text-blue-700">{broadcast.stats?.sent || 0}</div>
+                                    </div>
+                                    <div className="bg-emerald-50 rounded-lg p-3">
+                                        <div className="text-[11px] font-bold text-emerald-600 uppercase mb-1">Delivered</div>
+                                        <div className="text-xl font-bold text-emerald-700">{broadcast.stats?.delivered || 0}</div>
+                                    </div>
+                                    <div className="bg-purple-50 rounded-lg p-3">
+                                        <div className="text-[11px] font-bold text-purple-600 uppercase mb-1">Read</div>
+                                        <div className="text-xl font-bold text-purple-700">{broadcast.stats?.read || 0}</div>
                                     </div>
                                     <div className="bg-red-50 rounded-lg p-3">
                                         <div className="text-[11px] font-bold text-red-600 uppercase mb-1">Failed</div>

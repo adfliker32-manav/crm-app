@@ -22,7 +22,7 @@ const getCredentials = async (userId = null) => {
     };
 };
 
-const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null) => {
+const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null, languageCode = 'en_US') => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
             console.log(`🛑 WHATSAPP KILL SWITCH ACTIVE. Blocked template '${templateName}' to ${to}`);
@@ -39,7 +39,7 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
             template: {
                 name: templateName,
                 language: {
-                    code: "en_US"
+                    code: languageCode
                 }
             }
         };
@@ -226,9 +226,13 @@ const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en'
             data.template.components = componentsData;
         }
 
-        const response = await axios.post(url, data, {
-            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
-        });
+        // FIX #25: Added retry wrapper for consistency with other send functions
+        const response = await retryWithBackoff(
+            () => axios.post(url, data, {
+                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+            }),
+            { maxRetries: 3, label: `WA-TemplateSend:${templateName}` }
+        );
         
         const messageId = response.data.messages?.[0]?.id;
         if (userId && messageId) {
