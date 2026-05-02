@@ -457,7 +457,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             }).populate('flowId');
 
             if (session) {
-                console.log(`🤖 [Chatbot] Continuing active session ${session._id} for flow "${session.flowId?.name || 'unknown'}"`);
+                console.log(`🤖 [Chatbot] Continuing active session ${session._id} for flow "${session.flowId?.name || 'unknown'}" at node ${session.currentNodeId}`);
                 // If user sent text but the active node expects media, reject and stay on the node.
                 const currentNode = session.flowId?.nodes?.find(n => n.id === session.currentNodeId);
                 if (currentNode?.type === 'request_media') {
@@ -467,6 +467,33 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                     return null;
                 }
                 return await continueSession(session, messageText, conversationId, userId, message);
+            }
+
+            // No active session. Diagnostic: count any sessions for this conversation by status
+            // so it's obvious whether the session was never created vs. ended early.
+            const sessionCounts = await ChatbotSession.aggregate([
+                { $match: { conversationId: new (require('mongoose').Types.ObjectId)(conversationId.toString()) } },
+                { $group: { _id: '$status', count: { $sum: 1 }, last: { $max: '$updatedAt' } } }
+            ]);
+            if (sessionCounts.length > 0) {
+                const summary = sessionCounts.map(s => `${s._id}=${s.count} (last ${s.last?.toISOString?.() || s.last})`).join(', ');
+                console.log(`🤖 [Chatbot] No ACTIVE session for conversation ${conversationId}. Existing sessions: ${summary}`);
+            } else {
+                console.log(`🤖 [Chatbot] No sessions at all for conversation ${conversationId}. User has not yet triggered any flow.`);
+            }
+
+            // If the user tapped an interactive button but there is no active session,
+            // those buttons came from an old (now-ended) flow. Reply with a hint instead
+            // of silently dropping the tap so the user knows they need to restart.
+            if (mediaType === 'interactive') {
+                const replyText = 'This conversation has ended. Please send a new message to start again.';
+                try {
+                    const result = await sendWhatsAppTextMessage(conversation.phone, replyText, tenantId);
+                    await saveBotMessage(conversationId, tenantId, replyText, 'text', result);
+                } catch (sendErr) {
+                    console.error('Failed to send stale-button hint:', sendErr.message);
+                }
+                return null;
             }
         }
 
