@@ -20,7 +20,7 @@ import SmartLeadSettingsModal from './SmartLeadSettingsModal';
 const CompactFlowNode = ({ data, id, selected }) => {
     const type = data.blockType || 'message';
     const icon = {
-        message: '💬', media: '🖼️', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️'
+        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️'
     }[type] || '💬';
 
     return (
@@ -103,6 +103,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const nodeTypes = useMemo(() => ({
         message: CompactFlowNode,
         media: CompactFlowNode,
+        request_media: CompactFlowNode,
         list: CompactFlowNode,
         product: CompactFlowNode,
         products: CompactFlowNode,
@@ -116,7 +117,8 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const contentBlocks = [
         { type: 'message', icon: '💬', label: 'Text + Buttons', desc: 'Send text with button options' },
         { type: 'question', icon: '❓', label: 'Ask Question', desc: 'Ask user and save answer as variable' },
-        { type: 'media', icon: '🖼️', label: 'Media', desc: 'Send image, video, or file' },
+        { type: 'media', icon: '🖼️', label: 'Send Media', desc: 'Send image, video, or file' },
+        { type: 'request_media', icon: '📸', label: 'Request Media', desc: 'Ask user to upload a file' },
         { type: 'list', icon: '📋', label: 'List', desc: 'Interactive list menu' },
         { type: 'product', icon: '🛍️', label: 'Single Product', desc: 'Show one product' },
         { type: 'products', icon: '🛒', label: 'Multi Product', desc: 'Show product catalog' },
@@ -256,7 +258,8 @@ const FlowBuilder = ({ flowId, onBack }) => {
         const templates = {
             message: { text: 'Hello! How can I help?', buttons: [{ text: 'Continue', id: 'next' }] },
             question: { text: 'What is your email address?', variableName: 'email', expectedType: 'email' },
-            media: { text: 'Check out this!', mediaUrl: 'https://via.placeholder.com/300x200/e74c3c/ffffff?text=Product' },
+            media: { text: 'Check out this!', mediaType: 'image', mediaUrl: '' },
+            request_media: { text: 'Please upload your document or photo to continue.', variableName: 'media', acceptedMediaTypes: ['image', 'video', 'document'], attachToLead: false },
             product: { text: 'Premium Backpack', price: '$89.99', image: 'https://via.placeholder.com/150/e74c3c/ffffff?text=Product' },
             list: { text: 'Choose a category:', items: ['Electronics', 'Fashion', 'Home'] },
             template: { text: 'Send approved template', templateName: '', templateLanguage: 'en' },
@@ -475,6 +478,93 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                             <option value="email">Email address</option>
                                             <option value="phone">Phone number</option>
                                         </select>
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'media' && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-4 space-y-3">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Media Type</label>
+                                            <select
+                                                value={selectedNode.data.mediaType || 'image'}
+                                                onChange={(e) => updateSelectedNodeData({ mediaType: e.target.value })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                            >
+                                                <option value="image">Image</option>
+                                                <option value="video">Video</option>
+                                                <option value="document">Document</option>
+                                                <option value="audio">Audio</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Media URL (HTTPS)</label>
+                                            <input
+                                                value={selectedNode.data.mediaUrl || ''}
+                                                onChange={(e) => updateSelectedNodeData({ mediaUrl: e.target.value, mediaId: '' })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                placeholder="https://example.com/photo.jpg"
+                                            />
+                                            <p className="text-[11px] text-slate-500 mt-1">Must be a publicly accessible HTTPS URL.</p>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">— or — Meta Media ID</label>
+                                            <input
+                                                value={selectedNode.data.mediaId || ''}
+                                                onChange={(e) => updateSelectedNodeData({ mediaId: e.target.value, mediaUrl: '' })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                placeholder="e.g., 1234567890"
+                                            />
+                                            <p className="text-[11px] text-slate-500 mt-1">Use either a public URL or a Meta-uploaded media ID, not both.</p>
+                                        </div>
+                                        <p className="text-[11px] text-slate-500">Caption: use the &ldquo;Message Text&rdquo; field above.</p>
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'request_media' && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-4 space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Save Upload As Variable</label>
+                                            <input
+                                                value={selectedNode.data.variableName || ''}
+                                                onChange={(e) => updateSelectedNodeData({ variableName: e.target.value.toLowerCase().replace(/\s+/g, '_') })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                placeholder="e.g., id_proof, invoice_photo"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Accepted File Types</label>
+                                            <div className="space-y-1.5">
+                                                {['image', 'video', 'document', 'audio'].map(t => {
+                                                    const accepted = selectedNode.data.acceptedMediaTypes || ['image', 'video', 'document'];
+                                                    const checked = accepted.includes(t);
+                                                    return (
+                                                        <label key={t} className="flex items-center gap-2 text-sm capitalize">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={checked}
+                                                                onChange={(e) => {
+                                                                    const next = e.target.checked
+                                                                        ? [...accepted, t]
+                                                                        : accepted.filter(x => x !== t);
+                                                                    updateSelectedNodeData({ acceptedMediaTypes: next });
+                                                                }}
+                                                                className="w-4 h-4"
+                                                            />
+                                                            {t}
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                        <label className="flex items-center gap-2 text-sm">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!selectedNode.data.attachToLead}
+                                                onChange={(e) => updateSelectedNodeData({ attachToLead: e.target.checked })}
+                                                className="w-4 h-4"
+                                            />
+                                            <span className="font-medium text-slate-700">Attach upload to lead record</span>
+                                        </label>
                                     </div>
                                 )}
 

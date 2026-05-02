@@ -417,18 +417,32 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 
         // 2. Chatbot Flow Evaluation
         const messageText = message.content?.text?.toLowerCase().trim();
-        console.log(`🤖 [Chatbot] Message text: "${messageText || '(empty/media)'}" | Conversation: ${conversationId} | Paused: ${isPaused}`);
-        
-        // FIX: Handle media messages — acknowledge receipt instead of silently ignoring
+        const mediaType = message.type; // 'image' | 'video' | 'document' | 'audio' | 'text' | ...
+        const isMedia = ['image', 'video', 'document', 'audio'].includes(mediaType);
+        console.log(`🤖 [Chatbot] Message text: "${messageText || '(empty/media)'}" | Type: ${mediaType} | Conversation: ${conversationId} | Paused: ${isPaused}`);
+
+        // Inbound media: route to active session if it's waiting on a request_media node,
+        // otherwise reject with a friendly message.
         if (!messageText) {
-            // Check if there's an active session waiting for a response
+            if (isPaused) return null;
+
             const activeSession = await ChatbotSession.findOne({
                 conversationId: conversationId,
                 status: 'active'
-            });
-            if (activeSession && !isPaused) {
-                // Let the user know we need a text response
-                const replyText = 'Please send a text message to continue. Media files are not supported in this conversation flow.';
+            }).populate('flowId');
+
+            if (activeSession && isMedia) {
+                const currentNode = activeSession.flowId?.nodes?.find(n => n.id === activeSession.currentNodeId);
+                if (currentNode?.type === 'request_media') {
+                    console.log(`🤖 [Chatbot] Forwarding ${mediaType} to request_media node ${currentNode.id}`);
+                    return await continueSession(activeSession, null, conversationId, userId, message);
+                }
+            }
+
+            if (activeSession) {
+                const replyText = isMedia
+                    ? 'Please send a text response to continue this conversation.'
+                    : 'Please send a text message to continue. Media files are not supported in this conversation flow.';
                 const result = await sendWhatsAppTextMessage(conversation.phone, replyText, tenantId);
                 await saveBotMessage(conversationId, tenantId, replyText, 'text', result);
             }
@@ -444,6 +458,14 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 
             if (session) {
                 console.log(`🤖 [Chatbot] Continuing active session ${session._id} for flow "${session.flowId?.name || 'unknown'}"`);
+                // If user sent text but the active node expects media, reject and stay on the node.
+                const currentNode = session.flowId?.nodes?.find(n => n.id === session.currentNodeId);
+                if (currentNode?.type === 'request_media') {
+                    const replyText = 'Please upload a file (image, video, or document) to continue.';
+                    const result = await sendWhatsAppTextMessage(conversation.phone, replyText, tenantId);
+                    await saveBotMessage(conversationId, tenantId, replyText, 'text', result);
+                    return null;
+                }
                 return await continueSession(session, messageText, conversationId, userId);
             }
         }
@@ -793,8 +815,10 @@ const evaluateSmartLead = async (session, flow, conversation) => {
     }
 };
 
-// Continue existing session
-const continueSession = async (session, userResponse, conversationId, userId) => {
+// Continue existing session.
+// `incomingMessage` is the raw webhook message (used for request_media nodes that
+// need access to message.content.mediaId / mimeType / caption / fileName).
+const continueSession = async (session, userResponse, conversationId, userId, incomingMessage = null) => {
     try {
         const flow = session.flowId;
         if (!flow || !Array.isArray(flow.nodes)) {
@@ -822,8 +846,64 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
         session.visitedNodes.push({
             nodeId: currentNode.id,
             timestamp: new Date(),
-            userResponse: userResponse
+            userResponse: userResponse || (incomingMessage ? `[${incomingMessage.type}]` : null)
         });
+
+        // request_media node: capture uploaded media into session variables and (optionally) the lead.
+        if (currentNode.type === 'request_media') {
+            const messageType = incomingMessage?.type;
+            const acceptedTypes = (currentNode.data.acceptedMediaTypes && currentNode.data.acceptedMediaTypes.length > 0)
+                ? currentNode.data.acceptedMediaTypes
+                : ['image', 'video', 'document', 'audio'];
+
+            if (!messageType || !acceptedTypes.includes(messageType)) {
+                const typesList = acceptedTypes.join(', ');
+                const errMsg = `Please upload a ${typesList}.`;
+                const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
+                await saveBotMessage(conversationId, session.userId, errMsg, 'text', errResult);
+                return { success: true }; // stay on node
+            }
+
+            const mediaContent = incomingMessage.content || {};
+            const variableName = currentNode.data.variableName || 'media';
+            const captured = {
+                mediaId: mediaContent.mediaId || null,
+                type: messageType,
+                mimeType: mediaContent.mimeType || null,
+                fileName: mediaContent.fileName || null,
+                caption: mediaContent.caption || ''
+            };
+
+            session.variables.set(variableName, captured);
+            session.markModified('variables');
+
+            // Optionally attach to the linked Lead's customData.mediaAttachments[]
+            if (currentNode.data.attachToLead && conversation.leadId) {
+                try {
+                    const lead = await Lead.findById(conversation.leadId);
+                    if (lead) {
+                        if (!lead.customData) lead.customData = new Map();
+                        const existing = lead.customData.get('mediaAttachments') || [];
+                        existing.push({ ...captured, uploadedAt: new Date() });
+                        lead.customData.set('mediaAttachments', existing);
+                        lead.markModified('customData');
+                        await lead.save();
+                    }
+                } catch (attachErr) {
+                    console.error('[Chatbot] Failed to attach media to lead:', attachErr.message);
+                }
+            }
+
+            const nextNodeId = currentNode.data.nextNodeId;
+            if (nextNodeId) {
+                session.currentNodeId = nextNodeId;
+                session.lastInteractionAt = new Date();
+                await session.save();
+                return await executeNode(session, flow, nextNodeId, conversation);
+            }
+            await endSession(session, 'completed');
+            return null;
+        }
 
         // Handle different node types
         if (currentNode.type === 'question') {
@@ -1009,6 +1089,27 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 const questionResult = await sendWhatsAppTextMessage(conversation.phone, questionText, session.userId);
                 await saveBotMessage(session.conversationId, session.userId, questionText, 'text', questionResult);
                 // Session will wait for user response
+                break;
+
+            case 'request_media':
+                // Prompt the user to upload a file. Session waits for the next inbound
+                // media message (handled in processIncomingMessage → continueSession).
+                const requestMediaText = replaceVariables(
+                    node.data.text || 'Please upload a file to continue.',
+                    session.variables
+                );
+                const requestMediaResult = await sendWhatsAppTextMessage(
+                    conversation.phone,
+                    requestMediaText,
+                    session.userId
+                );
+                await saveBotMessage(
+                    session.conversationId,
+                    session.userId,
+                    requestMediaText,
+                    'text',
+                    requestMediaResult
+                );
                 break;
 
             case 'condition':

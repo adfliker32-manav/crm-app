@@ -59,7 +59,7 @@ const chatbotFlowSchema = new mongoose.Schema({
         id: { type: String, required: true },
         type: {
             type: String,
-            enum: ['start', 'message', 'question', 'condition', 'action', 'delay', 'template', 'media', 'list', 'product', 'products', 'handoff', 'end'],
+            enum: ['start', 'message', 'question', 'condition', 'action', 'delay', 'template', 'media', 'request_media', 'list', 'product', 'products', 'handoff', 'end'],
             required: true
         },
         position: {
@@ -98,6 +98,22 @@ const chatbotFlowSchema = new mongoose.Schema({
             actionData: mongoose.Schema.Types.Mixed,
             // For delay nodes
             delaySeconds: Number,
+            // For media nodes (outbound: send image/video/document/audio)
+            mediaType: {
+                type: String,
+                enum: ['image', 'video', 'document', 'audio']
+            },
+            mediaUrl: String,   // public HTTPS URL — sent as { link: ... }
+            mediaId: String,    // Meta media ID — sent as { id: ... }
+            // For request_media nodes (inbound: ask user to upload media)
+            acceptedMediaTypes: [{
+                type: String,
+                enum: ['image', 'video', 'document', 'audio']
+            }],
+            attachToLead: { type: Boolean, default: false },
+            // For template nodes
+            templateName: String,
+            templateLanguage: String,
             // Default next node (for non-branching nodes)
             nextNodeId: String
         }
