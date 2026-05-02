@@ -4,7 +4,7 @@ const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
-const { sendWhatsAppTextMessage, sendInteractiveMessage } = require('./whatsappService');
+const { sendWhatsAppTextMessage, sendInteractiveMessage, sendMediaMessage } = require('./whatsappService');
 const { emitToUser } = require('./socketService');
 const whatsappQueueService = require('./whatsappQueueService');
 const NodeCache = require('node-cache');
@@ -186,16 +186,26 @@ const triggerChatbotLeadCreatedEffects = (lead, userId, leadStatus = null) => {
 // 🔧 HELPER: Persist automated outbound messages to the DB
 // Without this, chatbot replies are invisible in the inbox UI.
 // ============================================================
-const saveBotMessage = async (conversationId, userId, text, type = 'text', waResult = null) => {
+const saveBotMessage = async (conversationId, userId, text, type = 'text', waResult = null, mediaData = null) => {
     try {
         const waMessageId = waResult?.messages?.[0]?.id || undefined;
+        
+        const content = { text };
+        if (['image', 'video', 'document', 'audio'].includes(type)) {
+            content.caption = text;
+            if (mediaData) {
+                if (mediaData.mediaUrl) content.mediaUrl = mediaData.mediaUrl;
+                if (mediaData.mediaId) content.mediaId = mediaData.mediaId;
+            }
+        }
+
         const messageDoc = new WhatsAppMessage({
             conversationId,
             userId,
             waMessageId,
             direction: 'outbound',
             type,
-            content: { text },
+            content,
             status: waMessageId ? 'sent' : 'pending',
             timestamp: new Date(),
             isAutomated: true,
@@ -204,9 +214,10 @@ const saveBotMessage = async (conversationId, userId, text, type = 'text', waRes
         await messageDoc.save();
 
         // Update conversation metadata
+        const lastMsgPreview = type === 'text' ? text.substring(0, 100) : `[${type}] ${text?.substring(0, 50) || ''}`;
         await WhatsAppConversation.findByIdAndUpdate(conversationId, {
             $set: {
-                lastMessage: text.substring(0, 100),
+                lastMessage: lastMsgPreview,
                 lastMessageAt: new Date(),
                 lastMessageDirection: 'outbound'
             },
@@ -225,7 +236,7 @@ const saveBotMessage = async (conversationId, userId, text, type = 'text', waRes
         emitToUser(userId, 'whatsapp:conversationUpdate', {
             conversationId,
             updates: {
-                lastMessage: text.substring(0, 100),
+                lastMessage: lastMsgPreview,
                 lastMessageAt: new Date(),
                 lastMessageDirection: 'outbound'
             }
@@ -1030,14 +1041,39 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
                 break;
 
             case 'media':
-                // Send media message (image/video/document) with optional caption
+                // Send media message (image/video/document) with actual file or URL
                 const mediaCaption = replaceVariables(node.data.text || '', session.variables);
-                if (node.data.mediaUrl) {
-                    // Use text message with media URL as link for now
-                    // (WhatsApp Cloud API requires uploaded media IDs, so we send URL in text)
-                    const mediaText = mediaCaption ? `${mediaCaption}\n\n${node.data.mediaUrl}` : node.data.mediaUrl;
-                    const mediaResult = await sendWhatsAppTextMessage(conversation.phone, mediaText, session.userId);
-                    await saveBotMessage(session.conversationId, session.userId, mediaText, 'text', mediaResult);
+                const mediaType = node.data.mediaType || 'image'; // fallback to image
+                const mediaIdentifier = node.data.mediaId || node.data.mediaUrl;
+
+                if (mediaIdentifier) {
+                    try {
+                        const mediaResult = await sendMediaMessage(
+                            conversation.phone,
+                            mediaType,
+                            mediaIdentifier,
+                            mediaCaption,
+                            session.userId
+                        );
+                        
+                        const mediaData = mediaIdentifier.startsWith('http') 
+                            ? { mediaUrl: mediaIdentifier } 
+                            : { mediaId: mediaIdentifier };
+                            
+                        await saveBotMessage(
+                            session.conversationId, 
+                            session.userId, 
+                            mediaCaption || `[${mediaType}]`, 
+                            mediaType, 
+                            mediaResult,
+                            mediaData
+                        );
+                    } catch (mediaErr) {
+                        console.error(`[Chatbot] Failed to send actual media, falling back to text link:`, mediaErr.message);
+                        const fallbackText = mediaCaption ? `${mediaCaption}\n\n${mediaIdentifier}` : mediaIdentifier;
+                        const fallbackResult = await sendWhatsAppTextMessage(conversation.phone, fallbackText, session.userId);
+                        await saveBotMessage(session.conversationId, session.userId, fallbackText, 'text', fallbackResult);
+                    }
                 } else if (mediaCaption) {
                     const mediaCaptionResult = await sendWhatsAppTextMessage(conversation.phone, mediaCaption, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, mediaCaption, 'text', mediaCaptionResult);

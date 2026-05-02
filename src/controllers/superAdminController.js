@@ -53,7 +53,7 @@ const generateToken = (id, role) => {
 // Internal Helper: Join User with WorkspaceSettings
 const joinWorkspaceSettings = async (query = {}, options = {}) => {
     const { sort = { createdAt: -1 }, limit = 500, skip = 0 } = options;
-    
+
     return await User.aggregate([
         { $match: query },
         {
@@ -193,10 +193,16 @@ const getAllCompanies = async (req, res) => {
                     from: 'users',
                     let: { companyId: '$_id' },
                     pipeline: [
-                        { $match: { $expr: { $and: [
-                            { $eq: ['$parentId', '$$companyId'] },
-                            { $eq: ['$role', 'agent'] }
-                        ]}}}
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$parentId', '$$companyId'] },
+                                        { $eq: ['$role', 'agent'] }
+                                    ]
+                                }
+                            }
+                        }
                     ],
                     as: '_agents'
                 }
@@ -881,7 +887,7 @@ const impersonateUser = async (req, res) => {
 const getCloudUsage = async (req, res) => {
     try {
         const agencySettings = await AgencySettings.find().select('usage planLimits');
-        
+
         let totalWhatsapp = 0;
         let totalEmails = 0;
         let totalWhatsappLimit = 0;
@@ -920,10 +926,10 @@ const getAuditLogs = async (req, res) => {
     try {
         const { page = 1, limit = 50, category, action, search } = req.query;
         const query = {};
-        
+
         if (category) query.actionCategory = category;
         if (action) query.action = action;
-        
+
         if (search) {
             const safe = escapeRegex(search);
             query.$or = [
@@ -934,13 +940,13 @@ const getAuditLogs = async (req, res) => {
         }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
-        
+
         const logs = await AuditLog.find(query)
             .sort({ timestamp: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
-            
+
         const total = await AuditLog.countDocuments(query);
 
         res.json({
@@ -994,9 +1000,9 @@ const freezeTenant = async (req, res) => {
             req
         });
 
-        res.json({ 
-            success: true, 
-            message: `Tenant ${isFrozen ? 'suspended' : 'reactivated'} successfully`, 
+        res.json({
+            success: true,
+            message: `Tenant ${isFrozen ? 'suspended' : 'reactivated'} successfully`,
             isFrozen: !!isFrozen,
             accountStatus: newAccountStatus
         });
@@ -1024,16 +1030,16 @@ const getSystemSettings = async (req, res) => {
 const updateSystemSettings = async (req, res) => {
     try {
         const { settings } = req.body;
-        
+
         const updates = Object.keys(settings).map(key => ({
             updateOne: {
                 filter: { key },
-                update: { 
-                    $set: { 
-                        value: settings[key], 
-                        updatedBy: req.user.userId, 
-                        updatedAt: new Date() 
-                    } 
+                update: {
+                    $set: {
+                        value: settings[key],
+                        updatedBy: req.user.userId,
+                        updatedAt: new Date()
+                    }
                 },
                 upsert: true
             }
@@ -1042,7 +1048,7 @@ const updateSystemSettings = async (req, res) => {
         if (updates.length > 0) {
             await SystemSetting.bulkWrite(updates);
             invalidateConfigCache();
-            
+
             auditLogger.log({
                 actor: req.user,
                 actionCategory: 'SYSTEM',
@@ -1105,7 +1111,7 @@ const analyzeHealthStatus = (metrics) => {
     // 6️⃣ Infrastructure Crashes
     const memoryUsagePercent = (metrics.server.memoryUsageMB / metrics.server.totalMemoryMB) * 100;
     if (memoryUsagePercent > 90) escalate('critical', `Memory Saturation > 90% (${Math.round(memoryUsagePercent)}%)`);
-    
+
     // CPU Load > 85% sustained (approximation)
     const cpuCores = os.cpus().length;
     if (metrics.server.loadAverage[0] / cpuCores > 0.85) escalate('warning', `Sustained High CPU Load`);
@@ -1200,7 +1206,7 @@ const getSystemHealth = async (req, res) => {
 
         const whatsappSentPromise = WhatsAppLog.countDocuments({ status: 'sent', createdAt: { $gte: yesterday } });
         const whatsappFailedPromise = WhatsAppLog.countDocuments({ status: 'failed', createdAt: { $gte: yesterday } });
-        
+
         const emailSentPromise = EmailLog.countDocuments({ status: 'sent', createdAt: { $gte: yesterday } });
         const emailFailedPromise = EmailLog.countDocuments({ status: 'failed', createdAt: { $gte: yesterday } });
 
@@ -1254,12 +1260,12 @@ const updateAgencyLimits = async (req, res) => {
 
         const updatedSettings = await AgencySettings.findOneAndUpdate(
             { agencyId: agency._id },
-            { 
-                $set: { 
+            {
+                $set: {
                     'planLimits.maxClients': maxClients,
                     'planLimits.whatsappMessagesPerMonth': whatsappMessagesPerMonth,
                     'planLimits.emailsPerMonth': emailsPerMonth
-                } 
+                }
             },
             { new: true, upsert: true, setDefaultsOnInsert: true }
         );
@@ -1309,11 +1315,11 @@ const getWorkspaceAnalytics = async (req, res) => {
 
             // Aggregate 30-day usage totals
             const usage = usageLogs.reduce((acc, day) => ({
-                leadsCreated:   acc.leadsCreated   + (day.leadsCreated   || 0),
-                whatsappSent:   acc.whatsappSent   + (day.whatsappSent   || 0),
-                emailsSent:     acc.emailsSent     + (day.emailsSent     || 0),
+                leadsCreated: acc.leadsCreated + (day.leadsCreated || 0),
+                whatsappSent: acc.whatsappSent + (day.whatsappSent || 0),
+                emailsSent: acc.emailsSent + (day.emailsSent || 0),
                 automationRuns: acc.automationRuns + (day.automationRuns || 0),
-                agentLogins:    acc.agentLogins    + (day.agentLogins    || 0),
+                agentLogins: acc.agentLogins + (day.agentLogins || 0),
             }), { leadsCreated: 0, whatsappSent: 0, emailsSent: 0, automationRuns: 0, agentLogins: 0 });
 
             // Upgrade pressure score: more activity = more likely to convert
@@ -1328,24 +1334,24 @@ const getWorkspaceAnalytics = async (req, res) => {
                 : null;
 
             return {
-                workspaceId:          wsId,
-                name:                 ws.name,
-                email:                ws.email,
-                companyName:          ws.companyName,
-                accountType:          ws.accountType,
-                plan:                 ws.workspace?.subscriptionPlan,
-                planStatus:           ws.workspace?.subscriptionStatus,
-                trialStartedAt:       ws.trialActivatedAt,
-                trialExpiresAt:       ws.workspace?.planExpiryDate,
+                workspaceId: wsId,
+                name: ws.name,
+                email: ws.email,
+                companyName: ws.companyName,
+                accountType: ws.accountType,
+                plan: ws.workspace?.subscriptionPlan,
+                planStatus: ws.workspace?.subscriptionStatus,
+                trialStartedAt: ws.trialActivatedAt,
+                trialExpiresAt: ws.workspace?.planExpiryDate,
                 daysRemainingInTrial: daysRemaining,
-                metaSyncEnabled:      ws.workspace?.planFeatures?.metaSync === true,
-                totalLeads:           leadCount,
-                leadLimit:            ws.workspace?.planFeatures?.leadLimit || 100,
-                totalAgents:          agentCount,
-                agentLimit:           ws.workspace?.agentLimit || ws.workspace?.planFeatures?.agentLimit || 5,
-                lastLogin:            ws.lastLogin,
-                joinedAt:             ws.createdAt,
-                usage30Days:          usage,
+                metaSyncEnabled: ws.workspace?.planFeatures?.metaSync === true,
+                totalLeads: leadCount,
+                leadLimit: ws.workspace?.planFeatures?.leadLimit || 100,
+                totalAgents: agentCount,
+                agentLimit: ws.workspace?.agentLimit || ws.workspace?.planFeatures?.agentLimit || 5,
+                lastLogin: ws.lastLogin,
+                joinedAt: ws.createdAt,
+                usage30Days: usage,
                 upgradePressureScore, // 0-100
             };
         }));
@@ -1370,13 +1376,13 @@ const getWorkspaceAnalytics = async (req, res) => {
 // @route GET /api/superadmin/accounts/pending
 const getPendingRequests = async (req, res) => {
     try {
-        const accounts = await User.find({ 
+        const accounts = await User.find({
             role: { $in: ['manager', 'agency'] },
             status: 'pending'
         })
-        .select('-password')
-        .sort({ createdAt: -1 })
-        .lean();
+            .select('-password')
+            .sort({ createdAt: -1 })
+            .lean();
 
         // Enrich with agency name if sub-client
         const enriched = await Promise.all(accounts.map(async (acc) => {
@@ -1401,14 +1407,14 @@ const getPendingRequests = async (req, res) => {
 // Avoid N+1 queries — use batched lookups instead of per-account queries.
 const getActiveAccounts = async (req, res) => {
     try {
-        const accounts = await User.find({ 
+        const accounts = await User.find({
             role: { $in: ['manager', 'agency'] },
             status: 'approved',
             is_active: true
         })
-        .select('-password')
-        .sort({ createdAt: -1 })
-        .lean();
+            .select('-password')
+            .sort({ createdAt: -1 })
+            .lean();
 
         // Batch-fetch all parent IDs and agent counts in two queries instead of N
         const parentIds = [...new Set(accounts.filter(a => a.parentId).map(a => a.parentId.toString()))];
@@ -1449,13 +1455,13 @@ const getActiveAccounts = async (req, res) => {
 // @route GET /api/superadmin/accounts/rejected
 const getRejectedAccounts = async (req, res) => {
     try {
-        const accounts = await User.find({ 
+        const accounts = await User.find({
             role: { $in: ['manager', 'agency'] },
             status: 'rejected'
         })
-        .select('-password')
-        .sort({ createdAt: -1 })
-        .lean();
+            .select('-password')
+            .sort({ createdAt: -1 })
+            .lean();
 
         const enriched = await Promise.all(accounts.map(async (acc) => {
             if (acc.parentId) {
@@ -1480,13 +1486,13 @@ const approveAccount = async (req, res) => {
 
         const user = await User.findOneAndUpdate(
             { _id: id, role: { $in: ['manager', 'agency'] } },
-            { 
-                $set: { 
-                    approved_by_admin: true, 
-                    is_active: true, 
+            {
+                $set: {
+                    approved_by_admin: true,
+                    is_active: true,
                     status: 'approved',
                     accountStatus: 'Active'
-                } 
+                }
             },
             { new: true }
         ).select('-password');
@@ -1496,11 +1502,13 @@ const approveAccount = async (req, res) => {
         // Also ensure WorkspaceSettings exists
         await WorkspaceSettings.findOneAndUpdate(
             { userId: id },
-            { $setOnInsert: { 
-                userId: id,
-                activeModules: ['leads', 'team', 'reports', 'email', 'whatsapp', 'settings'],
-                agentLimit: 5
-            }},
+            {
+                $setOnInsert: {
+                    userId: id,
+                    activeModules: ['leads', 'team', 'reports', 'email', 'whatsapp', 'settings'],
+                    agentLimit: 5
+                }
+            },
             { upsert: true }
         );
 
@@ -1514,8 +1522,8 @@ const approveAccount = async (req, res) => {
             req
         });
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             message: `Account for "${user.companyName || user.name}" has been approved and activated.`,
             user
         });
@@ -1534,12 +1542,12 @@ const rejectAccount = async (req, res) => {
 
         const user = await User.findOneAndUpdate(
             { _id: id, role: { $in: ['manager', 'agency'] } },
-            { 
-                $set: { 
-                    approved_by_admin: false, 
-                    is_active: false, 
-                    status: 'rejected' 
-                } 
+            {
+                $set: {
+                    approved_by_admin: false,
+                    is_active: false,
+                    status: 'rejected'
+                }
             },
             { new: true }
         ).select('-password');
@@ -1557,8 +1565,8 @@ const rejectAccount = async (req, res) => {
             req
         });
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             message: `Account for "${user.companyName || user.name}" has been rejected.`,
             user
         });

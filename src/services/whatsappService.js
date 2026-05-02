@@ -128,7 +128,7 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
     }
 };
 
-const sendMediaMessage = async (to, mediaType, mediaId, caption = null, userId = null) => {
+const sendMediaMessage = async (to, mediaType, mediaIdentifier, caption = null, userId = null) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
             throw new Error("Emergency: WhatsApp sending is temporarily disabled.");
@@ -137,14 +137,17 @@ const sendMediaMessage = async (to, mediaType, mediaId, caption = null, userId =
         const { phoneNumberId, accessToken } = await getCredentials(userId);
         const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
 
+        // Determine if mediaIdentifier is an ID (numeric-ish) or a URL
+        const isUrl = typeof mediaIdentifier === 'string' && (mediaIdentifier.startsWith('http://') || mediaIdentifier.startsWith('https://'));
+
         const data = {
             messaging_product: "whatsapp",
             to,
             type: mediaType,
-            [mediaType]: { id: mediaId }
+            [mediaType]: isUrl ? { link: mediaIdentifier } : { id: mediaIdentifier }
         };
 
-        if (caption && ['image', 'video', 'document'].includes(mediaType)) {
+        if (caption && ['image', 'video', 'document', 'audio'].includes(mediaType)) {
             data[mediaType].caption = caption;
         }
 
