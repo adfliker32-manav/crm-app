@@ -1000,24 +1000,28 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             });
 
             if (button) {
-                // Resolve the target node. button.nextNodeId is the authoritative routing field.
-                // Fall back to flow.edges (matched by sourceHandle = button.id) for legacy flows
-                // where onConnect didn't write nextNodeId onto the button.
+                // Resolve the target node. Try, in order:
+                //   1. button.nextNodeId, if it points to an existing node.
+                //   2. The target of any edge from (currentNode.id, sourceHandle = button.id)
+                //      whose target also exists in flow.nodes.
+                // The edge fallback covers two real cases: (a) older saves never wrote
+                // nextNodeId onto the button, (b) the node nextNodeId points to was deleted
+                // but a fresh edge was drawn afterwards.
                 let targetNodeId = button.nextNodeId;
-                if (!targetNodeId && flow.edges && flow.edges.length > 0) {
+                let targetNode = targetNodeId ? flow.nodes.find(n => n.id === targetNodeId) : null;
+
+                if (!targetNode && flow.edges && flow.edges.length > 0) {
                     const matchingEdge = flow.edges.find(e =>
-                        e.source === currentNode.id && e.sourceHandle === button.id
+                        e.source === currentNode.id &&
+                        e.sourceHandle === button.id &&
+                        flow.nodes.some(n => n.id === e.target)
                     );
                     if (matchingEdge) {
                         targetNodeId = matchingEdge.target;
-                        console.log(`🤖 [Chatbot] Recovered missing nextNodeId for button "${button.text}" → ${targetNodeId} from flow.edges`);
+                        targetNode = flow.nodes.find(n => n.id === targetNodeId);
+                        console.log(`🤖 [Chatbot] Recovered button "${button.text}" → ${targetNodeId} from flow.edges (button.nextNodeId was "${button.nextNodeId || 'empty'}")`);
                     }
                 }
-
-                // Validity rule: target must exist in flow.nodes. We deliberately do NOT require
-                // a matching edge — edges are UI metadata that the builder may fail to round-trip,
-                // and the user expects the button to navigate as long as the target still exists.
-                const targetNode = targetNodeId ? flow.nodes.find(n => n.id === targetNodeId) : null;
 
                 if (targetNode) {
                     session.currentNodeId = targetNodeId;
@@ -1025,12 +1029,14 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                     await session.save();
                     return await executeNode(session, flow, targetNodeId, conversation);
                 } else {
-                    // Either button.nextNodeId is empty/null, or it points to a node that no
-                    // longer exists (deleted in the builder). Either way: dead-end.
-                    const reason = !targetNodeId
-                        ? 'no nextNodeId set'
-                        : `target node "${targetNodeId}" not found in flow`;
-                    console.log(`🤖 [Chatbot] Button "${button.text}" selected but ${reason}. Ending session.`);
+                    const stalePointer = button.nextNodeId
+                        ? `points to deleted node "${button.nextNodeId}"`
+                        : 'has no nextNodeId set';
+                    const edgeOut = (flow.edges || []).find(e => e.source === currentNode.id && e.sourceHandle === button.id);
+                    const edgeNote = edgeOut
+                        ? `(edge with sourceHandle="${button.id}" exists but its target "${edgeOut.target}" is also missing)`
+                        : `(no edge with sourceHandle="${button.id}" found either)`;
+                    console.log(`🤖 [Chatbot] Button "${button.text}" ${stalePointer} ${edgeNote}. Ending session.`);
                     await endSession(session, 'completed');
                     return null;
                 }
