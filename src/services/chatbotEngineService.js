@@ -466,7 +466,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                     await saveBotMessage(conversationId, tenantId, replyText, 'text', result);
                     return null;
                 }
-                return await continueSession(session, messageText, conversationId, userId);
+                return await continueSession(session, messageText, conversationId, userId, message);
             }
         }
 
@@ -953,11 +953,24 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                 return null;
             }
         } else if (currentNode.type === 'message' && currentNode.data.buttons) {
-            // Handle button response — trim & normalize for reliable matching
-            const normalizedResponse = userResponse.toLowerCase().trim();
-            const button = currentNode.data.buttons.find(b =>
-                b.text.toLowerCase().trim() === normalizedResponse || b.id === normalizedResponse
-            );
+            // Handle button response. Match priority:
+            //   1. Exact buttonId from interactive.button_reply.id (most reliable — survives
+            //      WhatsApp's 20-char title truncation and case/whitespace differences).
+            //   2. Full button text (case-insensitive) — covers typed replies that match exactly.
+            //   3. Truncated button text (first 20 chars) — covers tapped buttons whose original
+            //      title was longer than WhatsApp's 20-char display limit.
+            const normalizedResponse = (userResponse || '').toLowerCase().trim();
+            const buttonId = incomingMessage?.content?.buttonId || null;
+
+            const button = currentNode.data.buttons.find(b => {
+                if (buttonId && b.id === buttonId) return true;
+                const fullText = (b.text || '').toLowerCase().trim();
+                if (fullText && fullText === normalizedResponse) return true;
+                if (b.id === normalizedResponse) return true;
+                const truncated = (b.text || '').substring(0, 20).toLowerCase().trim();
+                if (truncated && truncated === normalizedResponse) return true;
+                return false;
+            });
 
             if (button) {
                 // Verify the edge actually exists in the flow to prevent phantom connections from legacy bugs.
