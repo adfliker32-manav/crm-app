@@ -178,7 +178,34 @@ const FlowBuilder = ({ flowId, onBack }) => {
 
         setSaving(true);
         try {
-            const payload = { ...flow, nodes, edges, startNodeId: nodes[0]?.id };
+            // Sync visual edges back onto the node data the backend reads.
+            // The chatbot engine navigates via button.nextNodeId for buttons and
+            // node.data.nextNodeId for non-branching nodes — onConnect tries to
+            // keep these in sync as edges are drawn, but resaving the flow with
+            // a fresh derivation from `edges` removes any drift introduced by
+            // edge deletions, button renames, or out-of-order updates.
+            const syncedNodes = nodes.map(n => {
+                let nextData = { ...n.data };
+
+                if (Array.isArray(nextData.buttons) && nextData.buttons.length > 0) {
+                    nextData.buttons = nextData.buttons.map(btn => {
+                        const edge = edges.find(e => e.source === n.id && e.sourceHandle === btn.id);
+                        return edge ? { ...btn, nextNodeId: edge.target } : { ...btn, nextNodeId: undefined };
+                    });
+                }
+
+                // Default outgoing edge (non-button source) → node.data.nextNodeId
+                const defaultEdge = edges.find(e => e.source === n.id && !e.sourceHandle);
+                if (defaultEdge) {
+                    nextData.nextNodeId = defaultEdge.target;
+                } else if (!Array.isArray(nextData.buttons) || nextData.buttons.length === 0) {
+                    nextData.nextNodeId = undefined;
+                }
+
+                return { ...n, data: nextData };
+            });
+
+            const payload = { ...flow, nodes: syncedNodes, edges, startNodeId: syncedNodes[0]?.id };
 
             if (flowId && flowId !== 'new') {
                 await api.put(`/chatbot/flows/${flowId}`, payload);
