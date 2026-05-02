@@ -1000,10 +1000,9 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             });
 
             if (button) {
-                // Resolve the target node. The flow builder is supposed to write the edge target
-                // back to button.nextNodeId on save, but older flows often have the edge in
-                // flow.edges without that round-trip — fall back to flow.edges so those flows
-                // still work without a re-save.
+                // Resolve the target node. button.nextNodeId is the authoritative routing field.
+                // Fall back to flow.edges (matched by sourceHandle = button.id) for legacy flows
+                // where onConnect didn't write nextNodeId onto the button.
                 let targetNodeId = button.nextNodeId;
                 if (!targetNodeId && flow.edges && flow.edges.length > 0) {
                     const matchingEdge = flow.edges.find(e =>
@@ -1015,27 +1014,23 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                     }
                 }
 
-                // Verify the edge actually exists in the flow to prevent phantom connections from legacy bugs.
-                // When the edge has a sourceHandle, it must match this button's id — otherwise a click on
-                // button A could be routed via button B's edge to the wrong target.
-                let isValidConnection = !!targetNodeId;
-                if (isValidConnection && flow.edges && flow.edges.length > 0) {
-                    isValidConnection = flow.edges.some(e =>
-                        e.source === currentNode.id &&
-                        e.target === targetNodeId &&
-                        (!e.sourceHandle || e.sourceHandle === button.id)
-                    );
-                }
+                // Validity rule: target must exist in flow.nodes. We deliberately do NOT require
+                // a matching edge — edges are UI metadata that the builder may fail to round-trip,
+                // and the user expects the button to navigate as long as the target still exists.
+                const targetNode = targetNodeId ? flow.nodes.find(n => n.id === targetNodeId) : null;
 
-                if (isValidConnection) {
-                    // Button matched AND has a connected next node → navigate
+                if (targetNode) {
                     session.currentNodeId = targetNodeId;
                     session.lastInteractionAt = new Date();
                     await session.save();
                     return await executeNode(session, flow, targetNodeId, conversation);
                 } else {
-                    // Button matched but NO next node connected → dead-end path, end session gracefully
-                    console.log(`🤖 [Chatbot] Button "${button.text}" selected but has no connected node (button.nextNodeId=${button.nextNodeId}, edges with source=${currentNode.id} sourceHandle=${button.id}: ${(flow.edges || []).filter(e => e.source === currentNode.id && e.sourceHandle === button.id).length}). Ending session.`);
+                    // Either button.nextNodeId is empty/null, or it points to a node that no
+                    // longer exists (deleted in the builder). Either way: dead-end.
+                    const reason = !targetNodeId
+                        ? 'no nextNodeId set'
+                        : `target node "${targetNodeId}" not found in flow`;
+                    console.log(`🤖 [Chatbot] Button "${button.text}" selected but ${reason}. Ending session.`);
                     await endSession(session, 'completed');
                     return null;
                 }

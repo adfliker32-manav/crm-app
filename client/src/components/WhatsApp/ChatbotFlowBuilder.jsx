@@ -184,13 +184,16 @@ const FlowBuilder = ({ flowId, onBack }) => {
             // keep these in sync as edges are drawn, but resaving the flow with
             // a fresh derivation from `edges` removes any drift introduced by
             // edge deletions, button renames, or out-of-order updates.
+            // Use `null` (not `undefined`) for cleared values — JSON.stringify drops
+            // undefined keys, so undefined-to-clear leaves the previous value intact
+            // on the Mongoose-side merge, leading to dangling references.
             const syncedNodes = nodes.map(n => {
                 let nextData = { ...n.data };
 
                 if (Array.isArray(nextData.buttons) && nextData.buttons.length > 0) {
                     nextData.buttons = nextData.buttons.map(btn => {
                         const edge = edges.find(e => e.source === n.id && e.sourceHandle === btn.id);
-                        return edge ? { ...btn, nextNodeId: edge.target } : { ...btn, nextNodeId: undefined };
+                        return edge ? { ...btn, nextNodeId: edge.target } : { ...btn, nextNodeId: null };
                     });
                 }
 
@@ -199,7 +202,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
                 if (defaultEdge) {
                     nextData.nextNodeId = defaultEdge.target;
                 } else if (!Array.isArray(nextData.buttons) || nextData.buttons.length === 0) {
-                    nextData.nextNodeId = undefined;
+                    nextData.nextNodeId = null;
                 }
 
                 return { ...n, data: nextData };
