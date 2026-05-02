@@ -15,10 +15,21 @@ const { isFeatureDisabled } = require('../utils/systemConfig');
 const syncAutomatedSendToConversation = async (lead, userId, templateName, waMessageId, triggerSource) => {
     try {
         const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
+        // Try exact match first, then fall back to last-10-digit suffix match so that
+        // an existing conversation with a different format (e.g. "919876543210" vs
+        // "9876543210") is reused instead of a duplicate being created.
         let conversation = await WhatsAppConversation.findOne({
             userId: userId,
             waContactId: normalizedPhone
         });
+
+        if (!conversation && normalizedPhone.length >= 10) {
+            const phoneLastTen = normalizedPhone.slice(-10);
+            conversation = await WhatsAppConversation.findOne({
+                userId: userId,
+                waContactId: { $regex: phoneLastTen + '$' }
+            });
+        }
 
         if (!conversation) {
             conversation = new WhatsAppConversation({

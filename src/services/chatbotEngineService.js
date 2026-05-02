@@ -568,10 +568,22 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 // Start a new chatbot session
 const startSession = async (flow, conversationId, userId) => {
     try {
+        // Race-safe: re-check for an existing active session and bail if one already exists.
+        // Two webhooks arriving within ~50ms can both reach this function — without this
+        // guard we'd create two parallel sessions for the same conversation.
+        const existing = await ChatbotSession.findOne({
+            conversationId: conversationId,
+            status: 'active'
+        }).populate('flowId');
+        if (existing) {
+            console.log(`🤖 [Chatbot] startSession: active session ${existing._id} already exists for conversation ${conversationId}. Skipping duplicate start.`);
+            return null;
+        }
+
         // Fetch parent conversation & potential Lead to populate variables immediately
         const conversation = await WhatsAppConversation.findById(conversationId).populate('leadId');
         const initialVariables = new Map();
-        
+
         if (conversation && conversation.leadId) {
             const lead = conversation.leadId;
             initialVariables.set('lead_name', lead.name || '');
@@ -579,7 +591,7 @@ const startSession = async (flow, conversationId, userId) => {
             initialVariables.set('lead_phone', lead.phone || conversation.phone || '');
             initialVariables.set('lead_status', lead.status || '');
             initialVariables.set('lead_tags', (lead.tags || []).join(', '));
-            
+
             if (lead.customData) {
                 // Populate custom fields as variables
                 getSafeLeadCustomDataEntries(lead.customData).forEach(([key, value]) => {
@@ -598,7 +610,20 @@ const startSession = async (flow, conversationId, userId) => {
             visitedNodes: []
         });
 
-        await session.save();
+        try {
+            await session.save();
+        } catch (saveErr) {
+            // If a unique-index conflict races us, another worker won — return their session.
+            if (saveErr.code === 11000) {
+                const winner = await ChatbotSession.findOne({
+                    conversationId: conversationId,
+                    status: 'active'
+                });
+                console.log(`🤖 [Chatbot] startSession: race detected, returning winning session ${winner?._id}`);
+                return null;
+            }
+            throw saveErr;
+        }
 
         // Update analytics
         await ChatbotFlow.findByIdAndUpdate(flow._id, {
@@ -855,10 +880,16 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
             );
 
             if (button) {
-                // Verify the edge actually exists in the flow to prevent phantom connections from legacy bugs
+                // Verify the edge actually exists in the flow to prevent phantom connections from legacy bugs.
+                // When the edge has a sourceHandle, it must match this button's id — otherwise a click on
+                // button A could be routed via button B's edge to the wrong target.
                 let isValidConnection = !!button.nextNodeId;
                 if (isValidConnection && flow.edges && flow.edges.length > 0) {
-                    isValidConnection = flow.edges.some(e => e.source === currentNode.id && e.target === button.nextNodeId);
+                    isValidConnection = flow.edges.some(e =>
+                        e.source === currentNode.id &&
+                        e.target === button.nextNodeId &&
+                        (!e.sourceHandle || e.sourceHandle === button.id)
+                    );
                 }
 
                 if (isValidConnection) {
@@ -893,13 +924,30 @@ const continueSession = async (session, userResponse, conversationId, userId) =>
         return null;
     } catch (error) {
         console.error('Error continuing session:', error);
+        // Recover from a handler crash by abandoning the session — otherwise it stays
+        // 'active' forever and every subsequent message hits the same broken node.
+        try {
+            await endSession(session, 'abandoned');
+        } catch (endErr) {
+            console.error('Error ending session after handler crash:', endErr);
+        }
         return null;
     }
 };
 
+// Maximum recursion depth for executeNode — prevents stack overflow on
+// self-referencing or cyclic flows (corrupted data from old chatbot builders).
+const MAX_NODE_EXECUTION_DEPTH = 50;
+
 // Execute a specific node
-const executeNode = async (session, flow, nodeId, conversation = null) => {
+const executeNode = async (session, flow, nodeId, conversation = null, depth = 0) => {
     try {
+        if (depth >= MAX_NODE_EXECUTION_DEPTH) {
+            console.error(`🛑 [Chatbot] executeNode depth limit (${MAX_NODE_EXECUTION_DEPTH}) reached for session ${session._id}. Likely cycle in flow ${flow?._id}. Ending session.`);
+            await endSession(session, 'abandoned');
+            return null;
+        }
+
         if (!flow || !Array.isArray(flow.nodes)) {
             console.warn(`Cannot execute chatbot node for session ${session._id}: flow is missing.`);
             await endSession(session, 'abandoned');
@@ -924,7 +972,7 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                 }
                 break;
 
@@ -950,7 +998,7 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
                     if (node.data.nextNodeId) {
                         session.currentNodeId = node.data.nextNodeId;
                         await session.save();
-                        return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                        return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                     }
                 }
                 break;
@@ -972,12 +1020,12 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
                 if (matchedCondition && matchedCondition.nextNodeId) {
                     session.currentNodeId = matchedCondition.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, matchedCondition.nextNodeId, conversation);
+                    return await executeNode(session, flow, matchedCondition.nextNodeId, conversation, depth + 1);
                 } else if (node.data.nextNodeId) {
                     // Default path
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                 }
                 break;
 
@@ -989,7 +1037,7 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                 }
                 break;
 
@@ -1005,7 +1053,7 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
                     // No delay config, jump immediately
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                 }
                 break;
 
@@ -1036,14 +1084,19 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                 }
                 break;
 
             case 'media':
                 // Send media message (image/video/document) with actual file or URL
                 const mediaCaption = replaceVariables(node.data.text || '', session.variables);
-                const mediaType = node.data.mediaType || 'image'; // fallback to image
+                const VALID_MEDIA_TYPES = ['image', 'video', 'document', 'audio'];
+                const rawMediaType = node.data.mediaType || 'image';
+                const mediaType = VALID_MEDIA_TYPES.includes(rawMediaType) ? rawMediaType : 'image';
+                if (rawMediaType !== mediaType) {
+                    console.warn(`⚠️ [Chatbot] Media node ${nodeId} has invalid mediaType "${rawMediaType}". Falling back to "image".`);
+                }
                 const mediaIdentifier = node.data.mediaId || node.data.mediaUrl;
 
                 if (mediaIdentifier) {
@@ -1083,7 +1136,7 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                 }
                 break;
 
@@ -1131,7 +1184,7 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId, conversation);
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                 }
                 break;
 
@@ -1173,14 +1226,21 @@ const executeNode = async (session, flow, nodeId, conversation = null) => {
     }
 };
 
-// Replace variables in text
+// Replace variables in text. Both the variable key (used in regex source) and the
+// value (used as replacement string) need escaping — `$` has special meaning in
+// String.replace replacement strings and would corrupt user input like "$100".
 const replaceVariables = (text, variables) => {
     if (!text) return '';
+    if (!variables || typeof variables.forEach !== 'function') return text;
+
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapeReplacement = (s) => String(s ?? '').replace(/\$/g, '$$$$');
 
     let result = text;
     variables.forEach((value, key) => {
-        const regex = new RegExp(`{{${key}}}`, 'g');
-        result = result.replace(regex, value);
+        if (!key) return;
+        const regex = new RegExp(`{{${escapeRegex(key)}}}`, 'g');
+        result = result.replace(regex, escapeReplacement(value));
     });
 
     return result;
