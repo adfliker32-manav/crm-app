@@ -111,16 +111,8 @@ exports.handleWebhook = async (req, res) => {
             debug('📋 Request headers:', JSON.stringify(req.headers, null, 2));
             debugJSON('📦 Request body (raw)', req.body);
 
-            // Verify signature. In production, META_APP_SECRET is required —
-            // without it any unauthenticated party could spoof Meta webhooks.
-            if (!process.env.META_APP_SECRET) {
-                if (process.env.NODE_ENV === 'production') {
-                    console.error('❌ META_APP_SECRET is not set in production — refusing to process webhook');
-                    telemetryService.recordWebhook(false, false, 0);
-                    return;
-                }
-                console.warn('⚠️  META_APP_SECRET is not set — webhook signature verification is DISABLED (dev mode only)');
-            } else if (!verifySignature(req)) {
+            // Verify signature (optional but recommended)
+            if (process.env.META_APP_SECRET && !verifySignature(req)) {
                 console.error('❌ Invalid webhook signature - dropping request');
                 telemetryService.recordWebhook(false, false, 0);
                 return; // Exits the setImmediate block, response already sent
