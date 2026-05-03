@@ -673,6 +673,7 @@ const startSession = async (flow, conversationId, userId) => {
             }
             throw saveErr;
         }
+        console.log(`🤖 [Chatbot] Session ${session._id} created. startNodeId=${flow.startNodeId}, flow has ${flow.nodes?.length || 0} node(s) and ${flow.edges?.length || 0} edge(s)`);
 
         // Update analytics
         await ChatbotFlow.findByIdAndUpdate(flow._id, {
@@ -1092,9 +1093,11 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
 
         const node = flow.nodes.find(n => n.id === nodeId);
         if (!node) {
+            console.warn(`🤖 [Chatbot] executeNode: node "${nodeId}" not found in flow ${flow._id} (depth=${depth}). Available node ids: ${flow.nodes.map(n => n.id).join(', ')}. Ending session as abandoned.`);
             await endSession(session, 'abandoned');
             return null;
         }
+        console.log(`🤖 [Chatbot] executeNode session=${session._id} node=${node.id} type=${node.type} depth=${depth}${node.data?.buttons?.length ? ` buttons=${node.data.buttons.length}` : ''}${node.data?.nextNodeId ? ` next=${node.data.nextNodeId}` : ''}`);
 
         // FIX #25: Reuse passed conversation, only fetch if not provided
         if (!conversation) {

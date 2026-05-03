@@ -32,6 +32,11 @@ const { authMiddleware } = require('./src/middleware/authMiddleware');
 
 const app = express();
 
+// Render → Cloudflare → Express adds two proxy hops, so X-Forwarded-For has
+// "<client>, <render-edge>". Trust both so express-rate-limit can read the
+// real client IP from req.ip without throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+app.set('trust proxy', 2);
+
 // Middleware
 // IMPORTANT: We use a verify callback to capture the raw request body buffer.
 // Meta signs the RAW bytes of the payload, not the re-serialized JSON.
