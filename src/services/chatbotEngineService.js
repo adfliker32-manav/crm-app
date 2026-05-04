@@ -579,13 +579,44 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             );
         }
 
-        // 2. First Message Match (Completely new contact) — only if NOT paused
+        // 2. Template Reply Match — fires when user taps a QUICK_REPLY button on a template
+        // This bypasses pause (same as keyword — it's an explicit user intent).
+        if (!targetFlow && message.contextMessageId) {
+            try {
+                const originalMsg = await WhatsAppMessage.findOne({ waMessageId: message.contextMessageId }).lean();
+                if (originalMsg && originalMsg.content?.templateName) {
+                    const tplName = originalMsg.content.templateName;
+                    const replyFlow = allActiveFlows.find(f =>
+                        f.triggerType === 'template_reply' && f.triggerTemplateName === tplName
+                    );
+                    if (replyFlow) {
+                        console.log(`📩 [Chatbot] Template reply trigger matched: "${replyFlow.name}" (template: ${tplName}, button: "${messageText}")`);
+                        targetFlow = replyFlow;
+                        // Bypass pause if needed
+                        if (isPaused) {
+                            console.log(`🔓 [Chatbot] Template reply trigger "${replyFlow.name}" bypassing chatbot pause`);
+                            await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+                                $set: { chatbotPausedUntil: null }
+                            });
+                            await ChatbotSession.updateMany(
+                                { conversationId: conversationId, status: 'active' },
+                                { $set: { status: 'abandoned', completedAt: new Date() } }
+                            );
+                        }
+                    }
+                }
+            } catch (tplErr) {
+                console.error('[Chatbot] Template reply lookup error:', tplErr.message);
+            }
+        }
+
+        // 3. First Message Match (Completely new contact) — only if NOT paused
         if (!targetFlow && !isPaused && conversation.metadata.totalInbound === 1) {
             targetFlow = allActiveFlows.find(f => f.triggerType === 'first_message' || f.triggerType === 'any_message');
             if (targetFlow) console.log(`🤖 [Chatbot] First-message trigger matched: "${targetFlow.name}"`);
         }
 
-        // 3. Existing Contact Match (They have messaged before) — only if NOT paused
+        // 4. Existing Contact Match (They have messaged before) — only if NOT paused
         if (!targetFlow && !isPaused && conversation.metadata.totalInbound > 1) {
             targetFlow = allActiveFlows.find(f => f.triggerType === 'existing_contact_message' || f.triggerType === 'any_message');
             if (targetFlow) console.log(`🤖 [Chatbot] Existing-contact trigger matched: "${targetFlow.name}"`);

@@ -16,7 +16,8 @@ const TRIGGER_LABELS = {
     existing_contact_message: 'Returning',
     any_message: 'All Contacts',
     manual: 'Manual',
-    stage_change: 'Stage Change'
+    stage_change: 'Stage Change',
+    template_reply: 'Template Reply'
 };
 
 const TRIGGER_COLORS = {
@@ -25,7 +26,8 @@ const TRIGGER_COLORS = {
     existing_contact_message: 'bg-blue-100 text-blue-700',
     any_message: 'bg-amber-100 text-amber-700',
     manual: 'bg-slate-100 text-slate-600',
-    stage_change: 'bg-pink-100 text-pink-700'
+    stage_change: 'bg-pink-100 text-pink-700',
+    template_reply: 'bg-orange-100 text-orange-700'
 };
 
 const StatCard = ({ label, value, icon, color, subtext }) => (
@@ -298,6 +300,9 @@ const WhatsAppAnalytics = () => {
                                                         </span>
                                                         {flow.triggerType === 'keyword' && flow.triggerKeywords.length > 0 && (
                                                             <span className="text-[10px] text-slate-400">{flow.triggerKeywords.slice(0, 3).join(', ')}{flow.triggerKeywords.length > 3 ? ` +${flow.triggerKeywords.length - 3}` : ''}</span>
+                                                        )}
+                                                        {flow.triggerType === 'template_reply' && flow.triggerTemplateName && (
+                                                            <span className="text-[10px] text-slate-400">{flow.triggerTemplateName}</span>
                                                         )}
                                                     </div>
                                                 </div>

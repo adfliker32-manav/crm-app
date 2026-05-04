@@ -134,6 +134,7 @@ const ChatbotFlows = ({ onEditFlow }) => {
                                         {flow.triggerType === 'existing_contact_message' && 'Any message (Existing Contacts)'}
                                         {flow.triggerType === 'any_message' && 'Any message (All Contacts)'}
                                         {flow.triggerType === 'stage_change' && `Stage: ${flow.triggerStage}`}
+                                        {flow.triggerType === 'template_reply' && `Template Reply: ${flow.triggerTemplateName || 'None'}`}
                                         {flow.triggerType === 'manual' && 'Manual trigger only'}
                                     </span>
                                 </div>

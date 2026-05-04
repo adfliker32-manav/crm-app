@@ -479,7 +479,7 @@ exports.startConversation = async (req, res) => {
             const { sendWhatsAppMessage } = require('../services/whatsappService');
             result = await sendWhatsAppMessage(normalizedPhone, templateName, userId, metaComponents);
             waMessageId = result?.messages?.[0]?.id;
-            messageContent = { text: `[Template: ${templateName}]` };
+            messageContent = { text: `[Template: ${templateName}]`, templateName: templateName };
             messageType = 'template';
         } else {
             // Send via free-text (only works within 24hr window)

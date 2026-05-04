@@ -839,6 +839,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                         className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-teal-500 outline-none transition shadow-sm"
                                     >
                                         <option value="keyword">Specific Keywords</option>
+                                        <option value="template_reply">Template Button Reply</option>
                                         <option value="first_message">First Message Ever (New Contacts)</option>
                                         <option value="existing_contact_message">Any Message (Existing Contacts Only)</option>
                                         <option value="any_message">Any Message (All Contacts)</option>
@@ -908,6 +909,35 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                     <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100 text-emerald-700 text-sm">
                                         <i className="fa-solid fa-circle-info mr-2"></i>
                                         This flow will execute whenever an existing customer/contact sends a new message today (assuming they aren't already in another active chatbot session).
+                                    </div>
+                                )}
+
+                                {flow.triggerType === 'template_reply' && (
+                                    <div className="space-y-3">
+                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Linked Template</label>
+                                            <p className="text-xs text-slate-500 mb-3">Select the template whose button reply will start this flow</p>
+                                            <select
+                                                value={flow.triggerTemplateName || ''}
+                                                onChange={(e) => setFlow({ ...flow, triggerTemplateName: e.target.value })}
+                                                className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-teal-500 outline-none transition shadow-sm"
+                                            >
+                                                <option value="">— Select an approved template —</option>
+                                                {approvedTemplates.map(t => (
+                                                    <option key={t._id} value={t.name}>{t.name} ({t.language || 'en'})</option>
+                                                ))}
+                                            </select>
+                                            {approvedTemplates.length === 0 && (
+                                                <p className="text-[11px] text-red-500 mt-2">
+                                                    <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                                                    No approved templates found. Create and submit templates for Meta approval first.
+                                                </p>
+                                            )}
+                                        </div>
+                                        <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 text-orange-700 text-sm">
+                                            <i className="fa-solid fa-circle-info mr-2"></i>
+                                            When this template is sent (via automation, broadcast, or manually) and the recipient taps any Quick Reply button, this chatbot flow will be triggered automatically.
+                                        </div>
                                     </div>
                                 )}
 
