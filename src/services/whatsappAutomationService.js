@@ -85,9 +85,9 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return false;
         const templates = await WhatsAppTemplate.find({
             userId: userId,
-            isActive: true,
             isAutomated: true,
-            triggerType: 'on_lead_create'
+            triggerType: 'on_lead_create',
+            status: 'APPROVED'
         }).lean();
 
         if (!templates || templates.length === 0) {
@@ -135,10 +135,10 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
         // Find templates with automation enabled for stage change
         const templates = await WhatsAppTemplate.find({
             userId: userId,
-            isActive: true,
             isAutomated: true,
             triggerType: 'on_stage_change',
-            stage: newStage // Template must match the new stage
+            stage: newStage,
+            status: 'APPROVED'
         }).lean();
 
         if (!templates || templates.length === 0) {
