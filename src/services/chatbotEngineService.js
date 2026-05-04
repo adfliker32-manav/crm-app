@@ -628,7 +628,10 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             return await startSession(
                 targetFlow,
                 conversationId,
-                normalizeId(targetFlow.userId) || tenantId
+                normalizeId(targetFlow.userId) || tenantId,
+                messageText,
+                targetFlow.triggerType === 'template_reply',
+                message
             );
         }
 
@@ -646,7 +649,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 };
 
 // Start a new chatbot session
-const startSession = async (flow, conversationId, userId) => {
+const startSession = async (flow, conversationId, userId, triggerMessageText = null, isTemplateReply = false, incomingMessage = null) => {
     try {
         // Race-safe: re-check for an existing active session and bail if one already exists.
         // Two webhooks arriving within ~50ms can both reach this function — without this
@@ -711,8 +714,13 @@ const startSession = async (flow, conversationId, userId) => {
             $inc: { 'analytics.triggered': 1 }
         });
 
-        // Execute start node
-        return await executeNode(session, flow, flow.startNodeId);
+        if (isTemplateReply) {
+            console.log(`🤖 [Chatbot] Handling template reply button click immediately`);
+            return await continueSession(session, triggerMessageText, conversationId, userId, incomingMessage);
+        } else {
+            // Execute start node
+            return await executeNode(session, flow, flow.startNodeId);
+        }
     } catch (error) {
         console.error('Error starting session:', error);
         return null;
@@ -1013,7 +1021,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                 await endSession(session, 'completed');
                 return null;
             }
-        } else if (currentNode.type === 'message' && currentNode.data.buttons) {
+        } else if ((currentNode.type === 'message' || currentNode.type === 'template') && currentNode.data.buttons) {
             // Handle button response. Match priority:
             //   1. Exact buttonId from interactive.button_reply.id (most reliable — survives
             //      WhatsApp's 20-char title truncation and case/whitespace differences).

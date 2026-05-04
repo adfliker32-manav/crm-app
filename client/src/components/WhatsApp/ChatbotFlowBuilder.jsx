@@ -919,7 +919,45 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                             <p className="text-xs text-slate-500 mb-3">Select the template whose button reply will start this flow</p>
                                             <select
                                                 value={flow.triggerTemplateName || ''}
-                                                onChange={(e) => setFlow({ ...flow, triggerTemplateName: e.target.value })}
+                                                onChange={(e) => {
+                                                    const newTemplateName = e.target.value;
+                                                    setFlow({ ...flow, triggerTemplateName: newTemplateName });
+                                                    
+                                                    if (newTemplateName) {
+                                                        const tpl = approvedTemplates.find(t => t.name === newTemplateName);
+                                                        if (tpl) {
+                                                            let buttons = [];
+                                                            tpl.components.forEach(comp => {
+                                                                if (comp.type === 'BUTTONS') {
+                                                                    comp.buttons.forEach((b, idx) => {
+                                                                        if (b.type === 'QUICK_REPLY') {
+                                                                            buttons.push({ id: `btn_${idx}`, text: b.text });
+                                                                        }
+                                                                    });
+                                                                }
+                                                            });
+                                                            
+                                                            setNodes(prev => {
+                                                                const startNodeId = flow.startNodeId || 'start-1';
+                                                                let newNodes = [...prev];
+                                                                const startNodeIndex = newNodes.findIndex(n => n.id === startNodeId);
+                                                                const templateNodeData = {
+                                                                    blockType: 'template',
+                                                                    templateName: newTemplateName,
+                                                                    text: `Trigger: ${newTemplateName}`,
+                                                                    buttons: buttons
+                                                                };
+                                                                
+                                                                if (startNodeIndex >= 0) {
+                                                                    newNodes[startNodeIndex] = { ...newNodes[startNodeIndex], type: 'template', data: templateNodeData };
+                                                                } else {
+                                                                    newNodes.push({ id: startNodeId, type: 'template', position: { x: 250, y: 100 }, data: templateNodeData });
+                                                                }
+                                                                return newNodes;
+                                                            });
+                                                        }
+                                                    }
+                                                }}
                                                 className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-teal-500 outline-none transition shadow-sm"
                                             >
                                                 <option value="">— Select an approved template —</option>
