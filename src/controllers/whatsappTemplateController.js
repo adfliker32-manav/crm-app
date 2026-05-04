@@ -128,25 +128,36 @@ exports.updateTemplate = async (req, res) => {
             return res.status(404).json({ message: 'Template not found' });
         }
 
-        // Can only edit DRAFT or REJECTED templates
-        if (!['DRAFT', 'REJECTED'].includes(template.status)) {
-            return res.status(400).json({ message: 'Can only edit DRAFT or REJECTED templates' });
-        }
+        const isDraft = ['DRAFT', 'REJECTED'].includes(template.status);
+        const { name, language, category, components, isActive, variableMapping, isAutomated, triggerType, stage } = req.body;
 
-        const { name, language, category, components, isActive, variableMapping } = req.body;
+        // Automation fields (isAutomated, triggerType, stage) are CRM-side settings,
+        // NOT part of the Meta template format — allow them to be saved for ANY status.
+        if (isAutomated !== undefined) template.isAutomated = isAutomated;
+        if (triggerType !== undefined) template.triggerType = triggerType;
+        if (stage !== undefined) template.stage = stage;
 
-        if (name && name !== template.name) {
-            if (!/^[a-z0-9_]+$/.test(name)) {
-                return res.status(400).json({ message: 'Template name must be lowercase with underscores only' });
+        // Structural fields (content/format) can only be changed on DRAFT or REJECTED templates
+        if (!isDraft) {
+            // Check if caller is trying to change structural fields on a locked template
+            const tryingStructuralEdit = (name && name !== template.name) || language || category || components || variableMapping;
+            if (tryingStructuralEdit) {
+                return res.status(400).json({ message: 'Can only edit content of DRAFT or REJECTED templates. Automation settings have been saved.' });
             }
-            template.name = name;
+        } else {
+            if (name && name !== template.name) {
+                if (!/^[a-z0-9_]+$/.test(name)) {
+                    return res.status(400).json({ message: 'Template name must be lowercase with underscores only' });
+                }
+                template.name = name;
+            }
+            if (language) template.language = language;
+            if (category) template.category = category;
+            if (components) template.components = components;
+            if (variableMapping !== undefined) template.variableMapping = variableMapping;
         }
 
-        if (language) template.language = language;
-        if (category) template.category = category;
-        if (components) template.components = components;
         if (isActive !== undefined) template.isActive = isActive;
-        if (variableMapping !== undefined) template.variableMapping = variableMapping;
 
         await template.save();
         res.json({ template });
