@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useConfirm } from '../context/ConfirmContext';
 import { useState, useEffect } from 'react';
 import api from '../services/api';
+import useSocket from '../hooks/useSocket';
 
 const NavItem = ({ to, icon, label, collapsed, badgeCount = 0 }) => {
     const location = useLocation();
@@ -42,14 +43,44 @@ const NavItem = ({ to, icon, label, collapsed, badgeCount = 0 }) => {
 const Sidebar = () => {
     const { logout, user } = useAuth();
     const { showDanger } = useConfirm();
+    const location = useLocation();
+    const { socket } = useSocket();
     const [collapsed, setCollapsed] = useState(true);
     const [appName, setAppName] = useState('Adfliker');
     const [dueTaskCount, setDueTaskCount] = useState(0);
+    const [waUnreadCount, setWaUnreadCount] = useState(0);
 
     const canManageTeam = ['superadmin', 'agency', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
 
     // Workspace-level Plan Feature Check
     const hasModule = (moduleName) => user?.activeModules ? user.activeModules.includes(moduleName) : true;
+
+    const hasWhatsApp = (canManageTeam || user?.permissions?.viewWhatsApp === true) && hasModule('whatsapp');
+    const isWhatsAppPage = location.pathname.startsWith('/whatsapp');
+
+    // Fetch WhatsApp unread count when not on the inbox page (inbox manages its own state)
+    useEffect(() => {
+        if (!hasWhatsApp || !user) return;
+        if (isWhatsAppPage) {
+            setWaUnreadCount(0);
+            return;
+        }
+        api.get('/whatsapp/conversations/unread')
+            .then(res => setWaUnreadCount(res.data.unreadCount || 0))
+            .catch(() => {});
+    }, [user, isWhatsAppPage, hasWhatsApp]);
+
+    // Real-time increment via socket when a new inbound message arrives and inbox is not open
+    useEffect(() => {
+        if (!socket || !hasWhatsApp || isWhatsAppPage) return;
+        const handler = ({ message }) => {
+            if (message?.direction === 'inbound') {
+                setWaUnreadCount(prev => prev + 1);
+            }
+        };
+        socket.on('whatsapp:newMessage', handler);
+        return () => socket.off('whatsapp:newMessage', handler);
+    }, [socket, hasWhatsApp, isWhatsAppPage]);
 
     useEffect(() => {
         const fetchAppName = async () => {
@@ -120,7 +151,7 @@ const Sidebar = () => {
                 )}
 
                 {(canManageTeam || user?.permissions?.viewWhatsApp === true) && hasModule('whatsapp') && (
-                    <NavItem collapsed={collapsed} to="/whatsapp" icon="fa-brands fa-whatsapp" label="WhatsApp" />
+                    <NavItem collapsed={collapsed} to="/whatsapp" icon="fa-brands fa-whatsapp" label="WhatsApp" badgeCount={waUnreadCount} />
                 )}
 
                 {(canManageTeam || user?.permissions?.viewEmails === true) && hasModule('email') && (

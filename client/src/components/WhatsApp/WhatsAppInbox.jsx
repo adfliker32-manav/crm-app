@@ -39,6 +39,7 @@ const WhatsAppInbox = () => {
     const inputRef = useRef(null);
     const selectedChatRef = useRef(null); // Track selectedChat in socket callbacks
     const shouldScrollToBottomRef = useRef(true); // 🛡️ Flag for pagination vs new messages
+    const fetchConversationsRef = useRef(null); // Stable ref to avoid stale closure in socket handlers
     const { socket, isConnected } = useSocket();
 
     const fetchConversations = useCallback(async () => {
@@ -105,10 +106,14 @@ const WhatsAppInbox = () => {
 
     useEffect(() => { fetchConversations(); fetchTemplates(); }, [fetchConversations]);
 
-    // Keep selectedChatRef in sync for socket callbacks
+    // Keep refs in sync for socket callbacks (avoids stale closures)
     useEffect(() => {
         selectedChatRef.current = selectedChat;
     }, [selectedChat]);
+
+    useEffect(() => {
+        fetchConversationsRef.current = fetchConversations;
+    }, [fetchConversations]);
 
     const fetchTemplates = async () => {
         try {
@@ -177,7 +182,7 @@ const WhatsAppInbox = () => {
             setConversations(prev => {
                 const exists = prev.some(c => c._id === convId);
                 if (exists) {
-                    return prev.map(c => {
+                    const updated = prev.map(c => {
                         if (c._id !== convId) return c;
                         return {
                             ...c,
@@ -190,10 +195,12 @@ const WhatsAppInbox = () => {
                                 : c.unreadCount
                         };
                     });
+                    // Sort so the conversation with new message bubbles to top
+                    return [...updated].sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
                 } else {
-                    // New conversation — refresh the list
-                    // New conversation � schedule a refresh (fetchConversations accessed via closure, newest available)
-                    setTimeout(() => fetchConversations(), 0);
+                    // New conversation from a brand-new contact — refresh the list
+                    setTimeout(() => fetchConversationsRef.current?.(), 0);
+                    return prev; // must return prev to avoid corrupting state
                 }
             });
         };
