@@ -692,7 +692,8 @@ const evaluateSmartLead = async (session, flow, conversation) => {
     if (!flow.smartLeadSettings || !flow.smartLeadSettings.enabled) return;
     
     let currentLevel = session.qualificationLevel || 'None';
-    const numAnswers = session.variables ? session.variables.size : 0;
+    // Count all user interactions (button taps, replies, media uploads) — not just stored variables
+    const numAnswers = session.visitedNodes ? session.visitedNodes.length : 0;
     
     const customData = buildLeadCustomDataFromVariables(session.variables);
 
@@ -757,7 +758,7 @@ const evaluateSmartLead = async (session, flow, conversation) => {
         // Only push a history entry when the level actually increased
         if (didLevelUp) {
             let qualificationReason = `Level upgraded to ${currentLevel} by Smart Engine. `;
-            if (bestRule?.minQuestionsAnswered) qualificationReason += `Met criteria: ${bestRule.minQuestionsAnswered} questions answered. `;
+            if (bestRule?.minQuestionsAnswered) qualificationReason += `Met criteria: ${bestRule.minQuestionsAnswered} node interactions. `;
             if (bestRule?.requiredVariables?.length > 0) qualificationReason += `Provided required criteria: ${bestRule.requiredVariables.join(', ')}.`;
             updateOp.$push = {
                 history: { type: 'System', subType: 'Stage Change', content: qualificationReason, date: new Date() }
@@ -806,7 +807,7 @@ const evaluateSmartLead = async (session, flow, conversation) => {
         // Generate intelligent qualification reasoning
         let qualificationReason = `Lead automatically qualified as ${currentLevel} by Smart Engine. `;
         if (bestRule) {
-            if (bestRule.minQuestionsAnswered) qualificationReason += `Met criteria: ${bestRule.minQuestionsAnswered} questions answered. `;
+            if (bestRule.minQuestionsAnswered) qualificationReason += `Met criteria: ${bestRule.minQuestionsAnswered} node interactions. `;
             if (bestRule.requiredVariables && bestRule.requiredVariables.length > 0) qualificationReason += `Provided required criteria: ${bestRule.requiredVariables.join(', ')}.`;
         } else {
             qualificationReason += `Crossed baseline threshold.`;
@@ -923,6 +924,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             }
 
             const nextNodeId = currentNode.data.nextNodeId;
+            await evaluateSmartLead(session, flow, conversation);
             if (nextNodeId) {
                 session.currentNodeId = nextNodeId;
                 session.lastInteractionAt = new Date();
@@ -1028,6 +1030,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                     session.currentNodeId = targetNodeId;
                     session.lastInteractionAt = new Date();
                     await session.save();
+                    await evaluateSmartLead(session, flow, conversation);
                     return await executeNode(session, flow, targetNodeId, conversation);
                 } else {
                     const stalePointer = button.nextNodeId

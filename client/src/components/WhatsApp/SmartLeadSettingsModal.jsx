@@ -78,9 +78,13 @@ export default function SmartLeadSettingsModal({ settings, flowNodes = [], onSav
   const [stages, setStages] = useState([]);
   const [tags, setTags] = useState([]);
 
-  // Extract variable names from Question nodes in the flow
+  // Extract variable names from all nodes that save variables (question + request_media)
   const flowVariables = (flowNodes || [])
-    .filter(n => (n.type === 'question' || n.data?.type === 'question') && (n.data?.variableName || n.data?.data?.variableName))
+    .filter(n => {
+      const type = n.type || n.data?.type;
+      const hasVar = n.data?.variableName || n.data?.data?.variableName;
+      return (type === 'question' || type === 'request_media') && hasVar;
+    })
     .map(n => n.data?.variableName || n.data?.data?.variableName)
     .filter(Boolean);
 
@@ -235,7 +239,7 @@ export default function SmartLeadSettingsModal({ settings, flowNodes = [], onSav
                           <span className="text-xs text-slate-400">Lead Level</span>
                         </div>
 
-                        {/* Row 1: Level + Min Questions */}
+                        {/* Row 1: Level + Min Interactions */}
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <label className="block text-xs font-bold text-slate-600 mb-1">Qualify As</label>
@@ -250,7 +254,7 @@ export default function SmartLeadSettingsModal({ settings, flowNodes = [], onSav
                             </select>
                           </div>
                           <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1">Min Questions Answered</label>
+                            <label className="block text-xs font-bold text-slate-600 mb-1">Min Node Interactions</label>
                             <input
                               type="number" min="0"
                               value={rule.minQuestionsAnswered}
@@ -271,12 +275,12 @@ export default function SmartLeadSettingsModal({ settings, flowNodes = [], onSav
                               options={flowVariables.map(v => ({ value: v, label: v, name: v }))}
                               selectedValues={Array.isArray(rule.requiredVariables) ? rule.requiredVariables : []}
                               onChange={(val) => handleUpdateRule(idx, 'requiredVariables', val)}
-                              placeholder="Select variables from your Question nodes..."
+                              placeholder="Select variables from flow nodes..."
                             />
                           ) : (
                             <div className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg p-2">
                               <i className="fa-solid fa-triangle-exclamation mr-1"></i>
-                              No Question nodes found in this flow yet. Add Question nodes first, then come back.
+                              No variable nodes found in this flow yet. Add Question or Upload Media nodes first, then come back.
                             </div>
                           )}
                         </div>

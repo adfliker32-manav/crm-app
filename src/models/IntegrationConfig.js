@@ -45,7 +45,10 @@ const integrationConfigSchema = new mongoose.Schema({
         emailFromName: { type: String, default: null },
         emailSignature: { type: String, default: null },
         smtpHost: { type: String, default: null },
-        smtpPort: { type: Number, default: 587 }
+        smtpPort: { type: Number, default: 587 },
+        // Highest IMAP UID processed for this mailbox. Persisted so a server
+        // restart doesn't trigger a full re-sync of every unseen email.
+        lastImapUid: { type: Number, default: 0 }
     },
 
     // 🟦 Meta (Facebook/Meta Ads) Lead Sync & CAPI

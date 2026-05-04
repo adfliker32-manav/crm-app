@@ -43,9 +43,11 @@ async function processIncomingEmail(user, messageData, parsedMail) {
         });
     }
 
-    // Prevent duplicates
+    // Prevent duplicates — scope by userId. Without this, a Message-ID seen by
+    // tenant A (e.g., a CC'd thread) would block tenant B from ingesting their
+    // own copy.
     const messageId = parsedMail.messageId || String(messageData.uid);
-    const existing = await EmailMessage.findOne({ messageId: messageId });
+    const existing = await EmailMessage.findOne({ messageId, userId: user._id });
     if (existing) return;
 
     // Save Message
@@ -82,12 +84,13 @@ async function processIncomingEmail(user, messageData, parsedMail) {
 // Fetching all unseen emails repeatedly is highly inefficient.
 // Always track last processed UID to avoid reprocessing.
 // Parsing emails is CPU-intensive — NEVER parse before deduplication.
-const lastProcessedUid = {}; // In-memory UID tracker per email user
 
 async function syncUserEmails(userId, config) {
     if (!config?.emailUser || !config?.emailPassword) return;
     const pass = decrypt(config.emailPassword);
     if (!pass) return;
+
+    const IntegrationConfig = require('../models/IntegrationConfig');
 
     // FIX C3: Use dynamic IMAP host/port instead of hardcoded Gmail
     const imapHost = config.imapHost || 'imap.gmail.com';
@@ -106,8 +109,9 @@ async function syncUserEmails(userId, config) {
         await client.connect();
         let lock = await client.getMailboxLock('INBOX');
         try {
-            // Only fetch emails newer than last processed UID to avoid re-downloading
-            const lastUid = lastProcessedUid[config.emailUser] || 0;
+            // Persisted UID survives server restarts — without it, every restart
+            // would re-process every unseen email in the mailbox.
+            const lastUid = Number(config.lastImapUid) || 0;
             const fetchQuery = lastUid > 0
                 ? { uid: `${lastUid + 1}:*`, seen: false }
                 : { seen: false };
@@ -125,9 +129,13 @@ async function syncUserEmails(userId, config) {
                 }
             }
 
-            // Update last processed UID
+            // Persist the highest UID processed so the next cycle (or next
+            // restart) can resume from here.
             if (maxUid > lastUid) {
-                lastProcessedUid[config.emailUser] = maxUid;
+                await IntegrationConfig.updateOne(
+                    { userId },
+                    { $set: { 'email.lastImapUid': maxUid } }
+                );
             }
         } finally {
             lock.release();
@@ -165,7 +173,8 @@ async function syncAllUsers() {
 
             const imapConfig = {
                 emailUser: config.email.emailUser,
-                emailPassword: config.email.emailPassword
+                emailPassword: config.email.emailPassword,
+                lastImapUid: config.email.lastImapUid || 0
             };
 
             // 1. Await the sync fully. This parses heavy emails one account at a time.

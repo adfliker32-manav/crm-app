@@ -425,8 +425,53 @@ const handleWatcherReply = async (conversationId) => {
     }
 };
 
+// Cancel any pending Agenda jobs and watchers that reference a deleted rule.
+// Without this, scheduled EXECUTE_AUTOMATION_ACTION jobs and CHECK_REPLY_TIMEOUT
+// watchers continue to fire after the rule is gone, leading to phantom WhatsApp
+// sends and orphan watcher rows that never resolve.
+const cancelJobsForRule = async (ruleId) => {
+    if (!ruleId) return { cancelledJobs: 0, cancelledWatchers: 0 };
+    const id = ruleId.toString();
+    let cancelledJobs = 0;
+    let cancelledWatchers = 0;
+
+    if (globalAgendaInstance) {
+        try {
+            const result = await globalAgendaInstance.cancel({
+                $or: [
+                    { name: 'EXECUTE_AUTOMATION_ACTION', 'data.ruleId': id },
+                    { name: 'EXECUTE_AUTOMATION_ACTION', 'data.ruleId': ruleId }
+                ]
+            });
+            cancelledJobs = typeof result === 'number' ? result : (result?.deletedCount || 0);
+        } catch (err) {
+            console.error('[Automation] Failed to cancel scheduled jobs for rule', id, err.message);
+        }
+    }
+
+    try {
+        const watchers = await LeadAutomationWatcher.find({ ruleId, status: 'pending' }).select('agendaJobId').lean();
+        if (globalAgendaInstance && watchers.length > 0) {
+            const jobIds = watchers.map(w => w.agendaJobId).filter(Boolean);
+            if (jobIds.length > 0) {
+                await globalAgendaInstance.cancel({ _id: { $in: jobIds } }).catch(() => {});
+            }
+        }
+        const watcherResult = await LeadAutomationWatcher.updateMany(
+            { ruleId, status: 'pending' },
+            { $set: { status: 'cancelled' } }
+        );
+        cancelledWatchers = watcherResult.modifiedCount || 0;
+    } catch (err) {
+        console.error('[Automation] Failed to cancel watchers for rule', id, err.message);
+    }
+
+    return { cancelledJobs, cancelledWatchers };
+};
+
 module.exports = {
     evaluateLead,
     defineAutomationJobs,
-    handleWatcherReply
+    handleWatcherReply,
+    cancelJobsForRule
 };

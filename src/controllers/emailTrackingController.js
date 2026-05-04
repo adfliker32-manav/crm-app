@@ -58,7 +58,10 @@ exports.trackClick = async (req, res) => {
             await EmailLog.findByIdAndUpdate(logId, {
                 $set: { clickedAt: new Date() },
                 $inc: { clicks: 1 },
-                $push: { clickedLinks: { url, clickedAt: new Date() } }
+                // Cap to last 500 records — without this the array grows unbounded
+                // for any recipient that re-clicks links and eventually hits the
+                // 16 MB document limit.
+                $push: { clickedLinks: { $each: [{ url, clickedAt: new Date() }], $slice: -500 } }
             });
         }
     } catch (err) {

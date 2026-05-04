@@ -84,6 +84,16 @@ const deleteRule = async (req, res) => {
 
         if (!rule) return res.status(404).json({ message: 'Automation rule not found' });
 
+        // Cancel any in-flight Agenda jobs and pending watchers that reference this
+        // rule, so deleting a rule actually stops it from firing.
+        try {
+            const { cancelJobsForRule } = require('../services/AutomationService');
+            const result = await cancelJobsForRule(id);
+            console.log(`🧹 [Automation] Rule ${id} deleted — cancelled ${result.cancelledJobs} job(s), ${result.cancelledWatchers} watcher(s)`);
+        } catch (cleanupErr) {
+            console.error('[Automation] Cleanup after rule delete failed:', cleanupErr.message);
+        }
+
         res.json({ success: true, message: 'Automation rule deleted' });
     } catch (err) {
         console.error('Error deleting automation:', err);

@@ -89,7 +89,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [approvedTemplates, setApprovedTemplates] = useState([]);
     const flowVariables = useMemo(() => nodes
-        .filter((node) => node.type === 'question' && node.data?.variableName)
+        .filter((node) => (node.type === 'question' || node.type === 'request_media') && node.data?.variableName)
         .map((node) => node.data.variableName)
         .filter(Boolean), [nodes]);
 

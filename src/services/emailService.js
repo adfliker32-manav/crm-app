@@ -192,8 +192,12 @@ const sendEmail = async (options) => {
     const signatureText = userCredentials?.signature ? `\n\n${userCredentials.signature.replace(/<[^>]*>/g, '')}` : '';
 
     // FIX B1: Unsubscribe link must point to the BACKEND API, not the frontend
+    // Sign the link with HMAC so an attacker cannot suppress arbitrary recipients
+    // by hitting the endpoint with someone else's address.
     const backendUrl = process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
-    const unsubscribeLink = `${backendUrl}/api/email/unsubscribe?email=${encodeURIComponent(to)}`;
+    const { buildUnsubscribeToken } = require('../controllers/emailUnsubscribeController');
+    const unsubscribeToken = buildUnsubscribeToken(to);
+    const unsubscribeLink = `${backendUrl}/api/email/unsubscribe?email=${encodeURIComponent(to)}&token=${unsubscribeToken}`;
 
     // FIX B4: CAN-SPAM requires physical postal address
     const businessAddress = userCredentials?.businessAddress || process.env.BUSINESS_ADDRESS || '';

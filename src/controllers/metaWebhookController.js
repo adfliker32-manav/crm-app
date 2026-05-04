@@ -126,15 +126,25 @@ async function processLeadgenWebhook(pageId, leadgenData) {
         // Distribute the lead to all matching tenants
         for (const config of configs) {
              const { meta, userId } = config;
-             
+
              // Check if form matches (if config specifies a form)
              if (meta.metaFormId && meta.metaFormId !== form_id) {
                  console.log(`⚠️ Form ${form_id} doesn't match Tenant ${userId}'s selected form ${meta.metaFormId}`);
                  continue;
              }
 
+             // Idempotency: Meta retries webhooks; skip if we already created a lead
+             // for this leadgen_id under this tenant.
+             if (leadgen_id) {
+                 const alreadyIngested = await Lead.findOne({ userId, metaLeadgenId: leadgen_id }).select('_id').lean();
+                 if (alreadyIngested) {
+                     console.log(`↩️ Meta leadgen ${leadgen_id} already ingested for tenant ${userId} (lead ${alreadyIngested._id}). Skipping retry.`);
+                     continue;
+                 }
+             }
+
              // Create lead in CRM for this specific tenant
-             await createLeadFromMeta(userId, leadDetails, form_id);
+             await createLeadFromMeta(userId, leadDetails, form_id, leadgen_id);
 
              // Update last sync time for this tenant
              await IntegrationConfig.findOneAndUpdate(
@@ -186,7 +196,7 @@ async function fetchLeadDetails(leadgenId, accessToken) {
 }
 
 // Create a lead in CRM from Meta data
-async function createLeadFromMeta(userId, leadDetails, formId) {
+async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null) {
     try {
         // FIX 5.1: Enforce lead limit BEFORE creating — Meta sync was bypassing plan capacity
         const WorkspaceSettings = require('../models/WorkspaceSettings');
@@ -251,6 +261,7 @@ async function createLeadFromMeta(userId, leadDetails, formId) {
             email: cleanEmail || `meta_${leadDetails.id}@lead.local`,
             status: 'New',
             source: 'Meta',
+            metaLeadgenId: leadgenId || null,
             customData: customData,
             notes: [{
                 text: `Lead captured from Meta Lead Ads (Form: ${formId})`,
@@ -258,7 +269,19 @@ async function createLeadFromMeta(userId, leadDetails, formId) {
             }]
         });
 
-        await newLead.save();
+        try {
+            await newLead.save();
+        } catch (saveErr) {
+            // Idempotency backstop: a concurrent webhook retry may race past the
+            // pre-save `findOne` and arrive here at the same time. The unique index
+            // on (userId, metaLeadgenId) turns that race into a duplicate-key error
+            // we can swallow safely.
+            if (saveErr.code === 11000 && leadgenId) {
+                console.log(`↩️ Meta leadgen ${leadgenId} race-collided for tenant ${userId}. Treating as duplicate, skipping.`);
+                return null;
+            }
+            throw saveErr;
+        }
         console.log(`✅ Created new lead from Meta: ${newLead.name} (${newLead.phone || newLead.email})`);
 
         // FIX 2.3: Fire the same automation pipeline as leadController.createLead.

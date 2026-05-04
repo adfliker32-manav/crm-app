@@ -1,13 +1,42 @@
+const crypto = require('crypto');
 const EmailSuppression = require('../models/EmailSuppression');
 
+// HMAC tokens prove the unsubscribe link came from a real outgoing email.
+// Without this, anyone can hit /api/email/unsubscribe?email=victim@x.com and
+// permanently suppress somebody else's contacts. The token is derived from
+// (email + JWT_SECRET) so existing infra doesn't need a new secret.
+const getUnsubscribeSecret = () => process.env.UNSUBSCRIBE_SECRET || process.env.JWT_SECRET || '';
+
+const buildUnsubscribeToken = (email) => {
+    const secret = getUnsubscribeSecret();
+    if (!secret) return '';
+    return crypto.createHmac('sha256', secret)
+        .update(String(email).toLowerCase().trim())
+        .digest('hex')
+        .slice(0, 32); // 128 bits is plenty for non-replay non-brute-force protection
+};
+
+const verifyUnsubscribeToken = (email, token) => {
+    if (!email || !token) return false;
+    const expected = buildUnsubscribeToken(email);
+    if (!expected || expected.length !== token.length) return false;
+    try {
+        return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(token));
+    } catch {
+        return false;
+    }
+};
+
+exports.buildUnsubscribeToken = buildUnsubscribeToken;
+
 /**
- * GET /api/email/unsubscribe?email=...
+ * GET /api/email/unsubscribe?email=...&token=...
  * Public endpoint — no auth required (accessed from email link).
- * Adds the email to the suppression list and returns a confirmation page.
+ * Token is HMAC-SHA256(email, secret) and must match or the request is rejected.
  */
 exports.handleUnsubscribe = async (req, res) => {
     try {
-        const { email } = req.query;
+        const { email, token } = req.query;
 
         if (!email) {
             return res.status(400).send(buildPage(
@@ -23,6 +52,14 @@ exports.handleUnsubscribe = async (req, res) => {
             return res.status(400).send(buildPage(
                 'Invalid Email',
                 'The email address provided is not valid.',
+                'error'
+            ));
+        }
+
+        if (!verifyUnsubscribeToken(email, token)) {
+            return res.status(403).send(buildPage(
+                'Invalid Link',
+                'This unsubscribe link is invalid or expired. Use the link from a recent email, or contact support if you continue to have trouble.',
                 'error'
             ));
         }

@@ -990,6 +990,16 @@ const freezeTenant = async (req, res) => {
             { $set: { accountStatus: newAccountStatus } }
         );
 
+        // Invalidate the in-memory tenant cache so the next request from this
+        // user sees the new status immediately, instead of waiting up to 5
+        // minutes for the cache TTL to expire.
+        try {
+            const { clearTenantCache } = require('../middleware/authMiddleware');
+            clearTenantCache(id);
+        } catch (cacheErr) {
+            console.warn('[Suspend] Cache invalidation failed:', cacheErr.message);
+        }
+
         auditLogger.log({
             actor: req.user,
             actionCategory: 'COMPANY_MANAGEMENT',
