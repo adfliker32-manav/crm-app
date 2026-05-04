@@ -131,20 +131,14 @@ exports.updateTemplate = async (req, res) => {
         const isDraft = ['DRAFT', 'REJECTED'].includes(template.status);
         const { name, language, category, components, isActive, variableMapping, isAutomated, triggerType, stage } = req.body;
 
-        // Automation fields (isAutomated, triggerType, stage) are CRM-side settings,
-        // NOT part of the Meta template format — allow them to be saved for ANY status.
+        // Automation fields are CRM-side settings — allow them to be saved for ANY status.
         if (isAutomated !== undefined) template.isAutomated = isAutomated;
         if (triggerType !== undefined) template.triggerType = triggerType;
         if (stage !== undefined) template.stage = stage;
+        if (isActive !== undefined) template.isActive = isActive;
 
         // Structural fields (content/format) can only be changed on DRAFT or REJECTED templates
-        if (!isDraft) {
-            // Check if caller is trying to change structural fields on a locked template
-            const tryingStructuralEdit = (name && name !== template.name) || language || category || components || variableMapping;
-            if (tryingStructuralEdit) {
-                return res.status(400).json({ message: 'Can only edit content of DRAFT or REJECTED templates. Automation settings have been saved.' });
-            }
-        } else {
+        if (isDraft) {
             if (name && name !== template.name) {
                 if (!/^[a-z0-9_]+$/.test(name)) {
                     return res.status(400).json({ message: 'Template name must be lowercase with underscores only' });
@@ -156,8 +150,6 @@ exports.updateTemplate = async (req, res) => {
             if (components) template.components = components;
             if (variableMapping !== undefined) template.variableMapping = variableMapping;
         }
-
-        if (isActive !== undefined) template.isActive = isActive;
 
         await template.save();
         res.json({ template });
