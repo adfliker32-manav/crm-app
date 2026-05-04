@@ -3,6 +3,7 @@ const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const { submitTemplateToMeta, syncTemplateFromMeta } = require('../services/whatsappService');
 const { escapeRegex } = require('../utils/controllerHelpers');
+const { parseMetaError } = require('../utils/metaErrorUtils');
 
 // Get all templates (shared across users with same WhatsApp phone number)
 exports.getTemplates = async (req, res) => {
@@ -306,23 +307,14 @@ exports.sendTemplateMessage = async (req, res) => {
 
         res.json({ success: true, message: 'Template sent successfully', data: result });
     } catch (error) {
-        let errorMsg = error.message;
-        if (error.response && error.response.data && error.response.data.error) {
-            const metaError = error.response.data.error;
-            errorMsg = metaError.message || metaError.error_user_msg || 'WhatsApp API Error';
-            if (metaError.code === 131009) {
-                errorMsg = "User must register a valid template format before sending (Wait for approval)";
-            } else if (metaError.code === 131026) {
-                errorMsg = "Message undeliverable. User has not interacted with the business or is outside the 24h window.";
-            } else if (metaError.code) {
-                errorMsg = `Meta API Error (${metaError.code}): ${errorMsg}`;
-            }
-        }
-        console.error('Error sending template message:', errorMsg);
-        res.status(error.response?.status || 500).json({ 
-            success: false, 
-            message: `Failed to send: ${errorMsg}`, 
-            error: errorMsg 
+        const { msg: errorMsg, code: errorCode, category } = parseMetaError(error);
+        console.error(`Error sending template message [${category}/${errorCode}]:`, errorMsg);
+        res.status(error.response?.status || 500).json({
+            success: false,
+            message: errorMsg,
+            error: errorMsg,
+            errorCode,
+            errorCategory: category
         });
     }
 };

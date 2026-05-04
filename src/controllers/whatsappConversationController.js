@@ -13,6 +13,8 @@ const { buildMetaComponents } = require('../utils/templateVariableResolver');
 const { escapeRegex } = require('../utils/controllerHelpers');
 
 const { getUserWhatsAppCredentials, getCompanyUserIds } = require('../utils/whatsappUtils');
+const { parseMetaError } = require('../utils/metaErrorUtils');
+
 
 // Get all conversations for the user (shared across same WhatsApp phone number within same company)
 exports.getConversations = async (req, res) => {
@@ -517,28 +519,19 @@ exports.startConversation = async (req, res) => {
             message: message.toObject()
         });
     } catch (error) {
-        let errorMsg = error.message;
-        if (error.response && error.response.data && error.response.data.error) {
-            const metaError = error.response.data.error;
-            errorMsg = metaError.message || metaError.error_user_msg || 'WhatsApp API Error';
-            if (metaError.code === 131009) {
-                errorMsg = "User must register a valid template format before sending (Wait for approval)";
-            } else if (metaError.code === 131026) {
-                errorMsg = "Message undeliverable. User has not interacted with the business or is outside the 24h window.";
-            } else if (metaError.code) {
-                errorMsg = `Meta API Error (${metaError.code}): ${errorMsg}`;
-            }
-        }
-        console.error('Error starting conversation:', errorMsg);
-        
+        const { msg: errorMsg, code: errorCode, category } = parseMetaError(error);
+        console.error(`Error starting conversation [${category}/${errorCode}]:`, errorMsg);
+
         let statusCode = error.response?.status || 500;
         // Prevent Meta's 401 Unauthorized from triggering frontend logout interceptor
         if (statusCode === 401) statusCode = 400;
-        
+
         res.status(statusCode).json({
             success: false,
-            message: `Failed to start conversation: ${errorMsg}`,
-            error: errorMsg
+            message: errorMsg,
+            error: errorMsg,
+            errorCode,
+            errorCategory: category
         });
     }
 };
