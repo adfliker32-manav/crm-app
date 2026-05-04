@@ -192,8 +192,8 @@ const WhatsAppInbox = () => {
                     });
                 } else {
                     // New conversation â€” refresh the list
-                    fetchConversations();
-                    return prev;
+                    // New conversation — schedule a refresh (fetchConversations accessed via closure, newest available)
+                    setTimeout(() => fetchConversations(), 0);
                 }
             });
         };
@@ -201,10 +201,10 @@ const WhatsAppInbox = () => {
         // --- Conversation metadata update (lastMessage, unread, etc.) ---
         const handleConversationUpdate = ({ conversationId, updates }) => {
             const convId = typeof conversationId === 'string' ? conversationId : String(conversationId);
-            setConversations(prev =>
-                prev.map(c => c._id === convId ? { ...c, ...updates } : c)
-            );
-            // Also update selectedChat if it matches
+            setConversations(prev => {
+                const updated = prev.map(c => c._id === convId ? { ...c, ...updates } : c);
+                return [...updated].sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
+            });
             const currentChat = selectedChatRef.current;
             if (currentChat && currentChat._id === convId) {
                 setSelectedChat(prev => prev ? { ...prev, ...updates } : prev);
@@ -248,7 +248,7 @@ const WhatsAppInbox = () => {
             socket.off('whatsapp:statusUpdate', handleStatusUpdate);
             socket.off('whatsapp:conversationCleared', handleConversationCleared);
         };
-    }, [socket, fetchConversations]);
+    }, [socket]); // fetchConversations accessed via ref (fetchConversationsRef) to avoid stale closure
 
     // Watch/unwatch conversation room for targeted events
     useEffect(() => {
