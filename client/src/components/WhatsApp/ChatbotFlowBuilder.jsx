@@ -70,7 +70,7 @@ const DeletableEdge = ({
 const CompactFlowNode = ({ data, id, selected }) => {
     const type = data.blockType || 'message';
     const icon = {
-        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️'
+        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️', delay: '⏱️'
     }[type] || '💬';
 
     return (
@@ -90,32 +90,45 @@ const CompactFlowNode = ({ data, id, selected }) => {
 
             {/* Node Body */}
             <div className="p-3">
-                <p className="text-sm text-slate-600 mb-2 line-clamp-3 whitespace-pre-wrap leading-snug">
-                    {data.text || `Configure ${type} block...`}
-                </p>
-
-                {/* Content Previews */}
-                {type === 'media' && data.mediaUrl && (
-                    <div className="h-24 bg-slate-100 rounded-lg border border-slate-200 flex items-center justify-center overflow-hidden mb-2">
-                        <img src={data.mediaUrl} alt="media" className="object-cover w-full h-full opacity-80" />
+                {/* Special visual for delay nodes */}
+                {type === 'delay' ? (
+                    <div className="flex flex-col items-center justify-center py-3 gap-1">
+                        <span className="text-3xl">⏱️</span>
+                        <span className="text-sm font-bold text-amber-600">
+                            {data.delayDuration || 1} {data.delayUnit || 'hours'}
+                        </span>
+                        <span className="text-[10px] text-slate-400">Flow pauses here, then continues</span>
                     </div>
-                )}
+                ) : (
+                    <>
+                        <p className="text-sm text-slate-600 mb-2 line-clamp-3 whitespace-pre-wrap leading-snug">
+                            {data.text || `Configure ${type} block...`}
+                        </p>
 
-                {data.buttons && data.buttons.length > 0 && (
-                    <div className="mt-2 space-y-1.5 flex flex-col">
-                        {data.buttons.map((btn, i) => (
-                            <div key={i} className="relative w-full bg-blue-50/50 border border-blue-100 text-blue-700 py-1.5 px-3 rounded-md text-[11px] font-semibold text-center truncate">
-                                {btn.text}
-                                <Handle 
-                                    type="source" 
-                                    position={Position.Right} 
-                                    id={btn.id}
-                                    style={{ right: -8, top: '50%', transform: 'translateY(-50%)', width: '12px', height: '12px' }}
-                                    className="bg-blue-500 border-2 border-white absolute cursor-crosshair"
-                                />
+                        {/* Content Previews */}
+                        {type === 'media' && data.mediaUrl && (
+                            <div className="h-24 bg-slate-100 rounded-lg border border-slate-200 flex items-center justify-center overflow-hidden mb-2">
+                                <img src={data.mediaUrl} alt="media" className="object-cover w-full h-full opacity-80" />
                             </div>
-                        ))}
-                    </div>
+                        )}
+
+                        {data.buttons && data.buttons.length > 0 && (
+                            <div className="mt-2 space-y-1.5 flex flex-col">
+                                {data.buttons.map((btn, i) => (
+                                    <div key={i} className="relative w-full bg-blue-50/50 border border-blue-100 text-blue-700 py-1.5 px-3 rounded-md text-[11px] font-semibold text-center truncate">
+                                        {btn.text}
+                                        <Handle 
+                                            type="source" 
+                                            position={Position.Right} 
+                                            id={btn.id}
+                                            style={{ right: -8, top: '50%', transform: 'translateY(-50%)', width: '12px', height: '12px' }}
+                                            className="bg-blue-500 border-2 border-white absolute cursor-crosshair"
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </>
                 )}
             </div>
 
@@ -161,6 +174,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         handoff: CompactFlowNode,
         question: CompactFlowNode,
         action: CompactFlowNode,
+        delay: CompactFlowNode,
         start: CompactFlowNode // Fallback for old custom types
     }), []);
 
@@ -200,6 +214,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const contentBlocks = [
         { type: 'message', icon: '💬', label: 'Text + Buttons', desc: 'Send text with button options' },
         { type: 'question', icon: '❓', label: 'Ask Question', desc: 'Ask user and save answer as variable' },
+        { type: 'delay', icon: '⏱️', label: 'Time Delay', desc: 'Wait before sending next message' },
         { type: 'media', icon: '🖼️', label: 'Send Media', desc: 'Send image, video, or file' },
         { type: 'request_media', icon: '📸', label: 'Request Media', desc: 'Ask user to upload a file' },
         { type: 'list', icon: '📋', label: 'List', desc: 'Interactive list menu' },
@@ -371,6 +386,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         const templates = {
             message: { text: 'Hello! How can I help?', buttons: [{ text: 'Continue', id: 'next' }] },
             question: { text: 'What is your email address?', variableName: 'email', expectedType: 'email' },
+            delay: { text: 'Time Delay', delayDuration: 2, delayUnit: 'hours', delaySeconds: 7200 },
             media: { text: 'Check out this!', mediaType: 'image', mediaUrl: '' },
             request_media: { text: 'Please upload your document or photo to continue.', variableName: 'media', acceptedMediaTypes: ['image', 'video', 'document'], attachToLead: false },
             product: { text: 'Premium Backpack', price: '$89.99', image: 'https://via.placeholder.com/150/e74c3c/ffffff?text=Product' },
@@ -576,6 +592,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
                             </div>
                             
                             <div className="space-y-5">
+                                {selectedNode.data.blockType !== 'delay' && (
                                 <div>
                                     <label className="block text-sm font-semibold text-slate-700 mb-2">Message Text</label>
                                     <textarea
@@ -586,6 +603,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                         placeholder="Type your message here..."
                                     />
                                 </div>
+                                )}
 
                                 {selectedNode.data.blockType === 'message' && (
                                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
@@ -901,6 +919,67 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                 </div>
                                             </div>
                                         )}
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'delay' && (
+                                    <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 mt-4 space-y-4">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className="text-xl">⏱️</span>
+                                            <span className="text-sm font-bold text-amber-700">Time Delay</span>
+                                        </div>
+                                        <p className="text-xs text-amber-600">
+                                            Flow pauses here for the configured time, then automatically continues to the next node.
+                                        </p>
+                                        <div className="flex gap-3 items-end">
+                                            <div className="flex-1">
+                                                <label className="block text-sm font-semibold text-slate-700 mb-2">Wait Duration</label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max="999"
+                                                    value={selectedNode.data.delayDuration || 2}
+                                                    onChange={(e) => {
+                                                        const duration = Math.max(1, parseInt(e.target.value) || 1);
+                                                        const unit = selectedNode.data.delayUnit || 'hours';
+                                                        const secs = { minutes: 60, hours: 3600, days: 86400 };
+                                                        updateSelectedNodeData({ delayDuration: duration, delaySeconds: duration * (secs[unit] || 3600), text: `Wait ${duration} ${unit}` });
+                                                    }}
+                                                    className="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-amber-400 bg-white font-bold text-center text-lg"
+                                                />
+                                            </div>
+                                            <div className="flex-1">
+                                                <label className="block text-sm font-semibold text-slate-700 mb-2">Unit</label>
+                                                <select
+                                                    value={selectedNode.data.delayUnit || 'hours'}
+                                                    onChange={(e) => {
+                                                        const unit = e.target.value;
+                                                        const duration = selectedNode.data.delayDuration || 2;
+                                                        const secs = { minutes: 60, hours: 3600, days: 86400 };
+                                                        updateSelectedNodeData({ delayUnit: unit, delaySeconds: duration * (secs[unit] || 3600), text: `Wait ${duration} ${unit}` });
+                                                    }}
+                                                    className="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-amber-400 bg-white"
+                                                >
+                                                    <option value="minutes">Minutes</option>
+                                                    <option value="hours">Hours</option>
+                                                    <option value="days">Days</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div className="bg-amber-100 border border-amber-300 rounded-lg px-3 py-2 text-center">
+                                            <span className="text-sm font-bold text-amber-800">
+                                                ⏳ Pauses for {selectedNode.data.delayDuration || 2} {selectedNode.data.delayUnit || 'hours'}
+                                            </span>
+                                            <p className="text-[11px] text-amber-600 mt-0.5">= {selectedNode.data.delaySeconds || 7200} seconds</p>
+                                        </div>
+                                        <div className="bg-white border border-amber-200 rounded-lg p-3">
+                                            <p className="text-xs text-slate-500 font-semibold mb-1">💡 Example use cases:</p>
+                                            <ul className="text-xs text-slate-500 space-y-1 list-disc pl-4">
+                                                <li>Wait 2 hours → "Did you read the PDF?"</li>
+                                                <li>Wait 1 day → Send a follow-up offer</li>
+                                                <li>Wait 30 minutes → Check if user needs help</li>
+                                            </ul>
+                                        </div>
                                     </div>
                                 )}
 
