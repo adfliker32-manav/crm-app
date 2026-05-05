@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import useSocket from '../hooks/useSocket';
+import { useNotification } from '../context/NotificationContext';
 
 const Layout = () => {
     useEffect(() => {
@@ -23,8 +24,10 @@ const Layout = () => {
         return () => clearTimeout(timer);
     }, []);
 
-    // ⚠️ Listen for account deletion — auto-logout if admin removes this agent
     const { socket } = useSocket();
+    const { showError, showInfo } = useNotification();
+
+    // ⚠️ Listen for account deletion — auto-logout if admin removes this agent
     useEffect(() => {
         if (!socket) return;
         const handleAccountDeleted = (data) => {
@@ -36,6 +39,21 @@ const Layout = () => {
         socket.on('account:deleted', handleAccountDeleted);
         return () => socket.off('account:deleted', handleAccountDeleted);
     }, [socket]);
+
+    // 🔔 Listen for backend agent notifications (chatbot handoff, meta lead drop, etc.)
+    useEffect(() => {
+        if (!socket) return;
+        const handleAgentNotification = (data) => {
+            const msg = data?.message || 'New notification';
+            if (data?.type === 'meta_lead_drop') {
+                showError(msg, 10000);
+            } else {
+                showInfo(msg, 6000);
+            }
+        };
+        socket.on('notification:agent', handleAgentNotification);
+        return () => socket.off('notification:agent', handleAgentNotification);
+    }, [socket, showError, showInfo]);
 
     return (
         <div className="flex h-screen bg-slate-900 overflow-hidden font-sans">

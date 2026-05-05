@@ -2,6 +2,7 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const Lead = require('../models/Lead');
 const axios = require('axios');
+const { emitToUser } = require('../services/socketService');
 
 const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
 const META_API_TIMEOUT = 8000; // 8s — prevents hung threads on slow Meta API
@@ -119,6 +120,15 @@ async function processLeadgenWebhook(pageId, leadgenData) {
 
         if (!leadDetails) {
             console.error(`❌ Failed to fetch lead details for ${leadgen_id} after retries. Lead may be lost — check Meta API status.`);
+            // Notify every affected tenant in real-time so they can use the backfill button to recover
+            for (const config of configs) {
+                emitToUser(config.userId.toString(), 'notification:agent', {
+                    type: 'meta_lead_drop',
+                    message: `⚠️ Meta lead drop: failed to fetch a new lead after 3 attempts. Go to Meta Settings → Fetch Leads to recover it.`,
+                    leadgenId: leadgen_id,
+                    timestamp: new Date()
+                });
+            }
             return;
         }
 
