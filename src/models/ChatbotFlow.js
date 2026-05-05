@@ -111,6 +111,8 @@ const chatbotFlowSchema = new mongoose.Schema({
             actionData: mongoose.Schema.Types.Mixed,
             // For delay nodes
             delaySeconds: Number,
+            delayDuration: Number,
+            delayUnit: String,
             // For media nodes (outbound: send image/video/document/audio)
             mediaType: {
                 type: String,
