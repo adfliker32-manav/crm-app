@@ -94,10 +94,11 @@ async function processLeadgenWebhook(pageId, leadgenData) {
         const { leadgen_id, form_id } = leadgenData;
         console.log(`📋 Processing lead: ${leadgen_id} from form: ${form_id}`);
 
+        // +meta.metaAccessToken required so checkAndRefreshToken can read/refresh it (select:false field)
         const configs = await IntegrationConfig.find({
             'meta.metaPageId': pageId,
             'meta.metaLeadSyncEnabled': true
-        }).select('userId meta +meta.metaPageAccessToken');
+        }).select('userId meta +meta.metaAccessToken +meta.metaPageAccessToken');
 
         if (!configs || configs.length === 0) {
             console.log(`⚠️ No integration configs found for page ${pageId} or sync disabled`);
@@ -112,6 +113,14 @@ async function processLeadgenWebhook(pageId, leadgenData) {
 
         if (!pageToken) {
             console.error(`❌ No page access token for page ${pageId}. Lead ${leadgen_id} cannot be fetched. Reconnect Meta in settings.`);
+            for (const config of configs) {
+                emitToUser(config.userId.toString(), 'notification:agent', {
+                    type: 'meta_lead_drop',
+                    message: `⚠️ Meta lead drop: page access token missing. Please reconnect your Meta page in Settings → Integrations.`,
+                    leadgenId: leadgen_id,
+                    timestamp: new Date()
+                });
+            }
             return;
         }
 
@@ -229,7 +238,8 @@ async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
 // Create a lead in CRM from Meta data
 async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null) {
     try {
-        const workspace = await WorkspaceSettings.findOne({ userId }).select('planFeatures').lean();
+        // Single workspace query covering both planFeatures and customFieldDefinitions
+        const workspace = await WorkspaceSettings.findOne({ userId }).select('planFeatures customFieldDefinitions').lean();
         const leadLimit = workspace?.planFeatures?.leadLimit;
         if (leadLimit != null) {
             const currentCount = await Lead.countDocuments({ userId });
@@ -259,8 +269,7 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             }
         }
 
-        const workspaceFull = await WorkspaceSettings.findOne({ userId }).select('customFieldDefinitions').lean();
-        const customFieldDefs = workspaceFull?.customFieldDefinitions || [];
+        const customFieldDefs = workspace?.customFieldDefinitions || [];
 
         const customData = {};
         if (leadDetails.rawFields) {
