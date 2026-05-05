@@ -651,6 +651,33 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             }
         }
 
+        // 2.5. Meta Ad (Click-to-WhatsApp) Match
+        // Fires when user clicks an ad and sends a message (referral data is attached)
+        // Bypasses pause as it's an explicit intent.
+        if (!targetFlow && message.content?.referral) {
+            const adHeadline = message.content.referral.headline || '';
+            const adFlow = allActiveFlows.find(f => 
+                f.triggerType === 'meta_ad' && 
+                f.triggerAdHeadline &&
+                f.triggerAdHeadline.toLowerCase().trim() === adHeadline.toLowerCase().trim()
+            );
+
+            if (adFlow) {
+                console.log(`🎯 [Chatbot] Meta Ad trigger matched: "${adFlow.name}" (Ad Headline: "${adHeadline}")`);
+                targetFlow = adFlow;
+                if (isPaused) {
+                    console.log(`🔓 [Chatbot] Meta Ad trigger "${adFlow.name}" bypassing chatbot pause`);
+                    await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+                        $set: { chatbotPausedUntil: null }
+                    });
+                    await ChatbotSession.updateMany(
+                        { conversationId: conversationId, status: 'active' },
+                        { $set: { status: 'abandoned', completedAt: new Date() } }
+                    );
+                }
+            }
+        }
+
         // 3. First Message Match (Completely new contact) — only if NOT paused
         if (!targetFlow && !isPaused && conversation.metadata.totalInbound === 1) {
             targetFlow = allActiveFlows.find(f => f.triggerType === 'first_message' || f.triggerType === 'any_message');

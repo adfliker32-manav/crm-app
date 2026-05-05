@@ -1225,6 +1225,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                         <option value="first_message">First Message Ever (New Contacts)</option>
                                         <option value="existing_contact_message">Any Message (Existing Contacts Only)</option>
                                         <option value="any_message">Any Message (All Contacts)</option>
+                                        <option value="meta_ad">Meta Ad (Click-to-WhatsApp)</option>
                                         <option value="manual">Manual / API Trigger</option>
                                     </select>
                                 </div>
@@ -1291,6 +1292,22 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                     <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100 text-emerald-700 text-sm">
                                         <i className="fa-solid fa-circle-info mr-2"></i>
                                         This flow will execute whenever an existing customer/contact sends a new message today (assuming they aren't already in another active chatbot session).
+                                    </div>
+                                )}
+
+                                {flow.triggerType === 'meta_ad' && (
+                                    <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200">
+                                        <label className="block text-sm font-semibold text-indigo-900 mb-2">Meta Ad Headline</label>
+                                        <p className="text-xs text-indigo-700 mb-3">
+                                            Type the exact headline of your Facebook or Instagram Ad. This flow will trigger when a user clicks that specific ad.
+                                        </p>
+                                        <input
+                                            type="text"
+                                            placeholder="e.g. Summer Sale 2026 Offer"
+                                            value={flow.triggerAdHeadline || ''}
+                                            onChange={(e) => setFlow({ ...flow, triggerAdHeadline: e.target.value })}
+                                            className="w-full px-3 py-2 border border-indigo-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                                        />
                                     </div>
                                 )}
 

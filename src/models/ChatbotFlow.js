@@ -23,7 +23,7 @@ const chatbotFlowSchema = new mongoose.Schema({
     },
     triggerType: {
         type: String,
-        enum: ['keyword', 'first_message', 'any_message', 'existing_contact_message', 'stage_change', 'template_reply', 'manual'],
+        enum: ['keyword', 'first_message', 'any_message', 'existing_contact_message', 'stage_change', 'template_reply', 'manual', 'meta_ad'],
         default: 'keyword'
     },
     triggerKeywords: [{
@@ -38,6 +38,12 @@ const chatbotFlowSchema = new mongoose.Schema({
     // Template reply trigger: the name of the WhatsApp template whose
     // QUICK_REPLY button tap should start this flow.
     triggerTemplateName: {
+        type: String,
+        default: null,
+        trim: true
+    },
+    // Meta Ad trigger: exactly matches the ad headline from a Click-to-WhatsApp ad referral
+    triggerAdHeadline: {
         type: String,
         default: null,
         trim: true

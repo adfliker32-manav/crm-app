@@ -553,6 +553,17 @@ const extractMessageContent = (message) => {
         content.reactedMessageId = message.reaction.message_id;
     }
 
+    if (message.referral) {
+        content.referral = {
+            source_url: message.referral.source_url,
+            source_type: message.referral.source_type,
+            source_id: message.referral.source_id,
+            headline: message.referral.headline,
+            body: message.referral.body,
+            media_image_url: message.referral.media_image_url
+        };
+    }
+
     return content;
 };
 
