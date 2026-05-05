@@ -124,51 +124,70 @@ async function processLeadgenWebhook(pageId, leadgenData) {
             return;
         }
 
-        // BUG 1 FIX: fetchLeadDetails now retries on transient errors instead of silently dropping
         const leadDetails = await fetchLeadDetails(leadgen_id, pageToken);
 
         if (!leadDetails) {
-            console.error(`❌ Failed to fetch lead details for ${leadgen_id} after retries. Lead may be lost — check Meta API status.`);
-            // Notify every affected tenant in real-time so they can use the backfill button to recover
+            console.error(`❌ fetchLeadDetails failed for ${leadgen_id} after 3 attempts. Scheduling 30-min retry.`);
+            // Tell tenants we're retrying automatically — no manual action needed yet
             for (const config of configs) {
                 emitToUser(config.userId.toString(), 'notification:agent', {
                     type: 'meta_lead_drop',
-                    message: `⚠️ Meta lead drop: failed to fetch a new lead after 3 attempts. Go to Meta Settings → Fetch Leads to recover it.`,
+                    message: `⚠️ Meta lead fetch failed — retrying automatically in 30 minutes. No action needed yet.`,
                     leadgenId: leadgen_id,
                     timestamp: new Date()
                 });
             }
+            // 30-minute retry — covers Meta API outages that last a few minutes
+            // Variables captured in closure: configs, pageToken, leadgen_id, form_id
+            setTimeout(async () => {
+                try {
+                    console.log(`🔄 30-min retry firing for leadgen ${leadgen_id}...`);
+                    const retryDetails = await fetchLeadDetails(leadgen_id, pageToken);
+                    if (retryDetails) {
+                        console.log(`✅ 30-min retry succeeded for leadgen ${leadgen_id}`);
+                        await distributeLeadToTenants(retryDetails, configs, form_id, leadgen_id);
+                    } else {
+                        console.error(`❌ 30-min retry also failed for leadgen ${leadgen_id}. Manual recovery needed.`);
+                        for (const config of configs) {
+                            emitToUser(config.userId.toString(), 'notification:agent', {
+                                type: 'meta_lead_drop',
+                                message: `⚠️ Meta lead permanently dropped after retry. Go to Settings → Meta → Fetch Leads to recover it.`,
+                                leadgenId: leadgen_id,
+                                timestamp: new Date()
+                            });
+                        }
+                    }
+                } catch (err) {
+                    console.error(`❌ 30-min retry error for leadgen ${leadgen_id}:`, err.message);
+                }
+            }, 30 * 60 * 1000);
             return;
         }
 
-        // Distribute the lead to all matching tenants
-        for (const config of configs) {
-            const { meta, userId } = config;
-
-            if (meta.metaFormId && meta.metaFormId !== form_id) {
-                console.log(`⚠️ Form ${form_id} doesn't match tenant ${userId}'s selected form ${meta.metaFormId}`);
-                continue;
-            }
-
-            // Idempotency: skip if already ingested for this tenant
-            if (leadgen_id) {
-                const alreadyIngested = await Lead.findOne({ userId, metaLeadgenId: leadgen_id }).select('_id').lean();
-                if (alreadyIngested) {
-                    console.log(`↩️ Meta leadgen ${leadgen_id} already ingested for tenant ${userId}. Skipping.`);
-                    continue;
-                }
-            }
-
-            await createLeadFromMeta(userId, leadDetails, form_id, leadgen_id);
-
-            await IntegrationConfig.findOneAndUpdate(
-                { userId },
-                { $set: { 'meta.metaLastSyncAt': new Date() } }
-            );
-        }
+        await distributeLeadToTenants(leadDetails, configs, form_id, leadgen_id);
 
     } catch (error) {
         console.error("❌ processLeadgenWebhook Error:", error.message);
+    }
+}
+
+// Distribute a fetched lead to all matching tenants — used by both normal path and 30-min retry
+async function distributeLeadToTenants(leadDetails, configs, form_id, leadgen_id) {
+    for (const config of configs) {
+        const { meta, userId } = config;
+        if (meta.metaFormId && meta.metaFormId !== form_id) {
+            console.log(`⚠️ Form ${form_id} doesn't match tenant ${userId}'s form ${meta.metaFormId}`);
+            continue;
+        }
+        if (leadgen_id) {
+            const alreadyIngested = await Lead.findOne({ userId, metaLeadgenId: leadgen_id }).select('_id').lean();
+            if (alreadyIngested) {
+                console.log(`↩️ Meta leadgen ${leadgen_id} already ingested for tenant ${userId}. Skipping.`);
+                continue;
+            }
+        }
+        await createLeadFromMeta(userId, leadDetails, form_id, leadgen_id);
+        await IntegrationConfig.findOneAndUpdate({ userId }, { $set: { 'meta.metaLastSyncAt': new Date() } });
     }
 }
 
@@ -245,6 +264,12 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             const currentCount = await Lead.countDocuments({ userId });
             if (currentCount >= leadLimit) {
                 console.warn(`⚠️ Lead limit reached for tenant ${userId} (${currentCount}/${leadLimit}). Meta lead dropped.`);
+                // FIX 1: notify the user so they know to upgrade — previously this was silent
+                emitToUser(userId.toString(), 'notification:agent', {
+                    type: 'meta_lead_drop',
+                    message: `⚠️ Lead limit reached (${currentCount}/${leadLimit}). A Meta lead was dropped. Upgrade your plan to receive more leads.`,
+                    timestamp: new Date()
+                });
                 return null;
             }
         }
@@ -306,7 +331,23 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
                 console.log(`↩️ Meta leadgen ${leadgenId} race-collided for tenant ${userId}. Skipping.`);
                 return null;
             }
-            throw saveErr;
+            // FIX 2: DB transient error — retry save once after 30 minutes
+            console.error(`❌ DB save failed for lead "${newLead.name}", scheduling 30-min retry:`, saveErr.message);
+            setTimeout(async () => {
+                try {
+                    await newLead.save();
+                    console.log(`✅ 30-min DB retry: saved lead "${newLead.name}" (${newLead._id})`);
+                } catch (retryErr) {
+                    if (retryErr.code === 11000) return; // created by backfill in the meantime — fine
+                    console.error(`❌ 30-min DB retry failed for "${newLead.name}":`, retryErr.message);
+                    emitToUser(userId.toString(), 'notification:agent', {
+                        type: 'meta_lead_drop',
+                        message: `⚠️ Meta lead "${newLead.name}" could not be saved after retry. Use Settings → Meta → Fetch Leads to recover it.`,
+                        timestamp: new Date()
+                    });
+                }
+            }, 30 * 60 * 1000);
+            return null; // return now; retry will persist it in 30 min
         }
 
         console.log(`✅ Created Meta lead: ${newLead.name} (${newLead.phone || newLead.email})`);
