@@ -336,12 +336,15 @@ const FlowBuilder = ({ flowId, onBack }) => {
                     nextData.nextNodeId = elseEdge ? elseEdge.target : null;
                 }
 
-                // Default outgoing edge (non-button source) → node.data.nextNodeId
-                const defaultEdge = edges.find(e => e.source === n.id && !e.sourceHandle);
-                if (defaultEdge) {
-                    nextData.nextNodeId = defaultEdge.target;
-                } else if (!Array.isArray(nextData.buttons) || nextData.buttons.length === 0) {
-                    nextData.nextNodeId = null;
+                // Default outgoing edge (non-button, non-condition source) → node.data.nextNodeId
+                // IMPORTANT: condition nodes already set nextNodeId above (ELSE path) — skip this block for them
+                if (nextData.blockType !== 'condition') {
+                    const defaultEdge = edges.find(e => e.source === n.id && !e.sourceHandle);
+                    if (defaultEdge) {
+                        nextData.nextNodeId = defaultEdge.target;
+                    } else if (!Array.isArray(nextData.buttons) || nextData.buttons.length === 0) {
+                        nextData.nextNodeId = null;
+                    }
                 }
 
                 return { ...n, data: nextData };

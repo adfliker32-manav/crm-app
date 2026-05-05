@@ -1621,30 +1621,9 @@ const replaceVariables = (text, variables) => {
     return result;
 };
 
-// Evaluate condition
-const evaluateCondition = (condition, variables) => {
-    if (!condition || !condition.variable) return false;
-    const value = variables.get(condition.variable);
-    if (value === undefined || value === null) return false;
-
-    // FIX: Guard against null/undefined condition.value to prevent TypeError
-    const conditionValue = condition.value != null ? condition.value : '';
-
-    switch (condition.operator) {
-        case 'equals':
-            return value.toString().toLowerCase() === conditionValue.toString().toLowerCase();
-        case 'contains':
-            return value.toString().toLowerCase().includes(conditionValue.toString().toLowerCase());
-        case 'greater_than':
-            return parseFloat(value) > parseFloat(conditionValue);
-        case 'less_than':
-            return parseFloat(value) < parseFloat(conditionValue);
-        case 'not_empty':
-            return value && value.toString().trim().length > 0;
-        default:
-            return false;
-    }
-};
+// NOTE: evaluateCondition() is defined near the top of this file (after RESERVED_LEAD_VARIABLES).
+// It supports 10 operators: equals, not_equals, contains, not_contains, starts_with,
+// ends_with, greater_than, less_than, is_set, is_empty.
 
 // Execute action
 const executeAction = async (actionData, session, conversation) => {
