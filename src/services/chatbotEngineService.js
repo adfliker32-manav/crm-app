@@ -974,6 +974,53 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             return null;
         }
 
+        // ── PRE-CHECK: Button re-selection takes priority over question/other nodes ──
+        // If the user sends text that matches a button from ANY previously visited
+        // button-node, pivot immediately — don't treat it as a question answer.
+        if (userResponse) {
+            const _normResp = userResponse.toLowerCase().trim();
+            const _btnNodeTypes = new Set(['message', 'template']);
+            const _buttonId = incomingMessage?.content?.buttonId || null;
+            const _seenIds = new Set();
+            const _reversedVisited = [...session.visitedNodes].reverse().filter(e => {
+                if (_seenIds.has(e.nodeId)) return false;
+                _seenIds.add(e.nodeId);
+                return true;
+            });
+            for (const _entry of _reversedVisited) {
+                const _pNode = flow.nodes.find(n => n.id === _entry.nodeId);
+                if (!_pNode || !_btnNodeTypes.has(_pNode.type)) continue;
+                if (!_pNode.data?.buttons || _pNode.data.buttons.length === 0) continue;
+                const _mBtn = _pNode.data.buttons.find(b => {
+                    if (_buttonId && b.id === _buttonId) return true;
+                    const ft = (b.text || '').toLowerCase().trim();
+                    if (ft && ft === _normResp) return true;
+                    if (b.id === _normResp) return true;
+                    const tr = (b.text || '').substring(0, 20).toLowerCase().trim();
+                    if (tr && tr === _normResp) return true;
+                    return false;
+                });
+                if (!_mBtn) continue;
+                let _tId = _mBtn.nextNodeId;
+                let _tNode = _tId ? flow.nodes.find(n => n.id === _tId) : null;
+                if (!_tNode && flow.edges?.length > 0) {
+                    const _edge = flow.edges.find(e =>
+                        e.source === _pNode.id && e.sourceHandle === _mBtn.id &&
+                        flow.nodes.some(n => n.id === e.target)
+                    );
+                    if (_edge) { _tId = _edge.target; _tNode = flow.nodes.find(n => n.id === _tId); }
+                }
+                if (_tNode) {
+                    console.log(`🔄 [Chatbot] Button re-selection (pre-check) at node type "${currentNode.type}": user picked "${_mBtn.text}" from past node "${_pNode.id}". Pivoting → "${_tId}".`);
+                    session.currentNodeId = _tId;
+                    session.lastInteractionAt = new Date();
+                    await session.save();
+                    await evaluateSmartLead(session, flow, conversation);
+                    return await executeNode(session, flow, _tId, conversation);
+                }
+            }
+        }
+
         // Handle different node types
         if (currentNode.type === 'question') {
             // FIX: Validate response against expectedType before accepting
