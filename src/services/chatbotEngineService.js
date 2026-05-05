@@ -1732,61 +1732,91 @@ const executeAction = async (actionData, session, conversation) => {
                 }
                 break;
 
-            case 'create_lead':
-                if (!conversation.leadId) {
-                    const { findDuplicates } = require('./duplicateService');
-                    const actionTags = Array.isArray(actionData.actionData?.tags)
-                        ? actionData.actionData.tags
-                        : (actionData.actionData?.tag ? [actionData.actionData.tag] : []);
-                    const leadEmail = getFirstPopulatedVariable(session.variables, [
-                        'email',
-                        'email_address',
-                        'emailAddress',
-                        'lead_email'
-                    ]) || null;
+            case 'create_lead': {
+                const targetStage = actionData.actionData?.status || 'New';
+                const { findDuplicates } = require('./duplicateService');
+                const actionTags = Array.isArray(actionData.actionData?.tags)
+                    ? actionData.actionData.tags
+                    : (actionData.actionData?.tag ? [actionData.actionData.tag] : []);
+                const leadEmail = getFirstPopulatedVariable(session.variables, [
+                    'email', 'email_address', 'emailAddress', 'lead_email'
+                ]) || null;
 
+                let lead = null;
+
+                // ── Step 1: Check if conversation already has a linked lead ──
+                if (conversation.leadId) {
+                    lead = await Lead.findById(conversation.leadId);
+                }
+
+                // ── Step 2: If not linked, try to find by phone/email duplicate ──
+                if (!lead) {
                     const duplicates = await findDuplicates(session.userId, conversation.phone, leadEmail);
-                    let lead = null;
-
                     if (duplicates.length > 0) {
                         lead = await Lead.findById(duplicates[0]._id);
                     }
+                }
 
-                    if (!lead) {
-                        lead = new Lead(buildLeadPayloadFromSession(session, conversation, {
-                            source: actionData.actionData?.source || 'WhatsApp Chatbot',
-                            status: actionData.actionData?.status || 'New',
-                            tags: actionTags,
-                            history: [{
-                                type: 'System',
-                                subType: 'Created',
-                                content: 'Lead created by chatbot action node.',
-                                date: new Date()
-                            }]
-                        }));
-                        await lead.save();
+                if (lead) {
+                    // ── UPSERT PATH: Lead exists → just update stage ──────────
+                    const stageChanged = lead.status !== targetStage;
+                    if (stageChanged) {
+                        await Lead.findByIdAndUpdate(lead._id, {
+                            $set: { status: targetStage },
+                            $push: {
+                                history: {
+                                    $each: [{
+                                        type: 'System',
+                                        subType: 'Stage Change',
+                                        content: `Stage updated to "${targetStage}" by chatbot action node.`,
+                                        date: new Date()
+                                    }],
+                                    $slice: -100
+                                }
+                            }
+                        });
+                        console.log(`🤖 [Chatbot] create_lead (upsert): lead ${lead._id} stage updated → "${targetStage}"`);
+                    } else {
+                        console.log(`🤖 [Chatbot] create_lead (upsert): lead ${lead._id} already in stage "${targetStage}", no change needed.`);
+                    }
+                } else {
+                    // ── CREATE PATH: No lead found → create new ───────────────
+                    lead = new Lead(buildLeadPayloadFromSession(session, conversation, {
+                        source: actionData.actionData?.source || 'WhatsApp Chatbot',
+                        status: targetStage,
+                        tags: actionTags,
+                        history: [{
+                            type: 'System',
+                            subType: 'Created',
+                            content: `Lead created in stage "${targetStage}" by chatbot action node.`,
+                            date: new Date()
+                        }]
+                    }));
+                    await lead.save();
+                    console.log(`🤖 [Chatbot] create_lead: new lead ${lead._id} created in stage "${targetStage}"`);
 
-                        const flowId = getSessionFlowId(session);
-                        if (flowId) {
-                            await ChatbotFlow.findByIdAndUpdate(flowId, {
-                                $inc: { 'analytics.leadsGenerated': 1 }
-                            });
-                        }
-
-                        triggerChatbotLeadCreatedEffects(lead, session.userId, lead.status);
+                    const flowId = getSessionFlowId(session);
+                    if (flowId) {
+                        await ChatbotFlow.findByIdAndUpdate(flowId, {
+                            $inc: { 'analytics.leadsGenerated': 1 }
+                        });
                     }
 
-                    conversation.leadId = lead._id;
-                    conversation.tags = [...new Set([...(conversation.tags || []), ...(lead.tags || [])])];
+                    triggerChatbotLeadCreatedEffects(lead, session.userId, lead.status);
+                }
 
+                // ── Always link lead to the conversation ──────────────────────
+                if (!conversation.leadId || conversation.leadId.toString() !== lead._id.toString()) {
+                    conversation.leadId = lead._id;
                     const conversationUpdate = { $set: { leadId: lead._id } };
                     if (lead.tags?.length > 0) {
                         conversationUpdate.$addToSet = { tags: { $each: lead.tags } };
                     }
-
                     await WhatsAppConversation.findByIdAndUpdate(conversation._id, conversationUpdate);
                 }
                 break;
+            }
+
 
             case 'notify_agent':
                 // FIX: Implement real agent notification via Socket.IO

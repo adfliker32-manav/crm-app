@@ -1,4 +1,4 @@
-﻿/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
+/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     ReactFlow,
@@ -906,27 +906,46 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                         </div>
 
                                         {selectedNode.data.actionType === 'create_lead' && (
-                                            <div className="grid grid-cols-2 gap-3">
-                                                <div>
-                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Lead Source</label>
-                                                    <input
-                                                        value={selectedNode.data.actionData?.source || 'WhatsApp Chatbot'}
-                                                        onChange={(e) => updateSelectedActionData({ source: e.target.value })}
-                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
-                                                        placeholder="WhatsApp Chatbot"
-                                                    />
+                                            <div className="space-y-3">
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-slate-600 mb-1">Lead Source</label>
+                                                        <input
+                                                            value={selectedNode.data.actionData?.source || 'WhatsApp Chatbot'}
+                                                            onChange={(e) => updateSelectedActionData({ source: e.target.value })}
+                                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                            placeholder="WhatsApp Chatbot"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-slate-600 mb-1">Lead Stage</label>
+                                                        <select
+                                                            value={selectedNode.data.actionData?.status || 'New'}
+                                                            onChange={(e) => updateSelectedActionData({ status: e.target.value })}
+                                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                        >
+                                                            <option value="New">New</option>
+                                                            <option value="Contacted">Contacted</option>
+                                                            <option value="Interested">Interested</option>
+                                                            <option value="Qualified">Qualified</option>
+                                                            <option value="Proposal Sent">Proposal Sent</option>
+                                                            <option value="Negotiation">Negotiation</option>
+                                                            <option value="Won">Won</option>
+                                                            <option value="Lost">Lost</option>
+                                                            <option value="On Hold">On Hold</option>
+                                                        </select>
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <label className="block text-xs font-bold text-slate-600 mb-1">Initial Status</label>
-                                                    <input
-                                                        value={selectedNode.data.actionData?.status || 'New'}
-                                                        onChange={(e) => updateSelectedActionData({ status: e.target.value })}
-                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
-                                                        placeholder="New"
-                                                    />
+                                                {/* Upsert behaviour info */}
+                                                <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                                                    <i className="fa-solid fa-circle-info text-blue-500 mt-0.5 text-xs shrink-0"></i>
+                                                    <p className="text-[11px] text-blue-700">
+                                                        <strong>Smart Upsert:</strong> If this customer is already a lead, their stage will be updated to <em>{selectedNode.data.actionData?.status || 'New'}</em>. If not, a new lead is created in that stage.
+                                                    </p>
                                                 </div>
                                             </div>
                                         )}
+
 
                                         {selectedNode.data.actionType === 'update_field' && (
                                             <div className="space-y-3">
