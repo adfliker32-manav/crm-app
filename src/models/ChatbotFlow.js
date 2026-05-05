@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 const saasPlugin = require('./plugins/saasPlugin');
 
+const finiteNumber = (value, fallback = 0) => {
+    const numberValue = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numberValue) ? numberValue : fallback;
+};
+
 const chatbotFlowSchema = new mongoose.Schema({
     userId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -76,8 +81,8 @@ const chatbotFlowSchema = new mongoose.Schema({
             required: true
         },
         position: {
-            x: { type: Number, default: 0 },
-            y: { type: Number, default: 0 }
+            x: { type: Number, default: 0, set: (v) => finiteNumber(v, 0) },
+            y: { type: Number, default: 0, set: (v) => finiteNumber(v, 0) }
         },
         data: {
             // For message/question nodes

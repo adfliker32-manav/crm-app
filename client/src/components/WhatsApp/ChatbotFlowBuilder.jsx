@@ -1,8 +1,9 @@
 /* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     ReactFlow,
     Controls,
+    MiniMap,
     Background,
     applyNodeChanges,
     applyEdgeChanges,
@@ -178,6 +179,9 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const [selectedNode, setSelectedNode] = useState(null);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [approvedTemplates, setApprovedTemplates] = useState([]);
+    const [reactFlowReady, setReactFlowReady] = useState(false);
+    const reactFlowRef = useRef(null);
+    const didInitialFitViewRef = useRef(false);
     const flowVariables = useMemo(() => nodes
         .filter((node) => (node.type === 'question' || node.type === 'request_media') && node.data?.variableName)
         .map((node) => node.data.variableName)
@@ -281,21 +285,74 @@ const FlowBuilder = ({ flowId, onBack }) => {
             
             // Map existing DB nodes to React Flow format safely
             const dbNodes = res.data.flow.nodes || [];
-            const mappedNodes = dbNodes.map(n => ({
-                ...n,
-                // Ensure custom DB node types map to our registered types, passing the original type to data
-                type: n.type,
-                data: { ...n.data, blockType: n.type }
-            }));
+
+            const safeNumber = (value, fallback = 0) => {
+                const numberValue = typeof value === 'number' ? value : Number(value);
+                return Number.isFinite(numberValue) ? numberValue : fallback;
+            };
+
+            const mappedNodes = dbNodes.map((n, index) => {
+                const safePosition = {
+                    x: safeNumber(n?.position?.x, 250 + (index * 50)),
+                    y: safeNumber(n?.position?.y, 100 + (index * 50))
+                };
+
+                return ({
+                    ...n,
+                    // Ensure DB node types map to our registered types, passing the original type to data
+                    type: n.type,
+                    position: safePosition,
+                    data: { ...n.data, blockType: n.type }
+                });
+            });
             
             setNodes(mappedNodes);
-            setEdges(res.data.flow.edges || []);
+
+            const dbEdges = res.data.flow.edges || [];
+            const mappedEdges = dbEdges
+                .map((e, index) => {
+                    const source = e?.source;
+                    const target = e?.target;
+                    if (!source || !target) return null;
+
+                    const safeId = e?.id || `e-${source}-${e?.sourceHandle || 'd'}-${target}-${e?.targetHandle || 'd'}-${index}`;
+
+                    return {
+                        ...e,
+                        id: String(safeId),
+                        source: String(source),
+                        target: String(target)
+                    };
+                })
+                .filter(Boolean);
+
+            setEdges(mappedEdges);
+            didInitialFitViewRef.current = false;
         } catch (error) {
             showError('Failed to load flow');
         } finally {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        // Guard against the "blank canvas" scenario when a bad viewport or invalid positions sneak in.
+        if (!reactFlowRef.current) return;
+        if (didInitialFitViewRef.current) return;
+        if (!nodes || nodes.length === 0) return;
+
+        // Defer until nodes are measured.
+        const id = setTimeout(() => {
+            try {
+                reactFlowRef.current?.fitView?.({ padding: 0.25, includeHiddenNodes: true });
+                didInitialFitViewRef.current = true;
+            } catch (e) {
+                // no-op: fitView can throw if instance is not ready yet
+            }
+        }, 0);
+
+        return () => clearTimeout(id);
+    }, [nodes, reactFlowReady]);
 
     const handleSave = async () => {
         if (!flow.name || !flow.name.trim()) {
@@ -611,9 +668,20 @@ const FlowBuilder = ({ flowId, onBack }) => {
                         fitView
                         className="bg-slate-100"
                         defaultEdgeOptions={{ type: 'deletable', animated: true, style: { stroke: '#0d9488', strokeWidth: 2.5 } }}
+                        onInit={(instance) => {
+                            reactFlowRef.current = instance;
+                            setReactFlowReady(true);
+                        }}
                     >
                         <Background color="#94a3b8" gap={20} size={1.5} />
                         <Controls className="bg-white shadow-lg border border-slate-200 rounded-lg overflow-hidden flex-col" />
+                        <MiniMap
+                            position="top-right"
+                            pannable
+                            zoomable
+                            maskColor="rgba(15, 23, 42, 0.08)"
+                            className="!m-3 !w-[160px] !h-[120px] !rounded-lg !border !border-slate-200 !shadow-lg !bg-white"
+                        />
                     </ReactFlow>
                 </div>
 
