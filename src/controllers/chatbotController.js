@@ -42,7 +42,7 @@ exports.getFlow = async (req, res) => {
 exports.createFlow = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const { name, description, triggerType, triggerKeywords, nodes, edges } = req.body;
+        const { name, description, triggerType, triggerKeywords, triggerTemplateName, triggerAdHeadline, nodes, edges } = req.body;
 
         if (!name || !name.trim()) {
             return res.status(400).json({ message: 'Flow name is required' });
@@ -64,6 +64,8 @@ exports.createFlow = async (req, res) => {
             description: description || '',
             triggerType: triggerType || 'keyword',
             triggerKeywords: triggerKeywords || [],
+            triggerTemplateName: triggerTemplateName || null,
+            triggerAdHeadline: triggerAdHeadline || null,
             nodes: defaultNodes,
             edges: edges || [],
             startNodeId: defaultNodes[0].id
@@ -84,7 +86,7 @@ exports.updateFlow = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { id } = req.params;
-        const { name, description, isActive, triggerType, triggerKeywords, triggerStage, nodes, edges, startNodeId, smartLeadSettings } = req.body;
+        const { name, description, isActive, triggerType, triggerKeywords, triggerStage, triggerTemplateName, triggerAdHeadline, nodes, edges, startNodeId, smartLeadSettings } = req.body;
 
         const flow = await ChatbotFlow.findOne({ _id: id, userId: userId });
 
@@ -99,6 +101,8 @@ exports.updateFlow = async (req, res) => {
         if (triggerType !== undefined) flow.triggerType = triggerType;
         if (triggerKeywords !== undefined) flow.triggerKeywords = triggerKeywords;
         if (triggerStage !== undefined) flow.triggerStage = triggerStage;
+        if (triggerTemplateName !== undefined) flow.triggerTemplateName = triggerTemplateName;
+        if (triggerAdHeadline !== undefined) flow.triggerAdHeadline = triggerAdHeadline;
         if (nodes !== undefined) flow.nodes = nodes;
         if (edges !== undefined) flow.edges = edges;
         if (startNodeId !== undefined) flow.startNodeId = startNodeId;
