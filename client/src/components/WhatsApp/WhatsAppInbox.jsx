@@ -693,7 +693,8 @@ const WhatsAppInbox = () => {
     }
 
     return (
-        <div className="flex h-full bg-[#f0f2f5]">
+        <div className="h-full bg-[#f0f2f5] box-border p-2 sm:p-3 md:p-4">
+            <div className="flex h-full w-full max-w-[1600px] mx-auto overflow-hidden rounded-2xl border border-[#e9edef] bg-white shadow-xl">
             {/* ═══════════ LEFT SIDEBAR ═══════════ */}
             <div className="w-[380px] bg-white border-r border-[#e9edef] flex flex-col flex-shrink-0">
                 {/* Sidebar Header */}
@@ -1235,6 +1236,7 @@ const WhatsAppInbox = () => {
                     </div>
                 </div>
             )}
+            </div>
         </div>
     );
 };
