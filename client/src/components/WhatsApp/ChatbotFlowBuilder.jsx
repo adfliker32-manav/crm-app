@@ -997,15 +997,25 @@ const FlowBuilder = ({ flowId, onBack }) => {
 
                                         {selectedNode.data.actionType === 'change_stage' && (
                                             <div>
-                                                <label className="block text-xs font-bold text-slate-600 mb-1">Lead Stage</label>
-                                                <input
-                                                    value={selectedNode.data.actionData?.stage || ''}
+                                                <label className="block text-xs font-bold text-slate-600 mb-1">Move Lead to Stage</label>
+                                                <select
+                                                    value={selectedNode.data.actionData?.stage || 'Qualified'}
                                                     onChange={(e) => updateSelectedActionData({ stage: e.target.value })}
-                                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
-                                                    placeholder="Qualified"
-                                                />
+                                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                >
+                                                    <option value="New">New</option>
+                                                    <option value="Contacted">Contacted</option>
+                                                    <option value="Interested">Interested</option>
+                                                    <option value="Qualified">Qualified</option>
+                                                    <option value="Proposal Sent">Proposal Sent</option>
+                                                    <option value="Negotiation">Negotiation</option>
+                                                    <option value="Won">Won</option>
+                                                    <option value="Lost">Lost</option>
+                                                    <option value="On Hold">On Hold</option>
+                                                </select>
                                             </div>
                                         )}
+
 
                                         {selectedNode.data.actionType === 'notify_agent' && (
                                             <div>
