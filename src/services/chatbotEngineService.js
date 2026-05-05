@@ -1100,12 +1100,10 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             return { success: true }; // Stay on current node
         }
 
-        // ─── BUTTON RE-SELECTION: user is at a non-button node but sends text ──
-        // This handles the case where the user already tapped Button 1 and moved
-        // forward, but now sends "Button 2" (or taps it on WhatsApp's chat history).
-        // We scan backwards through visitedNodes to find the most recent button-node
-        // in this flow, check if the user's text matches one of its buttons, and if
-        // so — pivot the session to that button's target node.
+        // ─── BUTTON RE-SELECTION: scan ALL visited button-nodes in history ──────
+        // User may be at Node 4 but tap/type a button from Node 1 (or any earlier
+        // node). We scan ALL visited button-nodes in reverse so ANY past menu can
+        // be re-selected, not just the most recent one.
         if (userResponse) {
             const normalizedResp = userResponse.toLowerCase().trim();
             const buttonNodeTypes = new Set(['message', 'template']);
@@ -1153,8 +1151,8 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                         return await executeNode(session, flow, targetNodeId, conversation);
                     }
                 }
-                // Found a previous button-node but the re-selected button has no target → stop looking further back
-                break;
+                // Button matched but target node missing — keep scanning older nodes
+                continue;
             }
         }
 
