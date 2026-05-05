@@ -1100,6 +1100,64 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             return { success: true }; // Stay on current node
         }
 
+        // ─── BUTTON RE-SELECTION: user is at a non-button node but sends text ──
+        // This handles the case where the user already tapped Button 1 and moved
+        // forward, but now sends "Button 2" (or taps it on WhatsApp's chat history).
+        // We scan backwards through visitedNodes to find the most recent button-node
+        // in this flow, check if the user's text matches one of its buttons, and if
+        // so — pivot the session to that button's target node.
+        if (userResponse) {
+            const normalizedResp = userResponse.toLowerCase().trim();
+            const buttonNodeTypes = new Set(['message', 'template']);
+
+            // Walk visitedNodes in reverse to find the last node that had buttons
+            const reversedVisited = [...session.visitedNodes].reverse();
+            for (const entry of reversedVisited) {
+                const pastNode = flow.nodes.find(n => n.id === entry.nodeId);
+                if (!pastNode || !buttonNodeTypes.has(pastNode.type)) continue;
+                if (!pastNode.data?.buttons || pastNode.data.buttons.length === 0) continue;
+
+                const buttonId = incomingMessage?.content?.buttonId || null;
+                const matchedButton = pastNode.data.buttons.find(b => {
+                    if (buttonId && b.id === buttonId) return true;
+                    const fullText = (b.text || '').toLowerCase().trim();
+                    if (fullText && fullText === normalizedResp) return true;
+                    if (b.id === normalizedResp) return true;
+                    const truncated = (b.text || '').substring(0, 20).toLowerCase().trim();
+                    if (truncated && truncated === normalizedResp) return true;
+                    return false;
+                });
+
+                if (matchedButton) {
+                    let targetNodeId = matchedButton.nextNodeId;
+                    let targetNode = targetNodeId ? flow.nodes.find(n => n.id === targetNodeId) : null;
+
+                    if (!targetNode && flow.edges && flow.edges.length > 0) {
+                        const matchingEdge = flow.edges.find(e =>
+                            e.source === pastNode.id &&
+                            e.sourceHandle === matchedButton.id &&
+                            flow.nodes.some(n => n.id === e.target)
+                        );
+                        if (matchingEdge) {
+                            targetNodeId = matchingEdge.target;
+                            targetNode = flow.nodes.find(n => n.id === targetNodeId);
+                        }
+                    }
+
+                    if (targetNode) {
+                        console.log(`🔄 [Chatbot] Button re-selection detected! User changed from previous choice to "${matchedButton.text}" on node "${pastNode.id}". Pivoting to node "${targetNodeId}".`);
+                        session.currentNodeId = targetNodeId;
+                        session.lastInteractionAt = new Date();
+                        await session.save();
+                        await evaluateSmartLead(session, flow, conversation);
+                        return await executeNode(session, flow, targetNodeId, conversation);
+                    }
+                }
+                // Found a previous button-node but the re-selected button has no target → stop looking further back
+                break;
+            }
+        }
+
         return null;
     } catch (error) {
         console.error('Error continuing session:', error);
