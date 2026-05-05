@@ -9,12 +9,62 @@ import {
     addEdge,
     Handle,
     Position,
-    ReactFlowProvider
+    ReactFlowProvider,
+    BaseEdge,
+    EdgeLabelRenderer,
+    getSmoothStepPath,
+    reconnectEdge
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import SmartLeadSettingsModal from './SmartLeadSettingsModal';
+
+// --- Custom Deletable + Reconnectable Edge ---
+const DeletableEdge = ({
+    id, sourceX, sourceY, targetX, targetY,
+    sourcePosition, targetPosition, style = {}, markerEnd, data
+}) => {
+    const [edgePath, labelX, labelY] = getSmoothStepPath({
+        sourceX, sourceY, sourcePosition,
+        targetX, targetY, targetPosition
+    });
+    return (
+        <>
+            <BaseEdge path={edgePath} markerEnd={markerEnd} style={style} />
+            <EdgeLabelRenderer>
+                <div
+                    style={{
+                        position: 'absolute',
+                        transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+                        pointerEvents: 'all',
+                        zIndex: 10
+                    }}
+                    className="nodrag nopan"
+                >
+                    <button
+                        onClick={() => data?.onDelete(id)}
+                        title="Break connection"
+                        style={{
+                            width: 20, height: 20,
+                            borderRadius: '50%',
+                            background: '#ef4444',
+                            color: '#fff',
+                            border: '2px solid #fff',
+                            fontSize: 10,
+                            lineHeight: 1,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 1px 4px rgba(0,0,0,0.25)'
+                        }}
+                    >✕</button>
+                </div>
+            </EdgeLabelRenderer>
+        </>
+    );
+};
 
 // --- Custom Node Implementation ---
 const CompactFlowNode = ({ data, id, selected }) => {
@@ -113,6 +163,39 @@ const FlowBuilder = ({ flowId, onBack }) => {
         action: CompactFlowNode,
         start: CompactFlowNode // Fallback for old custom types
     }), []);
+
+    const deleteEdge = useCallback((edgeId) => {
+        setEdges((eds) => {
+            const edgeToRemove = eds.find(e => e.id === edgeId);
+            if (edgeToRemove) {
+                // Clear nextNodeId on the source node data when an edge is deleted
+                setNodes((nds) => nds.map(n => {
+                    if (n.id !== edgeToRemove.source) return n;
+                    if (edgeToRemove.sourceHandle && n.data.buttons) {
+                        const newButtons = n.data.buttons.map(btn =>
+                            btn.id === edgeToRemove.sourceHandle ? { ...btn, nextNodeId: undefined } : btn
+                        );
+                        return { ...n, data: { ...n.data, buttons: newButtons } };
+                    }
+                    return { ...n, data: { ...n.data, nextNodeId: undefined } };
+                }));
+            }
+            return eds.filter(e => e.id !== edgeId);
+        });
+    }, []);
+
+    const edgeTypes = useMemo(() => ({ deletable: DeletableEdge }), []);
+
+    // Build edges with the custom type + delete callback injected into data
+    const enrichedEdges = useMemo(() =>
+        edges.map(e => ({
+            ...e,
+            type: 'deletable',
+            data: { ...e.data, onDelete: deleteEdge },
+            style: { stroke: '#0d9488', strokeWidth: 2.5 },
+            animated: true
+        })),
+    [edges, deleteEdge]);
 
     const contentBlocks = [
         { type: 'message', icon: '💬', label: 'Text + Buttons', desc: 'Send text with button options' },
@@ -337,6 +420,50 @@ const FlowBuilder = ({ flowId, onBack }) => {
         setSelectedNode(null);
     };
 
+    const duplicateSelectedNode = () => {
+        if (!selectedNode) return;
+        const newId = `${selectedNode.type}-${Date.now()}`;
+        const duplicated = {
+            ...selectedNode,
+            id: newId,
+            position: {
+                x: selectedNode.position.x + 280,
+                y: selectedNode.position.y + 40
+            },
+            selected: false,
+            data: {
+                ...selectedNode.data,
+                // Deep-clone buttons array with fresh IDs so handles are unique
+                buttons: selectedNode.data.buttons
+                    ? selectedNode.data.buttons.map(btn => ({
+                        ...btn,
+                        id: `${btn.id}-copy-${Date.now()}`,
+                        nextNodeId: null
+                    }))
+                    : undefined
+            }
+        };
+        setNodes((nds) => [...nds, duplicated]);
+        setSelectedNode(duplicated);
+    };
+
+    const onReconnect = useCallback((oldEdge, newConnection) => {
+        setEdges((eds) => reconnectEdge(oldEdge, newConnection, eds));
+        // Update node data for the reconnected edge
+        setNodes((nds) => nds.map(n => {
+            if (n.id === newConnection.source) {
+                if (newConnection.sourceHandle && n.data.buttons) {
+                    const newButtons = n.data.buttons.map(btn =>
+                        btn.id === newConnection.sourceHandle ? { ...btn, nextNodeId: newConnection.target } : btn
+                    );
+                    return { ...n, data: { ...n.data, buttons: newButtons } };
+                }
+                return { ...n, data: { ...n.data, nextNodeId: newConnection.target } };
+            }
+            return n;
+        }));
+    }, []);
+
     if (loading) {
         return (
             <div className="flex items-center justify-center h-full bg-slate-50">
@@ -407,16 +534,21 @@ const FlowBuilder = ({ flowId, onBack }) => {
                 <div className="flex-1 relative bg-slate-50">
                     <ReactFlow
                         nodes={nodes}
-                        edges={edges}
+                        edges={enrichedEdges}
                         nodeTypes={nodeTypes}
+                        edgeTypes={edgeTypes}
                         onNodesChange={onNodesChange}
                         onEdgesChange={onEdgesChange}
                         onConnect={onConnect}
+                        onReconnect={onReconnect}
+                        onReconnectStart={() => {}}
+                        onReconnectEnd={() => {}}
                         onNodeClick={onNodeClick}
                         onPaneClick={onPaneClick}
+                        reconnectRadius={20}
                         fitView
                         className="bg-slate-100"
-                        defaultEdgeOptions={{ type: 'smoothstep', animated: true, style: { stroke: '#0d9488', strokeWidth: 2.5 } }}
+                        defaultEdgeOptions={{ type: 'deletable', animated: true, style: { stroke: '#0d9488', strokeWidth: 2.5 } }}
                     >
                         <Background color="#94a3b8" gap={20} size={1.5} />
                         <Controls className="bg-white shadow-lg border border-slate-200 rounded-lg overflow-hidden flex-col" />
@@ -429,9 +561,18 @@ const FlowBuilder = ({ flowId, onBack }) => {
                         <div className="p-4">
                             <div className="flex justify-between items-center mb-4">
                                 <h3 className="text-base font-bold text-slate-800">Edit Node</h3>
-                                <button onClick={deleteSelectedNode} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition" title="Delete Node">
-                                    <i className="fa-solid fa-trash"></i>
-                                </button>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        onClick={duplicateSelectedNode}
+                                        title="Duplicate Node"
+                                        className="text-teal-600 hover:bg-teal-50 p-2 rounded-lg transition"
+                                    >
+                                        <i className="fa-regular fa-copy"></i>
+                                    </button>
+                                    <button onClick={deleteSelectedNode} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition" title="Delete Node">
+                                        <i className="fa-solid fa-trash"></i>
+                                    </button>
+                                </div>
                             </div>
                             
                             <div className="space-y-5">
