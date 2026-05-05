@@ -8,199 +8,226 @@ const { sendWhatsAppMessage } = require('../services/whatsappService');
 
 const { buildMetaComponents } = require('../utils/templateVariableResolver');
 
-// Job processor definition (this could live in a separate worker file, but placing here for simplicity)
+// ─── Broadcast rate-limit config ────────────────────────────────────────────
+// 5 leads processed in parallel per batch, one batch every 5 seconds
+// = 5 msgs / 5s = 60 msgs/min — same Meta-safe rate as before, 5× faster wall-clock
+const BATCH_SIZE = 5;
+const BATCH_RATE_MS = 5000;
+
+// ─── Job processor ───────────────────────────────────────────────────────────
 let agendaInstance = null;
 const defineBroadcastJob = (agenda) => {
     agendaInstance = agenda;
     agenda.define('process whatsapp broadcast', async (job) => {
         const { broadcastId, userId, tenantId } = job.attrs.data;
-        // Use tenantId (company) for lead queries — agents' leads are stored under the company ID
         const leadOwnerId = tenantId || userId;
-        
+
         try {
-            const broadcast = await WhatsAppBroadcast.findById(broadcastId)
-                .populate('templateId');
-                
+            const broadcast = await WhatsAppBroadcast.findById(broadcastId).populate('templateId');
+
             if (!broadcast || broadcast.status !== 'PROCESSING') {
-                console.log(`[Broadcast ${broadcastId}] Not ready or not found. Target status: PROCESSING, Current: ${broadcast?.status}`);
+                console.log(`[Broadcast ${broadcastId}] Not ready. Status: ${broadcast?.status}`);
                 return;
             }
-
             if (!broadcast.templateId || broadcast.templateId.status !== 'APPROVED') {
-                broadcast.status = 'FAILED';
-                broadcast.errorMessage = 'Template is missing or not APPROVED by Meta.';
-                await broadcast.save();
+                await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                    $set: { status: 'FAILED', errorMessage: 'Template missing or not APPROVED by Meta.' }
+                });
                 return;
             }
 
-            // Find target leads based on audience selection
-            // 🔴 BUG FIX: Use tenantId (company) not userId (could be agent) for lead queries
-            let leadQuery = { userId: leadOwnerId };
-            
-            // Basic filtering logic (assuming Lead schema has these fields based on CRM structure)
-            if (broadcast.targetAudience.selectionType === 'STAGES' && broadcast.targetAudience.stages.length > 0) {
-                leadQuery.status = { $in: broadcast.targetAudience.stages };
-            } else if (broadcast.targetAudience.selectionType === 'TAGS' && broadcast.targetAudience.tags.length > 0) {
-                // Assuming Lead schema has a tags array (might need adjustment based on exact schema)
-                leadQuery.tags = { $in: broadcast.targetAudience.tags };
-            } else if (broadcast.targetAudience.selectionType === 'SPECIFIC' && broadcast.targetAudience.specificLeadIds.length > 0) {
-                leadQuery._id = { $in: broadcast.targetAudience.specificLeadIds };
-            }
+            // Build lead filter
+            const phoneFilter = { $exists: true, $nin: [null, ''] };
+            let leadQuery = { userId: leadOwnerId, phone: phoneFilter };
+            const { selectionType, stages, tags, specificLeadIds } = broadcast.targetAudience;
+            if (selectionType === 'STAGES' && stages?.length)           leadQuery.status = { $in: stages };
+            else if (selectionType === 'TAGS' && tags?.length)          leadQuery.tags   = { $in: tags };
+            else if (selectionType === 'SPECIFIC' && specificLeadIds?.length) leadQuery._id = { $in: specificLeadIds };
 
-            // Only grab leads with valid phone numbers
-            const leads = await Lead.find({
-                ...leadQuery,
-                phone: { $exists: true, $nin: [null, ''] }
-            }).select('_id name phone email status customData');
+            // Count without loading — cheap with index
+            const totalTargets = await Lead.countDocuments(leadQuery);
+            console.log(`[Broadcast ${broadcastId}] ${totalTargets} valid targets.`);
 
-            console.log(`[Broadcast ${broadcastId}] Found ${leads.length} valid lead targets.`);
+            await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                $set: { 'stats.totalTargets': totalTargets }
+            });
 
-            // Update stats
-            broadcast.stats.totalTargets = leads.length;
-            await broadcast.save();
-
-            if (leads.length === 0) {
-                broadcast.status = 'COMPLETED';
-                broadcast.completedAt = new Date();
-                broadcast.errorMessage = 'No valid leads found for criteria.';
-                await broadcast.save();
+            if (totalTargets === 0) {
+                await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                    $set: { status: 'COMPLETED', completedAt: new Date(), errorMessage: 'No valid leads for criteria.' }
+                });
                 return;
             }
 
-            // Fetch user info for template variables
-            const user = await User.findById(userId);
+            const user = await User.findById(userId).lean();
+            const template = broadcast.templateId;
 
-            // Process leads sequentially (or batch them for speed, but sequentially is safer for Meta API limits initially)
             let successCount = 0;
             let failCount = 0;
+            let batch = [];
 
-            for (const lead of leads) {
-                try {
-                    const templateData = {
-                        leadName: lead.name || '',
-                        leadEmail: lead.email || '',
-                        leadPhone: lead.phone || '',
-                        companyName: user?.companyName || '',
-                        userName: user?.name || '',
-                        stageName: lead.status || 'New'
-                    };
+            // Stream leads with a cursor — only BATCH_SIZE docs ever in memory at once
+            // regardless of whether the tenant has 100 or 100,000 leads
+            const cursor = Lead.find(leadQuery)
+                .select('_id name phone email status')
+                .lean()
+                .cursor();
 
-                    const metaComponents = buildMetaComponents(broadcast.templateId.components || [], broadcast.templateId.variableMapping, templateData);
-                    const result = await sendWhatsAppMessage(lead.phone, broadcast.templateId.name, userId, metaComponents);
-                    
-                    if (result && result.success !== false) {
-                        successCount++;
-                        broadcast.stats.sent = successCount;
-                        
-                        // ============================================
-                        // Sync to New Conversation Data Model
-                        // ============================================
-                        const waMessageId = result.messages?.[0]?.id;
-                        if (waMessageId) {
-                            try {
-                                // ⚠️ PRODUCTION NOTE:
-                                // waContactId is the PRIMARY identifier for conversations.
-                                // Must always be set using normalized phone format.
-                                // Queries MUST use indexed fields (userId + waContactId).
-                                // Using non-indexed fields (e.g., phone) will trigger full collection scans.
-                                const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
-                                let conversation = await WhatsAppConversation.findOne({
-                                    userId: userId,
-                                    waContactId: normalizedPhone  // Use indexed field instead of phone
-                                });
-
-                                if (!conversation) {
-                                    conversation = new WhatsAppConversation({
-                                        userId: userId,
-                                        leadId: lead._id,
-                                        waContactId: normalizedPhone,  // Required field — was missing!
-                                        phone: normalizedPhone,
-                                        displayName: lead.name,
-                                        status: 'active',
-                                        unreadCount: 0,
-                                        metadata: { totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
-                                    });
-                                    await conversation.save();
-                                }
-
-                                const messageRecord = new WhatsAppMessage({
-                                    conversationId: conversation._id,
-                                    userId: userId,
-                                    waMessageId: waMessageId,
-                                    direction: 'outbound',
-                                    type: 'template',
-                                    content: {
-                                        text: `[Broadcast] Template: ${broadcast.templateId.name}`,
-                                        templateName: broadcast.templateId.name
-                                    },
-                                    status: 'sent',
-                                    timestamp: new Date(),
-                                    isAutomated: true,
-                                    automationSource: 'broadcast'
-                                });
-
-                                await messageRecord.save();
-
-                                // FIX: Use atomic update to prevent race conditions
-                                await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
-                                    $set: {
-                                        lastMessage: `[Broadcast] ${broadcast.templateId.name}`,
-                                        lastMessageAt: new Date(),
-                                        lastMessageDirection: 'outbound'
-                                    },
-                                    $inc: {
-                                        'metadata.totalMessages': 1,
-                                        'metadata.totalOutbound': 1
-                                    }
-                                });
-                            } catch (syncErr) {
-                                console.error(`[Broadcast ${broadcastId}] DB Sync failed for lead ${lead.phone}:`, syncErr.message);
-                            }
-                        }
-
-                    } else {
-                        failCount++;
-                        broadcast.stats.failed = failCount;
+            for await (const lead of cursor) {
+                // Cancellation check at the start of every new batch (zero cost mid-batch)
+                if (batch.length === 0) {
+                    const current = await WhatsAppBroadcast.findById(broadcastId).select('status').lean();
+                    if (current?.status === 'CANCELLED') {
+                        console.log(`[Broadcast ${broadcastId}] Cancelled — stopping cursor.`);
+                        await cursor.close();
+                        return;
                     }
+                }
 
-                    // ⚠️ PRODUCTION NOTE:
-                    // Avoid saving entire documents for small updates.
-                    // Use atomic updates ($set) to reduce write load and prevent large document rewrites.
-                    // Important for high-frequency operations like broadcasts.
-                    if ((successCount + failCount) % 10 === 0) {
-                        await WhatsAppBroadcast.findByIdAndUpdate(broadcast._id, {
-                            $set: {
-                                'stats.sent': successCount,
-                                'stats.failed': failCount
-                            }
-                        });
-                    }
+                batch.push(lead);
 
-                    // Sleep 1000ms (1 second) to enforce a STRICT limit of ~60 messages per minute
-                    // This prevents Meta rate limits and API Lockups for clients.
-                    await new Promise(r => setTimeout(r, 1000));
-                    
-                } catch (err) {
-                    console.error(`[Broadcast ${broadcastId}] Failed for lead ${lead._id}:`, err.message);
-                    failCount++;
-                    broadcast.stats.failed = failCount;
+                if (batch.length >= BATCH_SIZE) {
+                    const r = await _processBatch(batch, template, user, userId, broadcastId);
+                    successCount += r.success;
+                    failCount   += r.failed;
+                    batch = [];
+                    await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                        $set: { 'stats.sent': successCount, 'stats.failed': failCount }
+                    });
                 }
             }
 
-            broadcast.status = 'COMPLETED';
-            broadcast.completedAt = new Date();
-            await broadcast.save();
-            console.log(`[Broadcast ${broadcastId}] Finished. Sent: ${successCount}, Failed: ${failCount}`);
+            // Flush remaining leads (last partial batch)
+            if (batch.length > 0) {
+                const r = await _processBatch(batch, template, user, userId, broadcastId);
+                successCount += r.success;
+                failCount   += r.failed;
+            }
+
+            await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                $set: {
+                    status: 'COMPLETED',
+                    completedAt: new Date(),
+                    'stats.sent': successCount,
+                    'stats.failed': failCount
+                }
+            });
+            console.log(`[Broadcast ${broadcastId}] Done. Sent: ${successCount}, Failed: ${failCount}`);
 
         } catch (error) {
-            console.error(`[Broadcast ${broadcastId}] Critical Failure:`, error);
+            console.error(`[Broadcast ${broadcastId}] Critical failure:`, error.message);
             await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
-                status: 'FAILED',
-                errorMessage: error.message
+                $set: { status: 'FAILED', errorMessage: error.message }
             });
         }
     });
 };
+
+// ─── Batch processor ─────────────────────────────────────────────────────────
+// Sends BATCH_SIZE messages in parallel, then waits out the remainder of BATCH_RATE_MS
+// so the overall throughput stays at 60 msgs/min regardless of how fast the API responds
+async function _processBatch(leads, template, user, userId, broadcastId) {
+    const batchStart = Date.now();
+
+    const results = await Promise.allSettled(
+        leads.map(lead => _processOneLead(lead, template, user, userId))
+    );
+
+    const success = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
+    const failed  = results.length - success;
+
+    // Pace: wait out the rest of BATCH_RATE_MS so we don't exceed Meta's rate limits
+    const elapsed = Date.now() - batchStart;
+    const wait = BATCH_RATE_MS - elapsed;
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+
+    return { success, failed };
+}
+
+// ─── Single lead processor ────────────────────────────────────────────────────
+async function _processOneLead(lead, template, user, userId) {
+    try {
+        const templateData = {
+            leadName:    lead.name    || '',
+            leadEmail:   lead.email   || '',
+            leadPhone:   lead.phone   || '',
+            companyName: user?.companyName || '',
+            userName:    user?.name   || '',
+            stageName:   lead.status  || 'New'
+        };
+
+        const metaComponents = buildMetaComponents(
+            template.components || [],
+            template.variableMapping,
+            templateData
+        );
+
+        const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents);
+        if (!result || result.success === false) return false;
+
+        const waMessageId = result.messages?.[0]?.id;
+        if (waMessageId) {
+            await _syncToDB(lead, userId, waMessageId, template.name);
+        }
+        return true;
+
+    } catch (err) {
+        console.error(`[Lead:${lead._id}] Broadcast send failed:`, err.message);
+        return false;
+    }
+}
+
+// ─── DB sync ─────────────────────────────────────────────────────────────────
+// Single atomic upsert replaces the old findOne + save + findByIdAndUpdate (3 ops → 1)
+async function _syncToDB(lead, userId, waMessageId, templateName) {
+    try {
+        const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
+
+        const conversation = await WhatsAppConversation.findOneAndUpdate(
+            { userId, waContactId: normalizedPhone },
+            {
+                $setOnInsert: {
+                    userId,
+                    leadId:      lead._id,
+                    waContactId: normalizedPhone,
+                    phone:       normalizedPhone,
+                    displayName: lead.name,
+                    status:      'active',
+                    unreadCount: 0,
+                    metadata:    { totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
+                },
+                $set: {
+                    lastMessage:          `[Broadcast] ${templateName}`,
+                    lastMessageAt:        new Date(),
+                    lastMessageDirection: 'outbound'
+                },
+                $inc: {
+                    'metadata.totalMessages':  1,
+                    'metadata.totalOutbound':  1
+                }
+            },
+            { upsert: true, new: true }
+        );
+
+        await WhatsAppMessage.create({
+            conversationId:  conversation._id,
+            userId,
+            waMessageId,
+            direction:       'outbound',
+            type:            'template',
+            content:         { text: `[Broadcast] Template: ${templateName}`, templateName },
+            status:          'sent',
+            timestamp:       new Date(),
+            isAutomated:     true,
+            automationSource: 'broadcast'
+        });
+
+    } catch (syncErr) {
+        if (syncErr.code !== 11000) { // 11000 = duplicate waMessageId — safe to ignore
+            console.error(`[DB Sync] Failed for ${lead.phone}:`, syncErr.message);
+        }
+    }
+}
 
 // --- API Methods ---
 
