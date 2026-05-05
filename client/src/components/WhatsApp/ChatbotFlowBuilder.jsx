@@ -70,7 +70,7 @@ const DeletableEdge = ({
 const CompactFlowNode = ({ data, id, selected }) => {
     const type = data.blockType || 'message';
     const icon = {
-        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️', delay: '⏱️'
+        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️', delay: '⏱️', condition: '🔀'
     }[type] || '💬';
 
     return (
@@ -98,6 +98,33 @@ const CompactFlowNode = ({ data, id, selected }) => {
                             {data.delayDuration || 1} {data.delayUnit || 'hours'}
                         </span>
                         <span className="text-[10px] text-slate-400">Flow pauses here, then continues</span>
+                    </div>
+                ) : type === 'condition' ? (
+                    <div className="space-y-1.5">
+                        {(data.conditions || []).map((cond, i) => (
+                            <div key={cond.id || i} className="relative flex items-center bg-violet-50 border border-violet-200 rounded-md py-1.5 px-2.5 text-[11px] font-semibold text-violet-700 pr-6">
+                                <span className="text-violet-400 mr-1.5">IF</span>
+                                <span className="truncate">{cond.variable || '?'} {cond.operator?.replace('_', ' ')} {cond.value || ''}</span>
+                                <Handle
+                                    type="source"
+                                    position={Position.Right}
+                                    id={cond.id}
+                                    style={{ right: -8, top: '50%', transform: 'translateY(-50%)', width: '12px', height: '12px' }}
+                                    className="bg-violet-500 border-2 border-white absolute cursor-crosshair"
+                                />
+                            </div>
+                        ))}
+                        <div className="relative flex items-center bg-slate-100 border border-slate-300 rounded-md py-1.5 px-2.5 text-[11px] font-semibold text-slate-500 pr-6">
+                            <span className="text-slate-400 mr-1.5">ELSE</span>
+                            <span>Default path</span>
+                            <Handle
+                                type="source"
+                                position={Position.Right}
+                                id="else"
+                                style={{ right: -8, top: '50%', transform: 'translateY(-50%)', width: '12px', height: '12px' }}
+                                className="bg-slate-400 border-2 border-white absolute cursor-crosshair"
+                            />
+                        </div>
                     </div>
                 ) : (
                     <>
@@ -132,8 +159,8 @@ const CompactFlowNode = ({ data, id, selected }) => {
                 )}
             </div>
 
-            {/* Output Handle */}
-            {type !== 'handoff' && (!data.buttons || data.buttons.length === 0) && (
+            {/* Output Handle — not shown for handoff, button nodes, condition nodes (use their own handles) */}
+            {type !== 'handoff' && type !== 'condition' && (!data.buttons || data.buttons.length === 0) && (
                 <Handle type="source" position={Position.Right} className="w-4 h-4 bg-teal-500 border-2 border-white -mr-2" />
             )}
         </div>
@@ -175,6 +202,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         question: CompactFlowNode,
         action: CompactFlowNode,
         delay: CompactFlowNode,
+        condition: CompactFlowNode,
         start: CompactFlowNode // Fallback for old custom types
     }), []);
 
@@ -215,6 +243,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         { type: 'message', icon: '💬', label: 'Text + Buttons', desc: 'Send text with button options' },
         { type: 'question', icon: '❓', label: 'Ask Question', desc: 'Ask user and save answer as variable' },
         { type: 'delay', icon: '⏱️', label: 'Time Delay', desc: 'Wait before sending next message' },
+        { type: 'condition', icon: '🔀', label: 'IF / ELSE', desc: 'Route flow based on a condition' },
         { type: 'media', icon: '🖼️', label: 'Send Media', desc: 'Send image, video, or file' },
         { type: 'request_media', icon: '📸', label: 'Request Media', desc: 'Ask user to upload a file' },
         { type: 'list', icon: '📋', label: 'List', desc: 'Interactive list menu' },
@@ -293,6 +322,18 @@ const FlowBuilder = ({ flowId, onBack }) => {
                         const edge = edges.find(e => e.source === n.id && e.sourceHandle === btn.id);
                         return edge ? { ...btn, nextNodeId: edge.target } : { ...btn, nextNodeId: null };
                     });
+                }
+
+                // Condition node: sync each IF branch nextNodeId from edges (sourceHandle = cond.id),
+                // and the ELSE path nextNodeId from the edge with sourceHandle = 'else'
+                if (Array.isArray(nextData.conditions) && nextData.conditions.length > 0) {
+                    nextData.conditions = nextData.conditions.map(cond => {
+                        const edge = edges.find(e => e.source === n.id && e.sourceHandle === cond.id);
+                        return edge ? { ...cond, nextNodeId: edge.target } : { ...cond, nextNodeId: null };
+                    });
+                    // ELSE path
+                    const elseEdge = edges.find(e => e.source === n.id && e.sourceHandle === 'else');
+                    nextData.nextNodeId = elseEdge ? elseEdge.target : null;
                 }
 
                 // Default outgoing edge (non-button source) → node.data.nextNodeId
@@ -387,6 +428,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
             message: { text: 'Hello! How can I help?', buttons: [{ text: 'Continue', id: 'next' }] },
             question: { text: 'What is your email address?', variableName: 'email', expectedType: 'email' },
             delay: { text: 'Time Delay', delayDuration: 2, delayUnit: 'hours', delaySeconds: 7200 },
+            condition: { text: 'IF / ELSE Condition', conditions: [{ id: `cond-${Date.now()}`, variable: '', operator: 'equals', value: '', nextNodeId: null }] },
             media: { text: 'Check out this!', mediaType: 'image', mediaUrl: '' },
             request_media: { text: 'Please upload your document or photo to continue.', variableName: 'media', acceptedMediaTypes: ['image', 'video', 'document'], attachToLead: false },
             product: { text: 'Premium Backpack', price: '$89.99', image: 'https://via.placeholder.com/150/e74c3c/ffffff?text=Product' },
@@ -978,6 +1020,123 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                 <li>Wait 2 hours → "Did you read the PDF?"</li>
                                                 <li>Wait 1 day → Send a follow-up offer</li>
                                                 <li>Wait 30 minutes → Check if user needs help</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'condition' && (
+                                    <div className="bg-violet-50 p-4 rounded-xl border border-violet-200 mt-4 space-y-4">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xl">🔀</span>
+                                            <span className="text-sm font-bold text-violet-700">IF / ELSE Conditions</span>
+                                        </div>
+                                        <p className="text-xs text-violet-600">
+                                            Each <strong>IF branch</strong> checks a captured variable. Draw an edge from its right-side handle to the target node. The <strong>ELSE</strong> handle catches everything else.
+                                        </p>
+
+                                        {/* Condition rows */}
+                                        <div className="space-y-3">
+                                            {(selectedNode.data.conditions || []).map((cond, i) => (
+                                                <div key={cond.id} className="bg-white border border-violet-200 rounded-lg p-3 space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-xs font-bold text-violet-500 uppercase tracking-wider">IF Branch {i + 1}</span>
+                                                        {(selectedNode.data.conditions || []).length > 1 && (
+                                                            <button
+                                                                onClick={() => {
+                                                                    const newConds = selectedNode.data.conditions.filter((_, idx) => idx !== i);
+                                                                    updateSelectedNodeData({ conditions: newConds });
+                                                                }}
+                                                                className="text-red-400 hover:text-red-600 text-xs font-bold transition"
+                                                                title="Remove this branch"
+                                                            >✕ Remove</button>
+                                                        )}
+                                                    </div>
+                                                    {/* Variable */}
+                                                    <div>
+                                                        <label className="block text-xs font-semibold text-slate-600 mb-1">Variable (captured answer)</label>
+                                                        <select
+                                                            value={cond.variable || ''}
+                                                            onChange={(e) => {
+                                                                const newConds = [...selectedNode.data.conditions];
+                                                                newConds[i] = { ...newConds[i], variable: e.target.value };
+                                                                updateSelectedNodeData({ conditions: newConds });
+                                                            }}
+                                                            className="w-full px-2 py-1.5 border border-slate-300 rounded-md text-xs shadow-sm focus:ring-2 focus:ring-violet-400 bg-white"
+                                                        >
+                                                            <option value="">-- select variable --</option>
+                                                            {flowVariables.map(v => (
+                                                                <option key={v} value={v}>{v}</option>
+                                                            ))}
+                                                            {/* Common meta-variables */}
+                                                            {['lead_status', 'lead_source', 'lead_tags'].map(v => (
+                                                                <option key={v} value={v}>📌 {v}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                    {/* Operator */}
+                                                    <div>
+                                                        <label className="block text-xs font-semibold text-slate-600 mb-1">Condition</label>
+                                                        <select
+                                                            value={cond.operator || 'equals'}
+                                                            onChange={(e) => {
+                                                                const newConds = [...selectedNode.data.conditions];
+                                                                newConds[i] = { ...newConds[i], operator: e.target.value };
+                                                                updateSelectedNodeData({ conditions: newConds });
+                                                            }}
+                                                            className="w-full px-2 py-1.5 border border-slate-300 rounded-md text-xs shadow-sm focus:ring-2 focus:ring-violet-400 bg-white"
+                                                        >
+                                                            <option value="equals">= equals</option>
+                                                            <option value="not_equals">≠ not equals</option>
+                                                            <option value="contains">contains</option>
+                                                            <option value="not_contains">does not contain</option>
+                                                            <option value="starts_with">starts with</option>
+                                                            <option value="ends_with">ends with</option>
+                                                            <option value="greater_than">&gt; greater than</option>
+                                                            <option value="less_than">&lt; less than</option>
+                                                            <option value="is_set">is set (any value)</option>
+                                                            <option value="is_empty">is empty / not answered</option>
+                                                        </select>
+                                                    </div>
+                                                    {/* Value (hidden for is_set / is_empty) */}
+                                                    {!['is_set', 'is_empty'].includes(cond.operator) && (
+                                                        <div>
+                                                            <label className="block text-xs font-semibold text-slate-600 mb-1">Value to compare</label>
+                                                            <input
+                                                                type="text"
+                                                                value={cond.value || ''}
+                                                                onChange={(e) => {
+                                                                    const newConds = [...selectedNode.data.conditions];
+                                                                    newConds[i] = { ...newConds[i], value: e.target.value };
+                                                                    updateSelectedNodeData({ conditions: newConds });
+                                                                }}
+                                                                className="w-full px-2 py-1.5 border border-slate-300 rounded-md text-xs shadow-sm focus:ring-2 focus:ring-violet-400"
+                                                                placeholder="e.g. Qualified, yes, 10000"
+                                                            />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        {/* Add condition button — max 5 branches */}
+                                        {(selectedNode.data.conditions || []).length < 5 && (
+                                            <button
+                                                onClick={() => {
+                                                    const newCond = { id: `cond-${Date.now()}`, variable: '', operator: 'equals', value: '', nextNodeId: null };
+                                                    updateSelectedNodeData({ conditions: [...(selectedNode.data.conditions || []), newCond] });
+                                                }}
+                                                className="w-full py-2 border-2 border-dashed border-violet-300 text-violet-600 hover:bg-violet-50 hover:border-violet-400 rounded-lg font-medium text-xs transition flex items-center justify-center gap-2"
+                                            >
+                                                <i className="fa-solid fa-plus"></i> Add IF Branch
+                                            </button>
+                                        )}
+
+                                        <div className="bg-white border border-violet-100 rounded-lg p-3">
+                                            <p className="text-xs text-slate-500 font-semibold mb-1">🔌 How to connect:</p>
+                                            <ul className="text-xs text-slate-400 space-y-1 list-disc pl-4">
+                                                <li>Draw from a <span className="text-violet-500 font-bold">purple IF handle</span> → next node</li>
+                                                <li>Draw from the <span className="text-slate-500 font-bold">grey ELSE handle</span> → fallback node</li>
                                             </ul>
                                         </div>
                                     </div>

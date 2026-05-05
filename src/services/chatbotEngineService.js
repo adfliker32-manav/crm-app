@@ -48,6 +48,47 @@ const getFirstPopulatedVariable = (variables, candidateKeys = []) => {
     return '';
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// evaluateCondition — powers the 'condition' (IF/ELSE) node in executeNode.
+// Checks one condition object against the session's captured variables.
+// ─────────────────────────────────────────────────────────────────────────────
+const evaluateCondition = (cond, variables) => {
+    try {
+        if (!cond || !cond.variable || !cond.operator) return false;
+
+        // Session variables are stored as a Mongoose Map → use .get()
+        // Fall back to plain JS object access for safety
+        let rawValue = variables?.get?.(cond.variable);
+        if (rawValue === undefined && variables && typeof variables === 'object') {
+            rawValue = variables[cond.variable];
+        }
+
+        const actualStr = (rawValue !== undefined && rawValue !== null)
+            ? String(rawValue).trim().toLowerCase()
+            : '';
+        const expectedStr = (cond.value !== undefined && cond.value !== null)
+            ? String(cond.value).trim().toLowerCase()
+            : '';
+
+        switch (cond.operator) {
+            case 'equals':         return actualStr === expectedStr;
+            case 'not_equals':     return actualStr !== expectedStr;
+            case 'contains':       return expectedStr !== '' && actualStr.includes(expectedStr);
+            case 'not_contains':   return expectedStr !== '' && !actualStr.includes(expectedStr);
+            case 'starts_with':    return expectedStr !== '' && actualStr.startsWith(expectedStr);
+            case 'ends_with':      return expectedStr !== '' && actualStr.endsWith(expectedStr);
+            case 'greater_than':   return !isNaN(parseFloat(actualStr)) && !isNaN(parseFloat(expectedStr)) && parseFloat(actualStr) > parseFloat(expectedStr);
+            case 'less_than':      return !isNaN(parseFloat(actualStr)) && !isNaN(parseFloat(expectedStr)) && parseFloat(actualStr) < parseFloat(expectedStr);
+            case 'is_set':         return actualStr !== '';
+            case 'is_empty':       return actualStr === '';
+            default:               return false;
+        }
+    } catch (e) {
+        console.warn(`[Chatbot] evaluateCondition error for "${cond?.variable}":`, e.message);
+        return false;
+    }
+};
+
 const buildLeadCustomDataFromVariables = (variables) => {
     const customData = {};
 
@@ -1316,23 +1357,52 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 );
                 break;
 
-            case 'condition':
-                // Evaluate conditions
-                const matchedCondition = node.data.conditions.find(cond =>
-                    evaluateCondition(cond, session.variables)
-                );
-
-                if (matchedCondition && matchedCondition.nextNodeId) {
-                    session.currentNodeId = matchedCondition.nextNodeId;
-                    await session.save();
-                    return await executeNode(session, flow, matchedCondition.nextNodeId, conversation, depth + 1);
-                } else if (node.data.nextNodeId) {
-                    // Default path
-                    session.currentNodeId = node.data.nextNodeId;
-                    await session.save();
-                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
+            case 'condition': {
+                // Guard: conditions must be an array
+                const conditions = Array.isArray(node.data.conditions) ? node.data.conditions : [];
+                if (conditions.length === 0) {
+                    console.warn(`⚠️ [Chatbot] Condition node "${nodeId}" has no conditions. Taking else path.`);
                 }
+
+                // Find the first matching IF branch
+                const matchedCondition = conditions.find(cond => evaluateCondition(cond, session.variables));
+
+                let branchNodeId = null;
+
+                if (matchedCondition) {
+                    // Resolve nextNodeId from condition data OR from the edge sourceHandle
+                    branchNodeId = matchedCondition.nextNodeId;
+                    if (!branchNodeId && flow.edges?.length > 0) {
+                        const edge = flow.edges.find(e =>
+                            e.source === nodeId && e.sourceHandle === matchedCondition.id &&
+                            flow.nodes.some(n => n.id === e.target)
+                        );
+                        if (edge) branchNodeId = edge.target;
+                    }
+                    console.log(`🔀 [Chatbot] Condition node "${nodeId}": IF matched (var="${matchedCondition.variable}" ${matchedCondition.operator} "${matchedCondition.value}") → "${branchNodeId}"`);
+                } else {
+                    // ELSE path: use node.data.nextNodeId OR edge with sourceHandle='else'
+                    branchNodeId = node.data.nextNodeId;
+                    if (!branchNodeId && flow.edges?.length > 0) {
+                        const elseEdge = flow.edges.find(e =>
+                            e.source === nodeId && e.sourceHandle === 'else' &&
+                            flow.nodes.some(n => n.id === e.target)
+                        );
+                        if (elseEdge) branchNodeId = elseEdge.target;
+                    }
+                    console.log(`🔀 [Chatbot] Condition node "${nodeId}": no IF matched → ELSE → "${branchNodeId}"`);
+                }
+
+                if (branchNodeId && flow.nodes.some(n => n.id === branchNodeId)) {
+                    session.currentNodeId = branchNodeId;
+                    await session.save();
+                    return await executeNode(session, flow, branchNodeId, conversation, depth + 1);
+                }
+                // No branch resolved — end session gracefully
+                console.warn(`⚠️ [Chatbot] Condition node "${nodeId}": no valid branch target found. Ending session.`);
+                await endSession(session, 'completed');
                 break;
+            }
 
             case 'action':
                 // Execute action
