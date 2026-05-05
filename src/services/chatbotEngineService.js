@@ -1035,6 +1035,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             if (nextNodeId) {
                 session.currentNodeId = nextNodeId;
                 session.lastInteractionAt = new Date();
+                session.followUpIndex = 0;
                 await session.save();
                 return await executeNode(session, flow, nextNodeId, conversation);
             }
@@ -1082,6 +1083,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                     console.log(`🔄 [Chatbot] Button re-selection (pre-check) at node type "${currentNode.type}": user picked "${_mBtn.text}" from past node "${_pNode.id}". Pivoting → "${_tId}".`);
                     session.currentNodeId = _tId;
                     session.lastInteractionAt = new Date();
+                    session.followUpIndex = 0;
                     await session.save();
                     await evaluateSmartLead(session, flow, conversation);
                     return await executeNode(session, flow, _tId, conversation);
@@ -1130,6 +1132,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             if (nextNodeId) {
                 session.currentNodeId = nextNodeId;
                 session.lastInteractionAt = new Date();
+                session.followUpIndex = 0;
                 await session.save();
                 return await executeNode(session, flow, nextNodeId, conversation);
             } else {
@@ -1183,6 +1186,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                 if (targetNode) {
                     session.currentNodeId = targetNodeId;
                     session.lastInteractionAt = new Date();
+                    session.followUpIndex = 0;
                     await session.save();
                     await evaluateSmartLead(session, flow, conversation);
                     return await executeNode(session, flow, targetNodeId, conversation);
@@ -1261,6 +1265,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                         console.log(`🔄 [Chatbot] Button re-selection detected! User changed from previous choice to "${matchedButton.text}" on node "${pastNode.id}". Pivoting to node "${targetNodeId}".`);
                         session.currentNodeId = targetNodeId;
                         session.lastInteractionAt = new Date();
+                        session.followUpIndex = 0;
                         await session.save();
                         await evaluateSmartLead(session, flow, conversation);
                         return await executeNode(session, flow, targetNodeId, conversation);
