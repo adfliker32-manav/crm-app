@@ -1,10 +1,10 @@
-const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const Lead = require('../models/Lead');
 const axios = require('axios');
 
 const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
+const META_API_TIMEOUT = 8000; // 8s — prevents hung threads on slow Meta API
 
 // Webhook verification (GET request from Meta)
 const verifyWebhook = (req, res) => {
@@ -33,7 +33,7 @@ const verifyWebhook = (req, res) => {
 
 // Handle incoming lead webhook (POST request from Meta)
 const handleLeadWebhook = async (req, res) => {
-    // Always respond quickly to Meta
+    // Always respond quickly to Meta to prevent retries
     res.sendStatus(200);
 
     try {
@@ -43,24 +43,18 @@ const handleLeadWebhook = async (req, res) => {
         const signature = req.headers['x-hub-signature-256'];
         const APP_SECRET = process.env.META_APP_SECRET;
 
-        // Only validate if APP_SECRET is available
         if (APP_SECRET) {
             if (!signature) {
-                console.warn("⛔ 401 Unauthorized - Missing Meta Signature");
+                console.warn("⛔ Unauthorized - Missing Meta Signature");
                 return;
             }
             const crypto = require('crypto');
-            // FIX 2.1: Use req.rawBody (exact bytes Meta signed) — same fix as WhatsApp webhook.
-            // JSON.stringify() changes whitespace and always mismatches Meta's HMAC.
             const payloadToVerify = req.rawBody || Buffer.from(JSON.stringify(body));
             const expectedSignature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(payloadToVerify).digest('hex');
-            
-            // ⚠️ SECURITY: Use timingSafeEqual to prevent timing attacks.
-            // Plain string comparison (===) leaks information about the expected value.
             const sigBuffer = Buffer.from(signature);
             const expBuffer = Buffer.from(expectedSignature);
             if (sigBuffer.length !== expBuffer.length || !crypto.timingSafeEqual(sigBuffer, expBuffer)) {
-                console.warn("⛔ 401 Unauthorized - Invalid Meta Signature");
+                console.warn("⛔ Unauthorized - Invalid Meta Signature");
                 return;
             }
         }
@@ -70,17 +64,14 @@ const handleLeadWebhook = async (req, res) => {
         console.log("📦 Object:", body.object);
         console.log("---------------------------------");
 
-        // Check if this is a page webhook
         if (body.object !== 'page') {
             console.log("⚠️ Not a page webhook, ignoring...");
             return;
         }
 
-        // Process each entry
         if (body.entry && Array.isArray(body.entry)) {
             for (const entry of body.entry) {
                 const pageId = entry.id;
-
                 if (entry.changes && Array.isArray(entry.changes)) {
                     for (const change of entry.changes) {
                         if (change.field === 'leadgen') {
@@ -99,58 +90,62 @@ const handleLeadWebhook = async (req, res) => {
 // Process leadgen webhook data
 async function processLeadgenWebhook(pageId, leadgenData) {
     try {
-        const { leadgen_id, form_id, created_time } = leadgenData;
-
+        const { leadgen_id, form_id } = leadgenData;
         console.log(`📋 Processing lead: ${leadgen_id} from form: ${form_id}`);
 
-        // Find ALL integration configs with this page connected and sync enabled
-        // FIX: Must explicitly select +meta.metaPageAccessToken because it's marked select:false in schema
         const configs = await IntegrationConfig.find({
             'meta.metaPageId': pageId,
             'meta.metaLeadSyncEnabled': true
         }).select('userId meta +meta.metaPageAccessToken');
 
         if (!configs || configs.length === 0) {
-            console.log(`⚠️ No integration configs found with page ${pageId} or sync disabled`);
+            console.log(`⚠️ No integration configs found for page ${pageId} or sync disabled`);
             return;
         }
 
-        // Fetch full lead details from Meta using the first config's token (since they all track the same page)
-        const leadDetails = await fetchLeadDetails(leadgen_id, configs[0].meta.metaPageAccessToken);
+        // BUG 3 FIX: Proactively refresh the user token before using the page token.
+        // Without this, stale tokens cause silent lead loss after 60 days.
+        const { checkAndRefreshToken } = require('./metaController');
+        const refreshedMeta = await checkAndRefreshToken(configs[0].userId.toString(), configs[0].meta);
+        const pageToken = refreshedMeta.metaPageAccessToken || configs[0].meta.metaPageAccessToken;
+
+        if (!pageToken) {
+            console.error(`❌ No page access token for page ${pageId}. Lead ${leadgen_id} cannot be fetched. Reconnect Meta in settings.`);
+            return;
+        }
+
+        // BUG 1 FIX: fetchLeadDetails now retries on transient errors instead of silently dropping
+        const leadDetails = await fetchLeadDetails(leadgen_id, pageToken);
 
         if (!leadDetails) {
-            console.log(`⚠️ Could not fetch lead details for ${leadgen_id}`);
+            console.error(`❌ Failed to fetch lead details for ${leadgen_id} after retries. Lead may be lost — check Meta API status.`);
             return;
         }
 
         // Distribute the lead to all matching tenants
         for (const config of configs) {
-             const { meta, userId } = config;
+            const { meta, userId } = config;
 
-             // Check if form matches (if config specifies a form)
-             if (meta.metaFormId && meta.metaFormId !== form_id) {
-                 console.log(`⚠️ Form ${form_id} doesn't match Tenant ${userId}'s selected form ${meta.metaFormId}`);
-                 continue;
-             }
+            if (meta.metaFormId && meta.metaFormId !== form_id) {
+                console.log(`⚠️ Form ${form_id} doesn't match tenant ${userId}'s selected form ${meta.metaFormId}`);
+                continue;
+            }
 
-             // Idempotency: Meta retries webhooks; skip if we already created a lead
-             // for this leadgen_id under this tenant.
-             if (leadgen_id) {
-                 const alreadyIngested = await Lead.findOne({ userId, metaLeadgenId: leadgen_id }).select('_id').lean();
-                 if (alreadyIngested) {
-                     console.log(`↩️ Meta leadgen ${leadgen_id} already ingested for tenant ${userId} (lead ${alreadyIngested._id}). Skipping retry.`);
-                     continue;
-                 }
-             }
+            // Idempotency: skip if already ingested for this tenant
+            if (leadgen_id) {
+                const alreadyIngested = await Lead.findOne({ userId, metaLeadgenId: leadgen_id }).select('_id').lean();
+                if (alreadyIngested) {
+                    console.log(`↩️ Meta leadgen ${leadgen_id} already ingested for tenant ${userId}. Skipping.`);
+                    continue;
+                }
+            }
 
-             // Create lead in CRM for this specific tenant
-             await createLeadFromMeta(userId, leadDetails, form_id, leadgen_id);
+            await createLeadFromMeta(userId, leadDetails, form_id, leadgen_id);
 
-             // Update last sync time for this tenant
-             await IntegrationConfig.findOneAndUpdate(
-                 { userId: userId },
-                 { $set: { 'meta.metaLastSyncAt': new Date() } }
-             );
+            await IntegrationConfig.findOneAndUpdate(
+                { userId },
+                { $set: { 'meta.metaLastSyncAt': new Date() } }
+            );
         }
 
     } catch (error) {
@@ -159,38 +154,64 @@ async function processLeadgenWebhook(pageId, leadgenData) {
 }
 
 // Fetch lead details from Meta Graph API
-async function fetchLeadDetails(leadgenId, accessToken) {
+// BUG 1+2 FIX: Added timeout + retry with exponential backoff for transient errors
+async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
+    const MAX_ATTEMPTS = 3;
+
+    // BUG 3 FIX: Validate token exists before attempting API call
+    if (!accessToken) {
+        console.error('❌ fetchLeadDetails: No access token provided');
+        return null;
+    }
+
     try {
         const response = await axios.get(`${META_GRAPH_URL}/${leadgenId}`, {
-            params: {
-                access_token: accessToken,
-                fields: 'id,created_time,field_data'
-            }
+            params: { access_token: accessToken, fields: 'id,created_time,field_data' },
+            timeout: META_API_TIMEOUT  // BUG 2 FIX: prevent hung requests
         });
 
         const leadData = response.data;
         const fields = {};
-
-        // Parse field_data into a more usable format
         if (leadData.field_data) {
             for (const field of leadData.field_data) {
-                fields[field.name.toLowerCase()] = field.values[0];
+                fields[field.name.toLowerCase()] = field.values?.[0];
             }
         }
 
         return {
             id: leadData.id,
             createdTime: leadData.created_time,
-            name: fields.full_name || fields.name || (fields.first_name ? fields.first_name + (fields.last_name ? ' ' + fields.last_name : '') : 'Unknown'),
+            name: fields.full_name || fields.name || (fields.first_name ? fields.first_name + (fields.last_name ? ' ' + fields.last_name : '') : null),
             email: fields.email || null,
             phone: fields.phone_number || fields.phone || null,
             city: fields.city || null,
             company: fields.company_name || fields.company || null,
-            // Store all raw fields for reference
             rawFields: fields
         };
+
     } catch (error) {
-        console.error("❌ fetchLeadDetails Error:", error.response?.data || error.message);
+        const status = error.response?.status;
+        const metaCode = error.response?.data?.error?.code;
+
+        // Auth errors (token expired/invalid) — no point retrying with the same token
+        if (status === 190 || status === 401 || status === 403 || metaCode === 190) {
+            console.error(`❌ fetchLeadDetails: Token invalid/expired for leadgen ${leadgenId} (HTTP ${status}, code ${metaCode}). Reconnect Meta in settings.`);
+            return null;
+        }
+
+        // BUG 6 FIX: Rate limit — respect Retry-After header
+        // BUG 1 FIX: Transient errors (5xx, network, 429) — retry with backoff
+        if (attempt < MAX_ATTEMPTS && (status === 429 || (status >= 500) || !status)) {
+            const retryAfter = parseInt(error.response?.headers?.['retry-after']) || 0;
+            const delay = status === 429
+                ? Math.max(retryAfter * 1000, 5000)  // respect Retry-After, min 5s
+                : attempt * 2000;                     // 2s, 4s backoff for 5xx/network
+            console.warn(`⚠️ fetchLeadDetails attempt ${attempt}/${MAX_ATTEMPTS} failed (HTTP ${status || 'network'}). Retrying in ${delay}ms...`);
+            await new Promise(r => setTimeout(r, delay));
+            return fetchLeadDetails(leadgenId, accessToken, attempt + 1);
+        }
+
+        console.error(`❌ fetchLeadDetails failed after ${attempt} attempt(s):`, error.response?.data || error.message);
         return null;
     }
 }
@@ -198,8 +219,6 @@ async function fetchLeadDetails(leadgenId, accessToken) {
 // Create a lead in CRM from Meta data
 async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null) {
     try {
-        // FIX 5.1: Enforce lead limit BEFORE creating — Meta sync was bypassing plan capacity
-        const WorkspaceSettings = require('../models/WorkspaceSettings');
         const workspace = await WorkspaceSettings.findOne({ userId }).select('planFeatures').lean();
         const leadLimit = workspace?.planFeatures?.leadLimit;
         if (leadLimit != null) {
@@ -210,116 +229,101 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             }
         }
 
-        // FIX 2.2: Only check for duplicates if meaningful values exist
         const cleanPhone = leadDetails.phone?.trim() || null;
         const cleanEmail = leadDetails.email?.trim() || null;
 
-        // Check for duplicate (by phone or email)
+        // Duplicate check by phone or email
         if (cleanPhone || cleanEmail) {
             const existingLead = await Lead.findOne({
-                userId: userId,
+                userId,
                 $or: [
                     cleanPhone ? { phone: cleanPhone } : null,
                     cleanEmail ? { email: cleanEmail } : null
                 ].filter(Boolean)
             });
-
             if (existingLead) {
-                console.log(`⚠️ Duplicate lead found: ${existingLead.name} - updating instead`);
-                existingLead.notes.push({
-                    text: `New Meta Lead Form submission received (Form: ${formId})`,
-                    date: new Date()
-                });
+                console.log(`⚠️ Duplicate lead: ${existingLead.name} — adding form submission note`);
+                existingLead.notes.push({ text: `New Meta Lead Form submission (Form: ${formId})`, date: new Date() });
                 await existingLead.save();
                 return null;
             }
         }
 
-        // Fetch workspace settings for custom field definitions
-        const workspaceFull = await WorkspaceSettings.findOne({ userId: userId }).select('customFieldDefinitions').lean();
+        const workspaceFull = await WorkspaceSettings.findOne({ userId }).select('customFieldDefinitions').lean();
         const customFieldDefs = workspaceFull?.customFieldDefinitions || [];
 
-        // Build customData by iterating over CRM's custom fields only
         const customData = {};
         if (leadDetails.rawFields) {
             customFieldDefs.forEach(field => {
-                const value = leadDetails.rawFields[field.label.toLowerCase()]
-                           || leadDetails.rawFields[field.key.toLowerCase()];
-                if (value) {
-                    customData[field.key] = value;
-                }
+                const value = leadDetails.rawFields[field.label?.toLowerCase()] || leadDetails.rawFields[field.key?.toLowerCase()];
+                if (value) customData[field.key] = value;
             });
         }
 
-        // Create new lead
+        const resolvedName = leadDetails.name || 'Unknown';
+
+        // BUG 7 FIX: Build notes array — flag missing name so users can identify dirty data
+        const notes = [{ text: `Lead captured from Meta Lead Ads (Form: ${formId})`, date: new Date() }];
+        if (!leadDetails.name) {
+            notes.push({ text: '⚠️ Name not captured — the Meta lead form may not include a name field.', date: new Date() });
+        }
+
         const newLead = new Lead({
-            userId: userId,
-            name: leadDetails.name,
-            // FIX 2.2: Store null when phone is missing — empty string '' breaks duplicate
-            //           detection and WhatsApp auto-message checks
+            userId,
+            name: resolvedName,
             phone: cleanPhone,
             email: cleanEmail || `meta_${leadDetails.id}@lead.local`,
             status: 'New',
             source: 'Meta',
             metaLeadgenId: leadgenId || null,
-            customData: customData,
-            notes: [{
-                text: `Lead captured from Meta Lead Ads (Form: ${formId})`,
-                date: new Date()
-            }]
+            customData,
+            notes
         });
 
         try {
             await newLead.save();
         } catch (saveErr) {
-            // Idempotency backstop: a concurrent webhook retry may race past the
-            // pre-save `findOne` and arrive here at the same time. The unique index
-            // on (userId, metaLeadgenId) turns that race into a duplicate-key error
-            // we can swallow safely.
             if (saveErr.code === 11000 && leadgenId) {
-                console.log(`↩️ Meta leadgen ${leadgenId} race-collided for tenant ${userId}. Treating as duplicate, skipping.`);
+                console.log(`↩️ Meta leadgen ${leadgenId} race-collided for tenant ${userId}. Skipping.`);
                 return null;
             }
             throw saveErr;
         }
-        console.log(`✅ Created new lead from Meta: ${newLead.name} (${newLead.phone || newLead.email})`);
 
-        // FIX 2.3: Fire the same automation pipeline as leadController.createLead.
-        // Previously, Meta-synced leads silently skipped all automations.
+        console.log(`✅ Created Meta lead: ${newLead.name} (${newLead.phone || newLead.email})`);
+
+        // BUG 5 FIX: Include lead ID in all error logs so failures are traceable in logs
         setImmediate(() => {
-            // a) WhatsApp welcome message (if phone exists and template configured)
             if (newLead.phone) {
                 const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
                 sendAutomatedWhatsAppOnLeadCreate(newLead, userId)
                     .then(sent => {
                         if (sent) {
                             Lead.findByIdAndUpdate(newLead._id, {
-                                $push: { 
-                                    history: { 
-                                        $each: [{ type: 'WhatsApp', subType: 'Auto', content: 'Automated Welcome WhatsApp Sent (Meta Sync)', date: new Date() }],
-                                        $slice: -100 
-                                    } 
-                                }
+                                $push: { history: { $each: [{ type: 'WhatsApp', subType: 'Auto', content: 'Automated Welcome WhatsApp Sent (Meta Sync)', date: new Date() }], $slice: -100 } }
                             }).exec();
                         }
                     })
-                    .catch(err => console.error('Meta Sync WA auto-message error:', err));
+                    .catch(err => console.error(`❌ [Lead:${newLead._id}] WA auto-message failed:`, err.message));
             }
 
-            // b) Meta CAPI "Lead" event
             (async () => {
                 try {
-                    const config = await require('../models/IntegrationConfig').findOne({ userId }).select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
+                    const config = await require('../models/IntegrationConfig').findOne({ userId })
+                        .select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
                     if (config?.meta?.metaCapiEnabled) {
                         const { sendMetaEvent } = require('../services/metaConversionService');
-                        sendMetaEvent(config, newLead, 'New', null).catch(err => console.error('Meta CAPI error (Meta Sync):', err));
+                        sendMetaEvent(config, newLead, 'New', null)
+                            .catch(err => console.error(`❌ [Lead:${newLead._id}] CAPI event failed:`, err.message));
                     }
-                } catch(e) { console.error('CAPI config fetch error (Meta Sync):', e); }
+                } catch (e) {
+                    console.error(`❌ [Lead:${newLead._id}] CAPI config fetch failed:`, e.message);
+                }
             })();
 
-            // c) Automation Builder Rules
             const { evaluateLead } = require('../services/AutomationService');
-            evaluateLead(newLead, 'LEAD_CREATED').catch(err => console.error('AutomationService error (Meta Sync LEAD_CREATED):', err));
+            evaluateLead(newLead, 'LEAD_CREATED')
+                .catch(err => console.error(`❌ [Lead:${newLead._id}] AutomationService (LEAD_CREATED) failed:`, err.message));
         });
 
         return newLead;
@@ -330,7 +334,81 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
     }
 }
 
+// BUG 8 FIX: Manual backfill — fetch up to 100 historical leads from Meta for the connected form
+const fetchHistoricalLeads = async (req, res) => {
+    try {
+        const ownerId = req.tenantId;
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+meta.metaAccessToken +meta.metaPageAccessToken meta.metaTokenExpiry meta.metaFormId meta.metaLeadSyncEnabled');
+
+        if (!config?.meta?.metaPageAccessToken) {
+            return res.status(400).json({ success: false, message: 'No Meta page connected. Please connect a page in settings first.' });
+        }
+        if (!config.meta.metaFormId) {
+            return res.status(400).json({ success: false, message: 'No lead form selected. Please select a form in settings.' });
+        }
+
+        const { checkAndRefreshToken } = require('./metaController');
+        const meta = await checkAndRefreshToken(ownerId, config.meta);
+        const pageToken = meta.metaPageAccessToken;
+
+        const response = await axios.get(`${META_GRAPH_URL}/${config.meta.metaFormId}/leads`, {
+            params: { access_token: pageToken, fields: 'id,created_time,field_data', limit: 100 },
+            timeout: 15000
+        });
+
+        const metaLeads = response.data.data || [];
+        let created = 0, skipped = 0;
+
+        for (const metaLead of metaLeads) {
+            if (metaLead.id) {
+                const exists = await Lead.findOne({ userId: ownerId, metaLeadgenId: metaLead.id }).select('_id').lean();
+                if (exists) { skipped++; continue; }
+            }
+
+            const fields = {};
+            for (const field of (metaLead.field_data || [])) {
+                fields[field.name.toLowerCase()] = field.values?.[0];
+            }
+
+            const leadDetails = {
+                id: metaLead.id,
+                createdTime: metaLead.created_time,
+                name: fields.full_name || fields.name || (fields.first_name ? `${fields.first_name}${fields.last_name ? ' ' + fields.last_name : ''}` : null),
+                email: fields.email || null,
+                phone: fields.phone_number || fields.phone || null,
+                city: fields.city || null,
+                company: fields.company_name || fields.company || null,
+                rawFields: fields
+            };
+
+            const result = await createLeadFromMeta(ownerId, leadDetails, config.meta.metaFormId, metaLead.id);
+            if (result) created++; else skipped++;
+        }
+
+        console.log(`✅ Meta backfill for tenant ${ownerId}: ${created} created, ${skipped} skipped from ${metaLeads.length} total`);
+        res.json({
+            success: true,
+            message: `Fetched ${metaLeads.length} leads from Meta. Created: ${created}, Skipped (duplicates): ${skipped}.`,
+            total: metaLeads.length, created, skipped
+        });
+
+    } catch (error) {
+        const metaError = error.response?.data?.error;
+        console.error('❌ Meta fetchHistoricalLeads Error:', metaError || error.message);
+
+        if (metaError?.code === 190 || error.response?.status === 190) {
+            return res.status(401).json({ success: false, message: 'Meta access token expired. Please reconnect your Facebook account in settings.' });
+        }
+        if (error.code === 'ECONNABORTED') {
+            return res.status(504).json({ success: false, message: 'Meta API timed out. Please try again.' });
+        }
+        res.status(500).json({ success: false, message: 'Failed to fetch leads from Meta. Please try again.' });
+    }
+};
+
 module.exports = {
     verifyWebhook,
-    handleLeadWebhook
+    handleLeadWebhook,
+    fetchHistoricalLeads
 };

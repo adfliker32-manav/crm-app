@@ -1,13 +1,22 @@
 const crypto = require('crypto');
 
 const ALGORITHM = 'aes-256-cbc';
-// Ensure a 32-byte key is used. Wait for process.env or fallback to a hardcoded random string (for development/testing)
-// In production, ENCRYPTION_KEY must be exactly 32 bytes.
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default_secret_key_32_bytes_long';
+
+// BUG 4 FIX: Never fall back to a known key — anyone with DB access could decrypt all tokens.
+// Throw at startup in production so the misconfiguration is caught immediately, not at runtime.
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+if (!ENCRYPTION_KEY) {
+    if (process.env.NODE_ENV === 'production') {
+        throw new Error('FATAL: ENCRYPTION_KEY environment variable is not set. Cannot start without it — all stored tokens would be unencryptable.');
+    } else {
+        console.warn('⚠️  ENCRYPTION_KEY not set. Using insecure dev fallback. Set ENCRYPTION_KEY in .env before going to production!');
+    }
+}
+const _key = ENCRYPTION_KEY || 'default_secret_key_32_bytes_long';
 
 // Helper to ensure key is exactly 32 bytes
 const getKey = () => {
-    return crypto.createHash('sha256').update(String(ENCRYPTION_KEY)).digest('base64').substring(0, 32);
+    return crypto.createHash('sha256').update(String(_key)).digest('base64').substring(0, 32);
 };
 
 exports.encryptToken = (text) => {

@@ -97,9 +97,8 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
             `${META_GRAPH_URL}/${user.metaPixelId}/events`,
             eventData,
             {
-                headers: {
-                    'Content-Type': 'application/json'
-                }
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 8000
             }
         );
 

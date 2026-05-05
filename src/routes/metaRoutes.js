@@ -22,6 +22,9 @@ router.post('/connect', authMiddleware, metaController.connect);
 router.post('/disconnect', authMiddleware, metaController.disconnect);
 router.post('/toggle-sync', authMiddleware, metaController.toggleSync);
 
+// Manual lead backfill — fetch up to 100 historical leads from the connected Meta form
+router.post('/fetch-leads', authMiddleware, metaWebhookController.fetchHistoricalLeads);
+
 // CAPI Settings routes
 router.get('/capi-settings', authMiddleware, metaController.getCapiSettings);
 router.post('/capi-settings', authMiddleware, metaController.updateCapiSettings);

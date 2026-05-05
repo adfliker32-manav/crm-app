@@ -1,10 +1,8 @@
-const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
-const Lead = require('../models/Lead');
 const axios = require('axios');
 
-// Meta Graph API base URL
 const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
+const META_API_TIMEOUT = 10000; // 10s — all Meta API calls must have a timeout
 
 // ==========================================
 // TOKEN REFRESH UTILITIES
@@ -46,7 +44,8 @@ async function refreshMetaToken(currentToken) {
                 client_id: appId,
                 client_secret: appSecret,
                 fb_exchange_token: currentToken
-            }
+            },
+            timeout: META_API_TIMEOUT
         });
 
         console.log('✅ Meta token refreshed successfully');
@@ -185,7 +184,6 @@ const handleCallback = async (req, res) => {
 const exchangeToken = async (req, res) => {
     try {
         const { code } = req.body;
-        const userId = req.user.userId || req.user.id;
 
         if (!code) {
             return res.status(400).json({ success: false, message: 'Missing authorization code' });
@@ -197,24 +195,16 @@ const exchangeToken = async (req, res) => {
 
         // Exchange code for access token
         const tokenResponse = await axios.get(`${META_GRAPH_URL}/oauth/access_token`, {
-            params: {
-                client_id: appId,
-                client_secret: appSecret,
-                redirect_uri: redirectUri,
-                code: code
-            }
+            params: { client_id: appId, client_secret: appSecret, redirect_uri: redirectUri, code },
+            timeout: META_API_TIMEOUT
         });
 
         const { access_token } = tokenResponse.data;
 
         // Get long-lived token
         const longLivedResponse = await axios.get(`${META_GRAPH_URL}/oauth/access_token`, {
-            params: {
-                grant_type: 'fb_exchange_token',
-                client_id: appId,
-                client_secret: appSecret,
-                fb_exchange_token: access_token
-            }
+            params: { grant_type: 'fb_exchange_token', client_id: appId, client_secret: appSecret, fb_exchange_token: access_token },
+            timeout: META_API_TIMEOUT
         });
 
         const longLivedToken = longLivedResponse.data.access_token;
@@ -222,7 +212,8 @@ const exchangeToken = async (req, res) => {
 
         // Get user info
         const userInfoResponse = await axios.get(`${META_GRAPH_URL}/me`, {
-            params: { access_token: longLivedToken }
+            params: { access_token: longLivedToken },
+            timeout: META_API_TIMEOUT
         });
 
         const tenantOwnerId = req.tenantId;
@@ -313,10 +304,8 @@ const getPages = async (req, res) => {
         const meta = await checkAndRefreshToken(ownerId, config.meta);
 
         const response = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
-            params: {
-                access_token: meta.metaAccessToken,
-                fields: 'id,name,access_token'
-            }
+            params: { access_token: meta.metaAccessToken, fields: 'id,name,access_token' },
+            timeout: META_API_TIMEOUT
         });
 
         const pages = response.data.data.map(page => ({
@@ -350,10 +339,8 @@ const getForms = async (req, res) => {
 
         // First get page access token
         const pagesResponse = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
-            params: {
-                access_token: meta.metaAccessToken,
-                fields: 'id,access_token'
-            }
+            params: { access_token: meta.metaAccessToken, fields: 'id,access_token' },
+            timeout: META_API_TIMEOUT
         });
 
         const page = pagesResponse.data.data.find(p => p.id === pageId);
@@ -363,10 +350,8 @@ const getForms = async (req, res) => {
 
         // Get lead forms using page token
         const formsResponse = await axios.get(`${META_GRAPH_URL}/${pageId}/leadgen_forms`, {
-            params: {
-                access_token: page.access_token,
-                fields: 'id,name,status'
-            }
+            params: { access_token: page.access_token, fields: 'id,name,status' },
+            timeout: META_API_TIMEOUT
         });
 
         const forms = formsResponse.data.data
@@ -387,22 +372,16 @@ const getForms = async (req, res) => {
 const connect = async (req, res) => {
     try {
         const { pageId, pageName, pageAccessToken, formId, formName } = req.body;
-        const userId = req.user.userId || req.user.id;
 
         if (!pageId || !formId) {
             return res.status(400).json({ success: false, message: 'Page and Form are required' });
         }
 
         // Subscribe page to leadgen webhook
-        const appId = process.env.META_APP_ID;
-        const appSecret = process.env.META_APP_SECRET;
-
         try {
             await axios.post(`${META_GRAPH_URL}/${pageId}/subscribed_apps`, null, {
-                params: {
-                    access_token: pageAccessToken,
-                    subscribed_fields: 'leadgen'
-                }
+                params: { access_token: pageAccessToken, subscribed_fields: 'leadgen' },
+                timeout: META_API_TIMEOUT
             });
             console.log('✅ Subscribed to leadgen webhook for page:', pageId);
         } catch (subError) {
@@ -610,9 +589,8 @@ const testCapiConnection = async (req, res) => {
             `${META_GRAPH_URL}/${meta.metaPixelId}/events`,
             testEventData,
             {
-                headers: {
-                    'Content-Type': 'application/json'
-                }
+                headers: { 'Content-Type': 'application/json' },
+                timeout: META_API_TIMEOUT
             }
         );
 
