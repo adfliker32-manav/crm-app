@@ -434,8 +434,9 @@ const FlowBuilder = ({ flowId, onBack }) => {
             condition: { text: 'IF / ELSE Condition', conditions: [{ id: `cond-${Date.now()}`, variable: '', operator: 'equals', value: '', nextNodeId: null }] },
             media: { text: 'Check out this!', mediaType: 'image', mediaUrl: '' },
             request_media: { text: 'Please upload your document or photo to continue.', variableName: 'media', acceptedMediaTypes: ['image', 'video', 'document'], attachToLead: false },
-            product: { text: 'Premium Backpack', price: '$89.99', image: 'https://via.placeholder.com/150/e74c3c/ffffff?text=Product' },
-            list: { text: 'Choose a category:', items: ['Electronics', 'Fashion', 'Home'] },
+            product: { text: 'Premium Backpack', price: '$89.99', image: '' },
+            products: { text: 'Browse our catalog:', productList: [{ name: 'Product 1', price: '$0.00', image: '' }] },
+            list: { text: 'Choose a category:', buttonText: 'View Options', items: [{ id: 'item_0', title: 'Electronics', description: '' }, { id: 'item_1', title: 'Fashion', description: '' }, { id: 'item_2', title: 'Home & Living', description: '' }] },
             template: { text: 'Send approved template', templateName: '', templateLanguage: 'en' },
             action: { text: 'Action: Create Lead', actionType: 'create_lead', actionData: { source: 'WhatsApp Chatbot', status: 'New' } },
             handoff: { text: 'Connecting you to an agent...' }
@@ -964,6 +965,198 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                 </div>
                                             </div>
                                         )}
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'list' && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Button Label <span className="text-slate-400 font-normal text-xs">(opens the list)</span></label>
+                                            <input
+                                                value={selectedNode.data.buttonText || 'View Options'}
+                                                onChange={(e) => updateSelectedNodeData({ buttonText: e.target.value.slice(0, 20) })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                placeholder="View Options"
+                                                maxLength={20}
+                                            />
+                                            <p className="text-xs text-slate-400 mt-1">Max 20 characters (WhatsApp limit)</p>
+                                        </div>
+                                        <div>
+                                            <div className="flex justify-between items-center mb-2">
+                                                <label className="text-sm font-semibold text-slate-700">List Items</label>
+                                                <span className="text-xs text-slate-400">{(selectedNode.data.items || []).length}/10</span>
+                                            </div>
+                                            {(selectedNode.data.items || []).map((item, i) => {
+                                                const itemObj = typeof item === 'string' ? { id: `item_${i}`, title: item, description: '' } : item;
+                                                return (
+                                                    <div key={itemObj.id || i} className="mb-3 bg-white border border-slate-200 rounded-lg p-3 space-y-2">
+                                                        <div className="flex gap-2 items-center">
+                                                            <span className="text-xs font-bold text-slate-400 w-5 shrink-0">#{i + 1}</span>
+                                                            <input
+                                                                value={itemObj.title || ''}
+                                                                onChange={(e) => {
+                                                                    const newItems = (selectedNode.data.items || []).map((it, idx) => {
+                                                                        if (idx !== i) return it;
+                                                                        const obj = typeof it === 'string' ? { id: `item_${idx}`, title: it, description: '' } : { ...it };
+                                                                        obj.title = e.target.value.slice(0, 24);
+                                                                        return obj;
+                                                                    });
+                                                                    updateSelectedNodeData({ items: newItems });
+                                                                }}
+                                                                className="flex-1 px-2 py-1.5 border border-slate-300 rounded text-sm shadow-sm focus:ring-1 focus:ring-teal-500"
+                                                                placeholder="Item title (max 24)"
+                                                                maxLength={24}
+                                                            />
+                                                            <button
+                                                                onClick={() => {
+                                                                    const newItems = (selectedNode.data.items || []).filter((_, idx) => idx !== i);
+                                                                    updateSelectedNodeData({ items: newItems });
+                                                                }}
+                                                                className="w-7 h-7 flex items-center justify-center bg-red-100 text-red-500 rounded hover:bg-red-200 transition shrink-0"
+                                                            >
+                                                                <i className="fa-solid fa-times text-xs"></i>
+                                                            </button>
+                                                        </div>
+                                                        <input
+                                                            value={itemObj.description || ''}
+                                                            onChange={(e) => {
+                                                                const newItems = (selectedNode.data.items || []).map((it, idx) => {
+                                                                    if (idx !== i) return it;
+                                                                    const obj = typeof it === 'string' ? { id: `item_${idx}`, title: it, description: '' } : { ...it };
+                                                                    obj.description = e.target.value.slice(0, 72);
+                                                                    return obj;
+                                                                });
+                                                                updateSelectedNodeData({ items: newItems });
+                                                            }}
+                                                            className="w-full px-2 py-1.5 border border-slate-200 rounded text-xs text-slate-500 shadow-sm focus:ring-1 focus:ring-teal-400 bg-slate-50 ml-7"
+                                                            placeholder="Optional description (max 72)"
+                                                            maxLength={72}
+                                                        />
+                                                    </div>
+                                                );
+                                            })}
+                                            {(selectedNode.data.items || []).length < 10 && (
+                                                <button
+                                                    onClick={() => {
+                                                        const newItem = { id: `item_${Date.now()}`, title: '', description: '' };
+                                                        updateSelectedNodeData({ items: [...(selectedNode.data.items || []), newItem] });
+                                                    }}
+                                                    className="w-full mt-1 py-2 border-2 border-dashed border-teal-300 text-teal-600 hover:bg-teal-50 hover:border-teal-400 rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
+                                                >
+                                                    <i className="fa-solid fa-plus"></i> Add Item
+                                                </button>
+                                            )}
+                                            <p className="text-xs text-slate-400 mt-2 text-center">Max 10 items · Each title max 24 chars</p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'product' && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Product Details</p>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Price</label>
+                                            <input
+                                                value={selectedNode.data.price || ''}
+                                                onChange={(e) => updateSelectedNodeData({ price: e.target.value })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                placeholder="e.g. $89.99"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Image URL</label>
+                                            <input
+                                                value={selectedNode.data.image || ''}
+                                                onChange={(e) => updateSelectedNodeData({ image: e.target.value })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                placeholder="https://example.com/product.jpg"
+                                            />
+                                            {selectedNode.data.image && (
+                                                <img
+                                                    src={selectedNode.data.image}
+                                                    alt="preview"
+                                                    className="mt-2 w-full rounded-lg border border-slate-200 max-h-32 object-cover"
+                                                    onError={(e) => { e.target.style.display = 'none'; }}
+                                                />
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'products' && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                                        <div className="flex justify-between items-center">
+                                            <p className="text-sm font-semibold text-slate-700">Product Catalog</p>
+                                            <span className="text-xs text-slate-400">{(selectedNode.data.productList || []).length} item(s)</span>
+                                        </div>
+                                        {(selectedNode.data.productList || []).map((prod, i) => (
+                                            <div key={i} className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
+                                                <div className="flex gap-2 items-center">
+                                                    <span className="text-xs font-bold text-slate-400 w-5 shrink-0">#{i + 1}</span>
+                                                    <input
+                                                        value={prod.name || ''}
+                                                        onChange={(e) => {
+                                                            const list = [...(selectedNode.data.productList || [])];
+                                                            list[i] = { ...list[i], name: e.target.value };
+                                                            updateSelectedNodeData({ productList: list });
+                                                        }}
+                                                        className="flex-1 px-2 py-1.5 border border-slate-300 rounded text-sm shadow-sm focus:ring-1 focus:ring-teal-500"
+                                                        placeholder="Product name"
+                                                    />
+                                                    <button
+                                                        onClick={() => {
+                                                            const list = (selectedNode.data.productList || []).filter((_, idx) => idx !== i);
+                                                            updateSelectedNodeData({ productList: list });
+                                                        }}
+                                                        className="w-7 h-7 flex items-center justify-center bg-red-100 text-red-500 rounded hover:bg-red-200 transition shrink-0"
+                                                    >
+                                                        <i className="fa-solid fa-times text-xs"></i>
+                                                    </button>
+                                                </div>
+                                                <div className="flex gap-2 ml-7">
+                                                    <input
+                                                        value={prod.price || ''}
+                                                        onChange={(e) => {
+                                                            const list = [...(selectedNode.data.productList || [])];
+                                                            list[i] = { ...list[i], price: e.target.value };
+                                                            updateSelectedNodeData({ productList: list });
+                                                        }}
+                                                        className="w-24 px-2 py-1.5 border border-slate-200 rounded text-xs shadow-sm focus:ring-1 focus:ring-teal-400 bg-slate-50"
+                                                        placeholder="Price"
+                                                    />
+                                                    <input
+                                                        value={prod.image || ''}
+                                                        onChange={(e) => {
+                                                            const list = [...(selectedNode.data.productList || [])];
+                                                            list[i] = { ...list[i], image: e.target.value };
+                                                            updateSelectedNodeData({ productList: list });
+                                                        }}
+                                                        className="flex-1 px-2 py-1.5 border border-slate-200 rounded text-xs shadow-sm focus:ring-1 focus:ring-teal-400 bg-slate-50"
+                                                        placeholder="Image URL"
+                                                    />
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <button
+                                            onClick={() => {
+                                                const list = [...(selectedNode.data.productList || []), { name: '', price: '', image: '' }];
+                                                updateSelectedNodeData({ productList: list });
+                                            }}
+                                            className="w-full py-2 border-2 border-dashed border-teal-300 text-teal-600 hover:bg-teal-50 hover:border-teal-400 rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
+                                        >
+                                            <i className="fa-solid fa-plus"></i> Add Product
+                                        </button>
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'handoff' && (
+                                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 space-y-2">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-lg">👤</span>
+                                            <span className="text-sm font-bold text-blue-700">Human Handoff</span>
+                                        </div>
+                                        <p className="text-xs text-blue-600">The message above is sent to the user, then the chatbot pauses for 24 hours so a live agent can take over.</p>
+                                        <p className="text-xs text-blue-500">The assigned agent receives a real-time notification to join the conversation.</p>
                                     </div>
                                 )}
 

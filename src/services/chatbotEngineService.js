@@ -1547,53 +1547,81 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 }
                 break;
 
-            case 'list':
-                // Send list as interactive button menu (WhatsApp limits to 3 buttons) or text list
+            case 'list': {
                 const listText = replaceVariables(node.data.text || 'Choose an option:', session.variables);
                 const listItems = node.data.items || [];
-                
-                if (listItems.length > 0 && listItems.length <= 3) {
-                    // Send as interactive buttons
-                    const listButtons = listItems.map((item, idx) => ({
-                        id: `list_${idx}`,
-                        text: typeof item === 'string' ? item : item.text || `Option ${idx + 1}`
-                    }));
+                // Normalise items — support both legacy string[] and new {id,title,description}[]
+                const normalisedItems = listItems.map((item, idx) =>
+                    typeof item === 'string'
+                        ? { id: `list_${idx}`, title: item, description: '' }
+                        : { id: item.id || `list_${idx}`, title: item.title || item.text || `Option ${idx + 1}`, description: item.description || '' }
+                );
+
+                if (normalisedItems.length > 0 && normalisedItems.length <= 3) {
+                    // ≤3 items — send as WhatsApp interactive reply buttons
+                    const listButtons = normalisedItems.map(it => ({ id: it.id, text: it.title.slice(0, 20) }));
                     const listResult = await sendInteractiveMessage(
                         conversation.phone, listText, listButtons, session.userId
                     );
                     await saveBotMessage(session.conversationId, session.userId, listText, 'interactive', listResult);
-                } else {
-                    // More than 3 items — send as numbered text list
-                    const numberedList = listItems.map((item, idx) => {
-                        const itemText = typeof item === 'string' ? item : item.text || `Option ${idx + 1}`;
-                        return `${idx + 1}. ${itemText}`;
+                } else if (normalisedItems.length > 3) {
+                    // >3 items — send as numbered text list (WhatsApp interactive list API requires approved BSP access)
+                    const numberedList = normalisedItems.map((it, idx) => {
+                        const desc = it.description ? ` — ${it.description}` : '';
+                        return `${idx + 1}. ${it.title}${desc}`;
                     }).join('\n');
                     const fullListText = `${listText}\n\n${numberedList}`;
                     const listTextResult = await sendWhatsAppTextMessage(conversation.phone, fullListText, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, fullListText, 'text', listTextResult);
                 }
-                // Wait for user selection (same as message with buttons)
                 break;
+            }
 
-            case 'product':
-            case 'products':
-                // Send product info as rich text message
+            case 'product': {
                 const productText = replaceVariables(node.data.text || '', session.variables);
                 const priceInfo = node.data.price ? `\n💰 Price: ${node.data.price}` : '';
                 const productMessage = productText + priceInfo;
-                
                 if (productMessage) {
                     const productResult = await sendWhatsAppTextMessage(conversation.phone, productMessage, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, productMessage, 'text', productResult);
                 }
-
-                // Auto-advance to next node
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
                     return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                 }
                 break;
+            }
+
+            case 'products': {
+                const catalogIntro = replaceVariables(node.data.text || 'Browse our catalog:', session.variables);
+                const productList = node.data.productList || [];
+                if (productList.length > 0) {
+                    const catalogLines = productList.map((p, idx) => {
+                        const name = p.name || `Product ${idx + 1}`;
+                        const price = p.price ? ` — 💰 ${p.price}` : '';
+                        return `${idx + 1}. ${name}${price}`;
+                    }).join('\n');
+                    const catalogMessage = `${catalogIntro}\n\n${catalogLines}`;
+                    const catalogResult = await sendWhatsAppTextMessage(conversation.phone, catalogMessage, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, catalogMessage, 'text', catalogResult);
+                } else {
+                    // Fallback to legacy single-product format
+                    const legacyText = replaceVariables(node.data.text || '', session.variables);
+                    const legacyPrice = node.data.price ? `\n💰 Price: ${node.data.price}` : '';
+                    const legacyMsg = legacyText + legacyPrice;
+                    if (legacyMsg) {
+                        const legacyResult = await sendWhatsAppTextMessage(conversation.phone, legacyMsg, session.userId);
+                        await saveBotMessage(session.conversationId, session.userId, legacyMsg, 'text', legacyResult);
+                    }
+                }
+                if (node.data.nextNodeId) {
+                    session.currentNodeId = node.data.nextNodeId;
+                    await session.save();
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
+                }
+                break;
+            }
 
             case 'handoff':
                 // Transfer to human agent — end chatbot session and notify agent
