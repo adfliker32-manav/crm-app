@@ -24,8 +24,8 @@ const FollowUpModal = ({ isOpen, onClose, onSuccess }) => {
                 api.get('/leads/follow-up-done')
             ]);
 
-            setTodayLeads(todayRes.data);
-            setDoneLeads(doneRes.data);
+            setTodayLeads(todayRes.data.leads || todayRes.data || []);
+            setDoneLeads(doneRes.data.leads || doneRes.data || []);
         } catch (err) {
             console.error("Error fetching follow ups", err);
         } finally {
