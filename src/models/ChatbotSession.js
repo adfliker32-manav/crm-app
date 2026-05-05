@@ -55,6 +55,13 @@ const chatbotSessionSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
+    // Timestamp of the last INBOUND (customer) message during this session.
+    // Used by the delay node: if the customer replied after the delay was
+    // scheduled, the scheduled message is skipped (cancelIfReplied mode).
+    lastCustomerReplyAt: {
+        type: Date,
+        default: null
+    },
     completedAt: {
         type: Date,
         default: null

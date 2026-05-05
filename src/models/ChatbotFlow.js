@@ -118,6 +118,9 @@ const chatbotFlowSchema = new mongoose.Schema({
             delaySeconds: Number,
             delayDuration: Number,
             delayUnit: String,
+            // If true, the scheduled message is cancelled when the customer
+            // sends any reply during the delay window.
+            cancelIfReplied: { type: Boolean, default: true },
             // For media nodes (outbound: send image/video/document/audio)
             mediaType: {
                 type: String,

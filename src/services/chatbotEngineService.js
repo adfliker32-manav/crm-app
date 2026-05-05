@@ -985,6 +985,12 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             userResponse: userResponse || (incomingMessage ? `[${incomingMessage.type}]` : null)
         });
 
+        // Track the latest customer reply timestamp.
+        // The delay-node scheduler uses this to decide whether to cancel a
+        // pending scheduled message when cancelIfReplied=true is set.
+        session.lastCustomerReplyAt = new Date();
+
+
         // request_media node: capture uploaded media into session variables and (optionally) the lead.
         if (currentNode.type === 'request_media') {
             const messageType = incomingMessage?.type;
@@ -1450,11 +1456,15 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
 
             case 'delay':
                 if (node.data.nextNodeId && node.data.delaySeconds > 0) {
+                    // cancelIfReplied defaults to true — skip the scheduled message
+                    // if the customer sends any reply during the wait window.
+                    const cancelIfReplied = node.data.cancelIfReplied !== false;
                     await whatsappQueueService.scheduleDelayNode(
                         session._id,
                         flow._id,
                         node.data.nextNodeId,
-                        node.data.delaySeconds
+                        node.data.delaySeconds,
+                        cancelIfReplied
                     );
                 } else if (node.data.nextNodeId) {
                     // No delay config, jump immediately
@@ -1463,6 +1473,7 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
                 }
                 break;
+
 
             case 'template':
                 // Send an approved WhatsApp template message

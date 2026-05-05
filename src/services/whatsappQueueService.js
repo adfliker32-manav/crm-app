@@ -26,7 +26,7 @@ const defineWhatsAppJobs = (agenda) => {
     // Fires when a chatbot delay node timer expires.
     // Resumes the flow from the next node after the delay.
     agenda.define('resume-chatbot-session', { priority: 'normal', concurrency: 10 }, async (job) => {
-        const { sessionId, flowId, nextNodeId } = job.attrs.data;
+        const { sessionId, flowId, nextNodeId, cancelIfReplied, scheduledAt } = job.attrs.data;
         try {
             const ChatbotSession = mongoose.model('ChatbotSession');
             const chatbotEngineService = require('./chatbotEngineService');
@@ -39,6 +39,8 @@ const defineWhatsAppJobs = (agenda) => {
                 return;
             }
 
+            // ── "Cancel If Replied" Guard ─────────────────────────────────────
+            // Fetch the flow once — used by both the cancel path and the normal path.
             const ChatbotFlow = mongoose.model('ChatbotFlow');
             const flow = await ChatbotFlow.findById(flowId).lean();
 
@@ -47,6 +49,26 @@ const defineWhatsAppJobs = (agenda) => {
                 return;
             }
 
+            // If the node was configured with cancelIfReplied=true AND the
+            // customer sent a message AFTER this delay was scheduled, skip the
+            // delayed message (but still advance the session to nextNodeId so
+            // the flow continues from the correct point).
+            if (cancelIfReplied && session.lastCustomerReplyAt && scheduledAt) {
+                const repliedAfterSchedule = new Date(session.lastCustomerReplyAt) > new Date(scheduledAt);
+                if (repliedAfterSchedule) {
+                    console.log(`⏱️ [Queue] Delay node CANCELLED — customer replied at ${session.lastCustomerReplyAt} (after schedule time ${scheduledAt}). Advancing session without sending.`);
+                    session.currentNodeId = nextNodeId;
+                    await session.save();
+                    // Still advance the flow so the next node executes normally
+                    if (chatbotEngineService.resumeExecution) {
+                        await chatbotEngineService.resumeExecution(session, flow, nextNodeId);
+                    }
+                    await job.remove();
+                    return;
+                }
+            }
+
+            // Normal path — delay expired, customer did NOT reply → send the message
             session.currentNodeId = nextNodeId;
             await session.save();
 
@@ -173,15 +195,22 @@ const defineWhatsAppJobs = (agenda) => {
  * @param {string} nextNodeId - Node to resume after delay
  * @param {number} delaySeconds - How many seconds to wait
  */
-exports.scheduleDelayNode = async (sessionId, flowId, nextNodeId, delaySeconds) => {
+exports.scheduleDelayNode = async (sessionId, flowId, nextNodeId, delaySeconds, cancelIfReplied = true) => {
     if (!sharedAgenda) {
         console.error('❌ [Queue] scheduleDelayNode called but sharedAgenda not initialized. Was defineWhatsAppJobs() called?');
         return;
     }
     try {
+        const scheduledAt = new Date();
         const runAt = new Date(Date.now() + delaySeconds * 1000);
-        await sharedAgenda.schedule(runAt, 'resume-chatbot-session', { sessionId, flowId, nextNodeId });
-        console.log(`⏱️ [Queue] Scheduled delay for node ${nextNodeId} in ${delaySeconds}s`);
+        await sharedAgenda.schedule(runAt, 'resume-chatbot-session', {
+            sessionId,
+            flowId,
+            nextNodeId,
+            cancelIfReplied,   // passed through to the job handler
+            scheduledAt        // exact moment the delay was created
+        });
+        console.log(`⏱️ [Queue] Scheduled delay for node ${nextNodeId} in ${delaySeconds}s (cancelIfReplied=${cancelIfReplied})`);
     } catch (err) {
         console.error('❌ [Queue] scheduleDelayNode error:', err.message);
     }

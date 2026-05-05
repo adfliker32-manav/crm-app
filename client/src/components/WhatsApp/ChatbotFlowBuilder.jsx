@@ -1,4 +1,4 @@
-/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
+﻿/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     ReactFlow,
@@ -1286,6 +1286,38 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                 <li>Wait 30 minutes → Check if user needs help</li>
                                             </ul>
                                         </div>
+                                        {/* ── Cancel-if-replied toggle ─────────────────────── */}
+                                        <div className="bg-white border border-amber-200 rounded-lg p-3 space-y-2">
+                                            <label className="flex items-start gap-3 cursor-pointer group">
+                                                <div className="relative mt-0.5 shrink-0">
+                                                    <input
+                                                        type="checkbox"
+                                                        className="sr-only peer"
+                                                        checked={selectedNode.data.cancelIfReplied !== false}
+                                                        onChange={(e) => updateSelectedNodeData({ cancelIfReplied: e.target.checked })}
+                                                    />
+                                                    <div className="w-9 h-5 rounded-full bg-slate-200 peer-checked:bg-teal-500 transition-colors duration-200"></div>
+                                                    <div className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow peer-checked:translate-x-4 transition-transform duration-200"></div>
+                                                </div>
+                                                <div>
+                                                    <p className="text-xs font-bold text-slate-700 group-hover:text-teal-700 transition-colors">Cancel if customer replies</p>
+                                                    <p className="text-[11px] text-slate-500 mt-0.5">
+                                                        If the customer sends any message during this wait window, the scheduled message will be skipped. The flow still continues from the next node.
+                                                    </p>
+                                                </div>
+                                            </label>
+                                            {selectedNode.data.cancelIfReplied !== false ? (
+                                                <div className="flex items-center gap-1.5 text-[11px] text-teal-700 bg-teal-50 border border-teal-200 rounded-md px-2 py-1.5">
+                                                    <i className="fa-solid fa-shield-check text-teal-500"></i>
+                                                    <span><strong>Smart mode ON</strong> - bot stays quiet if the customer is already engaged.</span>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center gap-1.5 text-[11px] text-orange-700 bg-orange-50 border border-orange-200 rounded-md px-2 py-1.5">
+                                                    <i className="fa-solid fa-clock text-orange-500"></i>
+                                                    <span><strong>Always send</strong> - message fires after the timer regardless of customer replies.</span>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
 
@@ -1673,3 +1705,5 @@ export default function ChatbotFlowBuilderWrapper(props) {
         </ReactFlowProvider>
     );
 }
+
+
