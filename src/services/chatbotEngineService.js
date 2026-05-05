@@ -1714,23 +1714,72 @@ const executeAction = async (actionData, session, conversation) => {
                 }
                 break;
 
-            case 'change_stage':
-                if (conversation.leadId && actionData.actionData?.stage) {
-                    await Lead.findByIdAndUpdate(conversation.leadId, {
-                        $set: { status: actionData.actionData.stage },
-                        $push: {
-                            history: {
-                                $each: [{
-                                    type: 'System', subType: 'Stage Change',
-                                    content: `Stage changed to "${actionData.actionData.stage}" by chatbot action.`,
-                                    date: new Date()
-                                }],
-                                $slice: -100
-                            }
-                        }
-                    });
+            case 'change_stage': {
+                const newStage = actionData.actionData?.stage;
+                if (!newStage) break;
+
+                let leadForStage = null;
+
+                // ── Step 1: Use linked lead if available ──────────────────────
+                if (conversation.leadId) {
+                    leadForStage = await Lead.findById(conversation.leadId);
                 }
+
+                // ── Step 2: No linked lead → search by phone/email ─────────────
+                if (!leadForStage) {
+                    const { findDuplicates } = require('./duplicateService');
+                    const emailForSearch = getFirstPopulatedVariable(session.variables, [
+                        'email', 'email_address', 'emailAddress', 'lead_email'
+                    ]) || null;
+                    const duplicates = await findDuplicates(session.userId, conversation.phone, emailForSearch);
+                    if (duplicates.length > 0) {
+                        leadForStage = await Lead.findById(duplicates[0]._id);
+                        // Link it to the conversation so future nodes can use it
+                        conversation.leadId = leadForStage._id;
+                        await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                            $set: { leadId: leadForStage._id }
+                        });
+                    }
+                }
+
+                // ── Step 3: Still no lead → create one on the spot ────────────
+                if (!leadForStage) {
+                    leadForStage = new Lead(buildLeadPayloadFromSession(session, conversation, {
+                        source: 'WhatsApp Chatbot',
+                        status: newStage,
+                        history: [{
+                            type: 'System', subType: 'Created',
+                            content: `Lead auto-created in stage "${newStage}" by chatbot change_stage node.`,
+                            date: new Date()
+                        }]
+                    }));
+                    await leadForStage.save();
+                    conversation.leadId = leadForStage._id;
+                    await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                        $set: { leadId: leadForStage._id }
+                    });
+                    console.log(`🤖 [Chatbot] change_stage: auto-created lead ${leadForStage._id} in stage "${newStage}"`);
+                    break; // Already created with correct stage, no need to update again
+                }
+
+                // ── Update the stage ──────────────────────────────────────────
+                await Lead.findByIdAndUpdate(leadForStage._id, {
+                    $set: { status: newStage },
+                    $push: {
+                        history: {
+                            $each: [{
+                                type: 'System', subType: 'Stage Change',
+                                content: `Stage changed to "${newStage}" by chatbot action.`,
+                                date: new Date()
+                            }],
+                            $slice: -100
+                        }
+                    }
+                });
+                console.log(`🤖 [Chatbot] change_stage: lead ${leadForStage._id} → "${newStage}"`);
                 break;
+            }
+
 
             case 'create_lead': {
                 const targetStage = actionData.actionData?.status || 'New';
