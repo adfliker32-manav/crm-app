@@ -153,7 +153,7 @@ async function _processBroadcastJob(job) {
             });
 
             if (batch.length >= BATCH_SIZE) {
-                const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey);
+                const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey, broadcast.media);
                 successCount += r.success;
                 failCount    += r.failed;
                 batch = [];
@@ -205,7 +205,7 @@ async function _processBroadcastJob(job) {
             batch.push(lead);
 
             if (batch.length >= BATCH_SIZE) {
-                const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey);
+                const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey, broadcast.media);
                 successCount += r.success;
                 failCount    += r.failed;
                 batch = [];
@@ -218,7 +218,7 @@ async function _processBroadcastJob(job) {
 
     // Flush remaining leads (last partial batch)
     if (batch.length > 0) {
-        const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey);
+        const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey, broadcast.media);
         successCount += r.success;
         failCount    += r.failed;
     }
@@ -239,11 +239,11 @@ async function _processBroadcastJob(job) {
 }
 
 // ─── Batch processor ──────────────────────────────────────────────────────────
-async function _processBatch(leads, template, user, userId, broadcastId, sentKey) {
+async function _processBatch(leads, template, user, userId, broadcastId, sentKey, media) {
     const batchStart = Date.now();
 
     const results = await Promise.allSettled(
-        leads.map(lead => _processOneLead(lead, template, user, userId, broadcastId, sentKey))
+        leads.map(lead => _processOneLead(lead, template, user, userId, broadcastId, sentKey, media))
     );
 
     // null = already sent in a previous attempt (idempotency skip) — not a new success or failure
@@ -262,7 +262,7 @@ async function _processBatch(leads, template, user, userId, broadcastId, sentKey
 }
 
 // ─── Single lead processor ────────────────────────────────────────────────────
-async function _processOneLead(lead, template, user, userId, broadcastId, sentKey) {
+async function _processOneLead(lead, template, user, userId, broadcastId, sentKey, media) {
     try {
         const redis = getRedisConnection();
 
@@ -278,7 +278,8 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
             leadPhone:   lead.phone   || '',
             companyName: user?.companyName || '',
             userName:    user?.name   || '',
-            stageName:   lead.status  || 'New'
+            stageName:   lead.status  || 'New',
+            media:       media || null
         };
 
         const metaComponents = buildMetaComponents(

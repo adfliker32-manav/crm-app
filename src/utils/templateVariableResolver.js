@@ -67,16 +67,44 @@ const buildMetaComponents = (dbComponents, variableMapping, data) => {
                 metaComponents.push({ type: 'body', parameters });
             }
         }
-        // HEADER text variables
-        if (comp.type === 'HEADER' && comp.format === 'TEXT' && comp.text) {
-            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
-            if (matches && matches.length > 0) {
-                const parameters = [];
-                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
-                for (const n of nums) {
-                    parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
+        // HEADER text and media variables
+        if (comp.type === 'HEADER') {
+            if (comp.format === 'TEXT' && comp.text) {
+                const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+                if (matches && matches.length > 0) {
+                    const parameters = [];
+                    const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
+                    for (const n of nums) {
+                        parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
+                    }
+                    metaComponents.push({ type: 'header', parameters });
                 }
-                metaComponents.push({ type: 'header', parameters });
+            } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(comp.format)) {
+                // If a media payload was provided and matches the template's header format
+                if (data.media && data.media.type === comp.format) {
+                    const mediaObj = {};
+                    if (data.media.media_id) {
+                        mediaObj.id = data.media.media_id;
+                    } else if (data.media.link) {
+                        mediaObj.link = data.media.link;
+                    }
+
+                    if (comp.format === 'DOCUMENT' && data.media.filename) {
+                        mediaObj.filename = data.media.filename;
+                    }
+
+                    if (mediaObj.id || mediaObj.link) {
+                        metaComponents.push({
+                            type: 'header',
+                            parameters: [
+                                {
+                                    type: comp.format.toLowerCase(),
+                                    [comp.format.toLowerCase()]: mediaObj
+                                }
+                            ]
+                        });
+                    }
+                }
             }
         }
     }

@@ -451,6 +451,35 @@ const uploadMediaForTemplate = async (userId, fileBuffer, mimeType, fileName) =>
     }
 };
 
+const FormData = require('form-data');
+const fs = require('fs');
+
+const uploadMediaForSending = async (userId, filePath, mimeType, fileName) => {
+    try {
+        const { phoneNumberId, accessToken } = await getCredentials(userId);
+        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/media`;
+
+        const formData = new FormData();
+        formData.append('messaging_product', 'whatsapp');
+        
+        // Stream directly from disk to Meta, preventing OOM crashes on large files
+        const fileStream = fs.createReadStream(filePath);
+        formData.append('file', fileStream, { filename: fileName, contentType: mimeType });
+
+        const response = await axios.post(url, formData, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                ...formData.getHeaders()
+            }
+        });
+
+        return { success: true, media_id: response.data.id };
+    } catch (error) {
+        console.error('❌ Failed to upload media for sending:', error.response?.data || error.message);
+        return { success: false, error: error.response?.data?.error?.message || error.message };
+    }
+};
+
 module.exports = {
     sendWhatsAppMessage,
     sendWhatsAppTextMessage,
@@ -460,5 +489,6 @@ module.exports = {
     submitTemplateToMeta,
     syncTemplateFromMeta,
     uploadMediaForTemplate,
+    uploadMediaForSending,
     sendWhatsAppTemplateMessage
 };

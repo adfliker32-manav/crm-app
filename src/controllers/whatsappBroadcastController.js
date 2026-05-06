@@ -37,7 +37,7 @@ exports.getBroadcast = async (req, res) => {
 exports.createBroadcast = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const { name, templateId, targetAudience, scheduledFor, csvContacts } = req.body;
+        const { name, templateId, targetAudience, scheduledFor, csvContacts, media } = req.body;
 
         if (!name || !templateId) {
             return res.status(400).json({ message: 'Name and Template are required' });
@@ -68,7 +68,8 @@ exports.createBroadcast = async (req, res) => {
             templateId,
             targetAudience: targetAudience || { selectionType: 'ALL' },
             scheduledFor:   isScheduled ? new Date(scheduledFor) : null,
-            status:         isScheduled ? 'SCHEDULED' : 'DRAFT'
+            status:         isScheduled ? 'SCHEDULED' : 'DRAFT',
+            media:          media || undefined
         };
 
         if (targetAudience?.selectionType === 'CSV' && csvContacts?.length) {

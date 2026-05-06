@@ -505,7 +505,9 @@ const WhatsAppBroadcasts = () => {
                                     <label className="block text-sm font-medium text-slate-700 mb-1">WhatsApp Template</label>
                                     <select
                                         value={newBroadcast.templateId}
-                                        onChange={e => setNewBroadcast({ ...newBroadcast, templateId: e.target.value })}
+                                        onChange={e => {
+                                            setNewBroadcast({ ...newBroadcast, templateId: e.target.value, media: undefined });
+                                        }}
                                         className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00a884]/30 outline-none text-sm bg-white"
                                         required
                                     >
@@ -518,6 +520,63 @@ const WhatsAppBroadcasts = () => {
                                         <p className="text-xs text-red-500 mt-1">No approved templates found. Create one first.</p>
                                     )}
                                 </div>
+
+                                {/* Media Upload for Headers */}
+                                {(() => {
+                                    const selectedTemplate = templates.find(t => t._id === newBroadcast.templateId);
+                                    const headerComp = selectedTemplate?.components?.find(c => c.type === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(c.format));
+                                    if (!headerComp) return null;
+
+                                    return (
+                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">
+                                                <i className="fa-solid fa-paperclip text-[#00a884] mr-2"></i>
+                                                Header Media Required ({headerComp.format})
+                                            </label>
+                                            <div className="flex items-center gap-3">
+                                                <input
+                                                    type="file"
+                                                    accept={
+                                                        headerComp.format === 'IMAGE' ? 'image/jpeg,image/png' :
+                                                        headerComp.format === 'VIDEO' ? 'video/mp4,video/3gpp' :
+                                                        'application/pdf'
+                                                    }
+                                                    onChange={async (e) => {
+                                                        const file = e.target.files?.[0];
+                                                        if (!file) return;
+                                                        
+                                                        const formData = new FormData();
+                                                        formData.append('file', file);
+                                                        
+                                                        try {
+                                                            const res = await api.post('/whatsapp/upload-broadcast-media', formData, {
+                                                                headers: { 'Content-Type': 'multipart/form-data' }
+                                                            });
+                                                            setNewBroadcast(prev => ({
+                                                                ...prev,
+                                                                media: {
+                                                                    type: headerComp.format,
+                                                                    media_id: res.data.media_id,
+                                                                    filename: res.data.filename
+                                                                }
+                                                            }));
+                                                            showSuccess('Media uploaded to Meta successfully');
+                                                        } catch (error) {
+                                                            showError(error.response?.data?.message || 'Failed to upload media');
+                                                            e.target.value = ''; // clear input
+                                                        }
+                                                    }}
+                                                    className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                                                />
+                                            </div>
+                                            {newBroadcast.media?.media_id && (
+                                                <p className="text-xs text-emerald-600 mt-2 font-medium">
+                                                    <i className="fa-solid fa-check-circle mr-1"></i> Attached: {newBroadcast.media.filename}
+                                                </p>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
 
                                 {/* Audience type */}
                                 <div>
@@ -684,6 +743,12 @@ const WhatsAppBroadcasts = () => {
                                         onChange={e => setNewBroadcast({ ...newBroadcast, scheduledFor: e.target.value })}
                                         className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00a884]/30 outline-none text-sm"
                                     />
+                                    {newBroadcast.scheduledFor && newBroadcast.media?.media_id && new Date(newBroadcast.scheduledFor) > new Date(Date.now() + 29 * 24 * 60 * 60 * 1000) && (
+                                        <p className="text-xs text-amber-600 mt-2 font-medium flex items-start gap-1">
+                                            <i className="fa-solid fa-triangle-exclamation mt-0.5"></i>
+                                            Warning: Meta media links expire after 30 days. Since this broadcast is scheduled more than 29 days out, the attached media might fail to send.
+                                        </p>
+                                    )}
                                 </div>
 
                                 {/* Time estimate info */}

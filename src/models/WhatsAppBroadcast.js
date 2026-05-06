@@ -46,6 +46,14 @@ const whatsappBroadcastSchema = new mongoose.Schema({
         email: { type: String, default: '' }
     }],
     
+    // Header Media
+    media: {
+        type: { type: String, enum: ['IMAGE', 'VIDEO', 'DOCUMENT'], default: null },
+        link: { type: String, default: null },
+        media_id: { type: String, default: null },
+        filename: { type: String, default: null }
+    },
+    
     // Scheduling
     scheduledFor: {
         type: Date,
