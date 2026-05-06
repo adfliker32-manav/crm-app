@@ -654,16 +654,26 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
         // 2.5. Meta Ad (Click-to-WhatsApp) Match
         // Fires when user clicks an ad and sends a message (referral data is attached)
         // Bypasses pause as it's an explicit intent.
+        // Match priority: source_id (Ad ID) → headline → catch-all (no identifier set)
         if (!targetFlow && message.content?.referral) {
-            const adHeadline = message.content.referral.headline || '';
-            const adFlow = allActiveFlows.find(f => 
-                f.triggerType === 'meta_ad' && 
-                f.triggerAdHeadline &&
-                f.triggerAdHeadline.toLowerCase().trim() === adHeadline.toLowerCase().trim()
-            );
+            const adSourceId = message.content.referral.source_id || '';
+            const adHeadline = (message.content.referral.headline || '').toLowerCase().trim();
+            const metaAdFlows = allActiveFlows.filter(f => f.triggerType === 'meta_ad');
+
+            let adFlow =
+                // 1. Match by Ad ID (most reliable — Meta always sends source_id)
+                metaAdFlows.find(f => f.triggerAdId && f.triggerAdId.trim() === adSourceId) ||
+                // 2. Match by headline (fallback — Meta sometimes omits this)
+                metaAdFlows.find(f =>
+                    !f.triggerAdId &&
+                    f.triggerAdHeadline &&
+                    f.triggerAdHeadline.toLowerCase().trim() === adHeadline
+                ) ||
+                // 3. Catch-all: flow with neither Ad ID nor headline set triggers on any referral
+                metaAdFlows.find(f => !f.triggerAdId && !f.triggerAdHeadline);
 
             if (adFlow) {
-                console.log(`🎯 [Chatbot] Meta Ad trigger matched: "${adFlow.name}" (Ad Headline: "${adHeadline}")`);
+                console.log(`🎯 [Chatbot] Meta Ad trigger matched: "${adFlow.name}" (source_id: "${adSourceId}", headline: "${adHeadline}")`);
                 targetFlow = adFlow;
                 if (isPaused) {
                     console.log(`🔓 [Chatbot] Meta Ad trigger "${adFlow.name}" bypassing chatbot pause`);

@@ -1629,18 +1629,38 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                 )}
 
                                 {flow.triggerType === 'meta_ad' && (
-                                    <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200">
-                                        <label className="block text-sm font-semibold text-indigo-900 mb-2">Meta Ad Headline</label>
-                                        <p className="text-xs text-indigo-700 mb-3">
-                                            Type the exact headline of your Facebook or Instagram Ad. This flow will trigger when a user clicks that specific ad.
-                                        </p>
-                                        <input
-                                            type="text"
-                                            placeholder="e.g. Summer Sale 2026 Offer"
-                                            value={flow.triggerAdHeadline || ''}
-                                            onChange={(e) => setFlow({ ...flow, triggerAdHeadline: e.target.value })}
-                                            className="w-full px-3 py-2 border border-indigo-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                                        />
+                                    <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200 space-y-3">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-indigo-900 mb-1">Meta Ad ID <span className="font-normal text-indigo-600">(Recommended)</span></label>
+                                            <p className="text-xs text-indigo-700 mb-2">
+                                                Find this in Meta Ads Manager → your ad → Ad ID. This is the most reliable way to match — Meta always sends it.
+                                            </p>
+                                            <input
+                                                type="text"
+                                                placeholder="e.g. 120213194823710273"
+                                                value={flow.triggerAdId || ''}
+                                                onChange={(e) => setFlow({ ...flow, triggerAdId: e.target.value })}
+                                                className="w-full px-3 py-2 border border-indigo-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-indigo-900 mb-1">Ad Headline <span className="font-normal text-indigo-600">(Optional fallback)</span></label>
+                                            <p className="text-xs text-indigo-700 mb-2">
+                                                Used only if Ad ID is not set. Note: Meta does not always send the headline in the webhook.
+                                            </p>
+                                            <input
+                                                type="text"
+                                                placeholder="e.g. Summer Sale 2026 Offer"
+                                                value={flow.triggerAdHeadline || ''}
+                                                onChange={(e) => setFlow({ ...flow, triggerAdHeadline: e.target.value })}
+                                                className="w-full px-3 py-2 border border-indigo-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                                            />
+                                        </div>
+                                        {!flow.triggerAdId && !flow.triggerAdHeadline && (
+                                            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                                                No Ad ID or headline set — this flow will trigger for ANY Click-to-WhatsApp ad message.
+                                            </p>
+                                        )}
                                     </div>
                                 )}
 

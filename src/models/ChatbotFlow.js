@@ -47,7 +47,13 @@ const chatbotFlowSchema = new mongoose.Schema({
         default: null,
         trim: true
     },
-    // Meta Ad trigger: exactly matches the ad headline from a Click-to-WhatsApp ad referral
+    // Meta Ad trigger: match on Ad ID (source_id) — most reliable, always sent by Meta
+    triggerAdId: {
+        type: String,
+        default: null,
+        trim: true
+    },
+    // Meta Ad trigger: fallback match on ad headline (Meta does NOT always send this)
     triggerAdHeadline: {
         type: String,
         default: null,
