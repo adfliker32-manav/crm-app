@@ -89,6 +89,12 @@ const whatsAppMessageSchema = new mongoose.Schema({
         enum: ['template', 'chatbot', 'auto_reply', 'broadcast', null],
         default: null
     },
+    broadcastId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'WhatsAppBroadcast',
+        default: null,
+        index: true
+    },
     // For replies/context
     contextMessageId: {
         type: String,

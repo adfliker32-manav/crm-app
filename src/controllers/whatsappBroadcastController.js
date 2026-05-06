@@ -1,5 +1,7 @@
-const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
-const WhatsAppTemplate  = require('../models/WhatsAppTemplate');
+const WhatsAppBroadcast    = require('../models/WhatsAppBroadcast');
+const WhatsAppTemplate     = require('../models/WhatsAppTemplate');
+const WhatsAppMessage      = require('../models/WhatsAppMessage');
+const WhatsAppConversation = require('../models/WhatsAppConversation');
 const { getBroadcastQueue } = require('../services/broadcastQueueService');
 
 // --- API Methods ---
@@ -35,7 +37,7 @@ exports.getBroadcast = async (req, res) => {
 exports.createBroadcast = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const { name, templateId, targetAudience, scheduledFor } = req.body;
+        const { name, templateId, targetAudience, scheduledFor, csvContacts } = req.body;
 
         if (!name || !templateId) {
             return res.status(400).json({ message: 'Name and Template are required' });
@@ -49,17 +51,26 @@ exports.createBroadcast = async (req, res) => {
             return res.status(400).json({ message: 'Can only broadcast APPROVED templates' });
         }
 
+        if (targetAudience?.selectionType === 'CSV' && (!csvContacts || csvContacts.length === 0)) {
+            return res.status(400).json({ message: 'CSV broadcast requires at least one contact' });
+        }
+
         const isScheduled = scheduledFor && new Date(scheduledFor) > new Date();
 
-        const broadcast = new WhatsAppBroadcast({
+        const broadcastData = {
             userId,
             name,
             templateId,
             targetAudience: targetAudience || { selectionType: 'ALL' },
             scheduledFor:   isScheduled ? new Date(scheduledFor) : null,
             status:         isScheduled ? 'SCHEDULED' : 'DRAFT'
-        });
+        };
 
+        if (targetAudience?.selectionType === 'CSV' && csvContacts?.length) {
+            broadcastData.csvContacts = csvContacts;
+        }
+
+        const broadcast = new WhatsAppBroadcast(broadcastData);
         await broadcast.save();
         res.status(201).json({ broadcast });
     } catch (error) {
@@ -168,11 +179,109 @@ exports.deleteBroadcast = async (req, res) => {
     }
 };
 
+exports.exportBroadcast = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const broadcast = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId });
+        if (!broadcast) return res.status(404).json({ message: 'Broadcast not found' });
+
+        const messages = await WhatsAppMessage.find({
+            broadcastId:     req.params.id,
+            automationSource:'broadcast'
+        })
+        .populate('conversationId', 'phone displayName')
+        .lean();
+
+        const escCsv = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        const rows = [
+            ['Phone', 'Name', 'Status', 'Sent At', 'Delivered At', 'Read At'].map(escCsv).join(',')
+        ];
+
+        for (const msg of messages) {
+            rows.push([
+                msg.conversationId?.phone        || '',
+                msg.conversationId?.displayName  || '',
+                msg.status,
+                msg.statusTimestamps?.sent        ? new Date(msg.statusTimestamps.sent).toISOString()      : '',
+                msg.statusTimestamps?.delivered   ? new Date(msg.statusTimestamps.delivered).toISOString() : '',
+                msg.statusTimestamps?.read        ? new Date(msg.statusTimestamps.read).toISOString()      : ''
+            ].map(escCsv).join(','));
+        }
+
+        const safeName = broadcast.name.replace(/[^a-z0-9_\- ]/gi, '_');
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="broadcast-${safeName}-report.csv"`);
+        res.send(rows.join('\n'));
+    } catch (error) {
+        console.error('Error exporting broadcast:', error);
+        res.status(500).json({ message: 'Error exporting broadcast', error: 'Server error' });
+    }
+};
+
+exports.retargetFailed = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const original = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId });
+        if (!original) return res.status(404).json({ message: 'Broadcast not found' });
+        if (original.status !== 'COMPLETED') {
+            return res.status(400).json({ message: 'Can only retarget completed broadcasts' });
+        }
+
+        const failedMessages = await WhatsAppMessage.find({
+            broadcastId:     req.params.id,
+            automationSource:'broadcast',
+            status:          'failed'
+        }).lean();
+
+        if (failedMessages.length === 0) {
+            return res.status(400).json({ message: 'No failed messages to retarget' });
+        }
+
+        const convIds = failedMessages.map(m => m.conversationId).filter(Boolean);
+        const convs   = await WhatsAppConversation.find({ _id: { $in: convIds } })
+            .select('leadId phone displayName')
+            .lean();
+
+        const leadIds = convs.map(c => c.leadId).filter(Boolean);
+
+        let targetAudience;
+        let csvContacts;
+
+        if (leadIds.length > 0) {
+            targetAudience = { selectionType: 'SPECIFIC', specificLeadIds: leadIds };
+        } else {
+            // CSV broadcast or leads without IDs — retarget by phone
+            targetAudience = { selectionType: 'CSV' };
+            csvContacts    = convs.map(c => ({ phone: c.phone, name: c.displayName || '', email: '' }));
+        }
+
+        const retarget = new WhatsAppBroadcast({
+            userId,
+            name:           `${original.name} — Retarget Failed`,
+            templateId:     original.templateId,
+            targetAudience,
+            csvContacts:    csvContacts || [],
+            status:         'DRAFT'
+        });
+
+        await retarget.save();
+        res.status(201).json({
+            broadcast: retarget,
+            message:   `Retarget draft created with ${failedMessages.length} failed contacts`
+        });
+    } catch (error) {
+        console.error('Error creating retarget broadcast:', error);
+        res.status(500).json({ message: 'Error creating retarget broadcast', error: 'Server error' });
+    }
+};
+
 module.exports = {
     getBroadcasts:    exports.getBroadcasts,
     getBroadcast:     exports.getBroadcast,
     createBroadcast:  exports.createBroadcast,
     startBroadcast:   exports.startBroadcast,
     cancelBroadcast:  exports.cancelBroadcast,
-    deleteBroadcast:  exports.deleteBroadcast
+    deleteBroadcast:  exports.deleteBroadcast,
+    exportBroadcast:  exports.exportBroadcast,
+    retargetFailed:   exports.retargetFailed
 };

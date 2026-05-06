@@ -459,12 +459,12 @@ const processStatusUpdate = async (status, userId) => {
             status: statusType
         });
 
-        // FIX #20: Update broadcast stats (delivered/read) if this was a broadcast message
-        if (updatedMsg.automationSource === 'broadcast' && ['delivered', 'read', 'failed'].includes(statusType)) {
+        // Update broadcast stats (delivered/read/failed) using the stored broadcastId
+        if (updatedMsg.automationSource === 'broadcast' && updatedMsg.broadcastId && ['delivered', 'read', 'failed'].includes(statusType)) {
             try {
                 const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
                 await WhatsAppBroadcast.updateOne(
-                    { userId: updatedMsg.userId, status: { $in: ['COMPLETED', 'PROCESSING'] } },
+                    { _id: updatedMsg.broadcastId },
                     { $inc: { [`stats.${statusType}`]: 1 } }
                 );
             } catch (bcErr) {

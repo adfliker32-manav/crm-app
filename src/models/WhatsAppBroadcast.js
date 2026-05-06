@@ -28,7 +28,7 @@ const whatsappBroadcastSchema = new mongoose.Schema({
     targetAudience: {
         selectionType: {
             type: String,
-            enum: ['ALL', 'TAGS', 'STAGES', 'SPECIFIC'],
+            enum: ['ALL', 'TAGS', 'STAGES', 'SPECIFIC', 'CSV'],
             default: 'ALL'
         },
         tags: [{ type: String }],
@@ -38,6 +38,13 @@ const whatsappBroadcastSchema = new mongoose.Schema({
             ref: 'Lead'
         }]
     },
+
+    // CSV broadcast contacts (used when selectionType === 'CSV')
+    csvContacts: [{
+        phone: { type: String, required: true },
+        name:  { type: String, default: '' },
+        email: { type: String, default: '' }
+    }],
     
     // Scheduling
     scheduledFor: {

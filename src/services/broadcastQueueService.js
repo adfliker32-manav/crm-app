@@ -95,32 +95,11 @@ async function _processBroadcastJob(job) {
         return;
     }
 
-    // Build lead filter
-    const phoneFilter = { $exists: true, $nin: [null, ''] };
-    let leadQuery = { userId: leadOwnerId, phone: phoneFilter };
     const { selectionType, stages, tags, specificLeadIds } = broadcast.targetAudience;
-    if      (selectionType === 'STAGES'   && stages?.length)           leadQuery.status = { $in: stages };
-    else if (selectionType === 'TAGS'     && tags?.length)             leadQuery.tags   = { $in: tags };
-    else if (selectionType === 'SPECIFIC' && specificLeadIds?.length)  leadQuery._id    = { $in: specificLeadIds };
-
-    const totalTargets = await Lead.countDocuments(leadQuery);
-    console.log(`[Broadcast ${broadcastId}] ${totalTargets} valid targets.`);
-
-    await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
-        $set: { 'stats.totalTargets': totalTargets }
-    });
-
-    if (totalTargets === 0) {
-        await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
-            $set: { status: 'COMPLETED', completedAt: new Date(), errorMessage: 'No valid leads for criteria.' }
-        });
-        return;
-    }
 
     const user = await User.findById(userId).lean();
 
     // On retry: seed counters from the idempotency Set so stats remain continuous.
-    // alreadySentCount > 0 means a previous attempt partially completed.
     const alreadySentCount = parseInt(await redis.scard(sentKey) || 0, 10);
     let successCount = alreadySentCount;
     let failCount    = broadcast.stats?.failed || 0;
@@ -130,34 +109,103 @@ async function _processBroadcastJob(job) {
         console.log(`[Broadcast ${broadcastId}] Retry detected — ${alreadySentCount} leads already sent, resuming.`);
     }
 
-    // Stream leads — only BATCH_SIZE docs ever in memory at once
-    const cursor = Lead.find(leadQuery)
-        .select('_id name phone email status')
-        .lean()
-        .cursor();
+    if (selectionType === 'CSV') {
+        // ─── CSV broadcast path ───────────────────────────────────────────────
+        const contacts = broadcast.csvContacts || [];
+        const totalTargets = contacts.length;
 
-    for await (const lead of cursor) {
-        // Cancellation check at start of every new batch.
-        // Treat a deleted document the same as CANCELLED — stop immediately.
-        if (batch.length === 0) {
-            const current = await WhatsAppBroadcast.findById(broadcastId).select('status').lean();
-            if (!current || current.status === 'CANCELLED') {
-                console.log(`[Broadcast ${broadcastId}] Cancelled or deleted — stopping cursor.`);
-                await cursor.close();
-                return;
+        await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+            $set: { 'stats.totalTargets': totalTargets }
+        });
+
+        if (totalTargets === 0) {
+            await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                $set: { status: 'COMPLETED', completedAt: new Date(), errorMessage: 'No CSV contacts provided.' }
+            });
+            return;
+        }
+
+        console.log(`[Broadcast ${broadcastId}] CSV mode — ${totalTargets} contacts.`);
+
+        for (const contact of contacts) {
+            if (batch.length === 0) {
+                const current = await WhatsAppBroadcast.findById(broadcastId).select('status').lean();
+                if (!current || current.status === 'CANCELLED') {
+                    console.log(`[Broadcast ${broadcastId}] Cancelled — stopping CSV iteration.`);
+                    return;
+                }
+            }
+
+            batch.push({
+                _id:    contact.phone, // phone as idempotency key for Redis Set
+                phone:  contact.phone,
+                name:   contact.name  || '',
+                email:  contact.email || '',
+                status: null,
+                _isCsv: true          // flag: skip leadId in DB sync
+            });
+
+            if (batch.length >= BATCH_SIZE) {
+                const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey);
+                successCount += r.success;
+                failCount    += r.failed;
+                batch = [];
+                await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                    $set: { 'stats.sent': successCount, 'stats.failed': failCount }
+                });
             }
         }
 
-        batch.push(lead);
+    } else {
+        // ─── Normal Lead cursor path ──────────────────────────────────────────
+        const phoneFilter = { $exists: true, $nin: [null, ''] };
+        let leadQuery = { userId: leadOwnerId, phone: phoneFilter };
+        if      (selectionType === 'STAGES'   && stages?.length)           leadQuery.status = { $in: stages };
+        else if (selectionType === 'TAGS'     && tags?.length)             leadQuery.tags   = { $in: tags };
+        else if (selectionType === 'SPECIFIC' && specificLeadIds?.length)  leadQuery._id    = { $in: specificLeadIds };
 
-        if (batch.length >= BATCH_SIZE) {
-            const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey);
-            successCount += r.success;
-            failCount    += r.failed;
-            batch = [];
+        const totalTargets = await Lead.countDocuments(leadQuery);
+        console.log(`[Broadcast ${broadcastId}] ${totalTargets} valid targets.`);
+
+        await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+            $set: { 'stats.totalTargets': totalTargets }
+        });
+
+        if (totalTargets === 0) {
             await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
-                $set: { 'stats.sent': successCount, 'stats.failed': failCount }
+                $set: { status: 'COMPLETED', completedAt: new Date(), errorMessage: 'No valid leads for criteria.' }
             });
+            return;
+        }
+
+        // Stream leads — only BATCH_SIZE docs ever in memory at once
+        const cursor = Lead.find(leadQuery)
+            .select('_id name phone email status')
+            .lean()
+            .cursor();
+
+        for await (const lead of cursor) {
+            // Cancellation check at start of every new batch.
+            if (batch.length === 0) {
+                const current = await WhatsAppBroadcast.findById(broadcastId).select('status').lean();
+                if (!current || current.status === 'CANCELLED') {
+                    console.log(`[Broadcast ${broadcastId}] Cancelled or deleted — stopping cursor.`);
+                    await cursor.close();
+                    return;
+                }
+            }
+
+            batch.push(lead);
+
+            if (batch.length >= BATCH_SIZE) {
+                const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey);
+                successCount += r.success;
+                failCount    += r.failed;
+                batch = [];
+                await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                    $set: { 'stats.sent': successCount, 'stats.failed': failCount }
+                });
+            }
         }
     }
 
@@ -178,7 +226,6 @@ async function _processBroadcastJob(job) {
     });
 
     // Broadcast is done — clean up the idempotency Set.
-    // TTL is the safety net if this delete fails.
     await redis.del(sentKey);
 
     console.log(`[Broadcast ${broadcastId}] Done. Sent: ${successCount}, Failed: ${failCount}`);
@@ -212,8 +259,6 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
         const redis = getRedisConnection();
 
         // ── Idempotency check ──────────────────────────────────────────────────
-        // If this lead was already sent to in a previous attempt, skip it.
-        // Returning true counts it in successCount so final stats are correct.
         const alreadySent = await redis.sismember(sentKey, lead._id.toString());
         if (alreadySent) return true;
 
@@ -236,15 +281,12 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
         if (!result || result.success === false) return false;
 
         // ── Mark as sent BEFORE DB sync ────────────────────────────────────────
-        // The send is the irreversible action. Marking here ensures that even if
-        // DB sync or the process crashes after this line, this lead won't be
-        // re-sent on the next retry attempt.
         await redis.sadd(sentKey, lead._id.toString());
         await redis.expire(sentKey, SENT_SET_TTL_SECONDS);
 
         const waMessageId = result.messages?.[0]?.id;
         if (waMessageId) {
-            await _syncToDB(lead, userId, waMessageId, template.name);
+            await _syncToDB(lead, userId, waMessageId, template.name, broadcastId);
         }
         return true;
 
@@ -255,17 +297,20 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
 }
 
 // ─── DB sync ──────────────────────────────────────────────────────────────────
-async function _syncToDB(lead, userId, waMessageId, templateName) {
+async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
     try {
         const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
-        if (!normalizedPhone) return; // Guard: non-numeric phones (e.g. "N/A") would corrupt waContactId
+        if (!normalizedPhone) return;
+
+        // For CSV contacts (_isCsv: true), leadId is null — no real Lead document
+        const leadId = lead._isCsv ? null : lead._id;
 
         const conversation = await WhatsAppConversation.findOneAndUpdate(
             { userId, waContactId: normalizedPhone },
             {
                 $setOnInsert: {
                     userId,
-                    leadId:      lead._id,
+                    leadId,
                     waContactId: normalizedPhone,
                     phone:       normalizedPhone,
                     displayName: lead.name,
@@ -289,6 +334,7 @@ async function _syncToDB(lead, userId, waMessageId, templateName) {
         await WhatsAppMessage.create({
             conversationId:   conversation._id,
             userId,
+            broadcastId,
             waMessageId,
             direction:        'outbound',
             type:             'template',
@@ -300,7 +346,7 @@ async function _syncToDB(lead, userId, waMessageId, templateName) {
         });
 
     } catch (syncErr) {
-        if (syncErr.code !== 11000) { // 11000 = duplicate waMessageId — safe to ignore
+        if (syncErr.code !== 11000) {
             console.error(`[DB Sync] Failed for ${lead.phone}:`, syncErr.message);
         }
     }

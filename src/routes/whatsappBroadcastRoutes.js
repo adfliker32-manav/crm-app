@@ -22,4 +22,10 @@ router.post('/:id/cancel', validateObjectId({ params: ['id'] }), authMiddleware,
 // Delete broadcast
 router.delete('/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireFeature('whatsappAutomation'), whatsappBroadcastController.deleteBroadcast);
 
+// Export broadcast report as CSV
+router.get('/:id/export', validateObjectId({ params: ['id'] }), authMiddleware, whatsappBroadcastController.exportBroadcast);
+
+// Create a retarget-failed draft broadcast
+router.post('/:id/retarget-failed', validateObjectId({ params: ['id'] }), authMiddleware, requireFeature('whatsappAutomation'), whatsappBroadcastController.retargetFailed);
+
 module.exports = router;
