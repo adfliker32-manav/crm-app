@@ -10,8 +10,8 @@ const MSGS_PER_MIN = 60;
 
 const timeEstimate = (total) => {
     if (!total || total <= 0) return null;
+    if (total < MSGS_PER_MIN) return '< 1 min';
     const mins = Math.ceil(total / MSGS_PER_MIN);
-    if (mins < 1)  return '< 1 min';
     if (mins === 1) return '~1 min';
     if (mins < 60) return `~${mins} mins`;
     const h = Math.floor(mins / 60);
@@ -114,7 +114,7 @@ const WhatsAppBroadcasts = () => {
     const handleRefresh = () => fetchBroadcasts(true);
 
     const buildCsvContacts = () => {
-        if (csvStep < 2 || !csvMapping.phone) return [];
+        if (!csvMapping.phone || csvRaw.length === 0) return [];
         return csvRaw
             .map(row => ({
                 phone: (row[csvMapping.phone] || '').toString().trim(),
@@ -655,10 +655,17 @@ const WhatsAppBroadcasts = () => {
                                                                 </tbody>
                                                             </table>
                                                         </div>
-                                                        <p className="text-xs text-emerald-600 mt-2 font-medium">
-                                                            <i className="fa-solid fa-circle-check mr-1"></i>
-                                                            {csvContactCount} valid contacts will be used
-                                                        </p>
+                                                        {csvContactCount > 10000 ? (
+                                                            <p className="text-xs text-red-600 mt-2 font-medium">
+                                                                <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                                                                {csvContactCount} contacts — limit is 10,000 per campaign
+                                                            </p>
+                                                        ) : (
+                                                            <p className="text-xs text-emerald-600 mt-2 font-medium">
+                                                                <i className="fa-solid fa-circle-check mr-1"></i>
+                                                                {csvContactCount} valid contacts will be used
+                                                            </p>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>
@@ -707,7 +714,10 @@ const WhatsAppBroadcasts = () => {
                                     </button>
                                     <button
                                         type="submit"
-                                        disabled={templates.length === 0 || (newBroadcast.targetAudience.selectionType === 'CSV' && csvContactCount === 0)}
+                                        disabled={
+                                            templates.length === 0 ||
+                                            (newBroadcast.targetAudience.selectionType === 'CSV' && (csvContactCount === 0 || csvContactCount > 10000))
+                                        }
                                         className="px-5 py-2.5 bg-[#00a884] hover:bg-[#008f6f] text-white rounded-xl text-sm font-medium transition shadow-sm disabled:opacity-50"
                                     >
                                         Create Campaign

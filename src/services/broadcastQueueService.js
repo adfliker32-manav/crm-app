@@ -76,9 +76,16 @@ async function _processBroadcastJob(job) {
 
     const broadcast = await WhatsAppBroadcast.findById(broadcastId).populate('templateId');
 
-    if (!broadcast || broadcast.status !== 'PROCESSING') {
+    if (!broadcast || !['PROCESSING', 'SCHEDULED'].includes(broadcast.status)) {
         console.log(`[Broadcast ${broadcastId}] Not ready. Status: ${broadcast?.status}`);
         return;
+    }
+
+    // Transition SCHEDULED → PROCESSING when the delayed job fires
+    if (broadcast.status === 'SCHEDULED') {
+        await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+            $set: { status: 'PROCESSING', startedAt: new Date() }
+        });
     }
     if (!broadcast.templateId || broadcast.templateId.status !== 'APPROVED') {
         await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
@@ -239,8 +246,9 @@ async function _processBatch(leads, template, user, userId, broadcastId, sentKey
         leads.map(lead => _processOneLead(lead, template, user, userId, broadcastId, sentKey))
     );
 
+    // null = already sent in a previous attempt (idempotency skip) — not a new success or failure
     const success = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
-    const failed  = results.length - success;
+    const failed  = results.filter(r => r.status === 'fulfilled' && r.value === false).length;
 
     // Pace: wait out the rest of BATCH_RATE_MS plus random jitter so concurrent
     // tenant broadcasts don't all fire their next batch at the same millisecond.
@@ -259,8 +267,10 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
         const redis = getRedisConnection();
 
         // ── Idempotency check ──────────────────────────────────────────────────
+        // Return null (not true) so the batch counter doesn't re-count leads
+        // that were already successfully sent in a previous attempt.
         const alreadySent = await redis.sismember(sentKey, lead._id.toString());
-        if (alreadySent) return true;
+        if (alreadySent) return null;
 
         const templateData = {
             leadName:    lead.name    || '',
@@ -280,9 +290,11 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
         const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents);
         if (!result || result.success === false) return false;
 
-        // ── Mark as sent BEFORE DB sync ────────────────────────────────────────
-        await redis.sadd(sentKey, lead._id.toString());
-        await redis.expire(sentKey, SENT_SET_TTL_SECONDS);
+        // ── Mark as sent BEFORE DB sync (atomic pipeline) ─────────────────────
+        await redis.pipeline()
+            .sadd(sentKey, lead._id.toString())
+            .expire(sentKey, SENT_SET_TTL_SECONDS)
+            .exec();
 
         const waMessageId = result.messages?.[0]?.id;
         if (waMessageId) {

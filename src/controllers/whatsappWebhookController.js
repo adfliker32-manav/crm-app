@@ -436,7 +436,7 @@ const processStatusUpdate = async (status, userId) => {
         const updatedMsg = await WhatsAppMessage.findOneAndUpdate(
             { waMessageId: waMessageId },
             updatePayload,
-            { new: true, select: 'conversationId userId automationSource content' }
+            { new: true, select: 'conversationId userId automationSource broadcastId content' }
         ).lean();
 
         if (!updatedMsg) {

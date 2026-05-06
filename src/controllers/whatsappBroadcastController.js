@@ -51,8 +51,13 @@ exports.createBroadcast = async (req, res) => {
             return res.status(400).json({ message: 'Can only broadcast APPROVED templates' });
         }
 
-        if (targetAudience?.selectionType === 'CSV' && (!csvContacts || csvContacts.length === 0)) {
-            return res.status(400).json({ message: 'CSV broadcast requires at least one contact' });
+        if (targetAudience?.selectionType === 'CSV') {
+            if (!csvContacts || csvContacts.length === 0) {
+                return res.status(400).json({ message: 'CSV broadcast requires at least one contact' });
+            }
+            if (csvContacts.length > 10000) {
+                return res.status(400).json({ message: 'CSV broadcast is limited to 10,000 contacts per campaign' });
+            }
         }
 
         const isScheduled = scheduledFor && new Date(scheduledFor) > new Date();
@@ -198,11 +203,14 @@ exports.exportBroadcast = async (req, res) => {
         ];
 
         for (const msg of messages) {
+            // statusTimestamps.sent is only set when Meta webhooks confirm delivery of 'sent'.
+            // Fall back to msg.timestamp (creation time) which is always present.
+            const sentAt = msg.statusTimestamps?.sent || msg.timestamp;
             rows.push([
                 msg.conversationId?.phone        || '',
                 msg.conversationId?.displayName  || '',
                 msg.status,
-                msg.statusTimestamps?.sent        ? new Date(msg.statusTimestamps.sent).toISOString()      : '',
+                sentAt                            ? new Date(sentAt).toISOString()                           : '',
                 msg.statusTimestamps?.delivered   ? new Date(msg.statusTimestamps.delivered).toISOString() : '',
                 msg.statusTimestamps?.read        ? new Date(msg.statusTimestamps.read).toISOString()      : ''
             ].map(escCsv).join(','));
@@ -239,29 +247,28 @@ exports.retargetFailed = async (req, res) => {
 
         const convIds = failedMessages.map(m => m.conversationId).filter(Boolean);
         const convs   = await WhatsAppConversation.find({ _id: { $in: convIds } })
-            .select('leadId phone displayName')
+            .select('phone displayName')
             .lean();
 
-        const leadIds = convs.map(c => c.leadId).filter(Boolean);
+        // Always retarget by phone (CSV style) so mixed lead/CSV broadcasts
+        // don't silently drop contacts that have no leadId.
+        const csvContacts = convs.map(c => ({
+            phone: c.phone,
+            name:  c.displayName || '',
+            email: ''
+        })).filter(c => c.phone);
 
-        let targetAudience;
-        let csvContacts;
-
-        if (leadIds.length > 0) {
-            targetAudience = { selectionType: 'SPECIFIC', specificLeadIds: leadIds };
-        } else {
-            // CSV broadcast or leads without IDs — retarget by phone
-            targetAudience = { selectionType: 'CSV' };
-            csvContacts    = convs.map(c => ({ phone: c.phone, name: c.displayName || '', email: '' }));
+        if (csvContacts.length === 0) {
+            return res.status(400).json({ message: 'No contactable failed recipients found' });
         }
 
         const retarget = new WhatsAppBroadcast({
             userId,
-            name:           `${original.name} — Retarget Failed`,
-            templateId:     original.templateId,
-            targetAudience,
-            csvContacts:    csvContacts || [],
-            status:         'DRAFT'
+            name:          `${original.name} — Retarget Failed`,
+            templateId:    original.templateId,
+            targetAudience:{ selectionType: 'CSV' },
+            csvContacts,
+            status:        'DRAFT'
         });
 
         await retarget.save();
