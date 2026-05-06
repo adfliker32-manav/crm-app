@@ -442,17 +442,22 @@ const processStatusUpdate = async (status, userId) => {
         if (!updatedMsg) {
             // RACE CONDITION MITIGATION:
             // Meta webhooks for 'sent' or 'delivered' can arrive faster than our own backend
-            // finishes writing the initial message to the DB. Wait 1.5 seconds and retry.
-            debug(`⏳ Message ${waMessageId} not found in DB. Waiting 1.5s for DB write to finish...`);
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            updatedMsg = await WhatsAppMessage.findOneAndUpdate(
-                { waMessageId: waMessageId },
-                updatePayload,
-                { new: true, select: 'conversationId userId automationSource broadcastId content' }
-            ).lean();
+            // finishes writing the initial message to the DB (especially during batch broadcasts).
+            // Retry up to 5 times (total ~7.5 seconds) to allow DB writes to catch up.
+            let retries = 5;
+            while (retries > 0 && !updatedMsg) {
+                debug(`⏳ Message ${waMessageId} not found in DB. Waiting 1.5s for DB write to finish... (${retries} retries left)`);
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                updatedMsg = await WhatsAppMessage.findOneAndUpdate(
+                    { waMessageId: waMessageId },
+                    updatePayload,
+                    { new: true, select: 'conversationId userId automationSource broadcastId content' }
+                ).lean();
+                retries--;
+            }
 
             if (!updatedMsg) {
-                console.log(`⚠️ Message not found for status update after retry: ${waMessageId}`);
+                console.log(`⚠️ Message not found for status update after ${5} retries: ${waMessageId}`);
                 debug('   The message may not have been saved by this server (e.g., sent via another tool)');
                 return;
             }
