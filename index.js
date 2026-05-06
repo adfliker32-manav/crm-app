@@ -353,7 +353,40 @@ app.use('/api/reports', reportRoutes); // Reports & Analytics
 
 // Meta Webhook URL: /api/meta/webhook
 
-// 5. HEALTH CHECK & KEEP-ALIVE (must be BEFORE catch-all)
+// 5. BULL BOARD — queue monitoring dashboard (only when Redis is configured)
+// Access: /admin/queues?key=<BULL_BOARD_SECRET>
+// To enable: set REDIS_URL and BULL_BOARD_SECRET in your environment variables.
+// BULL_BOARD_SECRET acts as the password — use a long random string.
+if (process.env.REDIS_URL && process.env.BULL_BOARD_SECRET) {
+  try {
+    const { createBullBoard }  = require('@bull-board/api');
+    const { BullMQAdapter }    = require('@bull-board/api/bullMQAdapter');
+    const { ExpressAdapter }   = require('@bull-board/express');
+    const { getBroadcastQueue } = require('./src/services/broadcastQueueService');
+
+    const serverAdapter = new ExpressAdapter();
+    serverAdapter.setBasePath('/admin/queues');
+
+    createBullBoard({
+      queues: [new BullMQAdapter(getBroadcastQueue())],
+      serverAdapter
+    });
+
+    // Simple secret-key auth — no JWT, no session; admin opens URL with ?key=<secret>
+    app.use('/admin/queues', (req, res, next) => {
+      if (req.query.key !== process.env.BULL_BOARD_SECRET) {
+        return res.status(401).send('Unauthorized — add ?key=<BULL_BOARD_SECRET> to the URL');
+      }
+      next();
+    }, serverAdapter.getRouter());
+
+    console.log('✅ Bull Board: /admin/queues?key=<BULL_BOARD_SECRET>');
+  } catch (e) {
+    console.warn('⚠️  Bull Board failed to start:', e.message);
+  }
+}
+
+// 6. HEALTH CHECK & KEEP-ALIVE (must be BEFORE catch-all)
 app.get('/api/health', (req, res) => {
   res.status(200).send('OK');
 });

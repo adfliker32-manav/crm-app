@@ -17,6 +17,8 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@bull-board/api": "^7.0.0",
+    "@bull-board/express": "^7.0.0",
     "agenda": "^5.0.0",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",

@@ -8,12 +8,20 @@ const WhatsAppMessage      = require('../models/WhatsAppMessage');
 const { sendWhatsAppMessage }  = require('./whatsappService');
 const { buildMetaComponents }  = require('../utils/templateVariableResolver');
 
-// ─── Rate-limit config (same as before) ──────────────────────────────────────
+// ─── Rate-limit config ────────────────────────────────────────────────────────
 // 5 leads in parallel, one batch every 5 s = 60 msgs/min (Meta-safe).
 // Jitter breaks synchronization when multiple tenant broadcasts run in parallel.
 const BATCH_SIZE      = 5;
 const BATCH_RATE_MS   = 5000;
 const BATCH_JITTER_MS = 1000; // 0–1000 ms random additive delay per batch
+
+// ─── Idempotency config ───────────────────────────────────────────────────────
+// Per-broadcast Redis Set tracks every lead that was successfully sent to.
+// On BullMQ retry (e.g. after a worker crash), already-sent leads are skipped
+// so users never receive duplicate messages.
+// TTL is generous (48 h) to survive the longest possible broadcast + buffer.
+// The set is also deleted explicitly when the broadcast reaches COMPLETED.
+const SENT_SET_TTL_SECONDS = 48 * 3600;
 
 const QUEUE_NAME = 'whatsapp-broadcast';
 
@@ -29,7 +37,7 @@ const getBroadcastQueue = () => {
         defaultJobOptions: {
             attempts: 3,
             backoff: { type: 'exponential', delay: 5000 },
-            // Auto-clean completed/failed jobs so Redis doesn't grow unbounded
+            // Auto-clean finished jobs so Redis doesn't grow unbounded
             removeOnComplete: { count: 200, age: 7 * 24 * 3600 },
             removeOnFail:     { count: 100, age: 7 * 24 * 3600 }
         }
@@ -40,7 +48,6 @@ const getBroadcastQueue = () => {
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
 // concurrency: 2 — at most 2 broadcasts run simultaneously across ALL tenants.
-// This is the global throttle that prevents one heavy tenant from blocking others.
 const startBroadcastWorker = () => {
     _worker = new Worker(QUEUE_NAME, _processBroadcastJob, {
         connection:  getRedisConnection(),
@@ -64,6 +71,8 @@ const getBroadcastWorker = () => _worker;
 async function _processBroadcastJob(job) {
     const { broadcastId, userId, tenantId } = job.data;
     const leadOwnerId = tenantId || userId;
+    const redis   = getRedisConnection();
+    const sentKey = `broadcast:${broadcastId}:sent`; // Redis Set of sent lead IDs
 
     const broadcast = await WhatsAppBroadcast.findById(broadcastId).populate('templateId');
 
@@ -78,7 +87,6 @@ async function _processBroadcastJob(job) {
         return;
     }
 
-    // Verify template has the fields the Meta API requires before streaming any leads
     const template = broadcast.templateId;
     if (!template.name || typeof template.name !== 'string' || !template.name.trim()) {
         await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
@@ -111,9 +119,16 @@ async function _processBroadcastJob(job) {
 
     const user = await User.findById(userId).lean();
 
-    let successCount = 0;
-    let failCount    = 0;
+    // On retry: seed counters from the idempotency Set so stats remain continuous.
+    // alreadySentCount > 0 means a previous attempt partially completed.
+    const alreadySentCount = parseInt(await redis.scard(sentKey) || 0, 10);
+    let successCount = alreadySentCount;
+    let failCount    = broadcast.stats?.failed || 0;
     let batch        = [];
+
+    if (alreadySentCount > 0) {
+        console.log(`[Broadcast ${broadcastId}] Retry detected — ${alreadySentCount} leads already sent, resuming.`);
+    }
 
     // Stream leads — only BATCH_SIZE docs ever in memory at once
     const cursor = Lead.find(leadQuery)
@@ -122,7 +137,7 @@ async function _processBroadcastJob(job) {
         .cursor();
 
     for await (const lead of cursor) {
-        // Cancellation check at start of every new batch (zero cost mid-batch).
+        // Cancellation check at start of every new batch.
         // Treat a deleted document the same as CANCELLED — stop immediately.
         if (batch.length === 0) {
             const current = await WhatsAppBroadcast.findById(broadcastId).select('status').lean();
@@ -136,7 +151,7 @@ async function _processBroadcastJob(job) {
         batch.push(lead);
 
         if (batch.length >= BATCH_SIZE) {
-            const r = await _processBatch(batch, template, user, userId, broadcastId);
+            const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey);
             successCount += r.success;
             failCount    += r.failed;
             batch = [];
@@ -148,28 +163,33 @@ async function _processBroadcastJob(job) {
 
     // Flush remaining leads (last partial batch)
     if (batch.length > 0) {
-        const r = await _processBatch(batch, template, user, userId, broadcastId);
+        const r = await _processBatch(batch, template, user, userId, broadcastId, sentKey);
         successCount += r.success;
         failCount    += r.failed;
     }
 
     await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
         $set: {
-            status:       'COMPLETED',
-            completedAt:  new Date(),
+            status:         'COMPLETED',
+            completedAt:    new Date(),
             'stats.sent':   successCount,
             'stats.failed': failCount
         }
     });
+
+    // Broadcast is done — clean up the idempotency Set.
+    // TTL is the safety net if this delete fails.
+    await redis.del(sentKey);
+
     console.log(`[Broadcast ${broadcastId}] Done. Sent: ${successCount}, Failed: ${failCount}`);
 }
 
 // ─── Batch processor ──────────────────────────────────────────────────────────
-async function _processBatch(leads, template, user, userId) {
+async function _processBatch(leads, template, user, userId, broadcastId, sentKey) {
     const batchStart = Date.now();
 
     const results = await Promise.allSettled(
-        leads.map(lead => _processOneLead(lead, template, user, userId))
+        leads.map(lead => _processOneLead(lead, template, user, userId, broadcastId, sentKey))
     );
 
     const success = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
@@ -187,8 +207,16 @@ async function _processBatch(leads, template, user, userId) {
 }
 
 // ─── Single lead processor ────────────────────────────────────────────────────
-async function _processOneLead(lead, template, user, userId) {
+async function _processOneLead(lead, template, user, userId, broadcastId, sentKey) {
     try {
+        const redis = getRedisConnection();
+
+        // ── Idempotency check ──────────────────────────────────────────────────
+        // If this lead was already sent to in a previous attempt, skip it.
+        // Returning true counts it in successCount so final stats are correct.
+        const alreadySent = await redis.sismember(sentKey, lead._id.toString());
+        if (alreadySent) return true;
+
         const templateData = {
             leadName:    lead.name    || '',
             leadEmail:   lead.email   || '',
@@ -206,6 +234,13 @@ async function _processOneLead(lead, template, user, userId) {
 
         const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents);
         if (!result || result.success === false) return false;
+
+        // ── Mark as sent BEFORE DB sync ────────────────────────────────────────
+        // The send is the irreversible action. Marking here ensures that even if
+        // DB sync or the process crashes after this line, this lead won't be
+        // re-sent on the next retry attempt.
+        await redis.sadd(sentKey, lead._id.toString());
+        await redis.expire(sentKey, SENT_SET_TTL_SECONDS);
 
         const waMessageId = result.messages?.[0]?.id;
         if (waMessageId) {
