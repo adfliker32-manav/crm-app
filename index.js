@@ -158,9 +158,29 @@ mongoose.connect(MONGO_URI, {
     // Google Sheet sync is now PUSH-based (Apps Script webhook) — no polling scheduler needed
     console.log('📋 Google Sheet Sync: Push mode (zero polling cost)');
 
-    // Initialize Agenda for Broadcasting, Automations, and WhatsApp Queue
+    // ── BullMQ: Broadcast worker (Redis-backed, concurrency: 2) ─────────────────
+    // Broadcasts are the heaviest job type. Running them on BullMQ gives:
+    //   - global concurrency cap across all tenants (max 2 simultaneous)
+    //   - Redis-backed queue (sub-ms dispatch vs Agenda's 30s polling)
+    //   - built-in 3-attempt exponential-backoff retry on crash
+    try {
+      if (!process.env.REDIS_URL) {
+        console.warn('⚠️  REDIS_URL not set — BullMQ Broadcast Worker will not start.');
+        console.warn('   Add REDIS_URL to .env to enable broadcast queue.');
+      } else {
+        const { startBroadcastWorker } = require('./src/services/broadcastQueueService');
+        startBroadcastWorker();
+      }
+    } catch (error) {
+      console.error('⚠️ Failed to start BullMQ Broadcast Worker:', error.message);
+    }
+
+    // ── Agenda: Automations, WhatsApp chatbot delays, Email scheduling ────────
+    // These lower-volume jobs remain on Agenda (MongoDB-backed) — no Redis needed.
     try {
       const { Agenda } = require('agenda');
+      const { setAgenda } = require('./src/services/agendaService');
+
       const agenda = new Agenda({
         db: { address: MONGO_URI, collection: 'agendaJobs' },
         processEvery: '30 seconds',
@@ -170,30 +190,24 @@ mongoose.connect(MONGO_URI, {
       // ⚠️ IMPORTANT: ALL job definitions must be registered BEFORE agenda.start()
       // Agenda ignores jobs defined after start() for already-queued tasks.
 
-      // 1. Broadcast jobs (WhatsApp bulk sends)
-      const { defineBroadcastJob } = require('./src/controllers/whatsappBroadcastController');
-      defineBroadcastJob(agenda);
-
-      // 2. CRM Automation rule jobs (EXECUTE_AUTOMATION_ACTION)
+      // 1. CRM Automation rule jobs (EXECUTE_AUTOMATION_ACTION)
       const { defineAutomationJobs } = require('./src/services/AutomationService');
       defineAutomationJobs(agenda);
 
-      // 3. WhatsApp chatbot delay jobs + CHECK_REPLY_TIMEOUT
+      // 2. WhatsApp chatbot delay jobs + CHECK_REPLY_TIMEOUT
       const { defineWhatsAppJobs } = require('./src/services/whatsappQueueService');
       defineWhatsAppJobs(agenda);
 
-      // 4. Email Scheduling jobs (send_scheduled_email)
+      // 3. Email Scheduling jobs (send_scheduled_email)
       const { defineEmailJobs } = require('./src/services/emailQueueService');
       defineEmailJobs(agenda);
 
       // ✅ Start AFTER all definitions are registered
       await agenda.start();
-      console.log('✅ Agenda Job Queue Started (Broadcasts, Automations, WhatsApp Queue)');
+      setAgenda(agenda); // Register for graceful shutdown
+      console.log('✅ Agenda Job Queue Started (Automations, WhatsApp, Email)');
 
-      // ⚠️ PRODUCTION NOTE:
-      // Agenda does NOT auto-clean completed/failed jobs.
-      // Without TTL, this collection will grow indefinitely and increase storage cost.
-      // This cleanup runs on startup to purge stale jobs older than 7 days.
+      // Purge stale jobs older than 7 days to prevent DB bloat
       try {
         const jobsCollection = mongoose.connection.db.collection('agendaJobs');
         const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -419,7 +433,27 @@ const gracefulShutdown = async (signal) => {
     console.log('✅ HTTP server closed');
   });
 
-  // 2. Stop Agenda queue
+  // 2. Stop BullMQ broadcast worker
+  try {
+    const { getBroadcastWorker } = require('./src/services/broadcastQueueService');
+    const worker = getBroadcastWorker();
+    if (worker) {
+      await worker.close();
+      console.log('✅ BullMQ broadcast worker stopped');
+    }
+  } catch (e) {
+    // Worker may not be initialized (e.g. REDIS_URL not set)
+  }
+
+  // 3. Close Redis connection
+  try {
+    const { closeRedisConnection } = require('./src/services/redisConnection');
+    await closeRedisConnection();
+  } catch (e) {
+    // Redis may not be initialized
+  }
+
+  // 4. Stop Agenda queue (automations, chatbot delays, email)
   try {
     const { getAgenda } = require('./src/services/agendaService');
     const agenda = getAgenda();
@@ -431,7 +465,7 @@ const gracefulShutdown = async (signal) => {
     // Agenda may not be initialized
   }
 
-  // 3. Close MongoDB connection
+  // 5. Close MongoDB connection
   try {
     await mongoose.connection.close();
     console.log('✅ MongoDB connection closed');
