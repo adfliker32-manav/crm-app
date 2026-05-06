@@ -179,6 +179,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const [selectedNode, setSelectedNode] = useState(null);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [approvedTemplates, setApprovedTemplates] = useState([]);
+    const [crmStages, setCrmStages] = useState([]);
     const [reactFlowReady, setReactFlowReady] = useState(false);
     const reactFlowRef = useRef(null);
     const didInitialFitViewRef = useRef(false);
@@ -187,11 +188,15 @@ const FlowBuilder = ({ flowId, onBack }) => {
         .map((node) => node.data.variableName)
         .filter(Boolean), [nodes]);
 
-    // Fetch approved WhatsApp templates for Template node selector
+    // Fetch approved WhatsApp templates and CRM stages
     useEffect(() => {
         api.get('/whatsapp/templates?status=APPROVED')
             .then(res => setApprovedTemplates(res.data.templates || []))
             .catch(err => console.error('Failed to fetch approved templates:', err));
+
+        api.get('/api/stages')
+            .then(res => setCrmStages(res.data.stages || []))
+            .catch(err => console.error('Failed to fetch CRM stages:', err));
     }, []);
 
     const nodeTypes = useMemo(() => ({
@@ -924,15 +929,23 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                             onChange={(e) => updateSelectedActionData({ status: e.target.value })}
                                                             className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
                                                         >
-                                                            <option value="New">New</option>
-                                                            <option value="Contacted">Contacted</option>
-                                                            <option value="Interested">Interested</option>
-                                                            <option value="Qualified">Qualified</option>
-                                                            <option value="Proposal Sent">Proposal Sent</option>
-                                                            <option value="Negotiation">Negotiation</option>
-                                                            <option value="Won">Won</option>
-                                                            <option value="Lost">Lost</option>
-                                                            <option value="On Hold">On Hold</option>
+                                                            {crmStages.length > 0 ? (
+                                                                crmStages.map(stage => (
+                                                                    <option key={stage._id} value={stage.name}>{stage.name}</option>
+                                                                ))
+                                                            ) : (
+                                                                <>
+                                                                    <option value="New">New</option>
+                                                                    <option value="Contacted">Contacted</option>
+                                                                    <option value="Interested">Interested</option>
+                                                                    <option value="Qualified">Qualified</option>
+                                                                    <option value="Proposal Sent">Proposal Sent</option>
+                                                                    <option value="Negotiation">Negotiation</option>
+                                                                    <option value="Won">Won</option>
+                                                                    <option value="Lost">Lost</option>
+                                                                    <option value="On Hold">On Hold</option>
+                                                                </>
+                                                            )}
                                                         </select>
                                                     </div>
                                                 </div>
@@ -1003,15 +1016,23 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                     onChange={(e) => updateSelectedActionData({ stage: e.target.value })}
                                                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
                                                 >
-                                                    <option value="New">New</option>
-                                                    <option value="Contacted">Contacted</option>
-                                                    <option value="Interested">Interested</option>
-                                                    <option value="Qualified">Qualified</option>
-                                                    <option value="Proposal Sent">Proposal Sent</option>
-                                                    <option value="Negotiation">Negotiation</option>
-                                                    <option value="Won">Won</option>
-                                                    <option value="Lost">Lost</option>
-                                                    <option value="On Hold">On Hold</option>
+                                                    {crmStages.length > 0 ? (
+                                                        crmStages.map(stage => (
+                                                            <option key={stage._id} value={stage.name}>{stage.name}</option>
+                                                        ))
+                                                    ) : (
+                                                        <>
+                                                            <option value="New">New</option>
+                                                            <option value="Contacted">Contacted</option>
+                                                            <option value="Interested">Interested</option>
+                                                            <option value="Qualified">Qualified</option>
+                                                            <option value="Proposal Sent">Proposal Sent</option>
+                                                            <option value="Negotiation">Negotiation</option>
+                                                            <option value="Won">Won</option>
+                                                            <option value="Lost">Lost</option>
+                                                            <option value="On Hold">On Hold</option>
+                                                        </>
+                                                    )}
                                                 </select>
                                             </div>
                                         )}
