@@ -1606,7 +1606,21 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 const productText = replaceVariables(node.data.text || '', session.variables);
                 const priceInfo = node.data.price ? `\n💰 Price: ${node.data.price}` : '';
                 const productMessage = productText + priceInfo;
-                if (productMessage) {
+                const productImageUrl = node.data.image || '';
+
+                if (productImageUrl) {
+                    // Send product image with name+price as caption
+                    try {
+                        const imgResult = await sendMediaMessage(conversation.phone, 'image', productImageUrl, productMessage, session.userId);
+                        await saveBotMessage(session.conversationId, session.userId, productMessage, 'image', imgResult, { mediaUrl: productImageUrl });
+                    } catch (imgErr) {
+                        console.warn(`[Chatbot] Product image failed, falling back to text:`, imgErr.message);
+                        if (productMessage) {
+                            const fallbackResult = await sendWhatsAppTextMessage(conversation.phone, productMessage, session.userId);
+                            await saveBotMessage(session.conversationId, session.userId, productMessage, 'text', fallbackResult);
+                        }
+                    }
+                } else if (productMessage) {
                     const productResult = await sendWhatsAppTextMessage(conversation.phone, productMessage, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, productMessage, 'text', productResult);
                 }

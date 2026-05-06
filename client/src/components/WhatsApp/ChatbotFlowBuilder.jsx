@@ -497,7 +497,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
             media: { text: 'Check out this!', mediaType: 'image', mediaUrl: '' },
             request_media: { text: 'Please upload your document or photo to continue.', variableName: 'media', acceptedMediaTypes: ['image', 'video', 'document'], attachToLead: false },
             product: { text: 'Premium Backpack', price: '$89.99', image: '' },
-            products: { text: 'Browse our catalog:', productList: [{ name: 'Product 1', price: '$0.00', image: '' }] },
+            products: { text: 'Browse our catalog:', productList: [{ name: 'Product 1', price: '' }] },
             list: { text: 'Choose a category:', buttonText: 'View Options', items: [{ id: 'item_0', title: 'Electronics', description: '' }, { id: 'item_1', title: 'Fashion', description: '' }, { id: 'item_2', title: 'Home & Living', description: '' }] },
             template: { text: 'Send approved template', templateName: '', templateLanguage: 'en' },
             action: { text: 'Action: Create Lead', actionType: 'create_lead', actionData: { source: 'WhatsApp Chatbot', status: 'New' } },
@@ -1229,25 +1229,15 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                             list[i] = { ...list[i], price: e.target.value };
                                                             updateSelectedNodeData({ productList: list });
                                                         }}
-                                                        className="w-24 px-2 py-1.5 border border-slate-200 rounded text-xs shadow-sm focus:ring-1 focus:ring-teal-400 bg-slate-50"
-                                                        placeholder="Price"
-                                                    />
-                                                    <input
-                                                        value={prod.image || ''}
-                                                        onChange={(e) => {
-                                                            const list = [...(selectedNode.data.productList || [])];
-                                                            list[i] = { ...list[i], image: e.target.value };
-                                                            updateSelectedNodeData({ productList: list });
-                                                        }}
-                                                        className="flex-1 px-2 py-1.5 border border-slate-200 rounded text-xs shadow-sm focus:ring-1 focus:ring-teal-400 bg-slate-50"
-                                                        placeholder="Image URL"
+                                                        className="w-36 px-2 py-1.5 border border-slate-200 rounded text-xs shadow-sm focus:ring-1 focus:ring-teal-400 bg-slate-50"
+                                                        placeholder="Price (e.g. $29.99)"
                                                     />
                                                 </div>
                                             </div>
                                         ))}
                                         <button
                                             onClick={() => {
-                                                const list = [...(selectedNode.data.productList || []), { name: '', price: '', image: '' }];
+                                                const list = [...(selectedNode.data.productList || []), { name: '', price: '' }];
                                                 updateSelectedNodeData({ productList: list });
                                             }}
                                             className="w-full py-2 border-2 border-dashed border-teal-300 text-teal-600 hover:bg-teal-50 hover:border-teal-400 rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
