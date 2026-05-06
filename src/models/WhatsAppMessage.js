@@ -54,7 +54,16 @@ const whatsAppMessageSchema = new mongoose.Schema({
         address: String,
         // For reactions
         reactionEmoji: String,
-        reactedMessageId: String
+        reactedMessageId: String,
+        // For Click-to-WhatsApp ad referrals
+        referral: {
+            source_url: String,
+            source_type: String,
+            source_id: String,
+            headline: String,
+            body: String,
+            media_image_url: String
+        }
     },
     status: {
         type: String,
