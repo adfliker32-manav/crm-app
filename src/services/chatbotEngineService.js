@@ -672,6 +672,10 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                 // 3. Catch-all: flow with neither Ad ID nor headline set triggers on any referral
                 metaAdFlows.find(f => !f.triggerAdId && !f.triggerAdHeadline);
 
+            if (!adFlow) {
+                console.log(`⚠️ [Chatbot] CTWA referral received but no meta_ad flow matched — source_id="${adSourceId}", headline="${adHeadline}", active meta_ad flows: ${metaAdFlows.map(f => `"${f.name}" (adId="${f.triggerAdId}", headline="${f.triggerAdHeadline}")`).join(', ') || 'none'}`);
+            }
+
             if (adFlow) {
                 console.log(`🎯 [Chatbot] Meta Ad trigger matched: "${adFlow.name}" (source_id: "${adSourceId}", headline: "${adHeadline}")`);
                 targetFlow = adFlow;

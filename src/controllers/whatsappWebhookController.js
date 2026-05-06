@@ -562,6 +562,7 @@ const extractMessageContent = (message) => {
             body: message.referral.body,
             media_image_url: message.referral.media_image_url
         };
+        console.log(`📢 [CTWA Referral] Ad click detected — source_id="${message.referral.source_id}", headline="${message.referral.headline}", source_type="${message.referral.source_type}"`);
     }
 
     return content;
