@@ -11,8 +11,12 @@ const { buildMetaComponents } = require('../utils/templateVariableResolver');
 // ─── Broadcast rate-limit config ────────────────────────────────────────────
 // 5 leads processed in parallel per batch, one batch every 5 seconds
 // = 5 msgs / 5s = 60 msgs/min — same Meta-safe rate as before, 5× faster wall-clock
-const BATCH_SIZE = 5;
+const BATCH_SIZE    = 5;
 const BATCH_RATE_MS = 5000;
+// Jitter breaks synchronization when multiple tenant broadcasts run in parallel.
+// Without it, all batches complete at the same wall-clock second → burst to Meta API.
+// Random 0–1000ms added to every inter-batch pause.
+const BATCH_JITTER_MS = 1000;
 
 // ─── Job processor ───────────────────────────────────────────────────────────
 let agendaInstance = null;
@@ -32,6 +36,14 @@ const defineBroadcastJob = (agenda) => {
             if (!broadcast.templateId || broadcast.templateId.status !== 'APPROVED') {
                 await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
                     $set: { status: 'FAILED', errorMessage: 'Template missing or not APPROVED by Meta.' }
+                });
+                return;
+            }
+            // Verify template has the fields the Meta API requires before streaming any leads
+            const template = broadcast.templateId;
+            if (!template.name || typeof template.name !== 'string' || !template.name.trim()) {
+                await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                    $set: { status: 'FAILED', errorMessage: 'Template has no name — Meta API would reject every send.' }
                 });
                 return;
             }
@@ -60,7 +72,6 @@ const defineBroadcastJob = (agenda) => {
             }
 
             const user = await User.findById(userId).lean();
-            const template = broadcast.templateId;
 
             let successCount = 0;
             let failCount = 0;
@@ -74,11 +85,12 @@ const defineBroadcastJob = (agenda) => {
                 .cursor();
 
             for await (const lead of cursor) {
-                // Cancellation check at the start of every new batch (zero cost mid-batch)
+                // Cancellation check at the start of every new batch (zero cost mid-batch).
+                // Treat a deleted (null) document the same as CANCELLED — stop immediately.
                 if (batch.length === 0) {
                     const current = await WhatsAppBroadcast.findById(broadcastId).select('status').lean();
-                    if (current?.status === 'CANCELLED') {
-                        console.log(`[Broadcast ${broadcastId}] Cancelled — stopping cursor.`);
+                    if (!current || current.status === 'CANCELLED') {
+                        console.log(`[Broadcast ${broadcastId}] Cancelled or deleted — stopping cursor.`);
                         await cursor.close();
                         return;
                     }
@@ -136,9 +148,12 @@ async function _processBatch(leads, template, user, userId, broadcastId) {
     const success = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
     const failed  = results.length - success;
 
-    // Pace: wait out the rest of BATCH_RATE_MS so we don't exceed Meta's rate limits
-    const elapsed = Date.now() - batchStart;
-    const wait = BATCH_RATE_MS - elapsed;
+    // Pace: wait out the rest of BATCH_RATE_MS, plus random jitter so that concurrent
+    // tenant broadcasts don't all fire their next batch at the same millisecond.
+    const elapsed  = Date.now() - batchStart;
+    const baseWait = BATCH_RATE_MS - elapsed;
+    const jitter   = Math.floor(Math.random() * BATCH_JITTER_MS);
+    const wait     = Math.max(0, baseWait) + jitter;
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
 
     return { success, failed };

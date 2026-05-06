@@ -194,7 +194,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
             .then(res => setApprovedTemplates(res.data.templates || []))
             .catch(err => console.error('Failed to fetch approved templates:', err));
 
-        api.get('/api/stages')
+        api.get('/stages')
             .then(res => setCrmStages(res.data.stages || []))
             .catch(err => console.error('Failed to fetch CRM stages:', err));
     }, []);
@@ -1012,7 +1012,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                             <div>
                                                 <label className="block text-xs font-bold text-slate-600 mb-1">Move Lead to Stage</label>
                                                 <select
-                                                    value={selectedNode.data.actionData?.stage || 'Qualified'}
+                                                    value={selectedNode.data.actionData?.stage || crmStages[0]?.name || ''}
                                                     onChange={(e) => updateSelectedActionData({ stage: e.target.value })}
                                                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
                                                 >
@@ -1021,17 +1021,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                             <option key={stage._id} value={stage.name}>{stage.name}</option>
                                                         ))
                                                     ) : (
-                                                        <>
-                                                            <option value="New">New</option>
-                                                            <option value="Contacted">Contacted</option>
-                                                            <option value="Interested">Interested</option>
-                                                            <option value="Qualified">Qualified</option>
-                                                            <option value="Proposal Sent">Proposal Sent</option>
-                                                            <option value="Negotiation">Negotiation</option>
-                                                            <option value="Won">Won</option>
-                                                            <option value="Lost">Lost</option>
-                                                            <option value="On Hold">On Hold</option>
-                                                        </>
+                                                        <option value="">Loading stages...</option>
                                                     )}
                                                 </select>
                                             </div>
