@@ -343,24 +343,31 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
             { upsert: true, new: true }
         );
 
-        await WhatsAppMessage.create({
-            conversationId:   conversation._id,
-            userId,
-            broadcastId,
-            waMessageId,
-            direction:        'outbound',
-            type:             'template',
-            content:          { text: `[Broadcast] Template: ${templateName}`, templateName },
-            status:           'sent',
-            timestamp:        new Date(),
-            isAutomated:      true,
-            automationSource: 'broadcast'
-        });
+        // Use upsert so if another code path already saved this waMessageId (without broadcastId),
+        // we patch it instead of silently dropping the create (E11000).
+        await WhatsAppMessage.findOneAndUpdate(
+            { waMessageId },
+            {
+                $setOnInsert: {
+                    conversationId:   conversation._id,
+                    userId,
+                    direction:        'outbound',
+                    type:             'template',
+                    content:          { text: `[Broadcast] Template: ${templateName}`, templateName },
+                    status:           'sent',
+                    timestamp:        new Date(),
+                    isAutomated:      true,
+                },
+                $set: {
+                    broadcastId,
+                    automationSource: 'broadcast'
+                }
+            },
+            { upsert: true, new: true }
+        );
 
     } catch (syncErr) {
-        if (syncErr.code !== 11000) {
-            console.error(`[DB Sync] Failed for ${lead.phone}:`, syncErr.message);
-        }
+        console.error(`[DB Sync] Failed for ${lead.phone}:`, syncErr.message);
     }
 }
 

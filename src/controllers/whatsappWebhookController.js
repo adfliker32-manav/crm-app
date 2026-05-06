@@ -468,7 +468,7 @@ const processStatusUpdate = async (status, userId) => {
                     { $inc: { [`stats.${statusType}`]: 1 } }
                 );
             } catch (bcErr) {
-                debug(`⚠️ Could not update broadcast stats: ${bcErr.message}`);
+                console.error(`⚠️ Could not update broadcast stats for broadcast ${updatedMsg.broadcastId}:`, bcErr.message);
             }
         }
 
