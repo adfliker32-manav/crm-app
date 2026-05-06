@@ -195,7 +195,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
             .catch(err => console.error('Failed to fetch approved templates:', err));
 
         api.get('/stages')
-            .then(res => setCrmStages(res.data.stages || []))
+            .then(res => setCrmStages(res.data || []))
             .catch(err => console.error('Failed to fetch CRM stages:', err));
     }, []);
 
