@@ -168,8 +168,51 @@ mongoose.connect(MONGO_URI, {
         console.warn('⚠️  REDIS_URL not set — BullMQ Broadcast Worker will not start.');
         console.warn('   Add REDIS_URL to .env to enable broadcast queue.');
       } else {
-        const { startBroadcastWorker } = require('./src/services/broadcastQueueService');
+        const { startBroadcastWorker, getBroadcastQueue } = require('./src/services/broadcastQueueService');
         startBroadcastWorker();
+
+        // ── Orphan recovery ────────────────────────────────────────────────────
+        // On every startup, find broadcasts whose BullMQ job was lost (e.g. Redis
+        // restart wiped the queue). Re-queue them so they are not stuck forever.
+        // This makes free-tier ephemeral Redis survivable.
+        try {
+          const WhatsAppBroadcast = require('./src/models/WhatsAppBroadcast');
+          const queue = getBroadcastQueue();
+          const now   = new Date();
+
+          // PROCESSING: job was running or waiting — re-queue immediately
+          const stuck = await WhatsAppBroadcast.find({ status: 'PROCESSING' }).lean();
+          for (const bc of stuck) {
+            const existingJob = bc.jobId ? await queue.getJob(bc.jobId) : null;
+            if (!existingJob) {
+              const job = await queue.add('process-broadcast', {
+                broadcastId: bc._id.toString(),
+                userId:      bc.userId.toString(),
+                tenantId:    bc.userId.toString()
+              });
+              await WhatsAppBroadcast.findByIdAndUpdate(bc._id, { $set: { jobId: job.id } });
+              console.log(`[Orphan Recovery] Re-queued PROCESSING broadcast ${bc._id}`);
+            }
+          }
+
+          // SCHEDULED: job was delayed — re-add with remaining delay (or immediately if past due)
+          const scheduled = await WhatsAppBroadcast.find({ status: 'SCHEDULED' }).lean();
+          for (const bc of scheduled) {
+            const existingJob = bc.jobId ? await queue.getJob(bc.jobId) : null;
+            if (!existingJob) {
+              const delayMs = bc.scheduledFor ? Math.max(0, new Date(bc.scheduledFor) - now) : 0;
+              const job = await queue.add('process-broadcast', {
+                broadcastId: bc._id.toString(),
+                userId:      bc.userId.toString(),
+                tenantId:    bc.userId.toString()
+              }, { delay: delayMs });
+              await WhatsAppBroadcast.findByIdAndUpdate(bc._id, { $set: { jobId: job.id } });
+              console.log(`[Orphan Recovery] Re-queued SCHEDULED broadcast ${bc._id} (delay: ${delayMs}ms)`);
+            }
+          }
+        } catch (recoveryErr) {
+          console.error('⚠️ Orphan broadcast recovery failed (non-critical):', recoveryErr.message);
+        }
       }
     } catch (error) {
       console.error('⚠️ Failed to start BullMQ Broadcast Worker:', error.message);
