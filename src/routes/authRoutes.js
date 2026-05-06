@@ -28,7 +28,10 @@ router.put('/update-agent/:id', validateObjectId({ params: ['id'] }), authMiddle
 router.put('/profile', authMiddleware, authController.updateProfile);
 // Billing removed
 
-// 5. Public
+// 5. Accept Terms & Conditions
+router.post('/accept-terms', authMiddleware, authController.acceptTerms);
+
+// 6. Public
 router.get('/app-name', authController.getAppName);
 
 module.exports = router;

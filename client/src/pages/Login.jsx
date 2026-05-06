@@ -196,6 +196,17 @@ const Login = () => {
                 and we’ll help you get started.
               </div>
 
+              <div className="text-center text-xs text-gray-400 mt-2">
+                By signing in you agree to our{" "}
+                <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-green-600 underline">
+                  Terms & Conditions
+                </a>{" "}
+                and{" "}
+                <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-green-600 underline">
+                  Privacy Policy
+                </a>
+              </div>
+
             </form>
           </div>
         </div>

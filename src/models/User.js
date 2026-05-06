@@ -91,6 +91,12 @@ const userSchema = new mongoose.Schema({
     },
 
 
+    // Legal consent — null = not yet accepted
+    termsAcceptedAt: {
+        type: Date,
+        default: null
+    },
+
     // ✅ APPROVAL-BASED ACCESS CONTROL (Replaces all billing/trial logic)
     is_active: {
         type: Boolean,

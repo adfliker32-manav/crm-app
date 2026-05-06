@@ -32,6 +32,8 @@ const SuperAdmin = lazy(() => import('./pages/SuperAdmin'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Automations = lazy(() => import('./pages/Automations'));
+const TermsAndConditions = lazy(() => import('./pages/TermsAndConditions'));
+const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -48,6 +50,8 @@ function App() {
                 <Suspense fallback={<GlobalLoader />}>
                   <Routes>
                     <Route path="/login" element={<Login />} />
+                    <Route path="/terms" element={<TermsAndConditions />} />
+                    <Route path="/privacy" element={<PrivacyPolicy />} />
 
                     <Route element={<ProtectedRoute />}>
                       <Route path="/super-admin" element={<SuperAdmin />} />

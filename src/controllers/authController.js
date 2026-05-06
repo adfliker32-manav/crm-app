@@ -46,14 +46,16 @@ const buildLoginUserResponse = (user, workspace) => ({
     is_active: user.is_active,
     approved_by_admin: user.approved_by_admin,
     status: user.status,
-    activeModules: workspace?.activeModules || []
+    activeModules: workspace?.activeModules || [],
+    termsAccepted: !!user.termsAcceptedAt
 });
 
 const buildGoogleUserResponse = (user, workspace) => ({
     ...buildBaseUserResponse(user),
     subscriptionStatus: workspace?.subscriptionStatus || 'Trial',
     planExpiryDate: workspace?.planExpiryDate,
-    activeModules: workspace?.activeModules || []
+    activeModules: workspace?.activeModules || [],
+    termsAccepted: !!user.termsAcceptedAt
 });
 
 const getJwtSecret = () => process.env.JWT_SECRET;
@@ -456,5 +458,17 @@ exports.getAppName = async (req, res) => {
     } catch (err) {
         console.error(err);
         res.json({ success: true, appName: 'Adfliker' });
+    }
+};
+
+// 9. ACCEPT TERMS & CONDITIONS (Protected)
+exports.acceptTerms = async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        await User.findByIdAndUpdate(userId, { $set: { termsAcceptedAt: new Date() } });
+        res.json({ success: true, termsAccepted: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
     }
 };
