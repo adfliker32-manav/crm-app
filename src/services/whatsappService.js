@@ -452,7 +452,6 @@ const uploadMediaForTemplate = async (userId, fileBuffer, mimeType, fileName) =>
 };
 
 const FormData = require('form-data');
-const fs = require('fs');
 
 const uploadMediaForSending = async (userId, filePath, mimeType, fileName) => {
     try {
