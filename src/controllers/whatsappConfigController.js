@@ -1,8 +1,10 @@
 const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
+const WorkspaceSettings = require('../models/WorkspaceSettings');
 const crypto = require('crypto');
 const axios = require('axios');
 const { encryptToken, decryptToken } = require('../utils/encryptionUtils');
+const { extractCountryCodeFromDisplayPhone } = require('../utils/phoneUtils');
 
 // Get WhatsApp configuration
 exports.getWhatsAppConfig = async (req, res) => {
@@ -69,7 +71,35 @@ exports.updateWhatsAppConfig = async (req, res) => {
             { $set: updateData },
             { new: true, upsert: true, select: 'whatsapp' }
         );
-        
+
+        // Auto-detect country code from the registered WhatsApp phone number.
+        // Call Meta API to get display_phone_number (e.g. "+971 50 123 4567"),
+        // extract the country code, and save it so phone normalization works for
+        // any country without manual configuration.
+        try {
+            const metaRes = await axios.get(
+                `https://graph.facebook.com/v21.0/${waPhoneNumberId.trim()}`,
+                {
+                    params: { fields: 'display_phone_number' },
+                    headers: { Authorization: `Bearer ${waAccessToken}` },
+                    timeout: 8000
+                }
+            );
+            const displayPhone = metaRes.data?.display_phone_number;
+            const detectedCode = extractCountryCodeFromDisplayPhone(displayPhone);
+            if (detectedCode) {
+                await WorkspaceSettings.findOneAndUpdate(
+                    { userId: ownerId },
+                    { $set: { defaultCountryCode: detectedCode } },
+                    { upsert: true }
+                );
+                console.log(`✅ Auto-detected country code '${detectedCode}' from WhatsApp number ${displayPhone} for tenant ${ownerId}`);
+            }
+        } catch (detectErr) {
+            // Non-fatal — credentials are saved, country code detection just failed
+            console.warn(`⚠️ Could not auto-detect country code for tenant ${ownerId}:`, detectErr.message);
+        }
+
         res.json({
             success: true,
             message: 'WhatsApp configuration updated successfully',

@@ -1,1 +1,6 @@
-require('dotenv').config(); const mongoose = require('mongoose'); mongoose.connect(process.env.MONGO_URI).then(async () => { const msgs = await mongoose.connection.db.collection('whatsappmessages').find({}).sort({_id:-1}).limit(5).toArray(); msgs.forEach(m => console.log('Msg:', m.content?.text, '| userId:', m?.userId, '| ts:', m.timestamp)); process.exit(0); });
+require('dotenv').config();
+require('mongoose').connect(process.env.MONGO_URI).then(async () => {
+    const msg = await require('./src/models/WhatsAppMessage').findOne({ waMessageId: 'wamid.HBgMOTE5NDI3MTc3NjExFQIAERgSREZBOTgwNUU1MDU4N0I0RURBAA==' });
+    console.log('LATEST_BROADCAST_MSG:', JSON.stringify(msg, null, 2));
+    process.exit(0);
+});

@@ -34,7 +34,11 @@ exports.verifyWebhook = (req, res) => {
     const challenge = req.query['hub.challenge'];
 
     // Get verify token from environment (support both names)
-    const VERIFY_TOKEN = process.env.WA_WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN || 'whatsapp_webhook_verify_token';
+    const VERIFY_TOKEN = process.env.WA_WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN;
+    if (!VERIFY_TOKEN) {
+        console.error('❌ WA_WEBHOOK_VERIFY_TOKEN not set in environment. Rejecting verification.');
+        return res.sendStatus(403);
+    }
 
     debug('🔍 Webhook verification request received');
     debug(`   hub.mode      = ${mode}`);
@@ -151,6 +155,75 @@ exports.handleWebhook = async (req, res) => {
     });
 };
 
+// Handle Meta's template approval / rejection webhook event.
+// Meta sends this when a submitted template changes status (APPROVED, REJECTED, DISABLED, etc.).
+const processTemplateStatusUpdate = async (wabaId, value) => {
+    try {
+        const event = value?.event;           // 'APPROVED', 'REJECTED', 'DISABLED', 'PAUSED'
+        const metaTemplateId = value?.message_template_id?.toString();
+        const templateName = value?.message_template_name;
+        const reason = value?.reason || null;
+
+        if (!metaTemplateId || !event) {
+            console.warn('⚠️ [TemplateWebhook] Missing template ID or event in payload', value);
+            return;
+        }
+
+        // Map Meta event names to our DB status values
+        const statusMap = {
+            APPROVED: 'APPROVED',
+            REJECTED: 'REJECTED',
+            DISABLED: 'DISABLED',
+            PAUSED: 'PAUSED',
+            PENDING_DELETION: 'DISABLED'
+        };
+        const newStatus = statusMap[event];
+        if (!newStatus) {
+            console.log(`ℹ️ [TemplateWebhook] Unhandled event type "${event}" for template ${templateName} — ignoring`);
+            return;
+        }
+
+        const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+        const { emitToUser } = require('../services/socketService');
+
+        // Find template by metaTemplateId (set when it was submitted)
+        // Also try by name as fallback (Meta sometimes omits the ID on first approval)
+        let template = await WhatsAppTemplate.findOne({ metaTemplateId });
+        if (!template && templateName) {
+            template = await WhatsAppTemplate.findOne({ name: templateName });
+        }
+
+        if (!template) {
+            console.warn(`⚠️ [TemplateWebhook] Template not found: id=${metaTemplateId} name=${templateName}`);
+            return;
+        }
+
+        const prevStatus = template.status;
+        template.status = newStatus;
+        if (reason) template.rejectionReason = reason;
+        if (event === 'APPROVED') template.rejectionReason = null;
+        await template.save();
+
+        console.log(`✅ [TemplateWebhook] Template "${templateName}" status: ${prevStatus} → ${newStatus}${reason ? ` (reason: ${reason})` : ''}`);
+
+        // Notify the tenant in real-time via socket
+        const notifMessage = event === 'APPROVED'
+            ? `✅ WhatsApp template "${templateName}" has been approved and is now active.`
+            : `⚠️ WhatsApp template "${templateName}" was ${newStatus.toLowerCase()}${reason ? `: ${reason}` : ''}.`;
+
+        emitToUser(template.userId.toString(), 'notification:agent', {
+            type: 'template_status_update',
+            templateId: template._id,
+            templateName,
+            status: newStatus,
+            message: notifMessage,
+            timestamp: new Date()
+        });
+    } catch (err) {
+        console.error('❌ [TemplateWebhook] Error processing template status update:', err.message);
+    }
+};
+
 // Process a single entry from the webhook
 const processEntry = async (entry) => {
     debug(`📂 Processing entry ID: ${entry.id}`);
@@ -159,6 +232,14 @@ const processEntry = async (entry) => {
 
     for (const change of changes) {
         debug(`   Change field: "${change.field}"`);
+
+        // Auto-update template status when Meta approves or rejects a submitted template.
+        // Without this, templates stay PENDING forever and the automated WhatsApp send never fires.
+        if (change.field === 'message_template_status_update') {
+            await processTemplateStatusUpdate(entry.id, change.value);
+            continue;
+        }
+
         if (change.field === 'messages') {
             const value = change.value;
             const phoneNumberId = value.metadata?.phone_number_id;

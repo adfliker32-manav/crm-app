@@ -52,6 +52,14 @@ const workspaceSettingsSchema = new mongoose.Schema({
         default: 0 // Optional fixed fee addition
     },
 
+    // 🌍 Auto-detected from the registered WhatsApp phone number when credentials are saved.
+    // Used to normalize local-format numbers (e.g. "501234567" → "971501234567" for UAE).
+    // e.g. '971' = UAE, '1' = USA, '44' = UK, '91' = India — null = not yet detected
+    defaultCountryCode: {
+        type: String,
+        default: null
+    },
+
     // 🎛️ WORKSPACE-LEVEL FEATURE FLAGS
     planFeatures: {
         whatsappAutomation:  { type: Boolean, default: true },

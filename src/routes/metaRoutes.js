@@ -1,13 +1,23 @@
 // Meta Lead Sync Routes
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const metaController = require('../controllers/metaController');
 const metaWebhookController = require('../controllers/metaWebhookController');
 
+// DDoS protection — Meta retries on 5xx not 429, so 429 safely drops floods
+const metaWebhookLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests' }
+});
+
 // Webhook routes (NO AUTH - Facebook needs to access these)
 router.get('/webhook', metaWebhookController.verifyWebhook);
-router.post('/webhook', metaWebhookController.handleLeadWebhook);
+router.post('/webhook', metaWebhookLimiter, metaWebhookController.handleLeadWebhook);
 
 // OAuth routes
 router.get('/auth', authMiddleware, metaController.getAuthUrl);

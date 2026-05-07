@@ -258,7 +258,7 @@ async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
 async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null) {
     try {
         // Single workspace query covering both planFeatures and customFieldDefinitions
-        const workspace = await WorkspaceSettings.findOne({ userId }).select('planFeatures customFieldDefinitions').lean();
+        const workspace = await WorkspaceSettings.findOne({ userId }).select('planFeatures customFieldDefinitions defaultCountryCode').lean();
         const leadLimit = workspace?.planFeatures?.leadLimit;
         if (leadLimit != null) {
             const currentCount = await Lead.countDocuments({ userId });
@@ -274,7 +274,9 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             }
         }
 
-        const cleanPhone = leadDetails.phone?.trim() || null;
+        // Normalize phone to WhatsApp international format using workspace's country code
+        const { normalizePhoneForWhatsApp } = require('../utils/phoneUtils');
+        const cleanPhone = normalizePhoneForWhatsApp(leadDetails.phone, workspace?.defaultCountryCode || null);
         const cleanEmail = leadDetails.email?.trim() || null;
 
         // Duplicate check by phone or email

@@ -288,7 +288,7 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
             templateData
         );
 
-        const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents);
+        const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language || 'en_US');
         if (!result || result.success === false) return false;
 
         // ── Mark as sent BEFORE DB sync (atomic pipeline) ─────────────────────

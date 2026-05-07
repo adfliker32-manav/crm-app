@@ -214,19 +214,53 @@ const WhatsAppSettings = () => {
                         </div>
                     )}
 
+                    {/* Step-by-step guide */}
+                    <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-6">
+                        <p className="text-sm font-bold text-blue-800 mb-3 flex items-center gap-2">
+                            <i className="fa-solid fa-circle-info"></i> Where to find your credentials
+                        </p>
+                        <ol className="space-y-2 text-sm text-blue-700">
+                            <li className="flex gap-2">
+                                <span className="font-bold shrink-0">1.</span>
+                                <span>Go to <span className="font-semibold">business.facebook.com</span> → Business Settings → <span className="font-semibold">WhatsApp Accounts</span> → click your account → copy the <span className="font-semibold">Account ID</span> (Business Account ID)</span>
+                            </li>
+                            <li className="flex gap-2">
+                                <span className="font-bold shrink-0">2.</span>
+                                <span>Still in WhatsApp Accounts → click <span className="font-semibold">Phone Numbers</span> → click your number → copy the <span className="font-semibold">Phone Number ID</span></span>
+                            </li>
+                            <li className="flex gap-2">
+                                <span className="font-bold shrink-0">3.</span>
+                                <span>For the <span className="font-semibold">Access Token</span> (permanent): Business Settings → <span className="font-semibold">Users → System Users</span> → create a System User → click <span className="font-semibold">Generate Token</span> → enable <span className="font-semibold">whatsapp_business_messaging</span> permission → copy token</span>
+                            </li>
+                        </ol>
+                        <p className="text-xs text-blue-500 mt-3 flex items-center gap-1">
+                            <i className="fa-solid fa-triangle-exclamation"></i>
+                            Use a <strong>System User token</strong> — it never expires. Temporary tokens from developers.facebook.com expire every 60 days.
+                        </p>
+                    </div>
+
                     <form onSubmit={handleSaveConfig} className="space-y-4 max-w-2xl">
                         <div>
-                            <label className="block text-sm font-semibold text-slate-700 mb-1">Business Account ID <span className="text-slate-400 font-normal">(Optional)</span></label>
+                            <label className="block text-sm font-semibold text-slate-700 mb-1">
+                                Business Account ID <span className="text-slate-400 font-normal">(Optional)</span>
+                            </label>
+                            <p className="text-xs text-slate-400 mb-1.5">business.facebook.com → Business Settings → WhatsApp Accounts → your account ID</p>
                             <input type="text" name="waBusinessId" value={config.waBusinessId} onChange={handleConfigChange} placeholder="123456789012345" className="w-full p-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono text-sm" />
                         </div>
                         <div>
-                            <label className="block text-sm font-semibold text-slate-700 mb-1">Phone Number ID <span className="text-red-500">*</span></label>
+                            <label className="block text-sm font-semibold text-slate-700 mb-1">
+                                Phone Number ID <span className="text-red-500">*</span>
+                            </label>
+                            <p className="text-xs text-slate-400 mb-1.5">WhatsApp Accounts → Phone Numbers → click your number → Phone Number ID</p>
                             <input type="text" name="waPhoneNumberId" value={config.waPhoneNumberId} onChange={handleConfigChange} placeholder="123456789012345" className="w-full p-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono text-sm" required />
                         </div>
                         <div>
-                            <label className="block text-sm font-semibold text-slate-700 mb-1">Access Token <span className="text-red-500">*</span></label>
+                            <label className="block text-sm font-semibold text-slate-700 mb-1">
+                                Access Token <span className="text-red-500">*</span>
+                            </label>
+                            <p className="text-xs text-slate-400 mb-1.5">Business Settings → Users → System Users → Generate Token → whatsapp_business_messaging permission</p>
                             <div className="relative">
-                                <input type={showToken ? 'text' : 'password'} name="waAccessToken" value={config.waAccessToken} onChange={handleConfigChange} placeholder={config.isConfigured ? "Enter new token to update" : "Enter access token"} className="w-full p-2.5 pr-12 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono text-sm" required={!config.isConfigured} />
+                                <input type={showToken ? 'text' : 'password'} name="waAccessToken" value={config.waAccessToken} onChange={handleConfigChange} placeholder={config.isConfigured ? "Enter new token to update" : "Paste your permanent system user token"} className="w-full p-2.5 pr-12 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono text-sm" required={!config.isConfigured} />
                                 <button type="button" onClick={() => setShowToken(!showToken)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><i className={`fa-solid ${showToken ? 'fa-eye-slash' : 'fa-eye'}`}></i></button>
                             </div>
                         </div>
@@ -315,11 +349,16 @@ const WhatsAppSettings = () => {
                                     className="p-1.5 border border-slate-200 rounded-lg text-xs bg-slate-50 font-medium outline-none cursor-pointer"
                                 >
                                     <option value={Intl.DateTimeFormat().resolvedOptions().timeZone}>Local Time ({Intl.DateTimeFormat().resolvedOptions().timeZone})</option>
-                                    <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+                                    <option value="Asia/Dubai">Asia/Dubai (UAE — GST +4)</option>
+                                    <option value="Asia/Riyadh">Asia/Riyadh (Saudi — AST +3)</option>
+                                    <option value="Asia/Kolkata">Asia/Kolkata (India — IST +5:30)</option>
                                     <option value="UTC">UTC</option>
-                                    <option value="America/New_York">America/New_York (EST)</option>
+                                    <option value="America/New_York">America/New_York (EST -5)</option>
+                                    <option value="America/Los_Angeles">America/Los_Angeles (PST -8)</option>
                                     <option value="Europe/London">Europe/London (GMT)</option>
-                                    <option value="Australia/Sydney">Australia/Sydney (AEST)</option>
+                                    <option value="Europe/Paris">Europe/Paris (CET +1)</option>
+                                    <option value="Australia/Sydney">Australia/Sydney (AEST +11)</option>
+                                    <option value="Asia/Singapore">Asia/Singapore (SGT +8)</option>
                                 </select>
                             </div>
                         </div>

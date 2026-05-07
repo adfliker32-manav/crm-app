@@ -416,12 +416,10 @@ exports.startConversation = async (req, res) => {
             return res.status(400).json({ message: 'Template name or message text is required' });
         }
 
-        // Normalize phone number — ensure country code is present for Indian numbers
-        let normalizedPhone = phone.replace(/[^0-9]/g, '');
-        // If only 10 digits (no country code), prepend India code
-        if (normalizedPhone.length === 10) {
-            normalizedPhone = '91' + normalizedPhone;
-        }
+        // Normalize phone — uses workspace's defaultCountryCode (set in Settings → Workspace)
+        const { normalizePhoneForWhatsApp, getWorkspaceCountryCode } = require('../utils/phoneUtils');
+        const countryCode = await getWorkspaceCountryCode(userId);
+        const normalizedPhone = normalizePhoneForWhatsApp(phone, countryCode);
 
         const companyUserIds = await getCompanyUserIds(userId);
         const phoneLast10 = normalizedPhone.slice(-10);
