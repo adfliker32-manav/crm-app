@@ -17,7 +17,8 @@ const Settings = () => {
     const canAccessSettings = canManageTeam || user?.permissions?.accessSettings === true;
 
     // Read tab from query param if present
-    const initialTab = searchParams.get('tab') || 'profile';
+    const initialTab = searchParams.get('tab') || 
+        (searchParams.get('meta_code') || searchParams.get('meta_success') || searchParams.get('meta_error') ? 'meta' : 'profile');
     const [activeTab, setActiveTab] = useState(initialTab);
     const [name, setName] = useState('');
     const [password, setPassword] = useState('');
