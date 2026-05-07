@@ -445,6 +445,7 @@ exports.startConversation = async (req, res) => {
                 waContactId: normalizedPhone,
                 phone: normalizedPhone,
                 leadId: leadId || null,
+                initiatedBy: 'user',
                 metadata: {
                     firstMessageAt: new Date()
                 }

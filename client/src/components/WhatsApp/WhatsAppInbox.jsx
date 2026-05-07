@@ -210,7 +210,12 @@ const WhatsAppInbox = () => {
             const convId = typeof conversationId === 'string' ? conversationId : String(conversationId);
             setConversations(prev => {
                 const updated = prev.map(c => c._id === convId ? { ...c, ...updates } : c);
-                return [...updated].sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
+                // Only re-sort on new message (lastMessageAt changed); skip for read-status
+                // updates so the chat doesn't jump to the top when you open it
+                if (updates.lastMessageAt) {
+                    return [...updated].sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
+                }
+                return updated;
             });
             const currentChat = selectedChatRef.current;
             if (currentChat && currentChat._id === convId) {
@@ -675,9 +680,11 @@ const WhatsAppInbox = () => {
         }
     };
 
-    const filteredConversations = filter === 'unread'
-        ? conversations.filter(c => c.unreadCount > 0)
-        : conversations;
+    const filteredConversations =
+        filter === 'unread' ? conversations.filter(c => c.unreadCount > 0) :
+        filter === 'user_initiated' ? conversations.filter(c => c.initiatedBy === 'user') :
+        filter === 'customer_initiated' ? conversations.filter(c => c.initiatedBy === 'customer') :
+        conversations;
 
     const totalUnread = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
 
@@ -693,8 +700,8 @@ const WhatsAppInbox = () => {
     }
 
     return (
-        <div className="h-full bg-[#f0f2f5] box-border p-2 sm:p-3 md:p-4">
-            <div className="flex h-full w-full max-w-[1600px] mx-auto overflow-hidden rounded-2xl border border-[#e9edef] bg-white shadow-xl">
+        <div className="h-full bg-[#f0f2f5]">
+            <div className="flex h-full w-full overflow-hidden bg-white">
             {/* ═══════════ LEFT SIDEBAR ═══════════ */}
             <div className="w-[380px] bg-white border-r border-[#e9edef] flex flex-col flex-shrink-0">
                 {/* Sidebar Header */}
@@ -736,21 +743,24 @@ const WhatsAppInbox = () => {
                 </div>
 
                 {/* Filter Tabs */}
-                <div className="px-3 pb-2 flex gap-2">
+                <div className="px-3 pb-2 flex gap-1.5 flex-wrap">
                     {[
                         { id: 'all', label: 'All' },
                         { id: 'unread', label: 'Unread', count: totalUnread },
+                        { id: 'user_initiated', label: 'We Started', icon: 'fa-solid fa-user' },
+                        { id: 'customer_initiated', label: 'They Started', icon: 'fa-solid fa-comment' },
                         { id: 'archived', label: 'Archived' }
                     ].map(tab => (
                         <button
                             key={tab.id}
                             onClick={() => setFilter(tab.id)}
-                            className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filter === tab.id
+                            className={`px-2.5 py-1 rounded-full text-xs font-medium transition flex items-center gap-1 ${filter === tab.id
                                 ? 'bg-[#e7fce3] text-[#008069]'
                                 : 'bg-[#f0f2f5] text-[#54656f] hover:bg-slate-200'}`}
                         >
+                            {tab.icon && <i className={`${tab.icon} text-[9px]`}></i>}
                             {tab.label}
-                            {tab.count > 0 && <span className="ml-1 bg-[#25d366] text-white text-[9px] px-1.5 py-0.5 rounded-full">{tab.count}</span>}
+                            {tab.count > 0 && <span className="ml-0.5 bg-[#25d366] text-white text-[9px] px-1.5 py-0.5 rounded-full">{tab.count}</span>}
                         </button>
                     ))}
                 </div>
@@ -800,7 +810,13 @@ const WhatsAppInbox = () => {
                     {filteredConversations.length === 0 && (
                         <div className="p-10 text-center">
                             <i className="fa-brands fa-whatsapp text-6xl text-[#e9edef] mb-4"></i>
-                            <p className="text-sm text-[#8696a0]">{filter === 'unread' ? 'No unread messages' : filter === 'archived' ? 'No archived chats' : 'No conversations yet'}</p>
+                            <p className="text-sm text-[#8696a0]">
+                                {filter === 'unread' ? 'No unread messages' :
+                                 filter === 'archived' ? 'No archived chats' :
+                                 filter === 'user_initiated' ? 'No chats you started' :
+                                 filter === 'customer_initiated' ? 'No chats started by customers' :
+                                 'No conversations yet'}
+                            </p>
                             <button onClick={() => setShowNewChatModal(true)} className="mt-3 text-[#00a884] text-sm font-medium hover:underline">
                                 Start a new chat
                             </button>

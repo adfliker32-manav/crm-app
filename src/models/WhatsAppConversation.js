@@ -72,6 +72,11 @@ const whatsAppConversationSchema = new mongoose.Schema({
         ref: 'User',
         default: null
     },
+    initiatedBy: {
+        type: String,
+        enum: ['user', 'customer'],
+        default: null
+    },
     metadata: {
         firstMessageAt: Date,
         totalMessages: { type: Number, default: 0 },

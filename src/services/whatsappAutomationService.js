@@ -40,6 +40,7 @@ const syncAutomatedSendToConversation = async (lead, userId, templateName, waMes
                 displayName: lead.name,
                 status: 'active',
                 unreadCount: 0,
+                initiatedBy: 'user',
                 metadata: { totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
             });
             await conversation.save();

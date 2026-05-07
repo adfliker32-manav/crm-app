@@ -379,6 +379,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                 waContactId: upsertContactId,
                 phone: from,
                 leadId: lead?._id || null,
+                initiatedBy: 'customer',
                 'metadata.firstMessageAt': timestamp
             },
             $set: {
