@@ -310,7 +310,7 @@ const getPages = async (req, res) => {
         const meta = await checkAndRefreshToken(ownerId, config.meta);
 
         const response = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
-            params: { access_token: meta.metaAccessToken, fields: 'id,name,access_token' },
+            params: { access_token: meta.metaAccessToken, fields: 'id,name,access_token', limit: 100 },
             timeout: META_API_TIMEOUT
         });
 
