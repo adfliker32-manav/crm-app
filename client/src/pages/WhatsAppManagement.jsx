@@ -50,7 +50,7 @@ const WhatsAppManagement = () => {
     };
 
     return (
-        <div className={`${activeTab === 'chatbot' && editingFlowId ? 'h-screen' : 'h-[calc(100vh-100px)]'} flex flex-col bg-[#f0f2f5] overflow-hidden`}>
+        <div className="-mx-4 md:-mx-6 -my-4 md:-my-6 h-screen flex flex-col bg-[#f0f2f5] overflow-hidden">
             {/* Premium Vibrant Header */}
             {!(activeTab === 'chatbot' && editingFlowId) && (
                 <div className="bg-gradient-to-r from-[#008069] via-[#00a884] to-[#05cd99] text-white shadow-xl z-20 relative overflow-hidden">
