@@ -121,7 +121,7 @@ const getAuthUrl = async (req, res) => {
             userId: req.tenantId
         })).toString('base64');
 
-        // Required permissions for Lead Ads
+        // Required permissions for Lead Ads (Fallback if Config ID is not used)
         const scope = [
             'pages_show_list',
             'pages_read_engagement',
@@ -130,12 +130,18 @@ const getAuthUrl = async (req, res) => {
             'ads_management'
         ].join(',');
 
-        const authUrl = `https://www.facebook.com/v21.0/dialog/oauth?` +
+        let authUrl = `https://www.facebook.com/v21.0/dialog/oauth?` +
             `client_id=${appId}` +
             `&redirect_uri=${encodeURIComponent(redirectUri)}` +
             `&state=${state}` +
-            `&scope=${scope}` +
             `&response_type=code`;
+
+        const configId = process.env.META_CONFIG_ID;
+        if (configId && configId !== 'YOUR_META_CONFIG_ID') {
+            authUrl += `&config_id=${configId}`;
+        } else {
+            authUrl += `&scope=${scope}`;
+        }
 
         res.json({ success: true, authUrl });
     } catch (error) {
