@@ -279,7 +279,8 @@ const WhatsAppBroadcasts = () => {
     const csvContactCount = buildCsvContacts().length;
 
     return (
-        <div className="p-6 max-w-7xl mx-auto">
+        <div className="h-full overflow-y-auto pb-12">
+            <div className="p-6 max-w-7xl mx-auto">
 
             {/* ── Header ─────────────────────────────────────────────────────── */}
             <div className="flex items-center justify-between mb-8">
@@ -793,6 +794,7 @@ const WhatsAppBroadcasts = () => {
                     </div>
                 </div>
             )}
+        </div>
         </div>
     );
 };
