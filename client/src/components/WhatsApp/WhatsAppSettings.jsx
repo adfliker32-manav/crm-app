@@ -156,24 +156,27 @@ const WhatsAppSettings = () => {
         }
 
         try {
-            window.FB.login(async (response) => {
-                if (!response?.authResponse?.code) {
-                    setConnecting(false);
-                    if (response?.status !== 'unknown') showError('Facebook login was cancelled or failed');
-                    return;
-                }
-
-                try {
-                    const res = await api.post('/whatsapp/connect-embedded', { code: response.authResponse.code });
-                    if (res.data.success) {
-                        showSuccess(`WhatsApp connected! Phone: ${res.data.displayPhone}`);
-                        await fetchData();
+            window.FB.login((response) => {
+                const processLogin = async () => {
+                    if (!response?.authResponse?.code) {
+                        setConnecting(false);
+                        if (response?.status !== 'unknown') showError('Facebook login was cancelled or failed');
+                        return;
                     }
-                } catch (err) {
-                    showError(err.response?.data?.message || 'Failed to connect WhatsApp');
-                } finally {
-                    setConnecting(false);
-                }
+
+                    try {
+                        const res = await api.post('/whatsapp/connect-embedded', { code: response.authResponse.code });
+                        if (res.data.success) {
+                            showSuccess(`WhatsApp connected! Phone: ${res.data.displayPhone}`);
+                            await fetchData();
+                        }
+                    } catch (err) {
+                        showError(err.response?.data?.message || 'Failed to connect WhatsApp');
+                    } finally {
+                        setConnecting(false);
+                    }
+                };
+                processLogin();
             }, loginOptions);
         } catch (err) {
             console.error('FB.login error:', err);
