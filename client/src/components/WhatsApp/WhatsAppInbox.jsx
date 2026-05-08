@@ -971,7 +971,12 @@ const WhatsAppInbox = () => {
                                                 </>
                                             )}
                                             {msg.status === 'failed' && msg.error && (
-                                                <p className="text-[10px] text-red-500 mt-1"><i className="fa-solid fa-exclamation-triangle mr-1"></i>{msg.error.message}</p>
+                                                <p className="text-[10px] text-red-500 mt-1">
+                                                    <i className="fa-solid fa-exclamation-triangle mr-1"></i>
+                                                    {msg.error.message}
+                                                    {msg.error.code && <span className="ml-1 opacity-60">(#{msg.error.code})</span>}
+                                                    {msg.error.detail && <span className="block mt-0.5 opacity-70">{msg.error.detail}</span>}
+                                                </p>
                                             )}
                                         </div>
                                     </div>

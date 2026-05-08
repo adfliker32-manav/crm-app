@@ -505,12 +505,16 @@ const processStatusUpdate = async (status, userId) => {
         };
 
         if (statusType === 'failed' && status.errors) {
-            const errCode = status.errors[0]?.code;
-            const errMsg = status.errors[0]?.title || status.errors[0]?.message;
-            debug(`❌ Message failed! Code: ${errCode}, Reason: ${errMsg}`);
+            const err = status.errors[0] || {};
+            const errCode = err.code;
+            const errMsg  = err.title || err.message;
+            const errData = err.error_data?.details || null;
+            // Always log — not just in debug mode — so production logs show the real reason
+            console.error(`❌ [WA-FAILED] msgId=${waMessageId} code=${errCode} reason="${errMsg}"${errData ? ` detail="${errData}"` : ''}`);
             updatePayload.$set.error = {
                 code: errCode,
-                message: errMsg
+                message: errMsg,
+                ...(errData && { detail: errData })
             };
         }
 

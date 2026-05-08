@@ -556,7 +556,7 @@ exports.sendMediaMessage = async (req, res) => {
             return res.status(400).json({ message: 'No file uploaded' });
         }
 
-        const { mimetype, buffer, originalname, size } = req.file;
+        let { mimetype, buffer, originalname, size } = req.file;
 
         // Determine media type and validate
         let mediaType;
@@ -574,13 +574,35 @@ exports.sendMediaMessage = async (req, res) => {
             if (size > 100 * MB) return res.status(400).json({ message: 'Document must be under 100 MB' });
         }
 
+        // Normalize images before uploading to Meta.
+        // WhatsApp's delivery pipeline rejects PNGs with alpha transparency, unusual
+        // color profiles, or very large dimensions even when the file is under 5 MB.
+        // Converting to a flat JPEG (quality 92, max 1600px) eliminates all these cases.
+        if (mediaType === 'image') {
+            try {
+                const sharp = require('sharp');
+                buffer = await sharp(buffer)
+                    .flatten({ background: { r: 255, g: 255, b: 255 } }) // replace transparency with white
+                    .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+                    .jpeg({ quality: 92 })
+                    .toBuffer();
+                mimetype = 'image/jpeg';
+                originalname = originalname.replace(/\.[^.]+$/, '.jpg');
+                size = buffer.length;
+                console.log(`🖼️ [Media] Image normalized to JPEG, size: ${(size / 1024).toFixed(0)} KB`);
+            } catch (sharpErr) {
+                // Non-fatal: upload the original if normalization fails
+                console.warn('⚠️ [Media] Image normalization failed, uploading original:', sharpErr.message);
+            }
+        }
+
         // Step 1: Upload file to Meta via Resumable Upload API
         const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
         const axios = require('axios');
         const creds = await getUserWhatsAppCredentials(userId);
         if (!creds?.phoneNumberId || !creds?.accessToken) {
-            return res.status(400).json({ 
-                message: 'WhatsApp not configured. Go to Settings → WhatsApp Config to set up your credentials.' 
+            return res.status(400).json({
+                message: 'WhatsApp not configured. Go to Settings → WhatsApp Config to set up your credentials.'
             });
         }
         const { phoneNumberId, accessToken } = creds;
