@@ -6,12 +6,11 @@ import { useConfirm } from '../../context/ConfirmContext';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
-// Load Facebook JS SDK once
 const loadFbSdk = (appId) => {
     return new Promise((resolve) => {
         if (window.FB) { resolve(window.FB); return; }
         window.fbAsyncInit = () => {
-            window.FB.init({ appId, cookie: true, xfbml: false, version: 'v21.0' });
+            window.FB.init({ appId, cookie: true, xfbml: false, version: 'v25.0' });
             resolve(window.FB);
         };
         if (!document.getElementById('facebook-jssdk')) {
