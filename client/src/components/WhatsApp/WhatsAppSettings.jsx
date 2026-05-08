@@ -157,9 +157,11 @@ const WhatsAppSettings = () => {
         try {
             window.FB.login((response) => {
                 const processLogin = async () => {
+                    console.log('Facebook SDK Response:', response);
                     if (!response?.authResponse?.code) {
                         setConnecting(false);
-                        if (response?.status !== 'unknown') showError('Facebook login was cancelled or failed');
+                        // Facebook sometimes fires this callback prematurely when the popup opens.
+                        // We silently exit without showing an annoying error toast.
                         return;
                     }
 
