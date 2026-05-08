@@ -476,7 +476,8 @@ exports.startConversation = async (req, res) => {
             }
 
             const { sendWhatsAppMessage } = require('../services/whatsappService');
-            result = await sendWhatsAppMessage(normalizedPhone, templateName, userId, metaComponents);
+            const languageCode = templateObj ? templateObj.language : 'en_US';
+            result = await sendWhatsAppMessage(normalizedPhone, templateName, userId, metaComponents, languageCode);
             waMessageId = result?.messages?.[0]?.id;
             messageContent = { text: `[Template: ${templateName}]`, templateName: templateName };
             messageType = 'template';
