@@ -140,13 +140,19 @@ const WhatsAppSettings = () => {
         const loginOptions = {
             response_type: 'code',
             override_default_response_type: true,
-            extras: { setup: {}, sessionInfoVersion: 2 }
+            extras: { setup: {}, sessionInfoVersion: '2' }
         };
 
         if (waConfigId) {
-            loginOptions.config_id = waConfigId;
+            loginOptions.config_id = String(waConfigId);
         } else {
             loginOptions.scope = 'whatsapp_business_management,whatsapp_business_messaging,business_management';
+        }
+
+        if (typeof window.FB?.login !== 'function') {
+            setConnecting(false);
+            showError('Facebook SDK is not ready. Please refresh the page and disable ad blockers.');
+            return;
         }
 
         try {
@@ -169,8 +175,9 @@ const WhatsAppSettings = () => {
                     setConnecting(false);
                 }
             }, loginOptions);
-        } catch {
-            showError('Failed to open Facebook login. Please try again.');
+        } catch (err) {
+            console.error('FB.login error:', err);
+            showError(`Failed to open Facebook login: ${err.message || 'Unknown error'}`);
             setConnecting(false);
         }
     };
