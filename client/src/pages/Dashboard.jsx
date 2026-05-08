@@ -3,8 +3,8 @@ import api from '../services/api';
 import StatCard from '../components/Dashboard/StatCard';
 import ChartsRow from '../components/Dashboard/ChartsRow';
 import FollowUpModal from '../components/Dashboard/FollowUpModal';
-import SettingsModal from '../components/Dashboard/SettingsModal';
 import TrialBanner from '../components/TrialBanner';
+import { Link } from 'react-router-dom';
 
 const MOTIVATIONAL_QUOTES = [
     { tag: "🔥 Today's Focus", headline: "Seize every lead. Convert every conversation. Close every deal.", cls: "bg-orange-50 text-orange-600 border-orange-200" },
@@ -31,7 +31,6 @@ const Dashboard = () => {
     const [error, setError] = useState(null);
 
     const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
-    const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
     const [quote] = useState(() => MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)]);
 
     const fetchDashboardData = useCallback(async () => {
@@ -151,13 +150,13 @@ const Dashboard = () => {
                             <i className="fa-solid fa-arrows-rotate"></i>
                             Refresh
                         </button>
-                        <button
-                            onClick={() => setIsSettingsModalOpen(true)}
+                        <Link
+                            to="/settings"
                             className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg transition-colors text-sm font-semibold flex items-center gap-2 shadow-md"
                         >
                             <i className="fa-solid fa-gear"></i>
                             Settings
-                        </button>
+                        </Link>
                     </div>
                 </div>
 
@@ -323,11 +322,6 @@ const Dashboard = () => {
                 <FollowUpModal
                     isOpen={isFollowUpModalOpen}
                     onClose={() => setIsFollowUpModalOpen(false)}
-                    onSuccess={fetchDashboardData}
-                />
-                <SettingsModal
-                    isOpen={isSettingsModalOpen}
-                    onClose={() => setIsSettingsModalOpen(false)}
                     onSuccess={fetchDashboardData}
                 />
             </div>
