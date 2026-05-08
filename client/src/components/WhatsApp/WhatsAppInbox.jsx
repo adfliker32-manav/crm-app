@@ -227,25 +227,33 @@ const WhatsAppInbox = () => {
             setConversations(prev => {
                 const exists = prev.some(c => c._id === convId);
                 if (exists) {
+                    // Build a readable preview for any message type (like real WhatsApp)
+                    const preview = message.content?.text?.substring(0, 100)
+                        || (message.type === 'image'    ? '📷 Photo'
+                          : message.type === 'video'    ? '🎥 Video'
+                          : message.type === 'audio'    ? '🎵 Audio'
+                          : message.type === 'document' ? `📄 ${message.content?.fileName || 'Document'}`
+                          : message.type === 'sticker'  ? '🎨 Sticker'
+                          : '💬 Message');
                     const updated = prev.map(c => {
                         if (c._id !== convId) return c;
                         return {
                             ...c,
-                            lastMessage: message.content?.text?.substring(0, 100) || 'Message',
+                            lastMessage: preview,
                             lastMessageAt: message.timestamp,
                             lastMessageDirection: message.direction,
-                            // Increment unread only for inbound messages not from currently viewed chat
+                            // Increment unread only for inbound messages not in the currently open chat
                             unreadCount: (message.direction === 'inbound' && (!currentChat || currentChat._id !== convId))
                                 ? (c.unreadCount || 0) + 1
                                 : c.unreadCount
                         };
                     });
-                    // Sort so the conversation with new message bubbles to top
+                    // Always re-sort — newest message bubbles to top (real WhatsApp behaviour)
                     return [...updated].sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
                 } else {
-                    // New conversation from a brand-new contact — refresh the list
+                    // Brand-new contact — refresh sidebar to pick up the new conversation
                     setTimeout(() => fetchConversationsRef.current?.(), 0);
-                    return prev; // must return prev to avoid corrupting state
+                    return prev;
                 }
             });
         };
@@ -268,12 +276,14 @@ const WhatsAppInbox = () => {
             }
         };
 
-        const handleStatusUpdate = ({ waMessageId, status, conversationId }) => {
+        const handleStatusUpdate = ({ waMessageId, status, conversationId, error }) => {
             const currentChat = selectedChatRef.current;
             if (currentChat && currentChat._id === conversationId) {
                 setMessages(prev =>
                     prev.map(m =>
-                        m.waMessageId === waMessageId ? { ...m, status } : m
+                        m.waMessageId === waMessageId
+                            ? { ...m, status, ...(error && { error }) }
+                            : m
                     )
                 );
             }
@@ -389,11 +399,14 @@ const WhatsAppInbox = () => {
                 return exists ? prev : [...prev, res.data.message];
             });
             setNewMessage('');
-            setConversations(prev => prev.map(c =>
-                c._id === selectedChat._id
-                    ? { ...c, lastMessage: newMessage.trim(), lastMessageAt: new Date(), lastMessageDirection: 'outbound' }
-                    : c
-            ));
+            setConversations(prev => {
+                const updated = prev.map(c =>
+                    c._id === selectedChat._id
+                        ? { ...c, lastMessage: newMessage.trim(), lastMessageAt: new Date(), lastMessageDirection: 'outbound' }
+                        : c
+                );
+                return [...updated].sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
+            });
         } catch (error) {
             showError(error.response?.data?.message || 'Failed to send message');
         } finally {
@@ -437,9 +450,19 @@ const WhatsAppInbox = () => {
                 return exists ? prev : [...prev, res.data.message];
             });
             setMediaPreview(null);
+            const sentCaption = newMessage.trim();
             setNewMessage('');
             showSuccess('Media sent!');
-            fetchConversations();
+            // Local update + sort — avoids resetting the paginated conversation list
+            setConversations(prev => {
+                const preview = sentCaption || (mediaPreview?.type === 'image' ? '📷 Photo' : mediaPreview?.type === 'video' ? '🎥 Video' : '📄 Document');
+                const updated = prev.map(c =>
+                    c._id === selectedChat._id
+                        ? { ...c, lastMessage: preview, lastMessageAt: new Date(), lastMessageDirection: 'outbound' }
+                        : c
+                );
+                return [...updated].sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
+            });
         } catch (error) {
             showError(error.response?.data?.message || 'Failed to send media');
         } finally {
@@ -529,9 +552,16 @@ const WhatsAppInbox = () => {
                     return exists ? prev : [...prev, res.data.message];
                 });
             }
-            fetchConversations();
             setShowTemplatePicker(false);
             showSuccess('Template sent! Conversation window re-opened.');
+            setConversations(prev => {
+                const updated = prev.map(c =>
+                    c._id === selectedChat._id
+                        ? { ...c, lastMessage: `📋 Template: ${templateNameToSend}`, lastMessageAt: new Date(), lastMessageDirection: 'outbound' }
+                        : c
+                );
+                return [...updated].sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
+            });
         } catch (error) {
             showError(error.response?.data?.message || 'Failed to send template');
         } finally {

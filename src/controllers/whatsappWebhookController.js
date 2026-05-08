@@ -553,11 +553,13 @@ const processStatusUpdate = async (status, userId) => {
         debug(`✅ Status atomic update completed`);
 
         // 🔌 Push status update to frontend via Socket.IO
-        emitToUser(updatedMsg.userId, 'whatsapp:statusUpdate', {
+        const statusPayload = {
             waMessageId,
             status: statusType,
-            conversationId: updatedMsg.conversationId
-        });
+            conversationId: updatedMsg.conversationId,
+            ...(statusType === 'failed' && updatePayload.$set.error && { error: updatePayload.$set.error })
+        };
+        emitToUser(updatedMsg.userId, 'whatsapp:statusUpdate', statusPayload);
         emitToConversation(updatedMsg.conversationId.toString(), 'whatsapp:statusUpdate', {
             waMessageId,
             status: statusType
