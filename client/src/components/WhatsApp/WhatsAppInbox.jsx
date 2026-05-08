@@ -18,6 +18,7 @@ const WhatsAppInbox = () => {
     const [newMessage, setNewMessage] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
+    const [messagesLoading, setMessagesLoading] = useState(false);
     const [sending, setSending] = useState(false);
     const [showContactPanel, setShowContactPanel] = useState(false);
     const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -32,6 +33,9 @@ const WhatsAppInbox = () => {
     const [uploading, setUploading] = useState(false);
     const [templateQuery, setTemplateQuery] = useState('');
     const [showInlineTemplatePicker, setShowInlineTemplatePicker] = useState(false);
+    const [convPage, setConvPage] = useState(1);
+    const [convHasMore, setConvHasMore] = useState(true);
+    const [convLoadingMore, setConvLoadingMore] = useState(false);
     const scrollRef = useRef(null);
     const fileInputRef = useRef(null);
     const attachRef = useRef(null);
@@ -40,27 +44,68 @@ const WhatsAppInbox = () => {
     const selectedChatRef = useRef(null); // Track selectedChat in socket callbacks
     const shouldScrollToBottomRef = useRef(true); // 🛡️ Flag for pagination vs new messages
     const fetchConversationsRef = useRef(null); // Stable ref to avoid stale closure in socket handlers
+    const convPageRef = useRef(1);
+    const convHasMoreRef = useRef(true);
+    const convLoadingMoreRef = useRef(false);
     const { socket, isConnected } = useSocket();
 
-    const fetchConversations = useCallback(async () => {
+    const fetchConversations = useCallback(async (pageNum = 1, merge = false) => {
+        if (pageNum === 1) {
+            convHasMoreRef.current = true;
+        } else {
+            if (convLoadingMoreRef.current || !convHasMoreRef.current) return;
+            convLoadingMoreRef.current = true;
+            setConvLoadingMore(true);
+        }
         try {
             const status = filter === 'archived' ? 'archived' : 'active';
             const res = await api.get('/whatsapp/conversations', {
-                params: { status, search: searchTerm }
+                params: { status, search: searchTerm, page: pageNum, limit: 50 }
             });
-            setConversations(res.data.conversations || []);
+            const incoming = res.data.conversations || [];
+            const pagination = res.data.pagination;
+            const hasMore = pagination ? pagination.page < pagination.pages : false;
+
+            if (pageNum === 1 && merge) {
+                // Soft-merge: update metadata of existing entries in-place,
+                // prepend brand-new contacts, keep any page-2+ entries intact.
+                setConversations(prev => {
+                    const incomingMap = new Map(incoming.map(c => [c._id, c]));
+                    const updated = prev.map(c => incomingMap.has(c._id) ? { ...c, ...incomingMap.get(c._id) } : c);
+                    const existingIds = new Set(prev.map(c => c._id));
+                    const brandNew = incoming.filter(c => !existingIds.has(c._id));
+                    return [...brandNew, ...updated];
+                });
+            } else if (pageNum === 1) {
+                setConversations(incoming);
+                setConvPage(1);
+                convPageRef.current = 1;
+            } else {
+                setConversations(prev => {
+                    const existingIds = new Set(prev.map(c => c._id));
+                    const unique = incoming.filter(c => !existingIds.has(c._id));
+                    return [...prev, ...unique];
+                });
+                setConvPage(pageNum);
+                convPageRef.current = pageNum;
+            }
+
+            setConvHasMore(hasMore);
+            convHasMoreRef.current = hasMore;
         } catch (error) {
             console.error('Error fetching conversations:', error);
         } finally {
             setLoading(false);
+            convLoadingMoreRef.current = false;
+            setConvLoadingMore(false);
         }
     }, [searchTerm, filter]);
 
-    const fetchMessages = useCallback(async (conversationId, pageNum = 1, isInitial = false) => {
+    const fetchMessages = useCallback(async (conversationId, pageNum = 1, isInitial = false, silent = false) => {
         if (!isInitial && (!hasMore || loadingMore)) return;
-        
+
         if (isInitial) {
-            setLoading(true);
+            if (!silent) setMessagesLoading(true);
             setPage(1);
             setHasMore(true);
             shouldScrollToBottomRef.current = true; // ✨ Initial load: go to bottom
@@ -99,7 +144,7 @@ const WhatsAppInbox = () => {
             console.error('Error fetching messages:', error);
             showError('Failed to load messages');
         } finally {
-            setLoading(false);
+            setMessagesLoading(false);
             setLoadingMore(false);
         }
     }, [showError, hasMore, loadingMore]);
@@ -271,20 +316,29 @@ const WhatsAppInbox = () => {
         };
     }, [socket, selectedChat?._id]);
 
-    // ⏰ Safety-net fallback poll (60s instead of 5s = 92% less DB load)
+    // ⏰ Safety-net fallback poll — socket handles real-time; this only catches missed events
+    // fetchMessages deliberately excluded: socket delivers messages; calling it here cleared
+    // the message area and auto-scrolled to bottom every minute (visible "refresh").
     useEffect(() => {
         const interval = setInterval(() => {
-            fetchConversations();
-            if (selectedChatRef.current) fetchMessages(selectedChatRef.current._id, 1, true);
-        }, 60000); // 60 seconds
+            fetchConversations(1, true); // soft-merge: updates metadata without replacing loaded list
+        }, 300000); // 5 minutes
         return () => clearInterval(interval);
-    }, [fetchConversations, fetchMessages]);
+    }, [fetchConversations]);
 
     useEffect(() => {
         if (scrollRef.current && shouldScrollToBottomRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [messages]);
+
+    // Load more conversations when user scrolls near the bottom of the contact list
+    const handleConvListScroll = (e) => {
+        const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+        if (scrollHeight - scrollTop - clientHeight < 150) {
+            fetchConversations(convPageRef.current + 1);
+        }
+    };
 
     // Handle Scroll for Pagination (Scroll to Top)
     const handleChatScroll = (e) => {
@@ -766,7 +820,7 @@ const WhatsAppInbox = () => {
                 </div>
 
                 {/* Conversations List */}
-                <div className="flex-1 overflow-y-auto">
+                <div className="flex-1 overflow-y-auto" onScroll={handleConvListScroll}>
                     {filteredConversations.map(chat => (
                         <div
                             key={chat._id}
@@ -807,7 +861,12 @@ const WhatsAppInbox = () => {
                             </div>
                         </div>
                     ))}
-                    {filteredConversations.length === 0 && (
+                    {convLoadingMore && (
+                        <div className="py-3 flex justify-center">
+                            <div className="w-4 h-4 border-2 border-[#00a884] border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                    )}
+                    {filteredConversations.length === 0 && !convLoadingMore && (
                         <div className="p-10 text-center">
                             <i className="fa-brands fa-whatsapp text-6xl text-[#e9edef] mb-4"></i>
                             <p className="text-sm text-[#8696a0]">
@@ -860,6 +919,11 @@ const WhatsAppInbox = () => {
                             onScroll={handleChatScroll}
                             style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='400' height='400' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3Cpattern id='p' width='60' height='60' patternUnits='userSpaceOnUse'%3E%3Cpath d='M30 5 q5 8 0 16 q-5 8 0 16' fill='none' stroke='%23d4cfc4' stroke-width='.4' opacity='.6'/%3E%3Ccircle cx='10' cy='50' r='1.5' fill='%23d4cfc4' opacity='.3'/%3E%3Ccircle cx='50' cy='20' r='1' fill='%23d4cfc4' opacity='.3'/%3E%3C/pattern%3E%3C/defs%3E%3Crect fill='%23efeae2' width='400' height='400'/%3E%3Crect fill='url(%23p)' width='400' height='400'/%3E%3C/svg%3E")`, backgroundSize: '400px' }}
                         >
+                            {messagesLoading ? (
+                                <div className="flex items-center justify-center h-full">
+                                    <div className="w-8 h-8 border-[3px] border-[#00a884] border-t-transparent rounded-full animate-spin"></div>
+                                </div>
+                            ) : (
                             <div className="space-y-1 max-w-3xl mx-auto">
                                 {/* Loading More Indicator */}
                                 {loadingMore && (
@@ -913,6 +977,7 @@ const WhatsAppInbox = () => {
                                     </div>
                                 ))}
                             </div>
+                            )}
                         </div>
 
                         {/* Input Bar */}

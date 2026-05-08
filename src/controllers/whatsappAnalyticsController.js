@@ -15,7 +15,8 @@ const buildDateFilter = (days) => {
 
 exports.getDashboardStats = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        // Use tenantId (owner) so agents see the same data as the manager
+        const userId = req.tenantId || req.user.userId || req.user.id;
         if (!mongoose.Types.ObjectId.isValid(userId)) {
             return res.status(400).json({ success: false, message: 'Invalid user ID' });
         }
@@ -154,10 +155,13 @@ exports.getDashboardStats = async (req, res) => {
             data: {
                 kpi: {
                     totalSent,
+                    totalBroadcastSent: bcStats.totalBroadcastSent,
                     totalReceived: convStats.totalReceived,
                     totalMessages,
                     deliveryRate,
                     readRate,
+                    totalDelivered: bcStats.totalBroadcastDelivered,
+                    totalRead: bcStats.totalBroadcastRead,
                     totalFailed: bcStats.totalBroadcastFailed,
                     activeChats: convStats.activeChats,
                     unreadChats: convStats.unreadChats

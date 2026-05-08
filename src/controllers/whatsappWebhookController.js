@@ -71,10 +71,10 @@ const verifySignature = (req) => {
         return false;
     }
 
-    const appSecret = process.env.META_APP_SECRET;
+    // WA_APP_SECRET is the secret for the WhatsApp Business app (separate from the auth app)
+    const appSecret = process.env.WA_APP_SECRET || process.env.META_APP_SECRET;
     if (!appSecret) {
-        // FIX #6: Fail closed — do NOT skip verification in production
-        console.error('❌ META_APP_SECRET not set. Rejecting webhook for security.');
+        console.error('❌ WA_APP_SECRET (or META_APP_SECRET) not set. Rejecting webhook for security.');
         return false;
     }
 

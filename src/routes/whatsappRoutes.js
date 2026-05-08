@@ -28,6 +28,12 @@ router.get('/config', authMiddleware, requireModule('whatsapp'), whatsappConfigC
 router.put('/config', authMiddleware, requireModule('whatsapp'), whatsappConfigController.updateWhatsAppConfig);
 router.post('/config/test', authMiddleware, requireModule('whatsapp'), whatsappConfigController.testWhatsAppConfig);
 
+// WhatsApp Embedded Signup (Facebook JS SDK flow)
+router.get('/public-config', authMiddleware, whatsappConfigController.getWaPublicConfig);
+router.post('/connect-embedded', authMiddleware, requireModule('whatsapp'), whatsappConfigController.connectWhatsAppEmbedded);
+router.post('/disconnect', authMiddleware, requireModule('whatsapp'), whatsappConfigController.disconnectWhatsApp);
+router.post('/token/refresh', authMiddleware, requireModule('whatsapp'), whatsappConfigController.manualRefreshToken);
+
 // WhatsApp Automation Settings (Business Hours & Auto-Reply)
 router.get('/settings', authMiddleware, requireModule('whatsapp'), whatsappConfigController.getWhatsAppSettings);
 router.put('/settings', authMiddleware, requireModule('whatsapp'), whatsappConfigController.updateWhatsAppSettings);

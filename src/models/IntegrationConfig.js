@@ -14,7 +14,13 @@ const integrationConfigSchema = new mongoose.Schema({
     // 🟢 WhatsApp Configuration
     whatsapp: {
         waBusinessId: { type: String, default: null },
+        wabaId: { type: String, default: null },           // WABA ID from Embedded Signup
         waPhoneNumberId: { type: String, default: null, index: true }, // Unique constraint removed to fix null duplicates
+        displayPhone: { type: String, default: null },     // e.g. "+91 98765 43210"
+        verifiedName: { type: String, default: null },     // Business display name from Meta
+        embeddedSignupConnected: { type: Boolean, default: false }, // true = connected via Embedded Signup
+        tokenExpiresAt:   { type: Date, default: null }, // when the current FB token expires (~60 days)
+        tokenRefreshedAt: { type: Date, default: null }, // last time cron/manual refresh ran
         // FIX 4.3: select:false prevents token leakage if a route returns the full config document
         waAccessToken: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         waAppId: { type: String, default: null },
