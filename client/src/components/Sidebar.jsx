@@ -183,7 +183,7 @@ const Sidebar = () => {
             {/* PROFILE */}
             <div className="border-t border-slate-800 p-4">
 
-                <Link to="/settings" className={`flex items-center ${collapsed ? "justify-center" : "gap-3"}`}>
+                <div className={`flex items-center ${collapsed ? "justify-center" : "gap-3"}`}>
                     <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold text-white">
                         {user?.name?.charAt(0) || 'U'}
                     </div>
@@ -194,7 +194,7 @@ const Sidebar = () => {
                             <p className="text-xs text-slate-400">{user?.role}</p>
                         </div>
                     )}
-                </Link>
+                </div>
 
                 <button
                     onClick={handleLogout}
