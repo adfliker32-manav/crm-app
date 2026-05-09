@@ -6,7 +6,7 @@ const BookingPage = require('../models/BookingPage');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
 const AgencySettings = require('../models/AgencySettings');
-const { sendWhatsAppTextMessage, sendInteractiveMessage, sendMediaMessage } = require('./whatsappService');
+const { sendWhatsAppTextMessage, sendInteractiveMessage, sendCtaUrlMessage, sendMediaMessage } = require('./whatsappService');
 const { emitToUser } = require('./socketService');
 const whatsappQueueService = require('./whatsappQueueService');
 const NodeCache = require('node-cache');
@@ -1732,12 +1732,21 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     node.data.text || '📅 Click below to book your appointment:',
                     session.variables
                 );
-                const bookingMessage = bookingUrl
-                    ? `${bookingIntroText}\n\n${bookingUrl}`
-                    : bookingIntroText;
 
-                const bookingResult = await sendWhatsAppTextMessage(conversation.phone, bookingMessage, session.userId);
-                await saveBotMessage(session.conversationId, session.userId, bookingMessage, 'text', bookingResult);
+                let bookingResult;
+                if (bookingUrl) {
+                    bookingResult = await sendCtaUrlMessage(
+                        conversation.phone,
+                        bookingIntroText,
+                        'Book Appointment',
+                        bookingUrl,
+                        session.userId
+                    );
+                    await saveBotMessage(session.conversationId, session.userId, `[Link Sent: ${bookingUrl}]\n${bookingIntroText}`, 'interactive', bookingResult);
+                } else {
+                    bookingResult = await sendWhatsAppTextMessage(conversation.phone, bookingIntroText, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, bookingIntroText, 'text', bookingResult);
+                }
 
                 if (node.data.nextNodeId) {
                     session.currentNodeId = node.data.nextNodeId;
@@ -2083,3 +2092,4 @@ exports.cancelActiveChatbots = async (conversationId) => {
 
 // Exported for Agenda queue processor
 exports.resumeExecution = async (session, flow, nodeId) => { return await executeNode(session, flow, nodeId); };
+

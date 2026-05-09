@@ -210,6 +210,49 @@ const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
     }
 };
 
+const sendCtaUrlMessage = async (to, bodyText, buttonText, buttonUrl, userId = null) => {
+    try {
+        if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
+            throw new Error("Emergency: WhatsApp sending is temporarily disabled.");
+        }
+
+        const { phoneNumberId, accessToken } = await getCredentials(userId);
+        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+
+        const data = {
+            messaging_product: "whatsapp",
+            to,
+            type: "interactive",
+            interactive: {
+                type: "cta_url",
+                body: { text: bodyText },
+                action: {
+                    name: "cta_url",
+                    parameters: {
+                        display_text: buttonText.substring(0, 20),
+                        url: buttonUrl
+                    }
+                }
+            }
+        };
+
+        // 🔄 RETRY: Wrap Meta API call with exponential backoff
+        const response = await retryWithBackoff(
+            () => axios.post(url, data, {
+                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+            }),
+            { maxRetries: 3, label: 'WA-CtaUrl' }
+        );
+        return response.data;
+    } catch (error) {
+        if (error.response?.data?.error?.code === 190) {
+            console.error(`🔑 WhatsApp token EXPIRED for user ${userId}.`);
+        }
+        console.error('❌ Failed to send CTA URL message:', error.response?.data || error.message);
+        throw error;
+    }
+};
+
 const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en', componentsData = [], userId = null, options = {}) => {
     try {
         const { phoneNumberId, accessToken } = await getCredentials(userId);
@@ -484,6 +527,7 @@ module.exports = {
     sendWhatsAppTextMessage,
     sendMediaMessage,
     sendInteractiveMessage,
+    sendCtaUrlMessage,
     downloadMedia,
     submitTemplateToMeta,
     syncTemplateFromMeta,
