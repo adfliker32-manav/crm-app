@@ -334,10 +334,11 @@ const getMyBookingPage = async (req, res) => {
             page = newPage.toObject();
         }
 
-        const frontendUrl =
+        let frontendUrl =
             process.env.FRONTEND_URL ||
             (req.get('host') ? `${req.protocol}://${req.get('host')}` : null) ||
             'http://localhost:5173';
+        if (frontendUrl.endsWith('/')) frontendUrl = frontendUrl.slice(0, -1);
         res.json({ ...page, publicUrl: `${frontendUrl}/book/${page.slug}` });
     } catch (err) {
         console.error('getMyBookingPage error:', err);
@@ -381,10 +382,11 @@ const updateMyBookingPage = async (req, res) => {
             await page.save();
         }
 
-        const frontendUrl =
+        let frontendUrl =
             process.env.FRONTEND_URL ||
             (req.get('host') ? `${req.protocol}://${req.get('host')}` : null) ||
             'http://localhost:5173';
+        if (frontendUrl.endsWith('/')) frontendUrl = frontendUrl.slice(0, -1);
         res.json({ ...page.toObject(), publicUrl: `${frontendUrl}/book/${page.slug}` });
     } catch (err) {
         console.error('updateMyBookingPage error:', err);
