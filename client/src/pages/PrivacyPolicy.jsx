@@ -111,7 +111,41 @@ const PrivacyPolicy = () => {
                         </p>
                     </Section>
 
-                    <Section title="8. Children's Privacy">
+                    <Section title="8. Facebook & Meta Platform Data">
+                        <p>
+                            If you connect your Facebook account to Adfliker CRM, we collect data provided through
+                            Meta's platform, including:
+                        </p>
+                        <ul className="list-disc pl-5 space-y-1 mt-2">
+                            <li><strong>Facebook Lead Ads:</strong> Lead information submitted through Facebook Lead Ad
+                                forms (name, phone, email, city, company) is collected via the Meta Lead Ads API on
+                                behalf of our users. This data is stored in the user's CRM workspace solely for lead
+                                management purposes and is not sold or shared with third parties.</li>
+                            <li><strong>Facebook Pages:</strong> Page IDs and names you authorise us to access, used
+                                only to set up lead sync and webhook subscriptions.</li>
+                            <li><strong>Access Tokens:</strong> OAuth access tokens are encrypted at rest and used
+                                exclusively to retrieve leads and send conversion events on your behalf.</li>
+                            <li><strong>Meta Conversions API:</strong> If enabled, lead status events are sent to your
+                                own Meta Pixel to help optimise ad delivery. All user data (email, phone) is hashed
+                                with SHA-256 before transmission.</li>
+                        </ul>
+                        <p className="mt-2">
+                            We collect only the data necessary to operate the integration and do not access any
+                            Facebook data beyond what you explicitly authorise during the OAuth login flow.
+                        </p>
+                        <p className="mt-2">
+                            <strong>Removing Facebook access:</strong> You may revoke Adfliker's access to your
+                            Facebook account at any time by going to{' '}
+                            <strong>Facebook Settings &rarr; Security and Login &rarr; Apps and Websites</strong>{' '}
+                            and removing Adfliker. Upon removal, we will automatically delete your stored Facebook
+                            access tokens and disable lead sync. You may also request full deletion of your
+                            Facebook-linked data by contacting us at <strong>adfliker32@gmail.com</strong> or
+                            through Facebook's own data deletion process, which will trigger an automatic deletion
+                            of all associated data from our systems within 30 days.
+                        </p>
+                    </Section>
+
+                    <Section title="9. Children's Privacy">
                         <p>
                             The Service is not directed at individuals under the age of 18. We do not knowingly collect
                             personal information from minors. If you believe we have inadvertently collected such
@@ -119,7 +153,7 @@ const PrivacyPolicy = () => {
                         </p>
                     </Section>
 
-                    <Section title="9. Changes to This Policy">
+                    <Section title="10. Changes to This Policy">
                         <p>
                             We may update this Privacy Policy periodically. We will notify you of material changes via
                             in-app notification or email. Continued use of the Service after changes constitutes your
@@ -127,7 +161,7 @@ const PrivacyPolicy = () => {
                         </p>
                     </Section>
 
-                    <Section title="10. Contact Us">
+                    <Section title="11. Contact Us">
                         <p>
                             If you have any questions or concerns about this Privacy Policy, please contact us at:{' '}
                             <strong>adfliker32@gmail.com</strong>

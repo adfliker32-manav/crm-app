@@ -375,7 +375,7 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
                         .select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
                     if (config?.meta?.metaCapiEnabled) {
                         const { sendMetaEvent } = require('../services/metaConversionService');
-                        sendMetaEvent(config, newLead, 'New', null)
+                        sendMetaEvent(config, newLead, newLead.status, null)
                             .catch(err => console.error(`❌ [Lead:${newLead._id}] CAPI event failed:`, err.message));
                     }
                 } catch (e) {

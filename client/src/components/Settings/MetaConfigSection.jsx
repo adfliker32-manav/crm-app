@@ -264,6 +264,8 @@ const MetaConfigSection = () => {
     const handleTestConnection = async () => {
         try {
             setTesting(true);
+            // Save current settings first so the test uses what's on screen, not stale DB values
+            await api.post('/meta/capi-settings', capiSettings);
             const res = await api.post('/meta/test-capi');
             showSuccess(res.data.message);
             if (res.data.details?.messages && res.data.details.messages.length > 0) {

@@ -83,7 +83,7 @@ const chatbotFlowSchema = new mongoose.Schema({
         id: { type: String, required: true },
         type: {
             type: String,
-            enum: ['start', 'message', 'question', 'condition', 'action', 'delay', 'template', 'media', 'request_media', 'list', 'product', 'products', 'handoff', 'end'],
+            enum: ['start', 'message', 'question', 'condition', 'action', 'delay', 'template', 'media', 'request_media', 'list', 'product', 'products', 'handoff', 'booking_link', 'end'],
             required: true
         },
         position: {

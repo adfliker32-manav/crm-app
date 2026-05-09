@@ -129,6 +129,10 @@ const queueLeadCreatedEffects = (lead, ownerId) => {
     runInBackground('Automation Service Error (LEAD_CREATED):', () =>
         evaluateLead(lead, 'LEAD_CREATED')
     );
+
+    // CAPI Lead event for manually created leads
+    sendMetaEventIfEnabled(lead, lead.status, null)
+        .catch(err => console.error('Meta CAPI error (Lead Created):', err));
 };
 
 const queueLeadStageChangeEffects = (lead) => {
@@ -612,8 +616,8 @@ const getStages = async (req, res) => {
                 { name: 'Contacted', order: 2, userId: ownerId },
                 { name: 'Won', order: 3, userId: ownerId }
             ];
-            await Stage.insertMany(defaults);
-            return res.json(defaults);
+            const inserted = await Stage.insertMany(defaults);
+            return res.json(inserted);
         }
         res.json(stages);
     } catch (err) {
@@ -827,13 +831,22 @@ const syncLeads = async (req, res) => {
             count = insertedLeads.length;
 
             // Trigger automations safely without blocking main thread
-            setTimeout(() => {
-                insertedLeads.forEach(newLead => {
-                    queueLeadCreatedEffects(newLead, userId);
-                    
-                    // Meta CAPI "Lead" event
-                    sendMetaEventIfEnabled(newLead, 'New', null).catch(err => console.error('Meta CAPI error (Sheet Sync):', err));
-                });
+            setTimeout(async () => {
+                insertedLeads.forEach(newLead => queueLeadCreatedEffects(newLead, userId));
+
+                // Fetch CAPI config once for the whole batch — avoids N×1 DB queries
+                try {
+                    const capiConfig = await IntegrationConfig.findOne({ userId })
+                        .select('+meta.metaCapiAccessToken +meta.metaCapiEnabled +meta.metaPixelId +meta.metaStageMapping +meta.metaTestEventCode');
+                    if (capiConfig?.meta?.metaCapiEnabled) {
+                        insertedLeads.forEach(newLead => {
+                            sendMetaEvent(capiConfig, newLead, newLead.status, null)
+                                .catch(err => console.error('Meta CAPI error (Sheet Sync):', err));
+                        });
+                    }
+                } catch (err) {
+                    console.error('Meta CAPI config fetch error (Sheet Sync):', err);
+                }
             }, 0);
         }
 

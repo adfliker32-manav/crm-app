@@ -32,8 +32,11 @@ const SuperAdmin = lazy(() => import('./pages/SuperAdmin'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Automations = lazy(() => import('./pages/Automations'));
+const Appointments = lazy(() => import('./pages/Appointments'));
+const BookingPage = lazy(() => import('./pages/BookingPage'));
 const TermsAndConditions = lazy(() => import('./pages/TermsAndConditions'));
 const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -50,6 +53,7 @@ function App() {
                 <Suspense fallback={<GlobalLoader />}>
                   <Routes>
                     <Route path="/login" element={<Login />} />
+                    <Route path="/book/:slug" element={<BookingPage />} />
                     <Route path="/terms" element={<TermsAndConditions />} />
                     <Route path="/privacy" element={<PrivacyPolicy />} />
 
@@ -72,6 +76,7 @@ function App() {
                         <Route path="/whatsapp" element={<WhatsAppManagement />} />
                         <Route path="/team" element={<Team />} />
                         <Route path="/automations" element={<Automations />} />
+                        <Route path="/appointments" element={<Appointments />} />
                         <Route path="/settings" element={<Settings />} />
                         <Route path="/reports" element={<Reports />} />
                       </Route>
@@ -79,6 +84,7 @@ function App() {
 
                     {/* Default root redirects to login for now (no Landing Page) */}
                     <Route path="/" element={<Navigate to="/login" replace />} />
+                    <Route path="*" element={<NotFound />} />
                   </Routes>
                 </Suspense>
                 <NotificationContainer />

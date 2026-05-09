@@ -178,6 +178,10 @@ const Sidebar = () => {
                     <NavItem collapsed={collapsed} to="/automations" icon="fa-solid fa-robot" label="Automations" />
                 )}
 
+                {(canManageTeam || user?.permissions?.viewLeads !== false) && (
+                    <NavItem collapsed={collapsed} to="/appointments" icon="fa-solid fa-calendar-check" label="Appointments" />
+                )}
+
             </nav>
 
             {/* PROFILE */}

@@ -71,7 +71,7 @@ const DeletableEdge = ({
 const CompactFlowNode = ({ data, id, selected }) => {
     const type = data.blockType || 'message';
     const icon = {
-        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️', delay: '⏱️', condition: '🔀'
+        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️', delay: '⏱️', condition: '🔀', booking_link: '📅'
     }[type] || '💬';
 
     return (
@@ -212,6 +212,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         action: CompactFlowNode,
         delay: CompactFlowNode,
         condition: CompactFlowNode,
+        booking_link: CompactFlowNode,
         start: CompactFlowNode // Fallback for old custom types
     }), []);
 
@@ -260,7 +261,8 @@ const FlowBuilder = ({ flowId, onBack }) => {
         { type: 'products', icon: '🛒', label: 'Multi Product', desc: 'Show product catalog' },
         { type: 'template', icon: '📄', label: 'Template', desc: 'Use message template' },
         { type: 'action', icon: '⚙️', label: 'Lead Action', desc: 'Create lead or update CRM fields' },
-        { type: 'handoff', icon: '👤', label: 'Request Intervention', desc: 'Transfer to agent' }
+        { type: 'handoff', icon: '👤', label: 'Request Intervention', desc: 'Transfer to agent' },
+        { type: 'booking_link', icon: '📅', label: 'Booking Link', desc: 'Send appointment booking link to customer' }
     ];
 
     useEffect(() => {
@@ -501,7 +503,8 @@ const FlowBuilder = ({ flowId, onBack }) => {
             list: { text: 'Choose a category:', buttonText: 'View Options', items: [{ id: 'item_0', title: 'Electronics', description: '' }, { id: 'item_1', title: 'Fashion', description: '' }, { id: 'item_2', title: 'Home & Living', description: '' }] },
             template: { text: 'Send approved template', templateName: '', templateLanguage: 'en' },
             action: { text: 'Action: Create Lead', actionType: 'create_lead', actionData: { source: 'WhatsApp Chatbot', status: 'New' } },
-            handoff: { text: 'Connecting you to an agent...' }
+            handoff: { text: 'Connecting you to an agent...' },
+            booking_link: { text: '📅 Click the link below to book your appointment:' }
         };
 
         const newNode = {
@@ -1255,6 +1258,18 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                         </div>
                                         <p className="text-xs text-blue-600">The message above is sent to the user, then the chatbot pauses for 24 hours so a live agent can take over.</p>
                                         <p className="text-xs text-blue-500">The assigned agent receives a real-time notification to join the conversation.</p>
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'booking_link' && (
+                                    <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 space-y-2">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-lg">📅</span>
+                                            <span className="text-sm font-bold text-emerald-700">Booking Link</span>
+                                        </div>
+                                        <p className="text-xs text-emerald-700">The message above is sent to the customer along with your unique booking page URL.</p>
+                                        <p className="text-xs text-emerald-600">Customers can pick a service, date, and time — and a WhatsApp confirmation is sent to them automatically on booking.</p>
+                                        <p className="text-xs text-slate-400 mt-1">Configure your booking page from the <strong>Appointments</strong> section in the sidebar.</p>
                                     </div>
                                 )}
 

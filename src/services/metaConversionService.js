@@ -10,14 +10,12 @@ const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
  * @param {string} value - The value to hash
  * @returns {string} - SHA256 hash
  */
-function hashValue(value) {
+function hashValue(value, type = 'text') {
     if (!value) return null;
 
-    // Normalize: lowercase and trim
     const normalized = value.toString().toLowerCase().trim();
-
-    // For phone numbers, remove all non-numeric characters
-    const cleaned = value.includes('@') ? normalized : normalized.replace(/\D/g, '');
+    // Strip non-digits only for phone numbers — applying this to names/cities produces the SHA256 of ""
+    const cleaned = type === 'phone' ? normalized.replace(/\D/g, '') : normalized;
 
     return crypto.createHash('sha256').update(cleaned).digest('hex');
 }
@@ -56,17 +54,16 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
                 {
                     event_name: eventName,
                     event_time: Math.floor(Date.now() / 1000),
-                    event_id: lead._id.toString(), // Required for deduplication
+                    event_id: `${lead._id.toString()}_${Date.now()}`, // Unique per event to prevent Meta deduplication
                     action_source: 'other', // CRM updates = 'other' per Meta docs
                     event_source_url: process.env.APP_URL || 'https://your-crm.com',
                     user_data: {
-                        // Hash PII data for privacy
-                        em: lead.email ? [hashValue(lead.email)] : null,
-                        ph: lead.phone ? [hashValue(lead.phone)] : null,
+                        em: lead.email ? [hashValue(lead.email, 'email')] : null,
+                        ph: lead.phone ? [hashValue(lead.phone, 'phone')] : null,
                         fn: lead.name ? [hashValue(lead.name.split(' ')[0])] : null,
                         ln: lead.name && lead.name.split(' ').length > 1 ? [hashValue(lead.name.split(' ').slice(-1)[0])] : null,
                         ct: lead.city ? [hashValue(lead.city)] : null,
-                        external_id: [lead._id.toString()] // CRM lead ID
+                        external_id: [lead._id.toString()]
                     },
                     custom_data: {
                         lead_status: newStatus,

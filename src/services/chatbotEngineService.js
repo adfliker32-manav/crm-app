@@ -2,13 +2,23 @@ const ChatbotFlow = require('../models/ChatbotFlow');
 const ChatbotSession = require('../models/ChatbotSession');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
+const BookingPage = require('../models/BookingPage');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
+const AgencySettings = require('../models/AgencySettings');
 const { sendWhatsAppTextMessage, sendInteractiveMessage, sendMediaMessage } = require('./whatsappService');
 const { emitToUser } = require('./socketService');
 const whatsappQueueService = require('./whatsappQueueService');
 const NodeCache = require('node-cache');
 const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+const bookingPageCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+
+const normalizeBaseUrl = (value) => {
+    const v = String(value || '').trim();
+    if (!v) return '';
+    const withProto = /^https?:\/\//i.test(v) ? v : `https://${v}`;
+    return withProto.replace(/\/+$/, '');
+};
 const normalizeId = (value) => value ? value.toString() : null;
 const buildFlowCacheKey = (ownerIds) => `flows_${[...new Set(ownerIds.map(normalizeId).filter(Boolean))].sort().join('|')}`;
 const getSessionFlowId = (session) => session?.flowId?._id || session?.flowId || null;
@@ -1687,6 +1697,55 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 // End the chatbot session
                 await endSession(session, 'handoff');
                 return { success: true };
+
+            case 'booking_link': {
+                let frontendUrl = normalizeBaseUrl(process.env.FRONTEND_URL) || 'https://app.adfliker.com';
+                const tenantId = session.userId.toString();
+
+                // Multi-tenancy: if this tenant belongs to an agency with a custom domain,
+                // use that domain for the public booking link (white-label support).
+                try {
+                    const tenantUser = await User.findById(session.userId).select('role parentId').lean();
+                    const agencyId = tenantUser?.role === 'agency'
+                        ? session.userId
+                        : (tenantUser?.parentId || null);
+
+                    if (agencyId) {
+                        const agency = await AgencySettings.findOne({ agencyId }).select('customDomain').lean();
+                        const customBase = normalizeBaseUrl(agency?.customDomain);
+                        if (customBase) frontendUrl = customBase;
+                    }
+                } catch (_) { /* non-critical */ }
+
+                let bookingUrl = '';
+                try {
+                    let slug = bookingPageCache.get(tenantId);
+                    if (!slug) {
+                        const bp = await BookingPage.findOne({ userId: session.userId, isActive: true }).select('slug').lean();
+                        slug = bp?.slug || null;
+                        if (slug) bookingPageCache.set(tenantId, slug);
+                    }
+                    if (slug) bookingUrl = `${frontendUrl}/book/${slug}`;
+                } catch (_) { /* non-critical */ }
+
+                const bookingIntroText = replaceVariables(
+                    node.data.text || '📅 Click below to book your appointment:',
+                    session.variables
+                );
+                const bookingMessage = bookingUrl
+                    ? `${bookingIntroText}\n\n${bookingUrl}`
+                    : bookingIntroText;
+
+                const bookingResult = await sendWhatsAppTextMessage(conversation.phone, bookingMessage, session.userId);
+                await saveBotMessage(session.conversationId, session.userId, bookingMessage, 'text', bookingResult);
+
+                if (node.data.nextNodeId) {
+                    session.currentNodeId = node.data.nextNodeId;
+                    await session.save();
+                    return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
+                }
+                break;
+            }
 
             case 'end':
                 await endSession(session, 'completed');

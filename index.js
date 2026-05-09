@@ -28,7 +28,10 @@ const reportRoutes = require('./src/routes/reportRoutes'); // Reports & Analytic
 const taskRoutes = require('./src/routes/taskRoutes'); // Tasks & Reminders
 const analyticsRoutes = require('./src/routes/analyticsRoutes'); // Advanced Analytics
 const automationRoutes = require('./src/routes/automationRoutes'); // Visual Automation Engine
+const appointmentRoutes = require('./src/routes/appointmentRoutes'); // Appointment Booking
+const bookingRoutes = require('./src/routes/bookingRoutes'); // Public Booking Pages
 const { authMiddleware } = require('./src/middleware/authMiddleware');
+const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
 
 const app = express();
 
@@ -58,7 +61,6 @@ app.use(helmet({
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   'https://app.adfliker.com',
-  'https://adfliker.onrender.com',
   'http://localhost:5173',
   'http://localhost:3000'
 ].filter(Boolean);
@@ -125,7 +127,7 @@ if (!process.env.META_APP_ID || process.env.META_APP_ID === 'YOUR_META_APP_ID') 
 if (!process.env.FRONTEND_URL) {
   console.warn('⚠️  WARNING: FRONTEND_URL is not set in .env');
   console.warn('   → CORS will only allow localhost origins.');
-  console.warn('   → Set FRONTEND_URL to your production domain before deploying (e.g. https://your-app.onrender.com)');
+  console.warn('   → Set FRONTEND_URL to your production domain before deploying (e.g. https://app.adfliker.com)');
 }
 
 // ⚠️ PRODUCTION NOTE:
@@ -359,6 +361,10 @@ app.use('/api/custom-fields', authMiddleware, customFieldRoutes);
 app.use('/api/tags', authMiddleware, require('./src/routes/tagRoutes'));
 app.use('/api/tasks', authMiddleware, taskRoutes);
 app.use('/api/automations', authMiddleware, automationRoutes);
+app.use('/api/appointments', authMiddleware, appointmentRoutes);
+
+// Public booking page (no auth — customer-facing)
+app.use('/api/book', bookingRoutes);
 app.use('/api/analytics', authMiddleware, analyticsRoutes);
 app.use('/api/dashboard', require('./src/routes/dashboardRoutes'));
 
@@ -432,6 +438,13 @@ if (process.env.REDIS_URL && process.env.BULL_BOARD_SECRET) {
 // 6. HEALTH CHECK & KEEP-ALIVE (must be BEFORE catch-all)
 app.get('/api/health', (req, res) => {
   res.status(200).send('OK');
+});
+
+// Public Booking Page (HTML + Tailwind, no React required)
+// This prevents blank screens if the SPA bundle doesn't yet include /book/:slug.
+app.get('/book/:slug', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.status(200).send(renderPublicBookingPage(req.params.slug));
 });
 
 // 6. CATCH-ALL HANDLER FOR REACT SPA
@@ -572,4 +585,4 @@ process.on('uncaughtException', (error) => {
     process.exit(1);
   }
   // For non-fatal exceptions, keep running
-});
+});

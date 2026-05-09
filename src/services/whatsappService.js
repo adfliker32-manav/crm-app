@@ -339,7 +339,7 @@ const submitTemplateToMeta = async (userId, template) => {
         const { accessToken } = await getCredentials(userId);
         const IntegrationConfig = require('../models/IntegrationConfig');
         const config = await IntegrationConfig.findOne({ userId });
-        const wabaId = config?.whatsapp?.waBusinessId;
+        const wabaId = config?.whatsapp?.waBusinessId || config?.whatsapp?.wabaId;
 
         if (!wabaId) {
             return { success: false, error: 'WhatsApp Business Account ID not configured. Go to Settings → WhatsApp Config.' };

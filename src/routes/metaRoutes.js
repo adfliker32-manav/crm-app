@@ -40,4 +40,9 @@ router.get('/capi-settings', authMiddleware, metaController.getCapiSettings);
 router.post('/capi-settings', authMiddleware, metaController.updateCapiSettings);
 router.post('/test-capi', authMiddleware, metaController.testCapiConnection);
 
+// Meta platform callbacks (NO AUTH — Meta posts to these directly)
+// Required for App Review: data deletion + deauthorization
+router.post('/data-deletion', metaController.handleDataDeletion);
+router.post('/deauth', metaController.handleDeauth);
+
 module.exports = router;

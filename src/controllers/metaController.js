@@ -518,12 +518,13 @@ const updateCapiSettings = async (req, res) => {
 
         const updateData = {};
 
-        if (pixelId !== undefined) updateData['meta.metaPixelId'] = pixelId;
+        // Trim whitespace — pasted tokens/IDs with spaces cause silent 400 errors from Meta
+        if (pixelId !== undefined) updateData['meta.metaPixelId'] = pixelId.trim();
         // Only update token if user actually entered a new one (not the masked placeholder)
         if (capiAccessToken !== undefined && !capiAccessToken.startsWith('••••')) {
-            updateData['meta.metaCapiAccessToken'] = capiAccessToken;
+            updateData['meta.metaCapiAccessToken'] = capiAccessToken.trim();
         }
-        if (testEventCode !== undefined) updateData['meta.metaTestEventCode'] = testEventCode;
+        if (testEventCode !== undefined) updateData['meta.metaTestEventCode'] = testEventCode.trim();
         if (capiEnabled !== undefined) updateData['meta.metaCapiEnabled'] = capiEnabled;
         if (stageMapping !== undefined) updateData['meta.metaStageMapping'] = stageMapping;
 
@@ -577,10 +578,14 @@ const testCapiConnection = async (req, res) => {
                 event_id: `test_${Date.now()}`,
                 action_source: 'website',
                 event_source_url: process.env.APP_URL || 'https://your-crm.com',
-                user_data: {
-                    client_user_agent: req.headers['user-agent'] || 'CRM-Test',
-                    client_ip_address: req.ip || '127.0.0.1'
-                }
+                user_data: (() => {
+                    // req.ip can be IPv6 (e.g. "::1", "::ffff:1.2.3.4") — Meta only accepts IPv4
+                    const rawIp = req.ip || '';
+                    const ipv4 = rawIp.startsWith('::ffff:') ? rawIp.slice(7) : rawIp;
+                    const data = { client_user_agent: req.headers['user-agent'] || 'CRM-Test' };
+                    if (ipv4 && /^\d{1,3}(\.\d{1,3}){3}$/.test(ipv4)) data.client_ip_address = ipv4;
+                    return data;
+                })()
             }],
             access_token: meta.metaCapiAccessToken
         };
@@ -666,6 +671,131 @@ const testCapiConnection = async (req, res) => {
     }
 };
 
+// ==========================================
+// META PLATFORM CALLBACKS (App Review Required)
+// ==========================================
+
+// Parse and verify a Meta signed_request (base64url-encoded HMAC-SHA256)
+function parseSignedRequest(signedRequest, appSecret) {
+    const crypto = require('crypto');
+    const parts = signedRequest.split('.');
+    if (parts.length !== 2) throw new Error('Invalid signed_request format');
+    const [encodedSig, payload] = parts;
+    const sig = Buffer.from(encodedSig.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+    const expectedSig = crypto.createHmac('sha256', appSecret).update(payload).digest();
+    if (sig.length !== expectedSig.length || !crypto.timingSafeEqual(sig, expectedSig)) {
+        throw new Error('Invalid signature');
+    }
+    return JSON.parse(Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'));
+}
+
+// POST /api/meta/data-deletion
+// Meta GDPR data deletion callback — required for App Review
+// Meta sends this when a user requests deletion of their data from Facebook settings.
+// Must return { url, confirmation_code } so Meta can show users a status link.
+const handleDataDeletion = async (req, res) => {
+    const crypto = require('crypto');
+    try {
+        const APP_SECRET = process.env.META_APP_SECRET;
+        if (!APP_SECRET) {
+            console.error('❌ META_APP_SECRET not set — data deletion callback cannot verify request');
+            return res.status(500).json({ error: 'Server configuration error' });
+        }
+
+        const { signed_request } = req.body;
+        if (!signed_request) return res.status(400).json({ error: 'Missing signed_request' });
+
+        let data;
+        try {
+            data = parseSignedRequest(signed_request, APP_SECRET);
+        } catch (e) {
+            console.warn('⛔ Data deletion: invalid signed_request:', e.message);
+            return res.status(400).json({ error: 'Invalid signed_request' });
+        }
+
+        const metaUserId = data.user_id;
+        console.log(`🗑️ Meta data deletion request for meta user: ${metaUserId}`);
+
+        // Clear all Meta integration data for this user
+        await IntegrationConfig.updateOne(
+            { 'meta.metaUserId': metaUserId },
+            {
+                $unset: {
+                    'meta.metaAccessToken': '',
+                    'meta.metaPageAccessToken': '',
+                    'meta.metaCapiAccessToken': '',
+                },
+                $set: {
+                    'meta.metaLeadSyncEnabled': false,
+                    'meta.metaCapiEnabled': false,
+                    'meta.metaUserId': null,
+                    'meta.metaPageId': null,
+                    'meta.metaPageName': null,
+                    'meta.metaFormId': null,
+                    'meta.metaFormName': null,
+                    'meta.metaPixelId': null,
+                    'meta.metaTokenExpiry': null,
+                }
+            }
+        );
+
+        const confirmationCode = crypto.randomBytes(10).toString('hex');
+        const statusUrl = `${process.env.FRONTEND_URL || 'https://app.adfliker.com'}/privacy`;
+
+        console.log(`✅ Meta data deletion completed for meta user ${metaUserId} — code: ${confirmationCode}`);
+        res.json({ url: statusUrl, confirmation_code: confirmationCode });
+
+    } catch (error) {
+        console.error('❌ Data deletion callback error:', error.message);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+// POST /api/meta/deauth
+// Meta deauthorization callback — fired when a user removes the app from their Facebook settings.
+// Must revoke stored tokens so stale credentials are not kept.
+const handleDeauth = async (req, res) => {
+    try {
+        const APP_SECRET = process.env.META_APP_SECRET;
+        if (!APP_SECRET) return res.sendStatus(200); // Can't verify without secret, ack and move on
+
+        const { signed_request } = req.body;
+        if (!signed_request) return res.sendStatus(400);
+
+        let data;
+        try {
+            data = parseSignedRequest(signed_request, APP_SECRET);
+        } catch (e) {
+            console.warn('⛔ Deauth: invalid signed_request:', e.message);
+            return res.sendStatus(400);
+        }
+
+        const metaUserId = data.user_id;
+        console.log(`🔌 Meta deauth for meta user: ${metaUserId}`);
+
+        // Revoke stored tokens — user removed app access from Facebook settings
+        await IntegrationConfig.updateOne(
+            { 'meta.metaUserId': metaUserId },
+            {
+                $unset: {
+                    'meta.metaAccessToken': '',
+                    'meta.metaPageAccessToken': '',
+                },
+                $set: {
+                    'meta.metaLeadSyncEnabled': false,
+                    'meta.metaTokenExpiry': null,
+                }
+            }
+        );
+
+        console.log(`✅ Meta deauth completed for meta user: ${metaUserId}`);
+        res.sendStatus(200);
+    } catch (error) {
+        console.error('❌ Deauth callback error:', error.message);
+        res.sendStatus(200); // Always 200 to Meta — never leave callbacks hanging
+    }
+};
+
 module.exports = {
     getAuthUrl,
     handleCallback,
@@ -678,5 +808,7 @@ module.exports = {
     getCapiSettings,
     updateCapiSettings,
     testCapiConnection,
-    exchangeToken
+    exchangeToken,
+    handleDataDeletion,
+    handleDeauth
 };
