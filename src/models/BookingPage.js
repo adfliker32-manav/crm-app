@@ -61,7 +61,11 @@ const bookingPageSchema = new mongoose.Schema({
     // Custom questions shown on the booking form; answers saved with appointment + lead
     customQuestions: { type: [customQuestionSchema], default: [] },
     // Message shown on the success screen after booking
-    thankYouMessage: { type: String, default: '', trim: true }
+    thankYouMessage: { type: String, default: '', trim: true },
+    // Optional description shown on the public booking page
+    description: { type: String, default: '', trim: true },
+    // User-editable URL prefix (slug = slugPrefix-userId_last8 or book-userId_last8)
+    slugPrefix: { type: String, default: '', trim: true }
 }, { timestamps: true });
 
 bookingPageSchema.plugin(saasPlugin);

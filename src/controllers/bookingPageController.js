@@ -11,7 +11,12 @@ const { emitToUser } = require('../services/socketService');
 const { normalizePhoneForWhatsApp, getWorkspaceCountryCode } = require('../utils/phoneUtils');
 const { replaceVariables } = require('../utils/emailTemplateUtils');
 
-const buildSlug = (userId) => `book-${userId.toString().slice(-8)}`;
+const slugify    = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+const buildSlug  = (userId, prefix) => {
+    const suffix = userId.toString().slice(-8);
+    const clean  = prefix ? slugify(prefix) : '';
+    return clean ? `${clean}-${suffix}` : `book-${suffix}`;
+};
 
 const formatDate = (dateObj) =>
     new Date(dateObj).toLocaleDateString('en-IN', {
@@ -95,7 +100,9 @@ const getPublicBookingPage = async (req, res) => {
             bufferMinutes:   page.bufferMinutes || 0,
             slug:            page.slug,
             customQuestions: page.customQuestions || [],
-            thankYouMessage: page.thankYouMessage || ''
+            thankYouMessage: page.thankYouMessage || '',
+            description:     page.description     || '',
+            slugPrefix:      page.slugPrefix      || ''
         });
     } catch (err) {
         console.error('getPublicBookingPage error:', err);
@@ -340,8 +347,8 @@ const getMyBookingPage = async (req, res) => {
         let page = await BookingPage.findOne({ userId }).lean();
 
         if (!page) {
-            const slug = buildSlug(userId);
             const user = await User.findById(userId).select('name').lean();
+            const slug = buildSlug(userId, user?.name || '');
             const newPage = new BookingPage({
                 userId,
                 slug,
@@ -374,7 +381,7 @@ const updateMyBookingPage = async (req, res) => {
             'primaryColor', 'logoUrl', 'businessName', 'confirmationMessage',
             'confirmationTemplateId', 'leadStageId',
             'sendConfirmation', 'isActive', 'maxAdvanceDays', 'bufferMinutes',
-            'customQuestions', 'thankYouMessage'
+            'customQuestions', 'thankYouMessage', 'description', 'slugPrefix'
         ];
         const updates = {};
         allowed.forEach(key => { if (req.body[key] !== undefined) updates[key] = req.body[key]; });
@@ -389,6 +396,11 @@ const updateMyBookingPage = async (req, res) => {
             const coerced = coerceObjectIdOrNull(updates.confirmationTemplateId);
             if (coerced === undefined) return res.status(400).json({ message: 'Invalid confirmationTemplateId' });
             updates.confirmationTemplateId = coerced;
+        }
+
+        // Regenerate slug when user changes the slug prefix
+        if ('slugPrefix' in updates) {
+            updates.slug = buildSlug(userId, updates.slugPrefix);
         }
 
         let page = await BookingPage.findOneAndUpdate(

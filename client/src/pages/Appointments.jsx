@@ -566,6 +566,8 @@ function BookingPageCustomizer() {
     const [maxAdvanceDays, setMaxAdvanceDays]           = useState(30);
     const [bufferMinutes, setBufferMinutes]             = useState(0);
     const [thankYouMessage, setThankYouMessage]         = useState('');
+    const [description, setDescription]                 = useState('');
+    const [slugPrefix, setSlugPrefix]                   = useState('');
     const [customQuestions, setCustomQuestions]         = useState([]);
     const [showNewQForm, setShowNewQForm]               = useState(false);
     const [newQ, setNewQ]                               = useState({ question: '', type: 'text', required: false, options: [] });
@@ -591,6 +593,8 @@ function BookingPageCustomizer() {
                 setMaxAdvanceDays(d.maxAdvanceDays || 30);
                 setBufferMinutes(d.bufferMinutes || 0);
                 setThankYouMessage(d.thankYouMessage || '');
+                setDescription(d.description || '');
+                setSlugPrefix(d.slugPrefix || '');
                 setCustomQuestions(d.customQuestions || []);
             })
             .catch(() => showError('Failed to load booking page config'))
@@ -619,7 +623,7 @@ function BookingPageCustomizer() {
                 leadStageId: leadStageId || null,
                 confirmationTemplateId: confirmationTemplateId || null,
                 sendConfirmation, isActive, maxAdvanceDays, bufferMinutes,
-                thankYouMessage, customQuestions
+                thankYouMessage, description, slugPrefix, customQuestions
             });
             setConfig(res.data);
             showSuccess('Booking page saved!');
@@ -731,27 +735,32 @@ function BookingPageCustomizer() {
             {/* ── Body: Sidebar + Content ── */}
             <div className="flex gap-5 flex-1 min-h-0">
 
-                {/* Sidebar nav */}
-                <div className="w-48 shrink-0 flex flex-col gap-1">
-                    {SECTIONS.map(s => (
-                        <button key={s.id} onClick={() => setActiveSection(s.id)}
-                            className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-left transition-all
-                                ${activeSection === s.id
-                                    ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
-                                    : 'text-slate-500 hover:bg-white hover:text-slate-700 hover:shadow-sm'}`}>
-                            <i className={`fa-solid ${s.icon} text-xs w-4 text-center`}></i>
-                            {s.label}
-                        </button>
-                    ))}
-
-                    <div className="flex-1"></div>
-
-                    <button onClick={handleSave} disabled={saving}
-                        className="mt-4 w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-colors shadow-md shadow-blue-200 flex items-center justify-center gap-2">
-                        {saving
-                            ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></span> Saving…</>
-                            : <><i className="fa-solid fa-floppy-disk text-xs"></i> Save Changes</>}
-                    </button>
+                {/* Sidebar — step progress indicator */}
+                <div className="w-44 shrink-0 flex flex-col gap-1">
+                    {SECTIONS.map((s, idx) => {
+                        const currentIdx = SECTIONS.findIndex(sec => sec.id === activeSection);
+                        const isDone     = idx < currentIdx;
+                        const isCurrent  = s.id === activeSection;
+                        return (
+                            <button key={s.id} onClick={() => setActiveSection(s.id)}
+                                className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-left transition-all
+                                    ${isCurrent
+                                        ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
+                                        : 'text-slate-500 hover:bg-white hover:text-slate-700 hover:shadow-sm'}`}>
+                                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0
+                                    ${isCurrent
+                                        ? 'bg-white/25 text-white'
+                                        : isDone
+                                            ? 'bg-green-100 text-green-600'
+                                            : 'bg-slate-200 text-slate-400'}`}>
+                                    {isDone
+                                        ? <i className="fa-solid fa-check text-[8px]"></i>
+                                        : idx + 1}
+                                </div>
+                                {s.label}
+                            </button>
+                        );
+                    })}
                 </div>
 
                 {/* Content area */}
@@ -759,6 +768,7 @@ function BookingPageCustomizer() {
 
                     {/* ── Branding ── */}
                     {activeSection === 'branding' && (
+                        <>
                         <CSection icon="fa-palette" title="Page Branding"
                             desc="Customize how your booking page looks to customers.">
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -772,7 +782,20 @@ function BookingPageCustomizer() {
                                 </CField>
                                 <CField label="Tagline / Subtitle" icon="fa-quote-left" className="sm:col-span-2">
                                     <input value={subtitle} onChange={e => setSubtitle(e.target.value)}
-                                        placeholder="Choose a service and pick a convenient time." className={iCls} />
+                                        placeholder="e.g. Choose a service and pick a convenient time." className={iCls} />
+                                </CField>
+                                <CField label="Description" icon="fa-align-left" className="sm:col-span-2">
+                                    <textarea value={description} onChange={e => setDescription(e.target.value)}
+                                        placeholder="Tell customers what to expect — this appears on your booking page below the header."
+                                        rows={3} className={`${iCls} resize-none`} />
+                                </CField>
+                                <CField label="Thank You Message" icon="fa-heart" className="sm:col-span-2">
+                                    <textarea value={thankYouMessage} onChange={e => setThankYouMessage(e.target.value)}
+                                        placeholder="Hi {{name}}, your appointment is confirmed. We look forward to seeing you!"
+                                        rows={2} className={`${iCls} resize-none`} />
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        Shown on success screen. Use <code className="bg-slate-100 px-1 rounded text-[11px]">{'{{name}}'}</code> for customer name.
+                                    </p>
                                 </CField>
                                 <CField label="Logo URL" icon="fa-image" className="sm:col-span-2">
                                     <input value={logoUrl} onChange={e => setLogoUrl(e.target.value)}
@@ -786,37 +809,56 @@ function BookingPageCustomizer() {
                                         </div>
                                     )}
                                 </CField>
-                                <CField label="Thank You Message" icon="fa-heart" className="sm:col-span-2">
-                                    <textarea value={thankYouMessage} onChange={e => setThankYouMessage(e.target.value)}
-                                        placeholder="Hi {{name}}, your appointment is confirmed. We look forward to seeing you!"
-                                        rows={2} className={`${iCls} resize-none`} />
-                                    <p className="text-xs text-slate-400 mt-1">
-                                        Shown on the success screen. Use <code className="bg-slate-100 px-1 rounded text-[11px]">{'{{name}}'}</code> for customer's name.
-                                    </p>
-                                </CField>
                                 <CField label="Brand Color" icon="fa-droplet" className="sm:col-span-2">
                                     <div className="flex items-center gap-3">
                                         <input type="color" value={primaryColor} onChange={e => setPrimaryColor(e.target.value)}
                                             className="w-11 h-11 rounded-xl border-2 border-slate-200 cursor-pointer p-1 shrink-0" />
                                         <input value={primaryColor} onChange={e => setPrimaryColor(e.target.value)}
                                             placeholder="#3b82f6" className={iCls} />
-                                        <div className="w-11 h-11 rounded-xl border border-slate-200 shrink-0"
+                                        <div className="w-11 h-11 rounded-xl border-2 border-slate-200 shrink-0 shadow-sm"
                                             style={{ backgroundColor: primaryColor }}></div>
                                     </div>
                                     <div className="flex gap-2 mt-2 flex-wrap">
-                                        {['#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444','#ec4899','#0ea5e9','#1e293b'].map(c => (
+                                        {['#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444','#ec4899','#0ea5e9','#6366f1','#14b8a6','#f97316'].map(c => (
                                             <button key={c} onClick={() => setPrimaryColor(c)}
-                                                className={`w-7 h-7 rounded-lg border-2 transition-all ${primaryColor === c ? 'border-slate-800 scale-110' : 'border-transparent hover:scale-105'}`}
+                                                className={`w-7 h-7 rounded-lg border-2 transition-all ${primaryColor === c ? 'border-slate-700 scale-110 shadow-md' : 'border-transparent hover:scale-105'}`}
                                                 style={{ backgroundColor: c }} title={c} />
                                         ))}
                                     </div>
+                                    <p className="text-xs text-slate-400 mt-1">Applied to the header, buttons, and selected elements on your booking page.</p>
+                                </CField>
+                                <CField label="Booking URL" icon="fa-link" className="sm:col-span-2">
+                                    <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5">
+                                        <span className="text-[11px] text-slate-400 shrink-0 truncate max-w-[160px]">
+                                            {config?.publicUrl?.replace(/\/book\/.*/, '') || 'domain.com'}/book/
+                                        </span>
+                                        <input value={slugPrefix}
+                                            onChange={e => setSlugPrefix(e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toLowerCase())}
+                                            placeholder="company-name"
+                                            className="flex-1 bg-transparent text-sm focus:outline-none font-semibold text-slate-700 min-w-0" />
+                                        <span className="text-[11px] text-slate-400 shrink-0 font-mono">
+                                            -{config?.slug?.slice(-8) || ''}
+                                        </span>
+                                    </div>
+                                    {slugPrefix && (
+                                        <p className="text-xs text-blue-600 mt-1 font-mono truncate">
+                                            → {config?.publicUrl?.replace(/\/book\/.*/, '') || ''}/book/{slugifyFe(slugPrefix)}-{config?.slug?.slice(-8) || ''}
+                                        </p>
+                                    )}
+                                    <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                                        <i className="fa-solid fa-triangle-exclamation text-[10px]"></i>
+                                        Saving a new URL will break any existing booking links shared before.
+                                    </p>
                                 </CField>
                             </div>
                         </CSection>
+                        <SectionNav currentId="branding" onNavigate={setActiveSection} onSave={handleSave} saving={saving} />
+                        </>
                     )}
 
                     {/* ── Services ── */}
                     {activeSection === 'services' && (
+                        <>
                         <CSection icon="fa-briefcase" title="Services Offered"
                             desc="List the services customers can book. They'll pick one when booking.">
                             <div className="flex flex-wrap gap-2 mb-4 min-h-[44px]">
@@ -845,10 +887,13 @@ function BookingPageCustomizer() {
                                 </button>
                             </div>
                         </CSection>
+                        <SectionNav currentId="services" onNavigate={setActiveSection} onSave={handleSave} saving={saving} />
+                        </>
                     )}
 
                     {/* ── Schedule ── */}
                     {activeSection === 'schedule' && (
+                        <>
                         <CSection icon="fa-calendar-days" title="Schedule Settings"
                             desc="Configure which days you're available and booking rules.">
 
@@ -892,10 +937,13 @@ function BookingPageCustomizer() {
                                 </CField>
                             </div>
                         </CSection>
+                        <SectionNav currentId="schedule" onNavigate={setActiveSection} onSave={handleSave} saving={saving} />
+                        </>
                     )}
 
                     {/* ── Time Slots ── */}
                     {activeSection === 'slots' && (
+                        <>
                         <CSection icon="fa-clock" title="Time Slots"
                             desc="Define the appointment times customers can choose from.">
                             <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-4 min-h-[44px]">
@@ -925,10 +973,13 @@ function BookingPageCustomizer() {
                                 Use the time picker to add slots. Times auto-format to AM/PM.
                             </p>
                         </CSection>
+                        <SectionNav currentId="slots" onNavigate={setActiveSection} onSave={handleSave} saving={saving} />
+                        </>
                     )}
 
                     {/* ── Questions ── */}
                     {activeSection === 'questions' && (
+                        <>
                         <CSection icon="fa-circle-question" title="Custom Questions"
                             desc="Add questions customers must answer when booking. Answers are saved with the appointment and lead.">
 
@@ -1062,10 +1113,13 @@ function BookingPageCustomizer() {
                                 </div>
                             )}
                         </CSection>
+                        <SectionNav currentId="questions" onNavigate={setActiveSection} onSave={handleSave} saving={saving} />
+                        </>
                     )}
 
                     {/* ── Notifications ── */}
                     {activeSection === 'notifications' && (
+                        <>
                         <CSection icon="fa-bell" title="WhatsApp Confirmation"
                             desc="Automatically send a WhatsApp message when a booking is made.">
 
@@ -1122,6 +1176,8 @@ function BookingPageCustomizer() {
                                 </CField>
                             )}
                         </CSection>
+                        <SectionNav currentId="notifications" onNavigate={setActiveSection} onSave={handleSave} saving={saving} />
+                        </>
                     )}
                 </div>
             </div>
@@ -1130,6 +1186,38 @@ function BookingPageCustomizer() {
 }
 
 const iCls = 'w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent bg-white transition-shadow';
+
+const slugifyFe = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+
+function SectionNav({ currentId, onNavigate, onSave, saving }) {
+    const ids     = SECTIONS.map(s => s.id);
+    const idx     = ids.indexOf(currentId);
+    const isFirst = idx === 0;
+    const isLast  = idx === ids.length - 1;
+    return (
+        <div className={`flex gap-3 mt-5 ${isFirst ? 'justify-end' : ''}`}>
+            {!isFirst && (
+                <button onClick={() => onNavigate(ids[idx - 1])}
+                    className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-bold text-sm hover:bg-white hover:border-slate-300 transition-all">
+                    ← Back
+                </button>
+            )}
+            {isLast ? (
+                <button onClick={onSave} disabled={saving}
+                    className="flex-1 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold text-sm transition-all shadow-md shadow-blue-200 flex items-center justify-center gap-2">
+                    {saving
+                        ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></span> Saving…</>
+                        : <><i className="fa-solid fa-floppy-disk text-xs"></i> Save All Changes</>}
+                </button>
+            ) : (
+                <button onClick={() => onNavigate(ids[idx + 1])}
+                    className="flex-1 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm transition-all shadow-md shadow-blue-200">
+                    Next →
+                </button>
+            )}
+        </div>
+    );
+}
 
 function CSection({ icon, title, desc, children }) {
     return (

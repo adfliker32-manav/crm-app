@@ -73,11 +73,19 @@ function StepIndicator({ step, primaryColor }) {
     );
 }
 
+function hexToRgba(hex, opacity) {
+    const h = (hex || '#3b82f6').replace('#', '');
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${opacity})`;
+}
+
 function SectionHeader({ icon, title, primaryColor }) {
     return (
         <div className="flex items-center gap-2 mb-3">
             <div className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0"
-                style={{ backgroundColor: `${primaryColor}18` }}>
+                style={{ backgroundColor: hexToRgba(primaryColor, 0.12) }}>
                 <i className={`fa-solid ${icon} text-[10px]`} style={{ color: primaryColor }}></i>
             </div>
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">{title}</h3>
@@ -102,7 +110,7 @@ function SummaryRow({ icon, label, value, primaryColor }) {
     return (
         <div className="flex items-start gap-3">
             <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
-                style={{ backgroundColor: `${primaryColor}15` }}>
+                style={{ backgroundColor: hexToRgba(primaryColor, 0.1) }}>
                 <i className={`fa-solid ${icon} text-[11px]`} style={{ color: primaryColor }}></i>
             </div>
             <div>
@@ -203,8 +211,17 @@ export default function BookingPage() {
     }, [slug, page?.timeSlots]);
 
     const handleDateSelect = (d) => { setSelectedDate(d); fetchSlots(d); };
-    const primaryColor     = page?.primaryColor || '#3b82f6';
-    const canContinue      = selectedService && selectedDate && selectedTime;
+    // Ensure we always have a valid hex color (never empty/null)
+    const primaryColor = (page?.primaryColor && page.primaryColor.trim()) ? page.primaryColor.trim() : '#3b82f6';
+    // CSS rgba helper for tinted backgrounds — avoids 8-char hex browser compatibility issues
+    const colorBg = (opacity) => {
+        const hex = primaryColor.replace('#', '');
+        const r = parseInt(hex.slice(0, 2), 16);
+        const g = parseInt(hex.slice(2, 4), 16);
+        const b = parseInt(hex.slice(4, 6), 16);
+        return `rgba(${r},${g},${b},${opacity})`;
+    };
+    const canContinue = selectedService && selectedDate && selectedTime;
 
     const handleSubmit = async () => {
         if (!name.trim() || !phone.trim()) {
@@ -301,6 +318,13 @@ export default function BookingPage() {
             </div>
 
             <div className="max-w-lg mx-auto px-4 pb-14">
+
+                {/* Description */}
+                {page.description && step !== 3 && (
+                    <div className="mt-4 bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                        <p className="text-slate-600 text-sm leading-relaxed">{page.description}</p>
+                    </div>
+                )}
 
                 {/* ── Step 3: Success ── */}
                 {step === 3 && (
@@ -474,7 +498,7 @@ export default function BookingPage() {
                             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                                 <div className="flex items-center gap-3">
                                     <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
-                                        style={{ backgroundColor: `${primaryColor}15` }}>
+                                        style={{ backgroundColor: hexToRgba(primaryColor, 0.1) }}>
                                         <i className="fa-solid fa-calendar-check text-base" style={{ color: primaryColor }}></i>
                                     </div>
                                     <div className="flex-1 min-w-0">
@@ -495,7 +519,7 @@ export default function BookingPage() {
                             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
                                 <div className="flex items-center gap-2 -mb-1">
                                     <div className="w-6 h-6 rounded-lg flex items-center justify-center"
-                                        style={{ backgroundColor: `${primaryColor}15` }}>
+                                        style={{ backgroundColor: hexToRgba(primaryColor, 0.1) }}>
                                         <i className="fa-solid fa-user text-[10px]" style={{ color: primaryColor }}></i>
                                     </div>
                                     <h3 className="font-bold text-slate-800 text-sm">Contact Information</h3>
@@ -536,7 +560,7 @@ export default function BookingPage() {
                                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
                                     <div className="flex items-center gap-2 -mb-1">
                                         <div className="w-6 h-6 rounded-lg flex items-center justify-center"
-                                            style={{ backgroundColor: `${primaryColor}15` }}>
+                                            style={{ backgroundColor: hexToRgba(primaryColor, 0.1) }}>
                                             <i className="fa-solid fa-circle-question text-[10px]" style={{ color: primaryColor }}></i>
                                         </div>
                                         <h3 className="font-bold text-slate-800 text-sm">Additional Information</h3>
