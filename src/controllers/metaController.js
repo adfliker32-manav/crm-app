@@ -1,7 +1,7 @@
 const IntegrationConfig = require('../models/IntegrationConfig');
 const axios = require('axios');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
 const META_API_TIMEOUT = 10000; // 10s — all Meta API calls must have a timeout
 
 // ==========================================
@@ -126,11 +126,12 @@ const getAuthUrl = async (req, res) => {
             'pages_show_list',
             'pages_read_engagement',
             'leads_retrieval',
+            'pages_manage_metadata', // required by Meta docs for leadgen webhook subscription
             'pages_manage_ads',
             'ads_management'
         ].join(',');
 
-        let authUrl = `https://www.facebook.com/v21.0/dialog/oauth?` +
+        let authUrl = `https://www.facebook.com/v25.0/dialog/oauth?` +
             `client_id=${appId}` +
             `&redirect_uri=${encodeURIComponent(redirectUri)}` +
             `&state=${state}` +
@@ -740,7 +741,8 @@ const handleDataDeletion = async (req, res) => {
         );
 
         const confirmationCode = crypto.randomBytes(10).toString('hex');
-        const statusUrl = `${process.env.FRONTEND_URL || 'https://app.adfliker.com'}/privacy`;
+        // Meta requires this URL to be a page where users can verify their deletion was processed.
+        const statusUrl = `${process.env.FRONTEND_URL || 'https://app.adfliker.com'}/deletion-status?code=${confirmationCode}`;
 
         console.log(`✅ Meta data deletion completed for meta user ${metaUserId} — code: ${confirmationCode}`);
         res.json({ url: statusUrl, confirmation_code: confirmationCode });

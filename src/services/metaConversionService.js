@@ -3,7 +3,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
 
 /**
  * Hash user data for privacy (Meta requirement)

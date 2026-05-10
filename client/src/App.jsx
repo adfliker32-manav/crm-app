@@ -36,6 +36,7 @@ const Appointments = lazy(() => import('./pages/Appointments'));
 const BookingPage = lazy(() => import('./pages/BookingPage'));
 const TermsAndConditions = lazy(() => import('./pages/TermsAndConditions'));
 const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
+const DataDeletionStatus = lazy(() => import('./pages/DataDeletionStatus'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
@@ -56,6 +57,7 @@ function App() {
                     <Route path="/book/:slug" element={<BookingPage />} />
                     <Route path="/terms" element={<TermsAndConditions />} />
                     <Route path="/privacy" element={<PrivacyPolicy />} />
+                    <Route path="/deletion-status" element={<DataDeletionStatus />} />
 
                     <Route element={<ProtectedRoute />}>
                       <Route path="/super-admin" element={<SuperAdmin />} />

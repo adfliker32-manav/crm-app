@@ -30,7 +30,7 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
         }
 
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -80,7 +80,7 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
         }
 
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -135,7 +135,7 @@ const sendMediaMessage = async (to, mediaType, mediaIdentifier, caption = null, 
         }
         
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
 
         // Determine if mediaIdentifier is an ID (numeric-ish) or a URL
         const isUrl = typeof mediaIdentifier === 'string' && (mediaIdentifier.startsWith('http://') || mediaIdentifier.startsWith('https://'));
@@ -175,7 +175,7 @@ const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
         }
 
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -217,7 +217,7 @@ const sendCtaUrlMessage = async (to, bodyText, buttonText, buttonUrl, userId = n
         }
 
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -256,7 +256,7 @@ const sendCtaUrlMessage = async (to, bodyText, buttonText, buttonUrl, userId = n
 const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en', componentsData = [], userId = null, options = {}) => {
     try {
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -344,7 +344,7 @@ const downloadMedia = async (mediaId, userId = null) => {
         console.log(`🌐 Cache Miss. Fetching from Meta: ${mediaId}`);
         const { accessToken } = await getCredentials(userId);
 
-        const mediaInfoUrl = `https://graph.facebook.com/v21.0/${mediaId}`;
+        const mediaInfoUrl = `https://graph.facebook.com/v25.0/${mediaId}`;
         const mediaInfoResponse = await axios.get(mediaInfoUrl, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
         });
@@ -388,7 +388,7 @@ const submitTemplateToMeta = async (userId, template) => {
             return { success: false, error: 'WhatsApp Business Account ID not configured. Go to Settings → WhatsApp Config.' };
         }
 
-        const url = `https://graph.facebook.com/v21.0/${wabaId}/message_templates`;
+        const url = `https://graph.facebook.com/v25.0/${wabaId}/message_templates`;
 
         const metaComponents = template.components.map(comp => {
             const metaComp = { type: comp.type };
@@ -448,7 +448,7 @@ const submitTemplateToMeta = async (userId, template) => {
 const syncTemplateFromMeta = async (userId, metaTemplateId) => {
     try {
         const { accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v21.0/${metaTemplateId}`;
+        const url = `https://graph.facebook.com/v25.0/${metaTemplateId}`;
 
         const response = await axios.get(url, {
             headers: { 'Authorization': `Bearer ${accessToken}` },
@@ -476,13 +476,13 @@ const uploadMediaForTemplate = async (userId, fileBuffer, mimeType, fileName) =>
 
         if (!appId) throw new Error('Meta App ID not configured. Go to Settings → WhatsApp Config and set your App ID.');
 
-        const sessionUrl = `https://graph.facebook.com/v21.0/${appId}/uploads`;
+        const sessionUrl = `https://graph.facebook.com/v25.0/${appId}/uploads`;
         const sessionRes = await axios.post(sessionUrl, null, {
             params: { file_length: fileBuffer.length, file_type: mimeType, file_name: fileName },
             headers: { 'Authorization': `Bearer ${accessToken}` }
         });
 
-        const uploadUrl = `https://graph.facebook.com/v21.0/${sessionRes.data.id}`;
+        const uploadUrl = `https://graph.facebook.com/v25.0/${sessionRes.data.id}`;
         const uploadRes = await axios.post(uploadUrl, fileBuffer, {
             headers: { 'Authorization': `OAuth ${accessToken}`, 'file_offset': '0', 'Content-Type': mimeType }
         });
@@ -499,7 +499,7 @@ const FormData = require('form-data');
 const uploadMediaForSending = async (userId, filePath, mimeType, fileName) => {
     try {
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/media`;
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/media`;
 
         const formData = new FormData();
         formData.append('messaging_product', 'whatsapp');

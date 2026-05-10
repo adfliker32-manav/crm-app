@@ -47,8 +47,9 @@ export const AuthProvider = ({ children }) => {
     const logout = () => {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
-        setUser(null);
-        window.location.href = '/login';
+        // Use replace (not href) so browser history doesn't allow "back" to protected pages.
+        // No setUser(null) needed — the hard reload reinitializes state from empty localStorage.
+        window.location.replace('/login');
     };
 
     const loginWithToken = (token, userObj) => {

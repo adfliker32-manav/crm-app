@@ -129,19 +129,74 @@ const PrivacyPolicy = () => {
                                 own Meta Pixel to help optimise ad delivery. All user data (email, phone) is hashed
                                 with SHA-256 before transmission.</li>
                         </ul>
+
+                        <p className="mt-3 font-semibold text-slate-700">Facebook Permissions We Request</p>
+                        <p className="mt-1">
+                            During the Facebook OAuth flow, Adfliker CRM requests the following permissions — and
+                            only the minimum required to operate the Lead Ads integration:
+                        </p>
+                        <ul className="list-disc pl-5 space-y-1 mt-2">
+                            <li><strong>pages_show_list</strong> — to list the Facebook Pages you manage so you can
+                                select which page to sync leads from.</li>
+                            <li><strong>pages_read_engagement</strong> — to read page details needed to configure
+                                lead form subscriptions.</li>
+                            <li><strong>leads_retrieval</strong> — to fetch lead submissions from your Facebook Lead
+                                Ad forms and import them into your CRM workspace.</li>
+                            <li><strong>pages_manage_ads</strong> — to subscribe your page to the leadgen webhook so
+                                new leads are delivered in real time.</li>
+                            <li><strong>ads_management</strong> — to manage webhook subscriptions for lead ad
+                                delivery notifications.</li>
+                        </ul>
                         <p className="mt-2">
                             We collect only the data necessary to operate the integration and do not access any
-                            Facebook data beyond what you explicitly authorise during the OAuth login flow.
+                            Facebook data beyond what you explicitly authorise during the OAuth login flow. We do
+                            not use Facebook data to re-target users through advertising, nor do we sell or share
+                            Facebook-sourced lead data with any third parties outside of our own service operations.
                         </p>
+
+                        <p className="mt-3 font-semibold text-slate-700">Facebook Platform Policy Compliance</p>
+                        <p className="mt-1">
+                            Our use of data received through Meta's platforms complies with{' '}
+                            <a
+                                href="https://developers.facebook.com/terms/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-500 hover:underline"
+                            >
+                                Meta's Platform Terms
+                            </a>{' '}
+                            and{' '}
+                            <a
+                                href="https://www.facebook.com/policy/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-500 hover:underline"
+                            >
+                                Meta's Data Policy
+                            </a>.
+                            We limit use of Facebook data to providing and improving the CRM features for which
+                            it was authorised. We do not transfer Facebook data to data brokers, ad networks, or
+                            use it for targeting advertisements on any platform other than your own Meta Pixel
+                            via the Conversions API (which you control).
+                        </p>
+
+                        <p className="mt-3 font-semibold text-slate-700">Removing Facebook Access &amp; Data Deletion</p>
                         <p className="mt-2">
-                            <strong>Removing Facebook access:</strong> You may revoke Adfliker's access to your
-                            Facebook account at any time by going to{' '}
+                            You may revoke Adfliker's access to your Facebook account at any time by going to{' '}
                             <strong>Facebook Settings &rarr; Security and Login &rarr; Apps and Websites</strong>{' '}
                             and removing Adfliker. Upon removal, we will automatically delete your stored Facebook
-                            access tokens and disable lead sync. You may also request full deletion of your
-                            Facebook-linked data by contacting us at <strong>adfliker32@gmail.com</strong> or
-                            through Facebook's own data deletion process, which will trigger an automatic deletion
-                            of all associated data from our systems within 30 days.
+                            access tokens and disable lead sync within 24 hours.
+                        </p>
+                        <p className="mt-2">
+                            You may also submit a formal data deletion request directly through Facebook. Meta will
+                            send an automated request to our Data Deletion Callback endpoint, and we will delete
+                            all Facebook-linked credentials and configuration from our systems within 30 days. You
+                            will receive a confirmation code to verify deletion at{' '}
+                            <strong>https://app.adfliker.com/deletion-status</strong>.
+                        </p>
+                        <p className="mt-2">
+                            For a complete account deletion (including all CRM data), contact us directly at{' '}
+                            <strong>adfliker32@gmail.com</strong>.
                         </p>
                     </Section>
 

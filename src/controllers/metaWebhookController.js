@@ -4,7 +4,7 @@ const Lead = require('../models/Lead');
 const axios = require('axios');
 const { emitToUser } = require('../services/socketService');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
 const META_API_TIMEOUT = 8000; // 8s — prevents hung threads on slow Meta API
 
 // Webhook verification (GET request from Meta)

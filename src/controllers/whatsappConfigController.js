@@ -27,7 +27,7 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
         const appSecret = process.env.META_APP_SECRET;
         if (!appId || !appSecret) return res.status(500).json({ success: false, message: 'Meta App credentials not configured on server' });
 
-        const GRAPH = 'https://graph.facebook.com/v21.0';
+        const GRAPH = 'https://graph.facebook.com/v25.0';
 
         // Step 1: Exchange auth code for short-lived user token
         // redirect_uri must be empty string for JS SDK popup flow (Meta requirement)
@@ -284,7 +284,7 @@ exports.updateWhatsAppConfig = async (req, res) => {
         // any country without manual configuration.
         try {
             const metaRes = await axios.get(
-                `https://graph.facebook.com/v21.0/${waPhoneNumberId.trim()}`,
+                `https://graph.facebook.com/v25.0/${waPhoneNumberId.trim()}`,
                 {
                     params: { fields: 'display_phone_number' },
                     headers: { Authorization: `Bearer ${waAccessToken}` },
@@ -350,7 +350,7 @@ exports.testWhatsAppConfig = async (req, res) => {
         }
         
         // Test by getting phone number info
-        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}`;
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}`;
         
         try {
             const response = await axios.get(url, {
@@ -466,7 +466,7 @@ const refreshTokenForOwner = async (ownerId) => {
 
     const currentToken = config.whatsapp.waAccessToken; // getter decrypts automatically
 
-    const GRAPH = 'https://graph.facebook.com/v21.0';
+    const GRAPH = 'https://graph.facebook.com/v25.0';
     const tokenRes = await axios.get(`${GRAPH}/oauth/access_token`, {
         params: {
             grant_type:       'fb_exchange_token',

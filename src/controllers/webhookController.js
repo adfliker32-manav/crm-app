@@ -274,7 +274,7 @@ const sendReply = async (req, res) => {
 
         const { phoneNumberId, accessToken } = userCredentials;
         
-        const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
         
         await axios.post(url, {
             messaging_product: "whatsapp",

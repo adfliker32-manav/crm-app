@@ -609,7 +609,7 @@ exports.sendMediaMessage = async (req, res) => {
         const { phoneNumberId, accessToken } = creds;
 
         // Upload media to WhatsApp
-        const uploadUrl = `https://graph.facebook.com/v21.0/${phoneNumberId}/media`;
+        const uploadUrl = `https://graph.facebook.com/v25.0/${phoneNumberId}/media`;
         const FormData = require('form-data');
         const form = new FormData();
         form.append('messaging_product', 'whatsapp');
@@ -629,7 +629,7 @@ exports.sendMediaMessage = async (req, res) => {
         console.log(`✅ Media uploaded to WhatsApp, ID: ${mediaId}`);
 
         // Step 2: Send media message using the uploaded media ID
-        const sendUrl = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+        const sendUrl = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
         const msgData = {
             messaging_product: 'whatsapp',
             to: conversation.phone,
