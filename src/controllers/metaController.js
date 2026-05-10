@@ -128,7 +128,8 @@ const getAuthUrl = async (req, res) => {
             'leads_retrieval',
             'pages_manage_metadata', // required by Meta docs for leadgen webhook subscription
             'pages_manage_ads',
-            'ads_management'
+            'ads_management',
+            'business_management'   // required to fetch Business Manager pages via /me/businesses
         ].join(',');
 
         let authUrl = `https://www.facebook.com/v25.0/dialog/oauth?` +
@@ -310,23 +311,55 @@ const getPages = async (req, res) => {
         // Auto-refresh token if expiring soon
         const meta = await checkAndRefreshToken(ownerId, config.meta);
 
-        // Fetch all pages — follow pagination cursors to get every page the user admins
+        const token = meta.metaAccessToken;
+        const seenIds = new Set();
         let allPages = [];
-        let nextUrl = null;
 
-        const firstResponse = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
-            params: { access_token: meta.metaAccessToken, fields: 'id,name,access_token', limit: 100 },
-            timeout: META_API_TIMEOUT
+        // Helper: fetch all pages from a paginated endpoint
+        const fetchAllPages = async (url, params = {}) => {
+            const results = [];
+            const first = await axios.get(url, { params: { ...params, limit: 100 }, timeout: META_API_TIMEOUT });
+            results.push(...(first.data.data || []));
+            let next = first.data.paging?.next || null;
+            while (next) {
+                const res = await axios.get(next, { timeout: META_API_TIMEOUT });
+                results.push(...(res.data.data || []));
+                next = res.data.paging?.next || null;
+            }
+            return results;
+        };
+
+        // 1. Direct page admin roles (pages_show_list)
+        const directPages = await fetchAllPages(`${META_GRAPH_URL}/me/accounts`, {
+            access_token: token, fields: 'id,name,access_token'
         });
+        directPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
 
-        allPages = allPages.concat(firstResponse.data.data || []);
-        nextUrl = firstResponse.data.paging?.next || null;
+        // 2. Business Manager pages (business_management permission)
+        // Fetches pages the user manages via Meta Business Manager — not visible via me/accounts alone
+        try {
+            const bizRes = await axios.get(`${META_GRAPH_URL}/me/businesses`, {
+                params: { access_token: token, fields: 'id,name', limit: 50 },
+                timeout: META_API_TIMEOUT
+            });
+            const businesses = bizRes.data.data || [];
 
-        // Follow pagination if there are more pages
-        while (nextUrl) {
-            const nextResponse = await axios.get(nextUrl, { timeout: META_API_TIMEOUT });
-            allPages = allPages.concat(nextResponse.data.data || []);
-            nextUrl = nextResponse.data.paging?.next || null;
+            for (const biz of businesses) {
+                // Fetch pages owned by this business
+                const bizPages = await fetchAllPages(`${META_GRAPH_URL}/${biz.id}/owned_pages`, {
+                    access_token: token, fields: 'id,name,access_token'
+                });
+                bizPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
+
+                // Fetch client pages this business manages
+                const clientPages = await fetchAllPages(`${META_GRAPH_URL}/${biz.id}/client_pages`, {
+                    access_token: token, fields: 'id,name,access_token'
+                });
+                clientPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
+            }
+        } catch (bizErr) {
+            // business_management permission not granted — silently skip BM pages
+            console.log('ℹ️ Business Manager pages not fetched (business_management permission not in token):', bizErr.response?.data?.error?.message || bizErr.message);
         }
 
         const pages = allPages.map(page => ({
