@@ -310,12 +310,26 @@ const getPages = async (req, res) => {
         // Auto-refresh token if expiring soon
         const meta = await checkAndRefreshToken(ownerId, config.meta);
 
-        const response = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
+        // Fetch all pages — follow pagination cursors to get every page the user admins
+        let allPages = [];
+        let nextUrl = null;
+
+        const firstResponse = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
             params: { access_token: meta.metaAccessToken, fields: 'id,name,access_token', limit: 100 },
             timeout: META_API_TIMEOUT
         });
 
-        const pages = response.data.data.map(page => ({
+        allPages = allPages.concat(firstResponse.data.data || []);
+        nextUrl = firstResponse.data.paging?.next || null;
+
+        // Follow pagination if there are more pages
+        while (nextUrl) {
+            const nextResponse = await axios.get(nextUrl, { timeout: META_API_TIMEOUT });
+            allPages = allPages.concat(nextResponse.data.data || []);
+            nextUrl = nextResponse.data.paging?.next || null;
+        }
+
+        const pages = allPages.map(page => ({
             id: page.id,
             name: page.name,
             accessToken: page.access_token
