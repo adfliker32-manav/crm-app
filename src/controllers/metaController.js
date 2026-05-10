@@ -396,17 +396,41 @@ const getPages = async (req, res) => {
         const seenIds = new Set();
         let allPages = [];
 
+        console.log(`\n========== 🔍 META getPages DEBUG — tenant ${ownerId} ==========`);
+
+        // 0. Inspect granted permissions so we know what's possible
+        try {
+            const permRes = await axios.get(`${META_GRAPH_URL}/me/permissions`, {
+                params: { access_token: token }, timeout: META_API_TIMEOUT
+            });
+            const granted = (permRes.data.data || []).filter(p => p.status === 'granted').map(p => p.permission);
+            const declined = (permRes.data.data || []).filter(p => p.status !== 'granted').map(p => `${p.permission}(${p.status})`);
+            console.log(`   ✓ Granted permissions: ${granted.join(', ') || '(none)'}`);
+            if (declined.length) console.log(`   ✗ Declined/expired:    ${declined.join(', ')}`);
+            if (!granted.includes('business_management')) {
+                console.log(`   ⚠️  business_management NOT granted → Business Manager pages WILL be skipped`);
+            }
+            if (!granted.includes('pages_show_list')) {
+                console.log(`   ⚠️  pages_show_list NOT granted → /me/accounts will return nothing`);
+            }
+        } catch (e) {
+            console.log(`   ⚠️  Could not read /me/permissions:`, e.response?.data?.error?.message || e.message);
+        }
+
         // Helper: fetch all pages from a paginated endpoint
         const fetchAllPages = async (url, params = {}) => {
             const results = [];
             const first = await axios.get(url, { params: { ...params, limit: 100 }, timeout: META_API_TIMEOUT });
             results.push(...(first.data.data || []));
             let next = first.data.paging?.next || null;
+            let pageNum = 1;
             while (next) {
+                pageNum++;
                 const res = await axios.get(next, { timeout: META_API_TIMEOUT });
                 results.push(...(res.data.data || []));
                 next = res.data.paging?.next || null;
             }
+            if (pageNum > 1) console.log(`     (paginated ${pageNum} pages of results from ${url})`);
             return results;
         };
 
@@ -414,6 +438,7 @@ const getPages = async (req, res) => {
         const directPages = await fetchAllPages(`${META_GRAPH_URL}/me/accounts`, {
             access_token: token, fields: 'id,name,access_token'
         });
+        console.log(`   📄 /me/accounts returned ${directPages.length} page(s)`);
         directPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
 
         // 2. Business Manager pages (business_management permission)
@@ -424,23 +449,34 @@ const getPages = async (req, res) => {
                 timeout: META_API_TIMEOUT
             });
             const businesses = bizRes.data.data || [];
+            console.log(`   🏢 /me/businesses returned ${businesses.length} Business Manager account(s)`);
 
             for (const biz of businesses) {
-                // Fetch pages owned by this business
-                const bizPages = await fetchAllPages(`${META_GRAPH_URL}/${biz.id}/owned_pages`, {
-                    access_token: token, fields: 'id,name,access_token'
-                });
-                bizPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
-
-                // Fetch client pages this business manages
-                const clientPages = await fetchAllPages(`${META_GRAPH_URL}/${biz.id}/client_pages`, {
-                    access_token: token, fields: 'id,name,access_token'
-                });
-                clientPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
+                let ownedCount = 0;
+                let clientCount = 0;
+                try {
+                    const bizPages = await fetchAllPages(`${META_GRAPH_URL}/${biz.id}/owned_pages`, {
+                        access_token: token, fields: 'id,name,access_token'
+                    });
+                    ownedCount = bizPages.length;
+                    bizPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
+                } catch (e) {
+                    console.log(`     ⚠️  owned_pages failed for biz "${biz.name}": ${e.response?.data?.error?.message || e.message}`);
+                }
+                try {
+                    const clientPages = await fetchAllPages(`${META_GRAPH_URL}/${biz.id}/client_pages`, {
+                        access_token: token, fields: 'id,name,access_token'
+                    });
+                    clientCount = clientPages.length;
+                    clientPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
+                } catch (e) {
+                    console.log(`     ⚠️  client_pages failed for biz "${biz.name}": ${e.response?.data?.error?.message || e.message}`);
+                }
+                console.log(`     • Biz "${biz.name}" (${biz.id}): ${ownedCount} owned + ${clientCount} client page(s)`);
             }
         } catch (bizErr) {
             // business_management permission not granted — silently skip BM pages
-            console.log('ℹ️ Business Manager pages not fetched (business_management permission not in token):', bizErr.response?.data?.error?.message || bizErr.message);
+            console.log(`   ℹ️  /me/businesses failed → BM pages skipped: ${bizErr.response?.data?.error?.message || bizErr.message}`);
         }
 
         const pages = allPages.map(page => ({
@@ -448,6 +484,12 @@ const getPages = async (req, res) => {
             name: page.name,
             accessToken: page.access_token
         }));
+
+        console.log(`   ✅ Total unique pages returned: ${pages.length}`);
+        if (pages.length > 0) {
+            console.log(`   📋 Page list: ${pages.map(p => p.name).join(', ')}`);
+        }
+        console.log(`========== END getPages DEBUG ==========\n`);
 
         res.json({ success: true, pages });
     } catch (error) {
