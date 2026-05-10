@@ -26,6 +26,7 @@ router.post('/exchange-token', authMiddleware, metaController.exchangeToken);
 
 // Configuration routes (require auth)
 router.get('/status', authMiddleware, metaController.getStatus);
+router.get('/debug-token', authMiddleware, metaController.debugToken); // Diagnostic: shows granted permissions
 router.get('/pages', authMiddleware, metaController.getPages);
 router.get('/forms/:pageId', authMiddleware, metaController.getForms);
 router.post('/connect', authMiddleware, metaController.connect);

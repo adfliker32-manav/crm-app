@@ -296,6 +296,87 @@ const getStatus = async (req, res) => {
     }
 };
 
+// Debug endpoint — returns granted permissions and businesses for the connected token
+// Use this to diagnose why some pages aren't showing
+const debugToken = async (req, res) => {
+    try {
+        const ownerId = req.tenantId;
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+meta.metaAccessToken meta.metaTokenExpiry meta.metaUserId');
+
+        if (!config?.meta?.metaAccessToken) {
+            return res.status(400).json({ success: false, message: 'Not connected to Facebook' });
+        }
+
+        const token = config.meta.metaAccessToken;
+
+        // 1. Granted permissions
+        let permissions = [];
+        try {
+            const permRes = await axios.get(`${META_GRAPH_URL}/me/permissions`, {
+                params: { access_token: token }, timeout: META_API_TIMEOUT
+            });
+            permissions = permRes.data.data || [];
+        } catch (e) {
+            permissions = [{ error: e.response?.data?.error?.message || e.message }];
+        }
+
+        // 2. Direct admin pages count
+        let directPagesCount = 0;
+        try {
+            const pagesRes = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
+                params: { access_token: token, fields: 'id', limit: 100 }, timeout: META_API_TIMEOUT
+            });
+            directPagesCount = (pagesRes.data.data || []).length;
+        } catch (e) { /* ignore */ }
+
+        // 3. Business Manager accounts
+        let businesses = [];
+        let businessError = null;
+        try {
+            const bizRes = await axios.get(`${META_GRAPH_URL}/me/businesses`, {
+                params: { access_token: token, fields: 'id,name', limit: 50 }, timeout: META_API_TIMEOUT
+            });
+            businesses = bizRes.data.data || [];
+        } catch (e) {
+            businessError = e.response?.data?.error?.message || e.message;
+        }
+
+        // 4. Pages per business (owned + client)
+        const businessPages = [];
+        for (const biz of businesses) {
+            const entry = { businessId: biz.id, businessName: biz.name, owned: 0, client: 0, errors: [] };
+            try {
+                const ownedRes = await axios.get(`${META_GRAPH_URL}/${biz.id}/owned_pages`, {
+                    params: { access_token: token, fields: 'id', limit: 100 }, timeout: META_API_TIMEOUT
+                });
+                entry.owned = (ownedRes.data.data || []).length;
+            } catch (e) { entry.errors.push(`owned: ${e.response?.data?.error?.message || e.message}`); }
+            try {
+                const clientRes = await axios.get(`${META_GRAPH_URL}/${biz.id}/client_pages`, {
+                    params: { access_token: token, fields: 'id', limit: 100 }, timeout: META_API_TIMEOUT
+                });
+                entry.client = (clientRes.data.data || []).length;
+            } catch (e) { entry.errors.push(`client: ${e.response?.data?.error?.message || e.message}`); }
+            businessPages.push(entry);
+        }
+
+        res.json({
+            success: true,
+            metaUserId: config.meta.metaUserId,
+            tokenExpiry: config.meta.metaTokenExpiry,
+            permissions,
+            directPagesCount,
+            businessesCount: businesses.length,
+            businessError,
+            businessPages
+        });
+    } catch (error) {
+        console.error('❌ Meta debugToken Error:', error.response?.data || error.message);
+        res.status(500).json({ success: false, message: 'Debug failed', error: error.message });
+    }
+};
+
 // Get user's Facebook Pages
 const getPages = async (req, res) => {
     try {
@@ -859,5 +940,6 @@ module.exports = {
     testCapiConnection,
     exchangeToken,
     handleDataDeletion,
-    handleDeauth
+    handleDeauth,
+    debugToken
 };
