@@ -202,21 +202,29 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
                                 >
                                     <option value="LEAD_CREATED">Lead is Created</option>
                                     <option value="STAGE_CHANGED">Lead Stage Changes</option>
-                                    <option value="TIME_IN_STAGE">Lead stays in Stage for a time</option>
+                                    <option value="TIME_IN_STAGE">Lead stays in Stage for X hours</option>
                                 </select>
                             </div>
-                            {(rule.trigger === 'TIME_IN_STAGE' || rule.trigger === 'LEAD_CREATED') && (
-                                <div>
-                                    <label className="block text-xs text-blue-600 mb-1">Wait Before Firing (Hours)</label>
-                                    <input
-                                        type="number" min="0"
-                                        className="w-full px-4 py-2 border border-blue-200 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 text-sm"
-                                        value={rule.delayHours}
-                                        onChange={(e) => setRule({ ...rule, delayHours: Number(e.target.value) })}
-                                    />
-                                </div>
-                            )}
+                            <div>
+                                <label className="block text-xs text-blue-600 mb-1">
+                                    {rule.trigger === 'TIME_IN_STAGE' ? 'Hours in Stage Before Firing' : 'Delay Before Firing (Hours)'}
+                                </label>
+                                <input
+                                    type="number" min="0"
+                                    className="w-full px-4 py-2 border border-blue-200 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 text-sm"
+                                    value={rule.delayHours}
+                                    onChange={(e) => setRule({ ...rule, delayHours: Number(e.target.value) })}
+                                />
+                            </div>
                         </div>
+                        {rule.trigger === 'TIME_IN_STAGE' && (
+                            <div className="mt-3 flex items-start gap-2 bg-blue-100/60 border border-blue-200 rounded-lg px-3 py-2">
+                                <i className="fa-solid fa-circle-info text-blue-500 mt-0.5 shrink-0 text-xs"></i>
+                                <p className="text-xs text-blue-700">
+                                    This trigger checks every <strong>30 minutes</strong>. Add a <strong>Stage condition</strong> below to specify which stage to watch. Include a <strong>Change Stage</strong> action to prevent re-firing.
+                                </p>
+                            </div>
+                        )}
                     </div>
 
                     {/* Conditions Block */}
@@ -247,6 +255,7 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
                                             <option value="not_equals">Does Not Equal</option>
                                             <option value="contains">Contains</option>
                                             <option value="greater_than">Greater Than</option>
+                                            <option value="less_than">Less Than</option>
                                         </select>
                                         {cond.field === 'status' ? (
                                             <select className="w-full md:w-1/3 px-3 py-2 border border-slate-200 rounded-md text-sm bg-white" value={cond.value} onChange={(e) => updateCondition(idx, 'value', e.target.value)}>

@@ -397,9 +397,9 @@ const updateLead = async (req, res) => {
 
         if (stageChanged) {
             const now = new Date();
+            lead.stageEnteredAt = now;
             if (typeof nextStatus === 'string' && /won/i.test(nextStatus)) {
                 lead.wonAt = now;
-                // If a deal is re-won after being marked lost, keep data consistent
                 lead.lostAt = null;
             } else if (typeof nextStatus === 'string' && (/lost/i.test(nextStatus) || /dead/i.test(nextStatus))) {
                 lead.lostAt = now;

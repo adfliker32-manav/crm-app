@@ -5,6 +5,68 @@ const fs   = require('fs');
 const path = require('path');
 const cron = require('node-cron');
 
+// ─────────────────────────────────────────────────────────────
+// TIME_IN_STAGE automation trigger
+// Runs every 30 minutes and evaluates leads that have been
+// sitting in the same stage longer than a rule's delayMinutes.
+// Fires the rule once per stage entry: if the rule's action
+// includes a CHANGE_STAGE step the lead moves out of scope
+// automatically; if not, add a CHANGE_STAGE action to prevent
+// the rule from re-firing on the next cron tick.
+// ─────────────────────────────────────────────────────────────
+const runTimeInStageTrigger = async () => {
+    try {
+        const AutomationRule = require('../models/AutomationRule');
+        const Lead           = require('../models/Lead');
+        const { evaluateLead } = require('./AutomationService');
+
+        const rules = await AutomationRule.find({ isActive: true, trigger: 'TIME_IN_STAGE' }).lean();
+        if (!rules.length) return;
+
+        console.log(`[TimeInStage] Checking ${rules.length} TIME_IN_STAGE rule(s)…`);
+
+        for (const rule of rules) {
+            const minutesRequired = rule.delayMinutes || 0;
+            if (minutesRequired <= 0) continue;
+
+            const thresholdDate = new Date(Date.now() - minutesRequired * 60 * 1000);
+
+            // Build a base query: leads for this tenant whose stage hasn't
+            // changed since the threshold date.
+            const baseQuery = {
+                userId: rule.tenantId,
+                stageEnteredAt: { $lte: thresholdDate }
+            };
+
+            // Pre-filter by any status=equals condition to reduce the scan set.
+            const stageCondition = rule.conditions.find(
+                c => c.field === 'status' && c.operator === 'equals'
+            );
+            if (stageCondition?.value) {
+                baseQuery.status = stageCondition.value;
+            }
+
+            const leads = await Lead.find(baseQuery)
+                .select('_id name phone email status source dealValue customData userId stageEnteredAt assignedTo history')
+                .lean();
+
+            for (const lead of leads) {
+                try {
+                    await evaluateLead(lead, 'TIME_IN_STAGE');
+                } catch (err) {
+                    console.error(`[TimeInStage] Error evaluating lead ${lead._id}:`, err.message);
+                }
+            }
+
+            if (leads.length > 0) {
+                console.log(`[TimeInStage] Rule "${rule.name}" evaluated ${leads.length} candidate lead(s)`);
+            }
+        }
+    } catch (err) {
+        console.error('❌ [TimeInStage] Cron error:', err.message);
+    }
+};
+
 /**
  * FIX #88: Media cache eviction — cleans up WhatsApp media files
  * older than 7 days from uploads/whatsapp/ to prevent disk exhaustion.
@@ -101,6 +163,10 @@ const startCronJobs = () => {
     cron.schedule('0 2 * * *', refreshExpiringTokens);
     setTimeout(refreshExpiringTokens, 30 * 1000);
     console.log('[CronJobs] WhatsApp token auto-refresh scheduled (daily 02:00 + startup check)');
+
+    // TIME_IN_STAGE automation trigger — every 30 minutes
+    cron.schedule('*/30 * * * *', runTimeInStageTrigger);
+    console.log('[CronJobs] TIME_IN_STAGE automation trigger scheduled (every 30 min)');
 };
 
-module.exports = { startCronJobs, cleanupWhatsAppMediaCache, refreshExpiringTokens };
+module.exports = { startCronJobs, cleanupWhatsAppMediaCache, refreshExpiringTokens, runTimeInStageTrigger };

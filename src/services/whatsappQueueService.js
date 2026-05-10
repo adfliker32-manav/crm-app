@@ -115,9 +115,12 @@ const defineWhatsAppJobs = (agenda) => {
                 updates.$set = { status: watcher.ifNoReplyAction.changeStage };
                 updates.$push = {
                     history: {
-                        type: 'System', subType: 'Auto',
-                        content: `No reply received. Stage moved to "${watcher.ifNoReplyAction.changeStage}" by automation.`,
-                        date: new Date()
+                        $each: [{
+                            type: 'System', subType: 'Auto',
+                            content: `No reply received. Stage moved to "${watcher.ifNoReplyAction.changeStage}" by automation.`,
+                            date: new Date()
+                        }],
+                        $slice: -100
                     }
                 };
                 await Lead.findByIdAndUpdate(watcher.leadId, updates);
@@ -175,7 +178,7 @@ const defineWhatsAppJobs = (agenda) => {
 
             // Release the one-at-a-time automation lock
             await AutomationRule.findByIdAndUpdate(watcher.ruleId, {
-                $set: { currentlyProcessingLeadId: null }
+                $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
             });
 
             console.log(`⏱️ [Timeout] Watcher expired → lead "${lead.name}" → stage "${watcher.ifNoReplyAction?.changeStage}"`);

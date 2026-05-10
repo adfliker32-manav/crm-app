@@ -7,34 +7,30 @@ const { sendWhatsAppMessage } = require('./whatsappService');
 const { logActivity } = require('./auditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 
-// Advanced property resolver (handles 'customData.Property' etc)
+// Prototype-safe property resolver (handles 'customData.Property' etc)
+const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const resolveField = (obj, path) => {
     return path.split('.').reduce((prev, curr) => {
-        return prev ? prev[curr] : undefined;
+        if (prev == null || BLOCKED_KEYS.has(curr)) return undefined;
+        return Object.prototype.hasOwnProperty.call(prev, curr) ? prev[curr] : undefined;
     }, obj);
 };
 
-// Condition Evaluator
+// Condition Evaluator — returns false if the lead field is missing/undefined
 const evaluateCondition = (condition, leadValue) => {
+    if (leadValue === undefined || leadValue === null) return false;
+
     const { operator, value } = condition;
-    
-    // Normalize string comparisons if possible
     const s1 = typeof leadValue === 'string' ? leadValue.toLowerCase() : leadValue;
     const s2 = typeof value === 'string' ? value.toLowerCase() : value;
 
     switch (operator) {
-        case 'equals':
-            return s1 === s2;
-        case 'not_equals':
-            return s1 !== s2;
-        case 'contains':
-            return typeof s1 === 'string' && s1.includes(s2);
-        case 'greater_than':
-            return Number(leadValue) > Number(value);
-        case 'less_than':
-            return Number(leadValue) < Number(value);
-        default:
-            return false;
+        case 'equals':        return s1 === s2;
+        case 'not_equals':    return s1 !== s2;
+        case 'contains':      return typeof s1 === 'string' && s1.includes(s2);
+        case 'greater_than':  return Number(leadValue) > Number(value);
+        case 'less_than':     return Number(leadValue) < Number(value);
+        default:              return false;
     }
 };
 
@@ -73,6 +69,7 @@ const executeRuleActions = async (rule, lead) => {
                 if (lead.status !== action.stageName) {
                     updates.$set = updates.$set || {};
                     updates.$set.status = action.stageName;
+                    updates.$set.stageEnteredAt = new Date();
                     historyEntries.push({ type: 'System', subType: 'Auto', content: `Stage changed to ${action.stageName} (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
                 }
@@ -158,14 +155,15 @@ const executeRuleActions = async (rule, lead) => {
             $inc: { executionCount: 1 },
             $set: {
                 lastFiredAt: new Date(),
-                currentlyProcessingLeadId: null // Release lock
+                currentlyProcessingLeadId: null,
+                lockAcquiredAt: null
             }
         });
 
     } catch (err) {
         // Always release lock even if execution failed
         await AutomationRule.findByIdAndUpdate(rule._id, {
-            $set: { currentlyProcessingLeadId: null }
+            $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
         });
         console.error(`❌ [Automation] Execution Error on Rule (${rule.name}):`, err);
     }
@@ -189,23 +187,22 @@ const evaluateLead = async (lead, triggerType) => {
 
         for (const rule of rules) {
             // ─── STALE LOCK RECOVERY ──────────────────────────────
-            // If a lock has been held for >1 hour, the process likely crashed.
-            // Release it so the rule isn't permanently stuck.
-            if (rule.currentlyProcessingLeadId && rule.lastFiredAt) {
-                const lockAge = Date.now() - new Date(rule.lastFiredAt).getTime();
+            // Use lockAcquiredAt (set at lock time) not lastFiredAt (set only on success).
+            // Without this, a rule that has never fired would never auto-recover.
+            if (rule.currentlyProcessingLeadId) {
+                const lockAge = rule.lockAcquiredAt
+                    ? Date.now() - new Date(rule.lockAcquiredAt).getTime()
+                    : Infinity; // No timestamp → definitely stale
                 const ONE_HOUR = 60 * 60 * 1000;
                 if (lockAge > ONE_HOUR) {
-                    console.warn(`⚠️ [Automation] Stale lock detected on rule "${rule.name}" (held ${Math.round(lockAge / 60000)}min). Releasing.`);
+                    console.warn(`⚠️ [Automation] Stale lock on rule "${rule.name}" (held ${Math.round(lockAge / 60000)}min). Releasing.`);
                     await AutomationRule.findByIdAndUpdate(rule._id, {
-                        $set: { currentlyProcessingLeadId: null }
+                        $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
                     });
                 } else {
-                    console.log(`⏭️ [Automation] Rule "${rule.name}" is already processing lead ${rule.currentlyProcessingLeadId}. Skipping.`);
+                    console.log(`⏭️ [Automation] Rule "${rule.name}" locked (acquired ${Math.round(lockAge / 60000)}min ago). Skipping.`);
                     continue;
                 }
-            } else if (rule.currentlyProcessingLeadId) {
-                console.log(`⏭️ [Automation] Rule "${rule.name}" is already processing lead ${rule.currentlyProcessingLeadId}. Skipping.`);
-                continue;
             }
 
             // ALSO: if there's already an active watcher for this LEAD, skip —
@@ -225,7 +222,7 @@ const evaluateLead = async (lead, triggerType) => {
             // Now uses findOneAndUpdate with a "not locked" condition — only one wins.
             const lockAcquired = await AutomationRule.findOneAndUpdate(
                 { _id: rule._id, currentlyProcessingLeadId: null },
-                { $set: { currentlyProcessingLeadId: lead._id } },
+                { $set: { currentlyProcessingLeadId: lead._id, lockAcquiredAt: new Date() } },
                 { new: true }
             );
 
@@ -251,15 +248,15 @@ const evaluateLead = async (lead, triggerType) => {
                     try {
                         console.log(`🤖 [Automation] Scheduling Rule: "${rule.name}" in ${rule.delayMinutes} mins.`);
                         await globalAgendaInstance.schedule(
-                            new Date(Date.now() + rule.delayMinutes * 60000), 
-                            'EXECUTE_AUTOMATION_ACTION', 
+                            new Date(Date.now() + rule.delayMinutes * 60000),
+                            'EXECUTE_AUTOMATION_ACTION',
                             { ruleId: rule._id, leadId: lead._id }
                         );
                         // Note: lock will be released when the scheduled job fires
                     } catch (scheduleErr) {
                         console.error(`❌ [Automation] Failed to schedule Rule "${rule.name}":`, scheduleErr.message);
                         await AutomationRule.findByIdAndUpdate(rule._id, {
-                            $set: { currentlyProcessingLeadId: null }
+                            $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
                         });
                     }
                 } else {
@@ -267,9 +264,8 @@ const evaluateLead = async (lead, triggerType) => {
                     await executeRuleActions(rule, lead);
                 }
             } else {
-                // Release lock if conditions not met
                 await AutomationRule.findByIdAndUpdate(rule._id, {
-                    $set: { currentlyProcessingLeadId: null }
+                    $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
                 });
             }
         }
@@ -311,17 +307,15 @@ const defineAutomationJobs = (agenda) => {
                 if (stillMet) {
                     await executeRuleActions(rule, lead);
                 } else {
-                    // Release lock — lead stage changed while waiting
                     await AutomationRule.findByIdAndUpdate(ruleId, {
-                        $set: { currentlyProcessingLeadId: null }
+                        $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
                     });
                     console.log(`⏱️ [Automation] Skipped Job: Lead no longer meets criteria for Rule "${rule.name}"`);
                 }
             } else {
-                // Rule deactivated or lead deleted while job was queued
                 console.log(`⏱️ [Automation] Job skipped: rule ${ruleId} inactive or lead ${leadId} missing.`);
                 await AutomationRule.findByIdAndUpdate(ruleId, {
-                    $set: { currentlyProcessingLeadId: null }
+                    $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
                 });
             }
         } catch (error) {
@@ -336,7 +330,7 @@ const defineAutomationJobs = (agenda) => {
 
             // Max retries exhausted — release lock permanently and clean up
             await AutomationRule.findByIdAndUpdate(ruleId, {
-                $set: { currentlyProcessingLeadId: null }
+                $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
             });
             console.error(`🚨 [Automation] Job PERMANENTLY FAILED after ${MAX_RETRIES} attempts. Rule: ${ruleId}, Lead: ${leadId}`);
             await job.remove();
@@ -411,7 +405,7 @@ const handleWatcherReply = async (conversationId) => {
 
         // Release the one-at-a-time rule lock
         await AutomationRule.findByIdAndUpdate(watcher.ruleId, {
-            $set: { currentlyProcessingLeadId: null }
+            $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
         });
 
         // Apply human handoff — pause chatbot for 24hrs since a human or reply happened

@@ -37,6 +37,11 @@ const LeadSchema = new mongoose.Schema({
         default: 'New',
         index: true
     },
+    stageEnteredAt: {
+        type: Date,
+        default: Date.now,
+        index: true
+    },
     source: {
         type: String,
         default: 'Web'

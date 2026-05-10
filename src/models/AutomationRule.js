@@ -51,8 +51,10 @@ const AutomationRuleSchema = new mongoose.Schema({
     actions: [ActionSchema],
 
     // ONE-AT-A-TIME LOCK: prevents multiple automations from firing in parallel for same lead
-    // Store the leadId being processed. We check this before scheduling a new job.
     currentlyProcessingLeadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead', default: null },
+    // Timestamp when the lock was acquired — used for stale lock recovery (not lastFiredAt,
+    // which is only set on successful completion and is wrong on the first-ever run).
+    lockAcquiredAt: { type: Date, default: null },
 
     // Audit logs
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

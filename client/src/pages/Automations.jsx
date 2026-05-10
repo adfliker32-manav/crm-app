@@ -58,6 +58,28 @@ const Automations = () => {
         }
     };
 
+    const duplicateRule = async (rule) => {
+        try {
+            const { _id, createdAt, updatedAt, executionCount, lastFiredAt, currentlyProcessingLeadId, lockAcquiredAt, __v, ...rest } = rule;
+            const res = await api.post('/automations', { ...rest, name: `${rule.name} (Copy)`, isActive: false });
+            setRules(prev => [res.data, ...prev]);
+            showNotification('success', 'Automation duplicated (inactive)');
+        } catch (error) {
+            showNotification('error', 'Failed to duplicate automation');
+        }
+    };
+
+    const formatLastFired = (date) => {
+        if (!date) return <span className="text-gray-400 text-xs">Never</span>;
+        const d = new Date(date);
+        const diff = Date.now() - d.getTime();
+        const mins = Math.floor(diff / 60000);
+        if (mins < 60) return <span className="text-xs text-gray-600">{mins}m ago</span>;
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return <span className="text-xs text-gray-600">{hrs}h ago</span>;
+        return <span className="text-xs text-gray-600">{Math.floor(hrs / 24)}d ago</span>;
+    };
+
     if (!canManageTeam) return <Navigate to="/dashboard" replace />;
 
     if (error) return (
@@ -111,6 +133,7 @@ const Automations = () => {
                                     <th className="px-6 py-4 font-semibold tracking-wide border-b">Trigger</th>
                                     <th className="px-6 py-4 font-semibold tracking-wide border-b text-center">Status</th>
                                     <th className="px-6 py-4 font-semibold tracking-wide border-b text-center">Executions</th>
+                                    <th className="px-6 py-4 font-semibold tracking-wide border-b text-center">Last Fired</th>
                                     <th className="px-6 py-4 font-semibold tracking-wide border-b text-center">Actions</th>
                                 </tr>
                             </thead>
@@ -141,11 +164,17 @@ const Automations = () => {
                                             {rule.executionCount}
                                         </td>
                                         <td className="px-6 py-4 text-center">
+                                            {formatLastFired(rule.lastFiredAt)}
+                                        </td>
+                                        <td className="px-6 py-4 text-center">
                                             <div className="flex items-center justify-center gap-3">
-                                                <button onClick={() => { setEditingRule(rule); setIsBuilderOpen(true); }} className="text-blue-500 hover:text-blue-700 transition p-1">
+                                                <button onClick={() => { setEditingRule(rule); setIsBuilderOpen(true); }} className="text-blue-500 hover:text-blue-700 transition p-1" title="Edit">
                                                     <i className="fa-solid fa-pen-to-square"></i>
                                                 </button>
-                                                <button onClick={() => deleteRule(rule._id)} className="text-gray-400 hover:text-red-600 transition p-1">
+                                                <button onClick={() => duplicateRule(rule)} className="text-gray-400 hover:text-indigo-600 transition p-1" title="Duplicate">
+                                                    <i className="fa-solid fa-copy"></i>
+                                                </button>
+                                                <button onClick={() => deleteRule(rule._id)} className="text-gray-400 hover:text-red-600 transition p-1" title="Delete">
                                                     <i className="fa-solid fa-trash-can"></i>
                                                 </button>
                                             </div>
