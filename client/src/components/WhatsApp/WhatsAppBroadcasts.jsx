@@ -81,6 +81,8 @@ const WhatsAppBroadcasts = () => {
 
     const fetchStagesAndLeads = async () => {
         try {
+            // Stages API now returns leadCount/leadCountWithPhone from the DB directly,
+            // so we no longer need to load all leads client-side just for counting.
             const [sRes, lRes] = await Promise.all([api.get('/stages'), api.get('/leads')]);
             setStages(sRes.data || []);
             setLeads(lRes.data.leads || lRes.data || []);
@@ -590,7 +592,7 @@ const WhatsAppBroadcasts = () => {
                                         }}
                                         className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#00a884]/30 outline-none text-sm bg-white"
                                     >
-                                        <option value="ALL">All Leads ({leads.filter(l => l.phone).length} with phone)</option>
+                                        <option value="ALL">All Leads ({stages.reduce((s, st) => s + (st.leadCountWithPhone || 0), 0)} with phone)</option>
                                         <option value="STAGES">Specific Stages</option>
                                         <option value="CSV">CSV Upload</option>
                                     </select>
@@ -602,7 +604,7 @@ const WhatsAppBroadcasts = () => {
                                         <label className="block text-[11px] font-bold text-slate-500 uppercase mb-2">Select Target Stage(s)</label>
                                         <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
                                             {stages.map(stage => {
-                                                const count = leads.filter(l => l.status === stage.name && l.phone).length;
+                                                const count = stage.leadCountWithPhone ?? 0;
                                                 const sel   = newBroadcast.targetAudience.stages.includes(stage.name);
                                                 return (
                                                     <label key={stage._id} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${sel ? 'border-[#00a884] bg-[#00a884]/5' : 'border-slate-200 bg-white hover:border-slate-300'}`}>

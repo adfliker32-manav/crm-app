@@ -346,6 +346,8 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
 
         // Use upsert so if another code path already saved this waMessageId (without broadcastId),
         // we patch it instead of silently dropping the create (E11000).
+        // setDefaultsOnInsert ensures schema defaults (incl. deletedAt: null) are applied so that
+        // the saasPlugin's { deletedAt: null } filter finds this document in future queries.
         await WhatsAppMessage.findOneAndUpdate(
             { waMessageId },
             {
@@ -358,13 +360,15 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
                     status:           'sent',
                     timestamp:        new Date(),
                     isAutomated:      true,
+                    broadcastId,
+                    automationSource: 'broadcast'
                 },
                 $set: {
                     broadcastId,
                     automationSource: 'broadcast'
                 }
             },
-            { upsert: true, new: true }
+            { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
     } catch (syncErr) {

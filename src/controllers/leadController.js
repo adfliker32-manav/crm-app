@@ -617,8 +617,31 @@ const getStages = async (req, res) => {
                 { name: 'Won', order: 3, userId: ownerId }
             ];
             const inserted = await Stage.insertMany(defaults);
-            return res.json(inserted);
+            stages = inserted.map(s => s.toObject ? s.toObject() : s);
         }
+
+        // Attach lead counts from DB so callers don't have to paginate all leads client-side
+        const counts = await Lead.aggregate([
+            { $match: { userId: new mongoose.Types.ObjectId(ownerId), deletedAt: null } },
+            {
+                $group: {
+                    _id: '$status',
+                    total: { $sum: 1 },
+                    withPhone: {
+                        $sum: {
+                            $cond: [{ $and: [{ $ifNull: ['$phone', false] }, { $ne: ['$phone', ''] }] }, 1, 0]
+                        }
+                    }
+                }
+            }
+        ]);
+        const countMap = counts.reduce((m, c) => { m[c._id] = c; return m; }, {});
+        stages = stages.map(s => ({
+            ...s,
+            leadCount: countMap[s.name]?.total || 0,
+            leadCountWithPhone: countMap[s.name]?.withPhone || 0
+        }));
+
         res.json(stages);
     } catch (err) {
         res.status(500).json({ message: 'Server error' });
