@@ -210,6 +210,16 @@ const WhatsAppBroadcasts = () => {
         }
     };
 
+    const handleRecalculateStats = async (id) => {
+        try {
+            const res = await api.post(`/whatsapp/broadcasts/${id}/recalculate-stats`);
+            showSuccess(`Stats refreshed — ${res.data.messageCount} message record(s) found`);
+            fetchBroadcasts(true);
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to refresh stats');
+        }
+    };
+
     const handleRetargetFailed = async (id) => {
         try {
             const res = await api.post(`/whatsapp/broadcasts/${id}/retarget-failed`);
@@ -389,6 +399,16 @@ const WhatsAppBroadcasts = () => {
                                                 className="px-4 py-2 bg-amber-50 text-amber-600 hover:bg-amber-100 rounded-lg text-sm font-medium transition"
                                             >
                                                 <i className="fa-solid fa-stop mr-2"></i>Cancel
+                                            </button>
+                                        )}
+                                        {canExport && (
+                                            <button
+                                                onClick={() => handleRecalculateStats(broadcast._id)}
+                                                title="Refresh delivered/read stats from message records"
+                                                className="px-3 py-2 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg text-sm font-medium transition flex items-center gap-1.5"
+                                            >
+                                                <i className="fa-solid fa-rotate"></i>
+                                                <span className="hidden sm:inline">Refresh</span>
                                             </button>
                                         )}
                                         {canExport && (

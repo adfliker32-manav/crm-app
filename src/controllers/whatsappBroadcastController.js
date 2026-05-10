@@ -191,9 +191,9 @@ exports.exportBroadcast = async (req, res) => {
         const broadcast = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId });
         if (!broadcast) return res.status(404).json({ message: 'Broadcast not found' });
 
+        // Query by broadcastId only — automationSource may not have been written for older records
         const messages = await WhatsAppMessage.find({
-            broadcastId:     req.params.id,
-            automationSource:'broadcast'
+            broadcastId: req.params.id
         })
         .populate('conversationId', 'phone displayName')
         .lean();
@@ -224,6 +224,50 @@ exports.exportBroadcast = async (req, res) => {
     } catch (error) {
         console.error('Error exporting broadcast:', error);
         res.status(500).json({ message: 'Error exporting broadcast', error: 'Server error' });
+    }
+};
+
+exports.recalculateStats = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const broadcast = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId });
+        if (!broadcast) return res.status(404).json({ message: 'Broadcast not found' });
+
+        // Recount from the actual message records — ground truth, not webhook-dependent
+        const agg = await WhatsAppMessage.aggregate([
+            { $match: { broadcastId: broadcast._id } },
+            {
+                $group: {
+                    _id: null,
+                    total:     { $sum: 1 },
+                    sent:      { $sum: { $cond: [{ $ifNull: ['$statusTimestamps.sent',      false] }, 1, 0] } },
+                    delivered: { $sum: { $cond: [{ $ifNull: ['$statusTimestamps.delivered', false] }, 1, 0] } },
+                    read:      { $sum: { $cond: [{ $ifNull: ['$statusTimestamps.read',      false] }, 1, 0] } },
+                    failed:    { $sum: { $cond: [{ $eq:     ['$status', 'failed'] },                   1, 0] } }
+                }
+            }
+        ]);
+
+        const counts = agg[0] || { total: 0, sent: 0, delivered: 0, read: 0, failed: 0 };
+
+        await WhatsAppBroadcast.findByIdAndUpdate(req.params.id, {
+            $set: {
+                'stats.delivered': counts.delivered,
+                'stats.read':      counts.read,
+                'stats.failed':    counts.failed,
+                // Only patch sent/targets if we found message records at all
+                ...(counts.total > 0 && {
+                    'stats.sent':         counts.sent || broadcast.stats.sent,
+                    'stats.totalTargets': broadcast.stats.totalTargets || counts.total
+                })
+            }
+        });
+
+        const updated = await WhatsAppBroadcast.findById(req.params.id).lean();
+        res.json({ message: 'Stats recalculated', stats: updated.stats, messageCount: counts.total });
+    } catch (error) {
+        console.error('Error recalculating broadcast stats:', error);
+        res.status(500).json({ message: 'Error recalculating stats', error: 'Server error' });
     }
 };
 

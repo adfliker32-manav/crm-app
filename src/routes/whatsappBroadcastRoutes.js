@@ -25,6 +25,9 @@ router.delete('/:id', validateObjectId({ params: ['id'] }), authMiddleware, requ
 // Export broadcast report as CSV
 router.get('/:id/export', validateObjectId({ params: ['id'] }), authMiddleware, whatsappBroadcastController.exportBroadcast);
 
+// Recalculate delivered/read/failed stats from message records (fixes webhook gaps)
+router.post('/:id/recalculate-stats', validateObjectId({ params: ['id'] }), authMiddleware, whatsappBroadcastController.recalculateStats);
+
 // Create a retarget-failed draft broadcast
 router.post('/:id/retarget-failed', validateObjectId({ params: ['id'] }), authMiddleware, requireFeature('whatsappAutomation'), whatsappBroadcastController.retargetFailed);
 
