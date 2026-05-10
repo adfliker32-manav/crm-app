@@ -611,11 +611,6 @@ function BookingPageCustomizer() {
     }, []);
 
     const handleSave = async () => {
-        if (sendConfirmation && !confirmationTemplateId) {
-            showError('Select a WhatsApp template for confirmation');
-            return;
-        }
-
         setSaving(true);
         try {
             const res = await api.put('/appointments/booking-page/config', {
