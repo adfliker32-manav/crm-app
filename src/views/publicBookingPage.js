@@ -38,6 +38,7 @@ const renderPublicBookingPage = (slug) => {
           phone: '',
           email: '',
           notes: '',
+          customAnswers: {},
           submitting: false,
           submitError: '',
           done: false
@@ -148,7 +149,37 @@ const renderPublicBookingPage = (slug) => {
               </button>\`;
           }).join('');
 
-          const canSubmit = !!(state.service && state.date && state.time && state.name.trim() && state.phone.trim() && !state.submitting);
+          const sortedQuestions = (page.customQuestions || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+          const requiredAnswered = sortedQuestions
+            .filter(q => q.required)
+            .every(q => String(state.customAnswers[q.id] || '').trim() !== '');
+          const canSubmit = !!(state.service && state.date && state.time && state.name.trim() && state.phone.trim() && requiredAnswered && !state.submitting);
+
+          const customQuestionsHtml = sortedQuestions.length === 0 ? '' : \`
+            <div class="pt-2 border-t border-slate-100">
+              <p class="text-xs font-black text-slate-500 tracking-wider uppercase mb-3">
+                <i class="fa-solid fa-circle-question mr-2"></i>Additional information
+              </p>
+              <div class="space-y-3">
+                \${sortedQuestions.map(q => {
+                  const val = esc(state.customAnswers[q.id] || '');
+                  const label = \`<label class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">\${esc(q.question)}\${q.required ? ' <span class="text-red-500">*</span>' : ''}</label>\`;
+                  const baseClass = 'mt-1 w-full border border-slate-200 rounded-2xl px-4 py-3 text-sm outline-none accent-ring';
+                  let input = '';
+                  if (q.type === 'textarea') {
+                    input = \`<textarea data-cq="\${esc(q.id)}" rows="3" class="\${baseClass} resize-none" placeholder="\${esc(q.question)}">\${val}</textarea>\`;
+                  } else if (q.type === 'select' && Array.isArray(q.options) && q.options.length) {
+                    const opts = q.options.map(o => \`<option value="\${esc(o)}" \${val === esc(o) ? 'selected' : ''}>\${esc(o)}</option>\`).join('');
+                    input = \`<select data-cq="\${esc(q.id)}" class="\${baseClass} bg-white"><option value="">-- Select --</option>\${opts}</select>\`;
+                  } else {
+                    const inputType = q.type === 'email' ? 'email' : q.type === 'phone' ? 'tel' : 'text';
+                    input = \`<input data-cq="\${esc(q.id)}" type="\${inputType}" class="\${baseClass}" placeholder="\${esc(q.question)}" value="\${val}" />\`;
+                  }
+                  return \`<div>\${label}\${input}</div>\`;
+                }).join('')}
+              </div>
+            </div>
+          \`;
 
           root.innerHTML = \`
             <div class="min-h-screen p-6">
@@ -226,6 +257,11 @@ const renderPublicBookingPage = (slug) => {
                         </div>
                       </div>
 
+                    </div>
+
+                    \${customQuestionsHtml}
+
+                    <div class="pt-2 border-t border-slate-100">
                       \${state.submitError ? \`<div class="mt-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2"><i class="fa-solid fa-triangle-exclamation mr-2"></i>\${esc(state.submitError)}</div>\` : ''}
 
                       <button id="submitBtn" type="button"
@@ -283,6 +319,19 @@ const renderPublicBookingPage = (slug) => {
           if (emailEl) emailEl.addEventListener('input', () => { state.email = emailEl.value || ''; });
           const notesEl = document.getElementById('notesInput');
           if (notesEl) notesEl.addEventListener('input', () => { state.notes = notesEl.value || ''; });
+
+          document.querySelectorAll('[data-cq]').forEach((el) => {
+            const qid = el.getAttribute('data-cq');
+            const evt = el.tagName === 'SELECT' ? 'change' : 'input';
+            el.addEventListener(evt, () => {
+              state.customAnswers[qid] = el.value || '';
+              const submitEl2 = document.getElementById('submitBtn');
+              if (submitEl2) {
+                const rq = sortedQuestions.filter(q => q.required).every(q => String(state.customAnswers[q.id] || '').trim() !== '');
+                submitEl2.disabled = !(state.service && state.date && state.time && state.name.trim() && state.phone.trim() && rq && !state.submitting);
+              }
+            });
+          });
 
           const submitEl = document.getElementById('submitBtn');
           if (submitEl) {
@@ -353,6 +402,11 @@ const renderPublicBookingPage = (slug) => {
           state.submitting = true;
           render();
           try {
+            const allQuestions = (state.page?.customQuestions || []);
+            const customAnswersPayload = allQuestions
+              .filter(q => String(state.customAnswers[q.id] || '').trim())
+              .map(q => ({ questionId: q.id, question: q.question, answer: String(state.customAnswers[q.id] || '').trim() }));
+
             const res = await fetch(API_BASE + '/submit', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -363,7 +417,8 @@ const renderPublicBookingPage = (slug) => {
                 serviceType: state.service,
                 appointmentDate: state.date,
                 appointmentTime: state.time,
-                notes: state.notes
+                notes: state.notes,
+                customAnswers: customAnswersPayload
               })
             });
             if (!res.ok) {
