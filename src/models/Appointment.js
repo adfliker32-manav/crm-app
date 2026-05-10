@@ -24,7 +24,14 @@ const appointmentSchema = new mongoose.Schema({
     // Source: chatbot or direct link
     source: { type: String, enum: ['chatbot', 'direct_link', 'manual'], default: 'direct_link' },
     // Cancellation reason
-    cancelledReason: { type: String, default: '' }
+    cancelledReason: { type: String, default: '' },
+    // Answers to custom questions from the booking page
+    customAnswers: [{
+        questionId: { type: String },
+        question:   { type: String },
+        answer:     { type: String },
+        _id: false
+    }]
 }, { timestamps: true });
 
 appointmentSchema.index({ userId: 1, appointmentDate: 1, status: 1 });

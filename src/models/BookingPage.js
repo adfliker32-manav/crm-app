@@ -2,8 +2,17 @@ const mongoose = require('mongoose');
 const saasPlugin = require('./plugins/saasPlugin');
 
 const timeSlotSchema = new mongoose.Schema({
-    time: { type: String, required: true }, // "09:00 AM"
-    label: { type: String, default: '' }   // optional display label
+    time: { type: String, required: true },
+    label: { type: String, default: '' }
+}, { _id: false });
+
+const customQuestionSchema = new mongoose.Schema({
+    id:       { type: String, required: true },
+    question: { type: String, required: true, trim: true },
+    type:     { type: String, enum: ['text', 'textarea', 'select', 'phone', 'email'], default: 'text' },
+    options:  [{ type: String, trim: true }],
+    required: { type: Boolean, default: false },
+    order:    { type: Number, default: 0 }
 }, { _id: false });
 
 const bookingPageSchema = new mongoose.Schema({
@@ -48,7 +57,11 @@ const bookingPageSchema = new mongoose.Schema({
     // Advance booking limit in days (0 = unlimited)
     maxAdvanceDays: { type: Number, default: 30 },
     // Gap in minutes to leave between back-to-back bookings
-    bufferMinutes: { type: Number, default: 0 }
+    bufferMinutes: { type: Number, default: 0 },
+    // Custom questions shown on the booking form; answers saved with appointment + lead
+    customQuestions: { type: [customQuestionSchema], default: [] },
+    // Message shown on the success screen after booking
+    thankYouMessage: { type: String, default: '', trim: true }
 }, { timestamps: true });
 
 bookingPageSchema.plugin(saasPlugin);

@@ -83,17 +83,19 @@ const getPublicBookingPage = async (req, res) => {
         if (!page) return res.status(404).json({ message: 'Booking page not found or inactive.' });
 
         res.json({
-            title:          page.title,
-            subtitle:       page.subtitle,
-            services:       page.services,
-            availableDays:  page.availableDays,
-            timeSlots:      page.timeSlots,
-            primaryColor:   page.primaryColor,
-            logoUrl:        page.logoUrl,
-            businessName:   page.businessName,
-            maxAdvanceDays: page.maxAdvanceDays,
-            bufferMinutes:  page.bufferMinutes || 0,
-            slug:           page.slug
+            title:           page.title,
+            subtitle:        page.subtitle,
+            services:        page.services,
+            availableDays:   page.availableDays,
+            timeSlots:       page.timeSlots,
+            primaryColor:    page.primaryColor,
+            logoUrl:         page.logoUrl,
+            businessName:    page.businessName,
+            maxAdvanceDays:  page.maxAdvanceDays,
+            bufferMinutes:   page.bufferMinutes || 0,
+            slug:            page.slug,
+            customQuestions: page.customQuestions || [],
+            thankYouMessage: page.thankYouMessage || ''
         });
     } catch (err) {
         console.error('getPublicBookingPage error:', err);
@@ -106,7 +108,8 @@ const submitBooking = async (req, res) => {
         const slug = String(req.params.slug || '').toLowerCase().trim();
         const {
             customerName, customerPhone, customerEmail,
-            serviceType, appointmentDate, appointmentTime, notes
+            serviceType, appointmentDate, appointmentTime, notes,
+            customAnswers
         } = req.body;
 
         if (!customerName || !customerPhone || !serviceType || !appointmentDate || !appointmentTime) {
@@ -125,6 +128,10 @@ const submitBooking = async (req, res) => {
             stageNameToSet = stage?.name || null;
         }
 
+        const sanitizedAnswers = Array.isArray(customAnswers)
+            ? customAnswers.filter(a => a.questionId && a.answer?.trim())
+            : [];
+
         const appt = new Appointment({
             userId:          page.userId,
             customerName,
@@ -135,7 +142,8 @@ const submitBooking = async (req, res) => {
             appointmentTime,
             notes:           notes || '',
             source:          'direct_link',
-            status:          'Pending'
+            status:          'Pending',
+            customAnswers:   sanitizedAnswers
         });
         await appt.save();
 
@@ -186,6 +194,18 @@ const submitBooking = async (req, res) => {
                     content: `Appointment booked: ${serviceType} on ${formattedDate} at ${appointmentTime}`,
                     date: new Date()
                 }];
+
+                if (sanitizedAnswers.length > 0) {
+                    const answersText = sanitizedAnswers
+                        .map(a => `• ${a.question}: ${a.answer}`)
+                        .join('\n');
+                    historyItems.push({
+                        type: 'System',
+                        subType: 'Auto',
+                        content: `Booking form answers:\n${answersText}`,
+                        date: new Date()
+                    });
+                }
 
                 const setOps = {};
 
@@ -353,7 +373,8 @@ const updateMyBookingPage = async (req, res) => {
             'title', 'subtitle', 'services', 'availableDays', 'timeSlots',
             'primaryColor', 'logoUrl', 'businessName', 'confirmationMessage',
             'confirmationTemplateId', 'leadStageId',
-            'sendConfirmation', 'isActive', 'maxAdvanceDays', 'bufferMinutes'
+            'sendConfirmation', 'isActive', 'maxAdvanceDays', 'bufferMinutes',
+            'customQuestions', 'thankYouMessage'
         ];
         const updates = {};
         allowed.forEach(key => { if (req.body[key] !== undefined) updates[key] = req.body[key]; });

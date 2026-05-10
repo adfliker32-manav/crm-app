@@ -193,6 +193,19 @@ function AppointmentsList() {
                         <DetailRow label="Time"     value={selectedAppt.appointmentTime} />
                         <DetailRow label="Source"   value={selectedAppt.source} />
                         {selectedAppt.notes && <DetailRow label="Notes" value={selectedAppt.notes} />}
+                        {(selectedAppt.customAnswers || []).length > 0 && (
+                            <div>
+                                <span className="text-slate-400 text-xs block mb-1.5">Custom Answers</span>
+                                <div className="space-y-2">
+                                    {selectedAppt.customAnswers.map((a, i) => (
+                                        <div key={i} className="bg-slate-50 rounded-lg p-2.5 border border-slate-100">
+                                            <p className="text-[11px] text-slate-400 font-medium">{a.question}</p>
+                                            <p className="text-sm text-slate-700 font-medium mt-0.5">{a.answer}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         <div>
                             <span className="text-slate-500 text-xs block mb-1">Status</span>
                             <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${STATUS_COLORS[selectedAppt.status]}`}>
@@ -509,12 +522,15 @@ function CalendarTab() {
 // ─── Booking Page Customizer Tab ─────────────────────────────────────────────
 
 const SECTIONS = [
-    { id: 'branding',      icon: 'fa-palette',       label: 'Branding' },
-    { id: 'services',      icon: 'fa-briefcase',      label: 'Services' },
-    { id: 'schedule',      icon: 'fa-calendar-days',  label: 'Schedule' },
-    { id: 'slots',         icon: 'fa-clock',          label: 'Time Slots' },
-    { id: 'notifications', icon: 'fa-bell',           label: 'Notifications' },
+    { id: 'branding',      icon: 'fa-palette',          label: 'Branding' },
+    { id: 'services',      icon: 'fa-briefcase',         label: 'Services' },
+    { id: 'schedule',      icon: 'fa-calendar-days',     label: 'Schedule' },
+    { id: 'slots',         icon: 'fa-clock',             label: 'Time Slots' },
+    { id: 'questions',     icon: 'fa-circle-question',   label: 'Questions' },
+    { id: 'notifications', icon: 'fa-bell',              label: 'Notifications' },
 ];
+
+const genQId = () => `q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
 // Convert HH:MM (from <input type="time">) to "H:MM AM/PM"
 function toAmPm(val) {
@@ -549,6 +565,11 @@ function BookingPageCustomizer() {
     const [isActive, setIsActive]                       = useState(true);
     const [maxAdvanceDays, setMaxAdvanceDays]           = useState(30);
     const [bufferMinutes, setBufferMinutes]             = useState(0);
+    const [thankYouMessage, setThankYouMessage]         = useState('');
+    const [customQuestions, setCustomQuestions]         = useState([]);
+    const [showNewQForm, setShowNewQForm]               = useState(false);
+    const [newQ, setNewQ]                               = useState({ question: '', type: 'text', required: false, options: [] });
+    const [newQOption, setNewQOption]                   = useState('');
 
     useEffect(() => {
         api.get('/appointments/booking-page/config')
@@ -569,6 +590,8 @@ function BookingPageCustomizer() {
                 setIsActive(d.isActive !== false);
                 setMaxAdvanceDays(d.maxAdvanceDays || 30);
                 setBufferMinutes(d.bufferMinutes || 0);
+                setThankYouMessage(d.thankYouMessage || '');
+                setCustomQuestions(d.customQuestions || []);
             })
             .catch(() => showError('Failed to load booking page config'))
             .finally(() => setLoading(false));
@@ -600,7 +623,8 @@ function BookingPageCustomizer() {
                 availableDays, timeSlots,
                 leadStageId: leadStageId || null,
                 confirmationTemplateId: confirmationTemplateId || null,
-                sendConfirmation, isActive, maxAdvanceDays, bufferMinutes
+                sendConfirmation, isActive, maxAdvanceDays, bufferMinutes,
+                thankYouMessage, customQuestions
             });
             setConfig(res.data);
             showSuccess('Booking page saved!');
@@ -622,9 +646,49 @@ function BookingPageCustomizer() {
         setNewTime('');
     };
     const removeTimeSlot = t => setTimeSlots(p => p.filter(s => s.time !== t));
-    const toggleDay      = n => setAvailableDays(p =>
+    const toggleDay = n => setAvailableDays(p =>
         p.includes(n) ? p.filter(d => d !== n) : [...p, n].sort()
     );
+
+    const addOptionToNewQ = () => {
+        if (!newQOption.trim()) return;
+        if (!newQ.options.includes(newQOption.trim()))
+            setNewQ(p => ({ ...p, options: [...p.options, newQOption.trim()] }));
+        setNewQOption('');
+    };
+    const removeOptionFromNewQ = (opt) => setNewQ(p => ({ ...p, options: p.options.filter(o => o !== opt) }));
+
+    const addQuestion = () => {
+        if (!newQ.question.trim()) return;
+        if (newQ.type === 'select' && newQ.options.length === 0) {
+            showError('Add at least one option for multiple choice questions.');
+            return;
+        }
+        const q = {
+            id: genQId(),
+            question: newQ.question.trim(),
+            type: newQ.type,
+            required: newQ.required,
+            options: newQ.options,
+            order: customQuestions.length
+        };
+        setCustomQuestions(prev => [...prev, q]);
+        setNewQ({ question: '', type: 'text', required: false, options: [] });
+        setNewQOption('');
+        setShowNewQForm(false);
+    };
+    const removeQuestion = (id) => setCustomQuestions(prev => prev.filter(q => q.id !== id));
+    const moveQuestion   = (id, dir) => {
+        setCustomQuestions(prev => {
+            const sorted = [...prev].sort((a, b) => a.order - b.order);
+            const idx    = sorted.findIndex(q => q.id === id);
+            const swap   = dir === 'up' ? idx - 1 : idx + 1;
+            if (swap < 0 || swap >= sorted.length) return prev;
+            const updated = sorted.map((q, i) => ({ ...q, order: i }));
+            [updated[idx].order, updated[swap].order] = [updated[swap].order, updated[idx].order];
+            return updated;
+        });
+    };
 
     if (loading) return (
         <div className="flex items-center justify-center h-40">
@@ -726,6 +790,14 @@ function BookingPageCustomizer() {
                                             <span className="text-xs text-slate-400">Logo preview</span>
                                         </div>
                                     )}
+                                </CField>
+                                <CField label="Thank You Message" icon="fa-heart" className="sm:col-span-2">
+                                    <textarea value={thankYouMessage} onChange={e => setThankYouMessage(e.target.value)}
+                                        placeholder="Hi {{name}}, your appointment is confirmed. We look forward to seeing you!"
+                                        rows={2} className={`${iCls} resize-none`} />
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        Shown on the success screen. Use <code className="bg-slate-100 px-1 rounded text-[11px]">{'{{name}}'}</code> for customer's name.
+                                    </p>
                                 </CField>
                                 <CField label="Brand Color" icon="fa-droplet" className="sm:col-span-2">
                                     <div className="flex items-center gap-3">
@@ -857,6 +929,143 @@ function BookingPageCustomizer() {
                             <p className="text-xs text-slate-400 mt-2">
                                 Use the time picker to add slots. Times auto-format to AM/PM.
                             </p>
+                        </CSection>
+                    )}
+
+                    {/* ── Questions ── */}
+                    {activeSection === 'questions' && (
+                        <CSection icon="fa-circle-question" title="Custom Questions"
+                            desc="Add questions customers must answer when booking. Answers are saved with the appointment and lead.">
+
+                            {/* Existing questions */}
+                            <div className="space-y-2.5 mb-5">
+                                {customQuestions.length === 0 && !showNewQForm && (
+                                    <div className="text-center py-8 border-2 border-dashed border-slate-200 rounded-xl">
+                                        <i className="fa-solid fa-circle-question text-3xl text-slate-200 mb-2 block"></i>
+                                        <p className="text-sm text-slate-500 font-medium">No custom questions yet</p>
+                                        <p className="text-xs text-slate-400 mt-1">Add questions to collect extra info from customers.</p>
+                                    </div>
+                                )}
+                                {[...customQuestions].sort((a, b) => a.order - b.order).map((q, idx) => (
+                                    <div key={q.id} className="flex items-start gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                                        <div className="flex flex-col gap-1 shrink-0 mt-0.5">
+                                            <button onClick={() => moveQuestion(q.id, 'up')} disabled={idx === 0}
+                                                className="text-slate-300 hover:text-slate-500 disabled:opacity-20 transition-colors">
+                                                <i className="fa-solid fa-chevron-up text-[10px]"></i>
+                                            </button>
+                                            <button onClick={() => moveQuestion(q.id, 'down')} disabled={idx === customQuestions.length - 1}
+                                                className="text-slate-300 hover:text-slate-500 disabled:opacity-20 transition-colors">
+                                                <i className="fa-solid fa-chevron-down text-[10px]"></i>
+                                            </button>
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="text-sm font-semibold text-slate-700">{q.question}</span>
+                                                {q.required && (
+                                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-red-500 border border-red-200">Required</span>
+                                                )}
+                                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-500 capitalize">{q.type}</span>
+                                            </div>
+                                            {q.type === 'select' && q.options?.length > 0 && (
+                                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                                    {q.options.map(opt => (
+                                                        <span key={opt} className="text-[10px] bg-white border border-slate-200 text-slate-500 px-2 py-0.5 rounded-md">{opt}</span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <button onClick={() => removeQuestion(q.id)}
+                                            className="text-slate-300 hover:text-red-400 transition-colors shrink-0 mt-0.5">
+                                            <i className="fa-solid fa-trash text-[11px]"></i>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Add question form */}
+                            {!showNewQForm ? (
+                                <button onClick={() => setShowNewQForm(true)}
+                                    className="w-full py-3 border-2 border-dashed border-slate-300 rounded-xl text-sm font-semibold text-slate-500 hover:border-blue-400 hover:text-blue-500 transition-all flex items-center justify-center gap-2">
+                                    <i className="fa-solid fa-plus text-xs"></i>
+                                    Add Question
+                                </button>
+                            ) : (
+                                <div className="border-2 border-blue-200 bg-blue-50/40 rounded-xl p-5 space-y-4">
+                                    <p className="text-sm font-bold text-slate-700">New Question</p>
+
+                                    <CField label="Question Text" icon="fa-message">
+                                        <input value={newQ.question}
+                                            onChange={e => setNewQ(p => ({ ...p, question: e.target.value }))}
+                                            placeholder="e.g. What is your preferred language?"
+                                            className={iCls}
+                                            onKeyDown={e => e.key === 'Enter' && addQuestion()} />
+                                    </CField>
+
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <CField label="Answer Type" icon="fa-list">
+                                            <select value={newQ.type}
+                                                onChange={e => setNewQ(p => ({ ...p, type: e.target.value, options: [] }))}
+                                                className={iCls}>
+                                                <option value="text">Short Text</option>
+                                                <option value="textarea">Long Text</option>
+                                                <option value="select">Multiple Choice</option>
+                                                <option value="phone">Phone Number</option>
+                                                <option value="email">Email Address</option>
+                                            </select>
+                                        </CField>
+                                        <CField label="Required?" icon="fa-asterisk">
+                                            <div className="flex items-center gap-2 h-[42px]">
+                                                <button onClick={() => setNewQ(p => ({ ...p, required: !p.required }))}
+                                                    className={`relative w-10 h-5 rounded-full transition-colors focus:outline-none ${newQ.required ? 'bg-blue-600' : 'bg-slate-300'}`}>
+                                                    <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${newQ.required ? 'left-[22px]' : 'left-0.5'}`}></span>
+                                                </button>
+                                                <span className="text-sm text-slate-600">{newQ.required ? 'Required' : 'Optional'}</span>
+                                            </div>
+                                        </CField>
+                                    </div>
+
+                                    {newQ.type === 'select' && (
+                                        <CField label="Options" icon="fa-list-check">
+                                            <div className="space-y-2">
+                                                <div className="flex flex-wrap gap-1.5 min-h-[28px]">
+                                                    {newQ.options.length === 0 && <span className="text-xs text-slate-400">No options yet</span>}
+                                                    {newQ.options.map(opt => (
+                                                        <span key={opt} className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 text-xs px-2.5 py-1 rounded-lg">
+                                                            {opt}
+                                                            <button onClick={() => removeOptionFromNewQ(opt)}
+                                                                className="text-slate-300 hover:text-red-400 transition-colors">
+                                                                <i className="fa-solid fa-xmark text-[9px]"></i>
+                                                            </button>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <input value={newQOption}
+                                                        onChange={e => setNewQOption(e.target.value)}
+                                                        onKeyDown={e => e.key === 'Enter' && addOptionToNewQ()}
+                                                        placeholder="Type option, press Enter…"
+                                                        className={`${iCls} flex-1 text-xs`} />
+                                                    <button onClick={addOptionToNewQ}
+                                                        className="shrink-0 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold px-3 py-2 rounded-xl transition-colors">
+                                                        + Add
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </CField>
+                                    )}
+
+                                    <div className="flex gap-2 pt-1">
+                                        <button onClick={() => { setShowNewQForm(false); setNewQ({ question: '', type: 'text', required: false, options: [] }); setNewQOption(''); }}
+                                            className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-500 hover:bg-white transition-all font-medium">
+                                            Cancel
+                                        </button>
+                                        <button onClick={addQuestion}
+                                            className="flex-[2] py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold transition-all">
+                                            Add Question
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </CSection>
                     )}
 
