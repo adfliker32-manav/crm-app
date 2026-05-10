@@ -141,13 +141,12 @@ exports.deleteTemplate = async (req, res) => {
             return res.status(404).json({ message: 'Template not found' });
         }
 
-        // Delete attachment files
+        // Delete attachment files — ignore errors (file may already be gone)
         if (template.attachments && template.attachments.length > 0) {
             template.attachments.forEach(att => {
-                const filePath = att.path;
-                if (fs.existsSync(filePath)) {
-                    fs.unlinkSync(filePath);
-                }
+                try {
+                    fs.unlinkSync(att.path);
+                } catch (_) {}
             });
         }
 
@@ -171,9 +170,7 @@ exports.uploadAttachment = [
             // Delete uploaded files if template not found
             if (req.files) {
                 req.files.forEach(file => {
-                    if (fs.existsSync(file.path)) {
-                        fs.unlinkSync(file.path);
-                    }
+                    try { fs.unlinkSync(file.path); } catch (_) {}
                 });
             }
             return res.status(404).json({ message: 'Template not found' });

@@ -168,20 +168,24 @@ const sendEmailController = async (req, res) => {
     } catch (error) {
         console.error("❌ Email Error:", error);
         
-        // Log failed email
+        // Log failed email — wrapped so a logging failure never prevents the 500 response
         const userId = req.user?.userId || req.user?.id;
         if (userId) {
-            await logEmail({
-                userId: userId,
-                to: req.body?.to || 'unknown',
-                subject: req.body?.subject || 'No subject',
-                body: req.body?.html || req.body?.text || '',
-                status: 'failed',
-                error: 'Server error',
-                isAutomated: false,
-                triggerType: 'manual',
-                attachments: []
-            });
+            try {
+                await logEmail({
+                    userId: userId,
+                    to: req.body?.to || 'unknown',
+                    subject: req.body?.subject || 'No subject',
+                    body: req.body?.html || req.body?.text || '',
+                    status: 'failed',
+                    error: 'Server error',
+                    isAutomated: false,
+                    triggerType: 'manual',
+                    attachments: []
+                });
+            } catch (logErr) {
+                console.error('Failed to log email error:', logErr.message);
+            }
         }
         
         // Handle specific error types

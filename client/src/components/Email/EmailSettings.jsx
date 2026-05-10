@@ -3,6 +3,19 @@ import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 
+const Field = ({ label, hint, required, children }) => (
+    <div className="flex flex-col gap-1.5">
+        <label className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+            {label}
+            {required && <span className="text-rose-500 text-xs">*</span>}
+            {hint && <span className="text-slate-400 text-xs font-normal">({hint})</span>}
+        </label>
+        {children}
+    </div>
+);
+
+const inputCls = "w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:bg-white transition-all";
+
 const EmailSettings = () => {
     const { showSuccess, showError, showInfo } = useNotification();
     const [config, setConfig] = useState({
@@ -19,11 +32,9 @@ const EmailSettings = () => {
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
-    const [showCredentials, setShowCredentials] = useState(false); // Toggle to view/hide saved credentials
+    const [showCredentials, setShowCredentials] = useState(false);
 
-    useEffect(() => {
-        fetchConfig();
-    }, []);
+    useEffect(() => { fetchConfig(); }, []);
 
     const fetchConfig = async () => {
         try {
@@ -34,13 +45,12 @@ const EmailSettings = () => {
                 smtpHost: res.data.smtpHost || '',
                 smtpPort: res.data.smtpPort || 587,
                 emailUser: res.data.emailUser || '',
-                emailPassword: res.data.emailPassword || '', // Keep password if returned
+                emailPassword: res.data.emailPassword || '',
                 emailFromName: res.data.emailFromName || '',
                 emailSignature: res.data.emailSignature || '',
                 isConfigured: res.data.isConfigured || false
             }));
         } catch (error) {
-            console.error('Error fetching config:', error);
             showError('Failed to load email configuration');
         } finally {
             setLoading(false);
@@ -49,27 +59,14 @@ const EmailSettings = () => {
 
     const handleChange = (e) => {
         const { name, value } = e.target;
-        setConfig(prev => ({
-            ...prev,
-            [name]: value
-        }));
+        setConfig(prev => ({ ...prev, [name]: value }));
     };
 
     const handleSave = async (e) => {
         e.preventDefault();
-
-        if (!config.emailUser.trim()) {
-            showError('Email address is required');
-            return;
-        }
-
-        if (!config.emailPassword.trim() && !config.isConfigured) {
-            showError('Password is required');
-            return;
-        }
-
+        if (!config.emailUser.trim()) { showError('Email address is required'); return; }
+        if (!config.emailPassword.trim() && !config.isConfigured) { showError('Password is required'); return; }
         setSaving(true);
-
         try {
             const payload = {
                 emailServiceType: config.emailServiceType,
@@ -79,24 +76,16 @@ const EmailSettings = () => {
                 emailFromName: config.emailFromName.trim(),
                 emailSignature: config.emailSignature
             };
-
             if (config.emailPassword.trim() && config.emailPassword !== '••••••••') {
                 payload.emailPassword = config.emailPassword.trim();
             }
-
             const res = await api.put('/email/config', payload);
-
             if (res.data.success) {
-                showSuccess('Email configuration saved successfully!');
-                setConfig(prev => ({
-                    ...prev,
-                    emailPassword: '••••••••',
-                    isConfigured: true
-                }));
-                setShowCredentials(false); // Hide credentials after saving
+                showSuccess('Email configuration saved!');
+                setConfig(prev => ({ ...prev, emailPassword: '••••••••', isConfigured: true }));
+                setShowCredentials(false);
             }
         } catch (error) {
-            console.error('Error saving config:', error);
             showError(error.response?.data?.message || 'Failed to save configuration');
         } finally {
             setSaving(false);
@@ -108,294 +97,205 @@ const EmailSettings = () => {
             showError('Please save your configuration first');
             return;
         }
-
         setTesting(true);
-        showInfo('Sending test email... This may take a few seconds.');
-
+        showInfo('Sending test email...');
         try {
             const payload = {};
             if (config.emailUser && config.emailPassword) {
                 payload.emailUser = config.emailUser;
                 payload.emailPassword = config.emailPassword;
             }
-
             const res = await api.post('/email/config/test', payload);
-
-            if (res.data.success) {
-                showSuccess(res.data.message || 'Test email sent successfully!');
-            }
+            if (res.data.success) showSuccess(res.data.message || 'Test email sent!');
         } catch (error) {
-            console.error('Error testing config:', error);
             showError(error.response?.data?.message || 'Failed to send test email');
         } finally {
             setTesting(false);
         }
     };
 
-    if (loading) {
-        return (
-            <div className="p-8 text-center text-slate-500">
-                <i className="fa-solid fa-spinner fa-spin text-2xl mb-2"></i>
-                <p>Loading configuration...</p>
-            </div>
-        );
-    }
+    if (loading) return (
+        <div className="flex flex-col items-center justify-center h-64 gap-3">
+            <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-sm text-slate-500 font-medium">Loading configuration...</p>
+        </div>
+    );
 
     return (
-        <div className="p-6 max-w-3xl mx-auto">
-            <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
-                <div className="flex items-center gap-3 mb-6 pb-4 border-b border-gray-200">
-                    <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-                        <i className="fa-solid fa-envelope text-2xl text-blue-600"></i>
+        <div className="p-6 max-w-2xl mx-auto space-y-5">
+            {/* Status banner */}
+            {config.isConfigured ? (
+                <div className="flex items-center gap-4 bg-emerald-50 border border-emerald-200 rounded-2xl px-5 py-4">
+                    <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                        <i className="fa-solid fa-circle-check text-emerald-600 text-lg"></i>
                     </div>
-                    <div>
-                        <h2 className="text-xl font-bold text-gray-800">Email Configuration</h2>
-                        <p className="text-sm text-gray-500">Configure your SMTP email settings (Gmail)</p>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-emerald-800">Email Connected</p>
+                        <p className="text-xs text-emerald-600 truncate">{config.emailUser}</p>
                     </div>
-                </div>
-
-                {/* Status Indicator */}
-                {config.isConfigured && (
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 flex items-center gap-3">
-                        <i className="fa-solid fa-check-circle text-green-600 text-xl"></i>
-                        <div>
-                            <p className="font-medium text-green-800">Configuration Active</p>
-                            <p className="text-sm text-green-600">Your email integration is configured and ready to use</p>
-                        </div>
-                    </div>
-                )}
-
-                {/* View Credentials Button */}
-                {config.isConfigured && !showCredentials && (
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <i className="fa-solid fa-lock text-slate-600 text-xl"></i>
-                                <div>
-                                    <p className="font-medium text-slate-800">Credentials Secured</p>
-                                    <p className="text-sm text-slate-600">From Name: <span className="font-semibold">{config.emailFromName || 'Not set'}</span></p>
-                                </div>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setShowCredentials(true)}
-                                className="bg-slate-600 hover:bg-slate-700 text-white px-4 py-2 rounded-lg font-medium transition flex items-center gap-2"
-                            >
-                                <i className="fa-solid fa-eye"></i>
-                                View Details
-                            </button>
-                        </div>
-                    </div>
-                )}
-
-                {/* Edit/Hide Button */}
-                {config.isConfigured && showCredentials && (
-                    <div className="flex justify-end mb-4">
-                        <button
-                            type="button"
-                            onClick={() => setShowCredentials(false)}
-                            className="text-sm text-slate-600 hover:text-slate-800 flex items-center gap-2"
-                        >
-                            <i className="fa-solid fa-eye-slash"></i>
-                            Hide Credentials
-                        </button>
-                    </div>
-                )}
-
-                <form onSubmit={handleSave} className={`space-y-5 ${config.isConfigured && !showCredentials ? 'hidden' : ''}`}>
-                    {/* Service Type */}
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Provider Type <span className="text-red-500">*</span>
-                        </label>
-                        <select
-                            name="emailServiceType"
-                            value={config.emailServiceType}
-                            onChange={handleChange}
-                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                        >
-                            <option value="gmail">Gmail / Google Workspace</option>
-                            <option value="smtp">Other Custom SMTP</option>
-                        </select>
-                    </div>
-
-                    {/* SMTP Advanced Settings */}
-                    {config.emailServiceType === 'smtp' && (
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    SMTP Host <span className="text-red-500">*</span>
-                                </label>
-                                <input
-                                    type="text"
-                                    name="smtpHost"
-                                    value={config.smtpHost}
-                                    onChange={handleChange}
-                                    placeholder="smtp.example.com"
-                                    required={config.emailServiceType === 'smtp'}
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    SMTP Port <span className="text-red-500">*</span>
-                                </label>
-                                <input
-                                    type="number"
-                                    name="smtpPort"
-                                    value={config.smtpPort}
-                                    onChange={handleChange}
-                                    placeholder="587"
-                                    required={config.emailServiceType === 'smtp'}
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                                />
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Email Address */}
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                            {config.emailServiceType === 'gmail' ? 'Gmail Address' : 'Email Address'} <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                            type="email"
-                            name="emailUser"
-                            value={config.emailUser}
-                            onChange={handleChange}
-                            placeholder={config.emailServiceType === 'gmail' ? "your-email@gmail.com" : "you@yourcompany.com"}
-                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                            required
-                        />
-                        <p className="text-xs text-gray-500 mt-1">
-                            Your email address for sending emails
-                        </p>
-                    </div>
-
-                    {/* Password */}
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                            {config.emailServiceType === 'gmail' ? 'App Password' : 'SMTP Password'} <span className="text-red-500">*</span>
-                        </label>
-                        <div className="relative">
-                            <input
-                                type={showPassword ? 'text' : 'password'}
-                                name="emailPassword"
-                                value={config.emailPassword}
-                                onChange={handleChange}
-                                placeholder={config.isConfigured ? "Enter new password to update" : "Enter your app password"}
-                                className="w-full p-3 pr-12 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm"
-                                required={!config.isConfigured}
-                            />
-                            <button
-                                type="button"
-                                onClick={() => setShowPassword(!showPassword)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                            >
-                                <i className={`fa-solid ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
-                            </button>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-1">
-                            {config.emailServiceType === 'gmail' ? 'Use a Gmail App Password, not your regular password' : 'Your SMTP password'}
-                        </p>
-                    </div>
-
-                    {/* From Name */}
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                            From Name <span className="text-gray-400">(Optional)</span>
-                        </label>
-                        <input
-                            type="text"
-                            name="emailFromName"
-                            value={config.emailFromName}
-                            onChange={handleChange}
-                            placeholder="Your Name or Company Name"
-                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                        />
-                        <p className="text-xs text-gray-500 mt-1">
-                            The name that will appear in the "From" field
-                        </p>
-                    </div>
-
-                    {/* Signature */}
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Email Signature <span className="text-gray-400">(Optional)</span>
-                        </label>
-                        <textarea
-                            name="emailSignature"
-                            value={config.emailSignature}
-                            onChange={handleChange}
-                            placeholder="Best regards,&#10;John Doe"
-                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm min-h-[100px] resize-y"
-                        ></textarea>
-                        <p className="text-xs text-gray-500 mt-1">
-                            This signature will be automatically appended to all emails sent from this account. HTML is supported.
-                        </p>
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="flex gap-3 pt-4 border-t border-gray-200">
-                        <button
-                            type="submit"
-                            disabled={saving}
-                            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition shadow-md disabled:opacity-70 flex items-center justify-center gap-2"
-                        >
-                            {saving ? (
-                                <>
-                                    <i className="fa-solid fa-spinner fa-spin"></i>
-                                    Saving...
-                                </>
-                            ) : (
-                                <>
-                                    <i className="fa-solid fa-save"></i>
-                                    Save Configuration
-                                </>
-                            )}
-                        </button>
+                    <div className="flex gap-2">
                         <button
                             type="button"
                             onClick={handleTest}
-                            disabled={testing || (!config.isConfigured && (!config.emailUser || !config.emailPassword))}
-                            className="flex-1 bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-medium transition shadow-md disabled:opacity-70 flex items-center justify-center gap-2"
+                            disabled={testing}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 bg-white hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl transition"
                         >
-                            {testing ? (
-                                <>
-                                    <i className="fa-solid fa-spinner fa-spin"></i>
-                                    Testing...
-                                </>
-                            ) : (
-                                <>
-                                    <i className="fa-solid fa-paper-plane"></i>
-                                    Send Test Email
-                                </>
-                            )}
+                            {testing ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-paper-plane"></i>}
+                            {testing ? 'Testing...' : 'Test'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowCredentials(v => !v)}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl transition"
+                        >
+                            <i className={`fa-solid ${showCredentials ? 'fa-eye-slash' : 'fa-pen'}`}></i>
+                            {showCredentials ? 'Hide' : 'Edit'}
                         </button>
                     </div>
-                </form>
-
-                {/* Help Section for Gmail */}
-                {config.emailServiceType === 'gmail' && (
-                    <div className="mt-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                        <h3 className="font-bold text-yellow-900 mb-2 flex items-center gap-2">
-                            <i className="fa-solid fa-lightbulb"></i>
-                            How to create a Gmail App Password
-                        </h3>
-                        <ol className="text-sm text-yellow-800 space-y-1 list-decimal list-inside">
-                            <li>Go to your <a href="https://myaccount.google.com/" target="_blank" rel="noopener noreferrer" className="underline">Google Account</a></li>
-                            <li>Select Security → 2-Step Verification (enable if not already)</li>
-                            <li>Scroll down and select "App passwords"</li>
-                            <li>Create a new app password for "Mail"</li>
-                            <li>Copy the 16-character password</li>
-                            <li>Paste it here (without spaces)</li>
-                        </ol>
-                        <p className="text-xs text-yellow-700 mt-2">
-                            ⚠️ Never use your regular Gmail password. Always use App Passwords for security.
-                        </p>
+                </div>
+            ) : (
+                <div className="flex items-center gap-4 bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4">
+                    <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                        <i className="fa-solid fa-triangle-exclamation text-amber-600 text-lg"></i>
                     </div>
-                )}
-            </div>
+                    <div>
+                        <p className="text-sm font-bold text-amber-800">Not Configured</p>
+                        <p className="text-xs text-amber-600">Fill in the form below to connect your email account.</p>
+                    </div>
+                </div>
+            )}
+
+            {/* Config Form */}
+            {(!config.isConfigured || showCredentials) && (
+                <form onSubmit={handleSave} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                    {/* Section: Provider */}
+                    <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">1 — Provider</p>
+                    </div>
+                    <div className="p-6 border-b border-slate-100 space-y-4">
+                        <div className="grid grid-cols-2 gap-3">
+                            {[
+                                { value: 'gmail', label: 'Gmail / Google Workspace', icon: 'fa-google', color: 'text-rose-500' },
+                                { value: 'smtp', label: 'Custom SMTP Server', icon: 'fa-server', color: 'text-slate-500' }
+                            ].map(opt => (
+                                <button
+                                    key={opt.value}
+                                    type="button"
+                                    onClick={() => setConfig(p => ({ ...p, emailServiceType: opt.value }))}
+                                    className={`flex items-center gap-3 p-4 rounded-xl border-2 text-left transition-all ${config.emailServiceType === opt.value ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200 hover:border-slate-300 bg-white'}`}
+                                >
+                                    <i className={`fa-brands ${opt.icon} text-xl ${config.emailServiceType === opt.value ? 'text-indigo-500' : opt.color}`}></i>
+                                    <span className={`text-sm font-semibold ${config.emailServiceType === opt.value ? 'text-indigo-700' : 'text-slate-700'}`}>{opt.label}</span>
+                                </button>
+                            ))}
+                        </div>
+
+                        {config.emailServiceType === 'smtp' && (
+                            <div className="grid grid-cols-3 gap-3">
+                                <div className="col-span-2">
+                                    <Field label="SMTP Host" required>
+                                        <input type="text" name="smtpHost" value={config.smtpHost} onChange={handleChange}
+                                            placeholder="smtp.yourprovider.com" required className={inputCls} />
+                                    </Field>
+                                </div>
+                                <Field label="Port" required>
+                                    <input type="number" name="smtpPort" value={config.smtpPort} onChange={handleChange}
+                                        placeholder="587" required className={inputCls} />
+                                </Field>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Section: Credentials */}
+                    <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">2 — Credentials</p>
+                    </div>
+                    <div className="p-6 border-b border-slate-100 space-y-4">
+                        <Field label={config.emailServiceType === 'gmail' ? 'Gmail Address' : 'Email Address'} required>
+                            <input type="email" name="emailUser" value={config.emailUser} onChange={handleChange}
+                                placeholder={config.emailServiceType === 'gmail' ? 'you@gmail.com' : 'you@yourcompany.com'}
+                                required className={inputCls} />
+                        </Field>
+
+                        <Field
+                            label={config.emailServiceType === 'gmail' ? 'App Password' : 'SMTP Password'}
+                            hint={config.isConfigured ? 'leave blank to keep current' : undefined}
+                            required={!config.isConfigured}
+                        >
+                            <div className="relative">
+                                <input
+                                    type={showPassword ? 'text' : 'password'}
+                                    name="emailPassword"
+                                    value={config.emailPassword}
+                                    onChange={handleChange}
+                                    placeholder={config.isConfigured ? 'Enter new password to update' : 'Enter app password'}
+                                    required={!config.isConfigured}
+                                    className={`${inputCls} pr-11 font-mono`}
+                                />
+                                <button type="button" onClick={() => setShowPassword(v => !v)}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition">
+                                    <i className={`fa-solid text-sm ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                                </button>
+                            </div>
+                            {config.emailServiceType === 'gmail' && (
+                                <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+                                    <i className="fa-solid fa-circle-info"></i>
+                                    Use a Gmail App Password — never your regular password
+                                </p>
+                            )}
+                        </Field>
+                    </div>
+
+                    {/* Section: Identity */}
+                    <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">3 — Sender Identity</p>
+                    </div>
+                    <div className="p-6 border-b border-slate-100 space-y-4">
+                        <Field label="From Name" hint="optional">
+                            <input type="text" name="emailFromName" value={config.emailFromName} onChange={handleChange}
+                                placeholder="Your Name or Company Name" className={inputCls} />
+                        </Field>
+
+                        <Field label="Email Signature" hint="optional, HTML supported">
+                            <textarea name="emailSignature" value={config.emailSignature} onChange={handleChange}
+                                placeholder={'Best regards,\nYour Name'}
+                                className={`${inputCls} min-h-[90px] resize-y`} />
+                        </Field>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="px-6 py-4 flex items-center justify-between gap-3 bg-slate-50/50">
+                        {config.isConfigured && (
+                            <button type="button" onClick={() => setShowCredentials(false)}
+                                className="text-sm text-slate-500 hover:text-slate-700 font-medium flex items-center gap-1.5 transition">
+                                <i className="fa-solid fa-xmark"></i> Cancel
+                            </button>
+                        )}
+                        <div className="flex gap-3 ml-auto">
+                            <button type="submit" disabled={saving}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition shadow-md shadow-indigo-200">
+                                {saving ? <><i className="fa-solid fa-spinner fa-spin"></i> Saving...</> : <><i className="fa-solid fa-floppy-disk"></i> Save Configuration</>}
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            )}
+
+            {/* Gmail Help */}
+            {config.emailServiceType === 'gmail' && (!config.isConfigured || showCredentials) && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                        <i className="fa-solid fa-lightbulb text-amber-500"></i>
+                        <h3 className="text-sm font-bold text-amber-900">How to create a Gmail App Password</h3>
+                    </div>
+                    <ol className="text-sm text-amber-800 space-y-1.5 list-decimal list-inside leading-relaxed">
+                        <li>Go to <a href="https://myaccount.google.com/" target="_blank" rel="noopener noreferrer" className="underline font-medium">myaccount.google.com</a></li>
+                        <li>Security → 2-Step Verification (enable if needed)</li>
+                        <li>Search "App passwords" → create one for "Mail"</li>
+                        <li>Copy the 16-character code and paste it above (without spaces)</li>
+                    </ol>
+                </div>
+            )}
         </div>
     );
 };

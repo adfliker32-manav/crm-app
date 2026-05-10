@@ -1,3 +1,4 @@
+const fs = require('fs');
 const EmailTemplate = require('../models/EmailTemplate');
 const User = require('../models/User');
 const { sendEmail, sendEmailWithRetry } = require('./emailService');
@@ -54,11 +55,10 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                 const subject = replaceVariables(template.subject, templateData);
                 const body = replaceVariables(template.body, templateData);
 
-                // Prepare attachments
-                const attachments = (template.attachments || []).map(att => ({
-                    filename: att.originalName || att.filename,
-                    path: att.path
-                }));
+                // Prepare attachments — skip any whose file has been deleted
+                const attachments = (template.attachments || [])
+                    .filter(att => att.path && fs.existsSync(att.path))
+                    .map(att => ({ filename: att.originalName || att.filename, path: att.path }));
 
                 // Send email
                 const emailOptions = {
@@ -165,11 +165,10 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                 const subject = replaceVariables(template.subject, templateData);
                 const body = replaceVariables(template.body, templateData);
 
-                // Prepare attachments
-                const attachments = (template.attachments || []).map(att => ({
-                    filename: att.originalName || att.filename,
-                    path: att.path
-                }));
+                // Prepare attachments — skip any whose file has been deleted
+                const attachments = (template.attachments || [])
+                    .filter(att => att.path && fs.existsSync(att.path))
+                    .map(att => ({ filename: att.originalName || att.filename, path: att.path }));
 
                 // Send email
                 const emailOptions = {

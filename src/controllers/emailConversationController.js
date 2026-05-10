@@ -5,10 +5,11 @@ const { escapeRegex } = require('../utils/controllerHelpers');
 exports.getConversations = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const { status = 'active', search } = req.query;
-        
+        const { status = 'active', search, page = 1, limit = 30 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
         const query = { userId, status };
-        
+
         if (search) {
             const safe = escapeRegex(search);
             query.$or = [
@@ -16,12 +17,21 @@ exports.getConversations = async (req, res) => {
                 { displayName: { $regex: safe, $options: 'i' } }
             ];
         }
-        
-        const conversations = await EmailConversation.find(query)
-            .sort({ lastMessageAt: -1 })
-            .populate('leadId', 'name email status');
-            
-        res.json({ success: true, conversations });
+
+        const [conversations, total] = await Promise.all([
+            EmailConversation.find(query)
+                .sort({ lastMessageAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .populate('leadId', 'name email status'),
+            EmailConversation.countDocuments(query)
+        ]);
+
+        res.json({
+            success: true,
+            conversations,
+            pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) }
+        });
     } catch (error) {
         console.error('Error fetching email conversations:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -40,10 +50,23 @@ exports.getMessages = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Conversation not found' });
         }
         
-        const messages = await EmailMessage.find({ conversationId, userId })
-            .sort({ timestamp: 1 });
-            
-        res.json({ success: true, conversation, messages });
+        const { page = 1, limit = 50 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const [messages, totalMessages] = await Promise.all([
+            EmailMessage.find({ conversationId, userId })
+                .sort({ timestamp: 1 })
+                .skip(skip)
+                .limit(parseInt(limit)),
+            EmailMessage.countDocuments({ conversationId, userId })
+        ]);
+
+        res.json({
+            success: true,
+            conversation,
+            messages,
+            pagination: { total: totalMessages, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(totalMessages / parseInt(limit)) }
+        });
     } catch (error) {
         console.error('Error fetching messages:', error);
         res.status(500).json({ success: false, message: 'Server Error' });

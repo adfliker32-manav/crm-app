@@ -50,7 +50,19 @@ async function processIncomingEmail(user, messageData, parsedMail) {
     const existing = await EmailMessage.findOne({ messageId, userId: user._id });
     if (existing) return;
 
-    // Save Message
+    // Save conversation FIRST so conversation._id is persisted before the
+    // message record references it. If conversation save fails, the message
+    // is never written — no orphaned records.
+    conversation.lastMessage = parsedMail.subject || 'Incoming Email';
+    conversation.lastMessageAt = parsedMail.date || new Date();
+    conversation.lastMessageDirection = 'inbound';
+    conversation.lastInboundMessageId = messageId; // FIX F4: Store for reply threading
+    conversation.unreadCount += 1;
+    conversation.metadata.totalMessages += 1;
+    conversation.metadata.totalInbound += 1;
+    await conversation.save();
+
+    // Now safe to reference conversation._id
     const messageRecord = new EmailMessage({
         conversationId: conversation._id,
         userId: user._id,
@@ -68,22 +80,18 @@ async function processIncomingEmail(user, messageData, parsedMail) {
 
     await messageRecord.save();
     console.log(`📩 Intercepted Inbound Email: ${parsedMail.subject} from ${fromAddress}`);
-
-    // Update Conversation
-    conversation.lastMessage = parsedMail.subject || 'Incoming Email';
-    conversation.lastMessageAt = parsedMail.date || new Date();
-    conversation.lastMessageDirection = 'inbound';
-    conversation.lastInboundMessageId = messageId; // FIX F4: Store for reply threading
-    conversation.unreadCount += 1;
-    conversation.metadata.totalMessages += 1;
-    conversation.metadata.totalInbound += 1;
-    await conversation.save();
 }
 
 // ⚠️ PRODUCTION NOTE:
 // Fetching all unseen emails repeatedly is highly inefficient.
 // Always track last processed UID to avoid reprocessing.
 // Parsing emails is CPU-intensive — NEVER parse before deduplication.
+
+// Cap first-run sync to avoid OOM on large mailboxes
+const FIRST_RUN_UID_LIMIT = 200;
+
+// Per-user sync timeout: if IMAP hangs, don't block the whole cycle
+const USER_SYNC_TIMEOUT_MS = 60000;
 
 async function syncUserEmails(userId, config) {
     if (!config?.emailUser || !config?.emailPassword) return;
@@ -112,9 +120,19 @@ async function syncUserEmails(userId, config) {
             // Persisted UID survives server restarts — without it, every restart
             // would re-process every unseen email in the mailbox.
             const lastUid = Number(config.lastImapUid) || 0;
-            const fetchQuery = lastUid > 0
-                ? { uid: `${lastUid + 1}:*`, seen: false }
-                : { seen: false };
+
+            let fetchQuery;
+            if (lastUid > 0) {
+                fetchQuery = { uid: `${lastUid + 1}:*`, seen: false };
+            } else {
+                // First run: only fetch the most recent N emails to avoid OOM on large mailboxes.
+                // Subsequent runs use UID-based incremental fetch.
+                const status = await client.status('INBOX', { uidNext: true });
+                const uidNext = status?.uidNext || 1;
+                const startUid = Math.max(1, uidNext - FIRST_RUN_UID_LIMIT);
+                fetchQuery = { uid: `${startUid}:*`, seen: false };
+                console.log(`📬 First IMAP run for ${config.emailUser}: fetching UIDs ${startUid}+ (capped at ${FIRST_RUN_UID_LIMIT})`);
+            }
 
             let maxUid = lastUid;
             for await (let message of client.fetch(fetchQuery, { envelope: true, source: true, uid: true })) {
@@ -177,8 +195,14 @@ async function syncAllUsers() {
                 lastImapUid: config.email.lastImapUid || 0
             };
 
-            // 1. Await the sync fully. This parses heavy emails one account at a time.
-            await syncUserEmails(config.userId, imapConfig).catch(e => console.error(e));
+            // 1. Await the sync with a per-user timeout so one hanging IMAP server
+            // can't block the entire sync cycle for all other users.
+            await Promise.race([
+                syncUserEmails(config.userId, imapConfig),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('IMAP sync timeout')), USER_SYNC_TIMEOUT_MS)
+                )
+            ]).catch(e => console.error(`IMAP sync failed for userId ${config.userId}:`, e.message));
 
             // 2. Yield the Event Loop for 1 second. This allows Webhooks, API clicks, 
             // and Socket.IO pushes to process flawlessly before starting the next mailbox.
@@ -193,6 +217,8 @@ async function syncAllUsers() {
 
 function startEmailSyncPolling() {
     console.log("🚀 Starting IMAP Email Polling Service (Interval: 10m)");
+    // Run immediately on startup so users don't wait 10 minutes after a restart
+    syncAllUsers();
     // Increased from 30s to 10m (600000ms) to reduce CPU overhead and IP ban risk from mail providers
     setInterval(syncAllUsers, 600000);
 }

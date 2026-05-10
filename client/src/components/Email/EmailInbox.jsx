@@ -15,19 +15,22 @@ const EmailInbox = () => {
     const [sending, setSending] = useState(false);
     const [showContactPanel, setShowContactPanel] = useState(false);
     const [showNewChatModal, setShowNewChatModal] = useState(false);
-    const [newChatEmail, setNewChatEmail] = useState('');
-    const [newChatCc, setNewChatCc] = useState('');
-    const [newChatBcc, setNewChatBcc] = useState('');
-    const [scheduleDate, setScheduleDate] = useState('');
-    const [filter, setFilter] = useState('all'); 
-    
+    const [filter, setFilter] = useState('all');
+    // Separate state for compose modal so it doesn't pollute the reply bar
+    const [composeEmail, setComposeEmail] = useState('');
+    const [composeCc, setComposeCc] = useState('');
+    const [composeBcc, setComposeBcc] = useState('');
+    const [composeSubject, setComposeSubject] = useState('');
+    const [composeMessage, setComposeMessage] = useState('');
+    const [composeSchedule, setComposeSchedule] = useState('');
+
     const scrollRef = useRef(null);
 
     const fetchConversations = useCallback(async () => {
         try {
             const status = filter === 'archived' ? 'archived' : 'active';
             const res = await api.get('/email-conversations', {
-                params: { status, search: searchTerm }
+                params: { status, search: searchTerm, limit: 30 }
             });
             setConversations(res.data.conversations || []);
         } catch (error) {
@@ -74,12 +77,13 @@ const EmailInbox = () => {
         e.preventDefault();
         if (!newMessage.trim() || !selectedChat) return;
         setSending(true);
-        
+
         try {
+            const htmlBody = newMessage.trim().replace(/\n/g, '<br>');
             const payload = {
                 to: selectedChat.email,
                 subject: newSubject.trim() || `Re: ${selectedChat.lastMessage || 'Conversation'}`,
-                html: newMessage.trim(), // Send as HTML or Text
+                html: htmlBody,
                 text: newMessage.trim()
             };
             
@@ -100,30 +104,31 @@ const EmailInbox = () => {
 
     const handleStartNewChat = async (e) => {
         e.preventDefault();
-        if (!newChatEmail.trim()) return;
-        
+        if (!composeEmail.trim()) return;
+
         setSending(true);
         try {
+            const htmlBody = composeMessage.trim().replace(/\n/g, '<br>');
             const payload = {
-                to: newChatEmail.trim(),
-                subject: newSubject.trim() || 'New Message',
-                html: newMessage.trim(),
-                text: newMessage.trim()
+                to: composeEmail.trim(),
+                subject: composeSubject.trim() || 'New Message',
+                html: htmlBody,
+                text: composeMessage.trim()
             };
-            
-            if (newChatCc.trim()) payload.cc = newChatCc.trim();
-            if (newChatBcc.trim()) payload.bcc = newChatBcc.trim();
-            if (scheduleDate) payload.scheduledFor = new Date(scheduleDate).toISOString();
-            
+
+            if (composeCc.trim()) payload.cc = composeCc.trim();
+            if (composeBcc.trim()) payload.bcc = composeBcc.trim();
+            if (composeSchedule) payload.scheduledFor = new Date(composeSchedule).toISOString();
+
             await api.post('/email/send', payload);
             setShowNewChatModal(false);
-            setNewChatEmail('');
-            setNewChatCc('');
-            setNewChatBcc('');
-            setScheduleDate('');
-            setNewMessage('');
-            setNewSubject('');
-            
+            setComposeEmail('');
+            setComposeCc('');
+            setComposeBcc('');
+            setComposeSchedule('');
+            setComposeSubject('');
+            setComposeMessage('');
+
             await fetchConversations();
             showSuccess('Email sent successfully!');
         } catch (error) {
@@ -151,6 +156,8 @@ const EmailInbox = () => {
         return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
     };
 
+    // 'archived' filter is handled server-side via status param.
+    // 'unread' is client-side since we already have the full page loaded.
     const filteredConversations = filter === 'unread'
         ? conversations.filter(c => c.unreadCount > 0)
         : conversations;
@@ -184,7 +191,7 @@ const EmailInbox = () => {
                         </div>
                     </div>
                     <button
-                        onClick={() => { setShowNewChatModal(true); setNewMessage(''); setNewSubject(''); setSelectedChat(null); }}
+                        onClick={() => { setShowNewChatModal(true); setComposeEmail(''); setComposeSubject(''); setComposeMessage(''); setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); }}
                         className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 transition"
                         title="Compose Email"
                     >
@@ -210,7 +217,8 @@ const EmailInbox = () => {
                 <div className="px-3 pb-3 border-b border-slate-50 flex gap-2">
                     {[
                         { id: 'all', label: 'All' },
-                        { id: 'unread', label: 'Unread', count: totalUnread }
+                        { id: 'unread', label: 'Unread', count: totalUnread },
+                        { id: 'archived', label: 'Archived' }
                     ].map(tab => (
                         <button
                             key={tab.id}
@@ -279,143 +287,223 @@ const EmailInbox = () => {
             </div>
 
             {/* ═══════════ CHAT WINDOW ═══════════ */}
-            <div className="flex-1 flex flex-col min-w-0 bg-white relative">
+            <div className="flex-1 flex min-w-0 bg-white relative overflow-hidden">
                 {selectedChat ? (
                     <>
-                        {/* Chat Header */}
-                        <div className="h-[70px] px-6 bg-white border-b border-slate-100 flex items-center justify-between shadow-sm z-10 flex-shrink-0">
-                            <div className="flex items-center gap-4 cursor-pointer" onClick={() => setShowContactPanel(!showContactPanel)}>
-                                <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center text-slate-600 font-bold text-xl">
-                                    {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
+                        {/* Main thread column */}
+                        <div className="flex-1 flex flex-col min-w-0">
+                            {/* Chat Header */}
+                            <div className="h-[68px] px-5 bg-white border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 bg-gradient-to-br from-indigo-400 to-blue-500 rounded-full flex items-center justify-center text-white font-bold text-base shadow-sm flex-shrink-0">
+                                        {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-[15px] text-slate-800 leading-tight">{selectedChat.displayName || selectedChat.email}</h3>
+                                        <p className="text-[11px] text-slate-400 font-medium">{selectedChat.email}</p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <h3 className="font-bold text-[16px] text-slate-800">{selectedChat.displayName || selectedChat.email}</h3>
-                                    <p className="text-xs text-slate-500 font-medium">{selectedChat.email}</p>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <button onClick={() => setShowContactPanel(!showContactPanel)} className="w-10 h-10 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-500 transition" title="Contact Info">
-                                    <i className="fa-solid fa-circle-info text-lg"></i>
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Messages Area */}
-                        <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50" ref={scrollRef}>
-                            <div className="space-y-6 max-w-4xl mx-auto">
-                                {messages.map((msg, index) => {
-                                    const showDate = index === 0 || new Date(msg.timestamp).toDateString() !== new Date(messages[index - 1].timestamp).toDateString();
-                                    
-                                    return (
-                                        <React.Fragment key={msg._id}>
-                                            {showDate && (
-                                                <div className="flex justify-center my-6">
-                                                    <span className="bg-slate-200/50 text-slate-500 tracking-wide text-[11px] font-bold uppercase px-3 py-1 rounded-full">
-                                                        {new Date(msg.timestamp).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
-                                                    </span>
-                                                </div>
-                                            )}
-                                            
-                                            <div className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}>
-                                                <div className={`max-w-[75%] rounded-2xl p-4 shadow-sm relative group
-                                                    ${msg.direction === 'outbound' 
-                                                        ? 'bg-blue-600 text-white rounded-br-sm' 
-                                                        : 'bg-white border border-slate-100 text-slate-800 rounded-bl-sm'}`}
-                                                >
-                                                    {/* Email Subject Header */}
-                                                    <div className={`text-xs font-bold mb-2 pb-2 border-b uppercase tracking-wide
-                                                        ${msg.direction === 'outbound' ? 'border-blue-500/50 text-blue-200' : 'border-slate-100 text-slate-400'}`}>
-                                                        {msg.subject || '(No Subject)'}
-                                                    </div>
-                                                    
-                                                    {/* Email Body */}
-                                                    <div className={`text-[14px] leading-relaxed whitespace-pre-wrap max-h-[400px] overflow-y-auto custom-scrollbar pr-2
-                                                        ${msg.direction === 'outbound' ? 'text-white/90' : 'text-slate-700'}`}
-                                                        dangerouslySetInnerHTML={msg.html ? { __html: DOMPurify.sanitize(msg.html) } : undefined}
-                                                    >
-                                                        {!msg.html && msg.text}
-                                                    </div>
-                                                    
-                                                    {/* Footer Metadata */}
-                                                    <div className={`flex items-center justify-end gap-2 mt-3 text-[11px] font-medium
-                                                        ${msg.direction === 'outbound' ? 'text-blue-200' : 'text-slate-400'}`}>
-                                                        <span>{formatTime(msg.timestamp)}</span>
-                                                        {msg.direction === 'outbound' && (
-                                                            <i className={`fa-solid ${msg.status === 'failed' ? 'fa-circle-exclamation text-rose-300' : 'fa-check text-blue-300'}`}></i>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </React.Fragment>
-                                    );
-                                })}
-                            </div>
-                        </div>
-
-                        {/* Compose Bar */}
-                        <div className="bg-white border-t border-slate-200 p-4 shadow-[0_-4px_20px_-15px_rgba(0,0,0,0.1)] z-10 flex-shrink-0">
-                            <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto">
-                                <div className="mb-2">
-                                    <input 
-                                        type="text" 
-                                        value={newSubject}
-                                        onChange={(e) => setNewSubject(e.target.value)}
-                                        placeholder="Subject"
-                                        className="w-full text-sm font-semibold text-slate-700 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 transition"
-                                        disabled={sending}
-                                    />
-                                </div>
-                                <div className="flex items-end gap-3 bg-slate-50 border border-slate-200 rounded-2xl p-2 focus-within:border-blue-400 focus-within:bg-white transition-all">
-                                    <textarea
-                                        value={newMessage}
-                                        onChange={(e) => setNewMessage(e.target.value)}
-                                        placeholder="Type your email reply..."
-                                        className="w-full bg-transparent border-none focus:outline-none px-3 py-2 text-[15px] text-slate-800 resize-none min-h-[60px] max-h-[200px] custom-scrollbar"
-                                        disabled={sending}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter' && !e.shiftKey) {
-                                                e.preventDefault();
-                                                handleSendMessage(e);
-                                            }
-                                        }}
-                                    />
+                                <div className="flex items-center gap-1">
+                                    {selectedChat.metadata?.totalMessages > 0 && (
+                                        <span className="text-xs text-slate-400 font-medium mr-2">
+                                            {selectedChat.metadata.totalMessages} messages
+                                        </span>
+                                    )}
                                     <button
-                                        type="submit"
-                                        disabled={!newMessage.trim() || sending}
-                                        className="w-12 h-12 rounded-xl flex items-center justify-center transition-all flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed
-                                            bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                                        onClick={() => setShowContactPanel(v => !v)}
+                                        className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm transition
+                                            ${showContactPanel ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-400'}`}
+                                        title="Contact Info"
                                     >
-                                        {sending ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-paper-plane"></i>}
+                                        <i className="fa-solid fa-circle-info"></i>
                                     </button>
                                 </div>
-                                <p className="text-[10px] text-slate-400 text-right mt-2 font-medium">Press Enter to send, Shift+Enter for new line</p>
-                            </form>
+                            </div>
+
+                            {/* Messages Area */}
+                            <div className="flex-1 overflow-y-auto px-5 py-4 bg-[#f7f8fc]" ref={scrollRef}>
+                                <div className="space-y-4 max-w-3xl mx-auto">
+                                    {messages.length === 0 && (
+                                        <div className="flex flex-col items-center justify-center py-16 gap-2 text-center">
+                                            <i className="fa-solid fa-envelope-open text-3xl text-slate-200"></i>
+                                            <p className="text-sm text-slate-400">No messages yet in this thread</p>
+                                        </div>
+                                    )}
+                                    {messages.map((msg, index) => {
+                                        const showDate = index === 0 ||
+                                            new Date(msg.timestamp).toDateString() !== new Date(messages[index - 1].timestamp).toDateString();
+                                        const isOut = msg.direction === 'outbound';
+
+                                        return (
+                                            <React.Fragment key={msg._id}>
+                                                {showDate && (
+                                                    <div className="flex justify-center my-4">
+                                                        <span className="bg-white/80 text-slate-400 text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-full border border-slate-200 shadow-sm">
+                                                            {new Date(msg.timestamp).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
+                                                        </span>
+                                                    </div>
+                                                )}
+                                                <div className={`flex items-end gap-2 ${isOut ? 'justify-end' : 'justify-start'}`}>
+                                                    {!isOut && (
+                                                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-slate-400 to-slate-500 flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0 mb-1">
+                                                            {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
+                                                        </div>
+                                                    )}
+                                                    <div className={`max-w-[72%] rounded-2xl overflow-hidden shadow-sm
+                                                        ${isOut ? 'bg-indigo-600 rounded-br-sm' : 'bg-white border border-slate-200 rounded-bl-sm'}`}>
+                                                        {/* Subject strip */}
+                                                        <div className={`px-4 pt-3 pb-2 border-b text-[10px] font-bold uppercase tracking-widest truncate
+                                                            ${isOut ? 'border-indigo-500/40 text-indigo-300' : 'border-slate-100 text-slate-400'}`}>
+                                                            {msg.subject || '(No Subject)'}
+                                                        </div>
+                                                        {/* Body */}
+                                                        <div
+                                                            className={`px-4 pt-2 pb-3 text-[13.5px] leading-relaxed max-h-[380px] overflow-y-auto custom-scrollbar
+                                                                ${isOut ? 'text-white/90' : 'text-slate-700'}`}
+                                                            dangerouslySetInnerHTML={msg.html ? { __html: DOMPurify.sanitize(msg.html) } : undefined}
+                                                        >
+                                                            {!msg.html && msg.text}
+                                                        </div>
+                                                        {/* Timestamp */}
+                                                        <div className={`px-4 pb-2.5 flex items-center justify-end gap-1.5 text-[10px] font-medium
+                                                            ${isOut ? 'text-indigo-300' : 'text-slate-300'}`}>
+                                                            <span>{formatTime(msg.timestamp)}</span>
+                                                            {isOut && (
+                                                                <i className={`fa-solid text-[9px] ${msg.status === 'failed' ? 'fa-circle-exclamation text-rose-300' : 'fa-check-double'}`}></i>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Compose Bar */}
+                            <div className="bg-white border-t border-slate-200 px-5 py-3 flex-shrink-0">
+                                <form onSubmit={handleSendMessage}>
+                                    <input
+                                        type="text"
+                                        value={newSubject}
+                                        onChange={(e) => setNewSubject(e.target.value)}
+                                        placeholder="Subject line..."
+                                        className="w-full text-xs font-semibold text-slate-600 px-3 py-2 mb-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-300 transition"
+                                        disabled={sending}
+                                    />
+                                    <div className="flex items-end gap-2 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 focus-within:border-indigo-400 focus-within:bg-white transition-all">
+                                        <textarea
+                                            value={newMessage}
+                                            onChange={(e) => setNewMessage(e.target.value)}
+                                            placeholder="Write your reply..."
+                                            rows={2}
+                                            className="flex-1 bg-transparent border-none focus:outline-none text-[14px] text-slate-800 resize-none min-h-[44px] max-h-[180px] custom-scrollbar"
+                                            disabled={sending}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); }
+                                            }}
+                                        />
+                                        <button
+                                            type="submit"
+                                            disabled={!newMessage.trim() || sending}
+                                            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all
+                                                bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                                        >
+                                            {sending ? <i className="fa-solid fa-spinner fa-spin text-sm"></i> : <i className="fa-solid fa-paper-plane text-sm"></i>}
+                                        </button>
+                                    </div>
+                                    <p className="text-[10px] text-slate-300 text-right mt-1.5 font-medium">Enter to send · Shift+Enter new line</p>
+                                </form>
+                            </div>
                         </div>
+
+                        {/* ═══ Contact Panel (slide-in) ═══ */}
+                        {showContactPanel && (
+                            <div className="w-64 flex-shrink-0 border-l border-slate-100 bg-slate-50/60 flex flex-col overflow-y-auto">
+                                {/* Panel Header */}
+                                <div className="px-4 py-4 border-b border-slate-100 flex items-center justify-between">
+                                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Contact Info</span>
+                                    <button onClick={() => setShowContactPanel(false)} className="text-slate-300 hover:text-slate-500 transition">
+                                        <i className="fa-solid fa-xmark text-sm"></i>
+                                    </button>
+                                </div>
+
+                                {/* Avatar + name */}
+                                <div className="flex flex-col items-center gap-2 py-6 px-4 border-b border-slate-100">
+                                    <div className="w-16 h-16 bg-gradient-to-br from-indigo-400 to-blue-500 rounded-2xl flex items-center justify-center text-white font-bold text-2xl shadow-md">
+                                        {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
+                                    </div>
+                                    <p className="text-sm font-bold text-slate-800 text-center leading-tight">
+                                        {selectedChat.displayName || selectedChat.email.split('@')[0]}
+                                    </p>
+                                    <p className="text-xs text-slate-400 font-medium text-center break-all">{selectedChat.email}</p>
+                                    {selectedChat.leadId?.status && (
+                                        <span className="mt-1 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-600">
+                                            {selectedChat.leadId.status}
+                                        </span>
+                                    )}
+                                </div>
+
+                                {/* Stats */}
+                                <div className="px-4 py-4 space-y-3">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Thread Stats</p>
+                                    {[
+                                        { icon: 'fa-envelope', label: 'Total Messages', value: selectedChat.metadata?.totalMessages ?? '—' },
+                                        { icon: 'fa-arrow-up', label: 'Sent', value: selectedChat.metadata?.totalOutbound ?? '—' },
+                                        { icon: 'fa-arrow-down', label: 'Received', value: selectedChat.metadata?.totalInbound ?? '—' },
+                                        { icon: 'fa-circle-dot', label: 'Unread', value: selectedChat.unreadCount ?? 0 },
+                                    ].map(row => (
+                                        <div key={row.label} className="flex items-center justify-between">
+                                            <span className="flex items-center gap-2 text-xs text-slate-500">
+                                                <i className={`fa-solid ${row.icon} text-slate-300 w-3`}></i>
+                                                {row.label}
+                                            </span>
+                                            <span className="text-xs font-bold text-slate-700">{row.value}</span>
+                                        </div>
+                                    ))}
+                                    {selectedChat.lastMessageAt && (
+                                        <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                                            <span className="text-xs text-slate-400">Last message</span>
+                                            <span className="text-xs font-semibold text-slate-500">{formatTime(selectedChat.lastMessageAt)}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </>
                 ) : (
                     /* Empty State */
-                    <div className="flex-1 flex flex-col items-center justify-center bg-slate-50">
-                        <div className="w-32 h-32 bg-white rounded-full shadow-sm flex items-center justify-center mb-6 border border-slate-100 cursor-pointer hover:shadow-md transition" onClick={() => setShowNewChatModal(true)}>
-                            <i className="fa-solid fa-envelope-open-text text-5xl text-blue-500/80"></i>
+                    <div className="flex-1 flex flex-col items-center justify-center bg-[#f7f8fc] gap-5">
+                        <div
+                            onClick={() => { setShowNewChatModal(true); setComposeEmail(''); setComposeSubject(''); setComposeMessage(''); setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); }}
+                            className="w-24 h-24 bg-white rounded-3xl shadow-md flex items-center justify-center cursor-pointer hover:shadow-lg hover:scale-105 transition-all border border-slate-100"
+                        >
+                            <i className="fa-solid fa-envelope-open-text text-4xl text-indigo-500/70"></i>
                         </div>
-                        <h2 className="text-2xl font-bold text-slate-700 mb-2">Email Command Center</h2>
-                        <p className="text-slate-500 text-center max-w-sm">
-                            Select a thread from the left or start a new conversation to communicate with leads via Email.
-                        </p>
+                        <div className="text-center">
+                            <h2 className="text-xl font-bold text-slate-700 mb-1">Select a conversation</h2>
+                            <p className="text-sm text-slate-400 max-w-xs">Pick a thread on the left, or click the icon above to compose a new email.</p>
+                        </div>
+                        <button
+                            onClick={() => { setShowNewChatModal(true); setComposeEmail(''); setComposeSubject(''); setComposeMessage(''); setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); }}
+                            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition shadow-md shadow-indigo-200"
+                        >
+                            <i className="fa-solid fa-pen-to-square"></i> Compose New Email
+                        </button>
                     </div>
                 )}
             </div>
 
-            {/* Compose New Email Modal */}
-            {showNewChatModal && !selectedChat && (
+            {/* Compose New Email Modal — uses isolated compose state, never touches reply bar */}
+            {showNewChatModal && (
                 <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-fade-in-up">
-                        <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
-                            <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                                <i className="fa-solid fa-pen-to-square text-blue-600"></i> Compose New Email
+                        <div className="px-6 py-4 bg-gradient-to-r from-indigo-600 to-blue-600 flex justify-between items-center">
+                            <h3 className="font-bold text-white text-base flex items-center gap-2">
+                                <i className="fa-solid fa-pen-to-square"></i> Compose New Email
                             </h3>
-                            <button onClick={() => setShowNewChatModal(false)} className="text-slate-400 hover:text-slate-600">
-                                <i className="fa-solid fa-xmark text-xl"></i>
+                            <button onClick={() => setShowNewChatModal(false)} className="text-white/70 hover:text-white transition">
+                                <i className="fa-solid fa-xmark text-lg"></i>
                             </button>
                         </div>
                         <form onSubmit={handleStartNewChat} className="p-6 space-y-4">
@@ -425,8 +513,8 @@ const EmailInbox = () => {
                                     <input
                                         type="email"
                                         required
-                                        value={newChatEmail}
-                                        onChange={(e) => setNewChatEmail(e.target.value)}
+                                        value={composeEmail}
+                                        onChange={(e) => setComposeEmail(e.target.value)}
                                         placeholder="lead@example.com"
                                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
                                     />
@@ -435,8 +523,8 @@ const EmailInbox = () => {
                                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Schedule For (Optional)</label>
                                     <input
                                         type="datetime-local"
-                                        value={scheduleDate}
-                                        onChange={(e) => setScheduleDate(e.target.value)}
+                                        value={composeSchedule}
+                                        onChange={(e) => setComposeSchedule(e.target.value)}
                                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
                                     />
                                 </div>
@@ -446,8 +534,8 @@ const EmailInbox = () => {
                                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">CC (Optional)</label>
                                     <input
                                         type="text"
-                                        value={newChatCc}
-                                        onChange={(e) => setNewChatCc(e.target.value)}
+                                        value={composeCc}
+                                        onChange={(e) => setComposeCc(e.target.value)}
                                         placeholder="comma separated emails"
                                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
                                     />
@@ -456,8 +544,8 @@ const EmailInbox = () => {
                                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">BCC (Optional)</label>
                                     <input
                                         type="text"
-                                        value={newChatBcc}
-                                        onChange={(e) => setNewChatBcc(e.target.value)}
+                                        value={composeBcc}
+                                        onChange={(e) => setComposeBcc(e.target.value)}
                                         placeholder="comma separated emails"
                                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
                                     />
@@ -468,8 +556,8 @@ const EmailInbox = () => {
                                 <input
                                     type="text"
                                     required
-                                    value={newSubject}
-                                    onChange={(e) => setNewSubject(e.target.value)}
+                                    value={composeSubject}
+                                    onChange={(e) => setComposeSubject(e.target.value)}
                                     placeholder="Enter subject..."
                                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
                                 />
@@ -478,8 +566,8 @@ const EmailInbox = () => {
                                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Message</label>
                                 <textarea
                                     required
-                                    value={newMessage}
-                                    onChange={(e) => setNewMessage(e.target.value)}
+                                    value={composeMessage}
+                                    onChange={(e) => setComposeMessage(e.target.value)}
                                     placeholder="Write your email here..."
                                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none min-h-[150px] resize-y"
                                 ></textarea>
@@ -488,7 +576,7 @@ const EmailInbox = () => {
                                 <button type="button" onClick={() => setShowNewChatModal(false)} className="px-5 py-2.5 text-slate-600 font-medium hover:bg-slate-100 rounded-xl transition">
                                     Cancel
                                 </button>
-                                <button type="submit" disabled={sending} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition shadow-md flex items-center gap-2">
+                                <button type="submit" disabled={sending} className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition shadow-md shadow-indigo-200 flex items-center gap-2 text-sm">
                                     {sending ? <><i className="fa-solid fa-spinner fa-spin"></i> Sending...</> : <><i className="fa-solid fa-paper-plane"></i> Send Email</>}
                                 </button>
                             </div>
