@@ -328,12 +328,13 @@ exports.retargetFailed = async (req, res) => {
 };
 
 module.exports = {
-    getBroadcasts:    exports.getBroadcasts,
-    getBroadcast:     exports.getBroadcast,
-    createBroadcast:  exports.createBroadcast,
-    startBroadcast:   exports.startBroadcast,
-    cancelBroadcast:  exports.cancelBroadcast,
-    deleteBroadcast:  exports.deleteBroadcast,
-    exportBroadcast:  exports.exportBroadcast,
-    retargetFailed:   exports.retargetFailed
+    getBroadcasts:      exports.getBroadcasts,
+    getBroadcast:       exports.getBroadcast,
+    createBroadcast:    exports.createBroadcast,
+    startBroadcast:     exports.startBroadcast,
+    cancelBroadcast:    exports.cancelBroadcast,
+    deleteBroadcast:    exports.deleteBroadcast,
+    exportBroadcast:    exports.exportBroadcast,
+    recalculateStats:   exports.recalculateStats,
+    retargetFailed:     exports.retargetFailed
 };
