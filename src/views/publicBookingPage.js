@@ -107,14 +107,17 @@ const renderPublicBookingPage = (slug) => {
           }
 
           if (state.done) {
+            const tyMsg = (state.page?.thankYouMessage || '').replace(/\{\{name\}\}/gi, esc(state.name));
             root.innerHTML = \`
               <div class="min-h-screen flex items-center justify-center p-6">
                 <div class="bg-white border border-slate-200 rounded-3xl p-10 shadow-sm text-center max-w-md w-full">
                   <div class="w-12 h-12 mx-auto rounded-2xl bg-emerald-50 flex items-center justify-center">
                     <i class="fa-solid fa-check text-emerald-600"></i>
                   </div>
-                  <h1 class="mt-4 text-xl font-black text-slate-900">Booking confirmed</h1>
-                  <p class="mt-2 text-sm text-slate-500">You will receive a confirmation message shortly.</p>
+                  <h1 class="mt-4 text-xl font-black text-slate-900">Booking confirmed!</h1>
+                  \${tyMsg
+                    ? \`<p class="mt-2 text-sm text-slate-700 leading-relaxed whitespace-pre-line">\${tyMsg}</p>\`
+                    : \`<p class="mt-2 text-sm text-slate-500">You will receive a confirmation message shortly.</p>\`}
                 </div>
               </div>\`;
             return;
@@ -194,6 +197,7 @@ const renderPublicBookingPage = (slug) => {
                         <p class="text-sm text-slate-500 mt-1">\${esc(page.subtitle || 'Choose a service and pick a time.')}</p>
                       </div>
                     </div>
+                    \${page.description ? \`<p class="mt-4 text-sm text-slate-600 leading-relaxed whitespace-pre-line">\${esc(page.description)}</p>\` : ''}
                   </div>
 
                   <div class="p-7 space-y-7">
