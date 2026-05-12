@@ -983,5 +983,6 @@ module.exports = {
     exchangeToken,
     handleDataDeletion,
     handleDeauth,
-    debugToken
+    debugToken,
+    checkAndRefreshToken
 };
