@@ -438,7 +438,7 @@ const fetchHistoricalLeads = async (req, res) => {
                 createdTime: metaLead.created_time,
                 name: fields.full_name || fields.name || (fields.first_name ? `${fields.first_name}${fields.last_name ? ' ' + fields.last_name : ''}` : null),
                 email: fields.email || null,
-                phone: fields.phone_number || fields.phone || null,
+                phone: fields.phone_number || fields.phone || fields.mobile_number || fields.whatsapp_number || fields.whatsapp || fields.mobile || null,
                 city: fields.city || null,
                 company: fields.company_name || fields.company || null,
                 rawFields: fields
