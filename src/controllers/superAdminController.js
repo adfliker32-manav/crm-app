@@ -1266,13 +1266,15 @@ const freezeTenant = async (req, res) => {
         }
 
         const newAccountStatus = isFrozen ? 'Suspended' : 'Active';
-        await User.findByIdAndUpdate(id, {
-            $set: {
-                accountStatus: newAccountStatus,
-                frozenBy: isFrozen ? 'superadmin' : null,
-                frozenAt: isFrozen ? new Date() : null
-            }
-        });
+        const userUpdate = {
+            accountStatus: newAccountStatus,
+            frozenBy: isFrozen ? 'superadmin' : null,
+            frozenAt: isFrozen ? new Date() : null
+        };
+        // Resume = full reactivation: also clear the legacy is_active flag so accounts
+        // stuck with is_active=false (from the old Deactivate flow) recover with one click.
+        if (!isFrozen) userUpdate.is_active = true;
+        await User.findByIdAndUpdate(id, { $set: userUpdate });
 
         // Also update WorkspaceSettings mirror so authMiddleware's tri-state check fires
         await WorkspaceSettings.findOneAndUpdate(

@@ -9,7 +9,7 @@ const statusColors = {
     rejected: { bg: 'bg-red-100',    text: 'text-red-700',    border: 'border-red-300',    dot: 'bg-red-500'    },
 };
 
-const AccountCard = ({ account, onReview, onApprove, onReject, onDeactivate, showActions }) => {
+const AccountCard = ({ account, onReview, onApprove, onReject, showActions }) => {
     const [loading, setLoading] = useState(false);
     const sc = statusColors[account.status] || statusColors.pending;
 
@@ -145,16 +145,6 @@ const AccountCard = ({ account, onReview, onApprove, onReject, onDeactivate, sho
                             Reject
                         </button>
                     )}
-                    {onDeactivate && (
-                        <button
-                            onClick={() => handle(onDeactivate)}
-                            disabled={loading}
-                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-medium transition disabled:opacity-50"
-                        >
-                            <i className="fa-solid fa-ban" />
-                            Deactivate
-                        </button>
-                    )}
                 </div>
             )}
         </div>
@@ -165,7 +155,7 @@ const AccountApprovalsView = () => {
     const [activeTab, setActiveTab] = useState('pending');
     const [accounts, setAccounts] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [counts, setCounts] = useState({ pending: 0, active: 0, rejected: 0 });
+    const [counts, setCounts] = useState({ pending: 0, rejected: 0 });
     const [search, setSearch] = useState('');
     const [toast, setToast] = useState(null);
     const [reviewing, setReviewing] = useState(null); // account being reviewed in modal
@@ -177,12 +167,11 @@ const AccountApprovalsView = () => {
 
     const fetchCounts = useCallback(async () => {
         try {
-            const [p, a, r] = await Promise.all([
+            const [p, r] = await Promise.all([
                 api.get(`/superadmin/accounts/pending`),
-                api.get(`/superadmin/accounts/active`),
                 api.get(`/superadmin/accounts/rejected`),
             ]);
-            setCounts({ pending: p.data.total, active: a.data.total, rejected: r.data.total });
+            setCounts({ pending: p.data.total, rejected: r.data.total });
         } catch (err) { console.error('Failed to load account counts:', err.message); }
     }, []);
 
@@ -220,7 +209,6 @@ const AccountApprovalsView = () => {
 
     const tabs = [
         { id: 'pending',  label: 'Pending',  icon: 'fa-hourglass-half', color: 'text-amber-600',  count: counts.pending  },
-        { id: 'active',   label: 'Active',   icon: 'fa-circle-check',   color: 'text-emerald-600', count: counts.active   },
         { id: 'rejected', label: 'Rejected', icon: 'fa-circle-xmark',   color: 'text-red-500',     count: counts.rejected },
     ];
 
@@ -239,11 +227,11 @@ const AccountApprovalsView = () => {
             {/* Header */}
             <div>
                 <h1 className="text-2xl font-bold text-slate-800">Account Approvals</h1>
-                <p className="text-slate-500 mt-1">Approve, reject, or deactivate client accounts. You have full control.</p>
+                <p className="text-slate-500 mt-1">Approve or reject new client account requests. Manage approved accounts from the Agencies / Direct Clients sections.</p>
             </div>
 
             {/* Stats Row */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
                 {tabs.map(tab => (
                     <div key={tab.id} className={`bg-white rounded-xl border p-4 cursor-pointer transition-all ${activeTab === tab.id ? 'border-indigo-400 ring-2 ring-indigo-100' : 'border-slate-200 hover:border-slate-300'}`}
                         onClick={() => setActiveTab(tab.id)}>
@@ -313,7 +301,6 @@ const AccountApprovalsView = () => {
                             onReview={activeTab === 'pending' ? () => setReviewing(account) : null}
                             onApprove={activeTab === 'rejected' ? () => handleAction(account._id, 'approve') : null}
                             onReject={activeTab === 'pending' ? () => handleAction(account._id, 'reject') : null}
-                            onDeactivate={activeTab === 'active' ? () => handleAction(account._id, 'deactivate') : null}
                         />
                     ))}
                 </div>

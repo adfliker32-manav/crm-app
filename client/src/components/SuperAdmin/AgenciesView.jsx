@@ -115,16 +115,19 @@ const AgenciesView = () => {
     };
 
     const handleFreezeCompany = async (company) => {
-        const action = company.isFrozen ? 'unfreeze' : 'freeze';
+        // "Needs resume" = frozen OR deactivated (is_active === false). Resume restores both.
+        const needsResume = company.isFrozen || company.is_active === false;
+        const action = needsResume ? 'resume' : 'freeze';
         const confirmed = await showDanger(
-            `Are you sure you want to ${action} this company and all its agents? ${action === 'freeze' ? 'They will instantly lose access to the platform.' : ''}`,
-            `${action === 'freeze' ? 'Freeze' : 'Unfreeze'} Company?`
+            `Are you sure you want to ${action} this company and all its agents? ${action === 'freeze' ? 'They will instantly lose access to the platform.' : 'They will regain access immediately.'}`,
+            `${action === 'freeze' ? 'Freeze' : 'Resume'} Company?`
         );
 
         if (!confirmed) return;
 
         try {
-            await api.put(`/superadmin/companies/${company._id}/freeze`, { isFrozen: !company.isFrozen });
+            // isFrozen=false on Resume triggers backend to also flip is_active back to true.
+            await api.put(`/superadmin/companies/${company._id}/freeze`, { isFrozen: !needsResume });
             showSuccess(`Company ${action}d successfully`);
             fetchCompanies();
         } catch (error) {
@@ -264,6 +267,10 @@ const AgenciesView = () => {
                                                 <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-600 text-[10px] font-black uppercase rounded-full border border-blue-100">
                                                     <i className="fa-solid fa-snowflake"></i> Frozen
                                                 </span>
+                                            ) : company.is_active === false ? (
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-700 text-[10px] font-black uppercase rounded-full border border-amber-200">
+                                                    <i className="fa-solid fa-power-off"></i> Deactivated
+                                                </span>
                                             ) : (
                                                 <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-black uppercase rounded-full border border-emerald-100">
                                                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div> Operational
@@ -304,11 +311,11 @@ const AgenciesView = () => {
                     { label: 'SaaS Plan Limits', icon: 'fa-sliders', onClick: () => { setSelectedCompany(selectedCompany); setIsManageLimitsModalOpen(true); } },
                     { label: 'Change Password', icon: 'fa-key', onClick: () => { setSelectedCompany(selectedCompany); setIsChangePasswordModalOpen(true); } },
                     { label: 'Edit Profile', icon: 'fa-edit', onClick: () => { setSelectedCompany(selectedCompany); setIsEditModalOpen(true); } },
-                    { 
-                        label: selectedCompany?.isFrozen ? 'Resume Account' : 'Freeze Account', 
-                        icon: selectedCompany?.isFrozen ? 'fa-fire-flame-curved' : 'fa-snowflake', 
+                    {
+                        label: (selectedCompany?.isFrozen || selectedCompany?.is_active === false) ? 'Resume Account' : 'Freeze Account',
+                        icon: (selectedCompany?.isFrozen || selectedCompany?.is_active === false) ? 'fa-fire-flame-curved' : 'fa-snowflake',
                         onClick: () => handleFreezeCompany(selectedCompany),
-                        variant: selectedCompany?.isFrozen ? 'default' : 'danger' 
+                        variant: (selectedCompany?.isFrozen || selectedCompany?.is_active === false) ? 'default' : 'danger'
                     },
                     { label: 'Delete Company', icon: 'fa-trash', onClick: () => handleDeleteCompany(selectedCompany._id), variant: 'danger' }
                 ]}
