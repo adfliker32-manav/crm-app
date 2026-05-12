@@ -108,19 +108,24 @@ const createCompany = async (req, res) => {
             status: 'approved'
         });
 
+        // Agencies get lifetime free access — no trial, no expiry. They're our
+        // distribution partners, not paying customers. Only direct managers
+        // (and agency-created sub-clients) go through the trial → paid lifecycle.
+        const isAgency = newCompany.role === 'agency';
+        const workspacePayload = {
+            userId: newCompany._id,
+            agentLimit: DEFAULT_AGENT_LIMIT,
+            activeModules: DEFAULT_ACTIVE_MODULES,
+            subscriptionPlan: isAgency ? 'Lifetime Free' : 'Free Trial',
+            subscriptionStatus: isAgency ? 'active' : 'trial',
+            billingType: isAgency ? 'paid_by_agency' : 'trial',
+            // planExpiryDate left null for agencies — they never expire.
+            ...(isAgency ? {} : { planExpiryDate: new Date(Date.now() + TRIAL_DURATION_MS) })
+        };
+
         await Promise.all([
-            WorkspaceSettings.create({
-                userId: newCompany._id,
-                subscriptionStatus: 'Trial',
-                subscriptionPlan: 'Free',
-                billingType: 'trial',
-                planExpiryDate: new Date(Date.now() + TRIAL_DURATION_MS),
-                agentLimit: DEFAULT_AGENT_LIMIT,
-                activeModules: DEFAULT_ACTIVE_MODULES
-            }),
-            IntegrationConfig.create({
-                userId: newCompany._id
-            })
+            WorkspaceSettings.create(workspacePayload),
+            IntegrationConfig.create({ userId: newCompany._id })
         ]);
 
         res.status(201).json({
@@ -300,7 +305,11 @@ const getCompanyById = async (req, res) => {
 const updateCompany = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, email, companyName, contactPerson, phone, activeModules, leadLimit, agentLimit } = req.body;
+        const {
+            name, email, companyName, contactPerson, phone,
+            activeModules, leadLimit, agentLimit,
+            planFeatures   // NEW: sub-permission overrides (aiChatbot, metaSync, etc.)
+        } = req.body;
 
         const company = await findCompanyById(id);
         if (!company) {
@@ -329,11 +338,25 @@ const updateCompany = async (req, res) => {
             { new: true, runValidators: true }
         ).select('-password').lean();
 
-        // Update settings in WorkspaceSettings
+        // Update settings in WorkspaceSettings — use $set with dotted paths so
+        // we never blow away other planFeatures keys when only a few change.
         const updateFields = {};
         if (activeModules !== undefined && Array.isArray(activeModules)) updateFields.activeModules = activeModules;
         if (leadLimit !== undefined) updateFields['planFeatures.leadLimit'] = Number.parseInt(leadLimit, 10);
         if (agentLimit !== undefined) updateFields.agentLimit = Number.parseInt(agentLimit, 10);
+
+        // Sub-permissions: only honor known keys to prevent arbitrary writes
+        const SUB_PERMISSION_KEYS = [
+            'aiChatbot', 'whatsappAutomation', 'emailAutomation', 'metaSync',
+            'campaigns', 'advancedAnalytics', 'webhooks', 'agentCreation'
+        ];
+        if (planFeatures && typeof planFeatures === 'object') {
+            for (const key of SUB_PERMISSION_KEYS) {
+                if (planFeatures[key] !== undefined) {
+                    updateFields[`planFeatures.${key}`] = !!planFeatures[key];
+                }
+            }
+        }
 
         if (Object.keys(updateFields).length > 0) {
             await WorkspaceSettings.findOneAndUpdate(
@@ -440,20 +463,65 @@ const deleteCompany = async (req, res) => {
 };
 
 // ==========================================
+// 🧹 NORMALIZE AGENCIES — strip stale trial/expiry state from agency workspaces.
+// Agencies are lifetime-free; earlier code paths incorrectly assigned them a
+// 14-day trial. Runs automatically on every orphan cleanup invocation but is
+// also safe to call standalone.
+// ==========================================
+const normalizeAgencyWorkspaces = async () => {
+    const agencies = await User.find({ role: 'agency' }).select('_id').lean();
+    const agencyIds = agencies.map(a => a._id);
+    if (agencyIds.length === 0) return { agenciesNormalized: 0 };
+
+    const result = await WorkspaceSettings.updateMany(
+        {
+            userId: { $in: agencyIds },
+            $or: [
+                { planExpiryDate: { $ne: null } },
+                { subscriptionStatus: 'trial' },
+                { billingType: 'trial' }
+            ]
+        },
+        {
+            $set: {
+                planExpiryDate: null,
+                subscriptionPlan: 'Lifetime Free',
+                subscriptionStatus: 'active',
+                billingType: 'paid_by_agency'
+            }
+        }
+    );
+
+    return { agenciesNormalized: result.modifiedCount || 0 };
+};
+
+// ==========================================
 // 🧹 ORPHAN CLEANUP
 // ==========================================
 // Find managers whose parentId points to a User that no longer exists
 // (left over when an agency is deleted before this cascade-delete fix existed).
 // Wipes them and all their data using the same per-tenant cleanup as deleteCompany.
+// Also normalizes any agency workspaces that still carry stale trial state.
 const cleanupOrphanedAccounts = async (req, res) => {
     try {
+        // First, normalize any agency workspace that still carries stale trial state
+        // from earlier code paths. Runs every time — idempotent and cheap.
+        const { agenciesNormalized } = await normalizeAgencyWorkspaces();
+
         // Find all sub-clients (managers with a parentId)
         const subClients = await User.find({ role: 'manager', parentId: { $ne: null } })
             .select('_id companyName email parentId')
             .lean();
 
         if (subClients.length === 0) {
-            return res.json({ success: true, deleted: 0, message: 'No orphan accounts to clean up.' });
+            return res.json({
+                success: true,
+                deleted: 0,
+                agenciesNormalized,
+                message: agenciesNormalized > 0
+                    ? `No orphan accounts. Normalized ${agenciesNormalized} agency workspace${agenciesNormalized === 1 ? '' : 's'}.`
+                    : 'No orphan accounts to clean up.'
+            });
         }
 
         // Batch-look up parents that exist
@@ -465,7 +533,14 @@ const cleanupOrphanedAccounts = async (req, res) => {
         const orphans = subClients.filter(c => !existingParentIds.has(c.parentId.toString()));
 
         if (orphans.length === 0) {
-            return res.json({ success: true, deleted: 0, message: 'No orphan accounts to clean up.' });
+            return res.json({
+                success: true,
+                deleted: 0,
+                agenciesNormalized,
+                message: agenciesNormalized > 0
+                    ? `No orphan accounts. Normalized ${agenciesNormalized} agency workspace${agenciesNormalized === 1 ? '' : 's'}.`
+                    : 'No orphan accounts to clean up.'
+            });
         }
 
         // Wipe each orphan with full per-tenant cleanup
@@ -500,8 +575,9 @@ const cleanupOrphanedAccounts = async (req, res) => {
             success: true,
             deleted: orphans.length,
             agentsDeleted: totalAgentsDeleted,
+            agenciesNormalized,
             names: wipedNames,
-            message: `Removed ${orphans.length} orphan account${orphans.length === 1 ? '' : 's'} and ${totalAgentsDeleted} associated agent${totalAgentsDeleted === 1 ? '' : 's'}.`
+            message: `Removed ${orphans.length} orphan account${orphans.length === 1 ? '' : 's'} and ${totalAgentsDeleted} associated agent${totalAgentsDeleted === 1 ? '' : 's'}${agenciesNormalized > 0 ? `. Also normalized ${agenciesNormalized} agency workspace${agenciesNormalized === 1 ? '' : 's'}.` : '.'}`
         });
     } catch (error) {
         console.error('Orphan Cleanup Error:', error);
@@ -1474,6 +1550,34 @@ const getSystemHealth = async (req, res) => {
 // ==========================================
 // Removed Dynamic Subscription Plan Management functions
 
+// @desc    Get current allocated limits for an Agency (Super Admin)
+// @route   GET /api/superadmin/agencies/:id/limits
+// @access  Private (Super Admin)
+// Added because ManageAgencyLimitsModal had a stub fetch — modal always
+// opened with hardcoded defaults instead of the saved values.
+const getAgencyLimits = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const agency = await User.findOne({ _id: id, role: 'agency' });
+        if (!agency) return res.status(404).json({ message: "Agency not found" });
+
+        const settings = await AgencySettings.findOne({ agencyId: id }).select('planLimits usage').lean();
+
+        // If no settings yet, return defaults so the modal still works
+        const limits = settings?.planLimits || {
+            maxClients: 5,
+            whatsappMessagesPerMonth: 1000,
+            emailsPerMonth: 5000
+        };
+        const usage = settings?.usage || { whatsappSent: 0, emailsSent: 0 };
+
+        res.json({ success: true, limits, usage });
+    } catch (err) {
+        console.error("Get Agency Limits Error:", err);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
 const updateAgencyLimits = async (req, res) => {
     try {
         const { id } = req.params; // The Agency ID
@@ -1755,6 +1859,52 @@ const approveAccount = async (req, res) => {
 
         if (!user) return res.status(404).json({ message: 'Account not found' });
 
+        // 🎁 TRIAL RESET ON APPROVAL — agencies are lifetime-free, managers always
+        // get a fresh 14-day trial counted FROM APPROVAL (not from creation). This
+        // is important because the account is unusable until approved — counting
+        // trial days while it sat in the pending queue would shortchange the client.
+        //
+        // Exception: if the manager is already on a paid plan (subscriptionStatus
+        // === 'active'), we preserve their expiry. This handles re-approvals after
+        // a prior deactivation — don't reset their paid time.
+        const isAgency = user.role === 'agency';
+        const existingWorkspace = await WorkspaceSettings.findOne({ userId: id })
+            .select('subscriptionStatus planExpiryDate').lean();
+        const isAlreadyPaid = existingWorkspace?.subscriptionStatus === 'active'
+            && existingWorkspace?.planExpiryDate
+            && new Date(existingWorkspace.planExpiryDate).getTime() > Date.now();
+
+        if (isAgency) {
+            // Wipe any stale trial state — agencies never expire.
+            await WorkspaceSettings.findOneAndUpdate(
+                { userId: id },
+                {
+                    $set: {
+                        planExpiryDate: null,
+                        subscriptionPlan: 'Lifetime Free',
+                        subscriptionStatus: 'active',
+                        billingType: 'paid_by_agency'
+                    }
+                },
+                { upsert: true, setDefaultsOnInsert: true }
+            );
+        } else if (!isAlreadyPaid) {
+            // Manager on trial / pending / lapsed — start fresh 14-day trial from now.
+            const trialExpiry = new Date(Date.now() + TRIAL_DURATION_MS);
+            await WorkspaceSettings.findOneAndUpdate(
+                { userId: id },
+                {
+                    $set: {
+                        planExpiryDate: trialExpiry,
+                        subscriptionPlan: 'Free Trial',
+                        subscriptionStatus: 'trial',
+                        billingType: 'trial'
+                    }
+                },
+                { upsert: true, setDefaultsOnInsert: true }
+            );
+        }
+
         // Build override set — only include fields the admin actually sent
         const workspaceSet = {};
         if (Array.isArray(activeModules)) workspaceSet.activeModules = activeModules;
@@ -1919,6 +2069,7 @@ module.exports = {
     impersonateUser,
     getCloudUsage,
     getAuditLogs,
+    getAgencyLimits,
     updateAgencyLimits,
     getWorkspaceAnalytics,
     // ✅ Approval-Based Access Control

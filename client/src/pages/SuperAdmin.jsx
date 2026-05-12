@@ -9,6 +9,7 @@ import AuditLogsView from '../components/SuperAdmin/AuditLogsView';
 import EmergencyControlsView from '../components/SuperAdmin/EmergencyControlsView';
 import SystemHealthView from '../components/SuperAdmin/SystemHealthView';
 import SupportInboxView from '../components/SuperAdmin/SupportInboxView';
+import FinanceView from '../components/SuperAdmin/FinanceView';
 
 const SuperAdmin = () => {
     const [activeView, setActiveView] = useState('dashboard');
@@ -23,6 +24,8 @@ const SuperAdmin = () => {
                 return <AgenciesView />;
             case 'direct-clients':
                 return <DirectClientsView />;
+            case 'finance':
+                return <FinanceView />;
             case 'support':
                 return <SupportInboxView />;
             case 'system-health':

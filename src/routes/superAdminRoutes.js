@@ -29,6 +29,7 @@ const {
     impersonateUser,
     getCloudUsage,
     getAuditLogs,
+    getAgencyLimits,
     updateAgencyLimits,
     getWorkspaceAnalytics,
     // ✅ Approval-Based Access Control
@@ -62,6 +63,7 @@ router.put('/companies/:id/freeze', validateObjectId({ params: ['id'] }), authMi
 router.get('/companies/:id/leads', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getCompanyLeads);
 
 // Agency Resource Limits (Controlled Autonomy)
+router.get('/companies/:id/limits', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getAgencyLimits);
 router.put('/companies/:id/limits', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updateAgencyLimits);
 
 // Company Password
@@ -108,5 +110,28 @@ router.put('/accounts/:id/deactivate', validateObjectId({ params: ['id'] }), aut
 
 // 🧹 Cleanup orphan sub-clients (managers whose parent agency was deleted)
 router.post('/cleanup/orphans', authMiddleware, requireSuperAdmin, cleanupOrphanedAccounts);
+
+// 💰 FINANCE MANAGER — payments, expenses, summary
+const {
+    recordPayment,
+    listPayments,
+    deletePayment,
+    recordExpense,
+    listExpenses,
+    deleteExpense,
+    getFinanceSummary,
+    listBillableClients
+} = require('../controllers/financeController');
+
+router.get('/finance/summary',  authMiddleware, requireSuperAdmin, getFinanceSummary);
+router.get('/finance/clients',  authMiddleware, requireSuperAdmin, listBillableClients);
+
+router.get('/finance/payments',     authMiddleware, requireSuperAdmin, listPayments);
+router.post('/finance/payments',    authMiddleware, requireSuperAdmin, recordPayment);
+router.delete('/finance/payments/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deletePayment);
+
+router.get('/finance/expenses',     authMiddleware, requireSuperAdmin, listExpenses);
+router.post('/finance/expenses',    authMiddleware, requireSuperAdmin, recordExpense);
+router.delete('/finance/expenses/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deleteExpense);
 
 module.exports = router;

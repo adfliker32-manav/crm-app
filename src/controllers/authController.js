@@ -461,7 +461,47 @@ exports.getAppName = async (req, res) => {
     }
 };
 
-// 9. ACCEPT TERMS & CONDITIONS (Protected)
+// 9b. PAYMENT STATUS (Protected)
+// Returns the current tenant's payment-expiry posture. Used by the frontend
+// to decide whether to show "X days left" / "in grace" banners.
+// Past-grace tenants never reach here — they get blocked by the 402 in authMiddleware.
+exports.getPaymentStatus = async (req, res) => {
+    try {
+        // Agencies + superadmin have lifetime-free access — never show banners.
+        // (Defends against stale planExpiryDate left over from earlier code paths
+        // that may not have been wiped by the startup migration yet.)
+        if (req.user.role === 'superadmin' || req.user.role === 'agency') {
+            return res.json({ success: true, hasExpiry: false, lifetimeFree: true });
+        }
+
+        const expiry = req.workspace?.planExpiryDate;
+        if (!expiry) {
+            return res.json({ success: true, hasExpiry: false });
+        }
+        const GRACE_DAYS = 7;
+        const expiryTime = new Date(expiry).getTime();
+        const graceEnd = expiryTime + GRACE_DAYS * 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        const day = 24 * 60 * 60 * 1000;
+
+        res.json({
+            success: true,
+            hasExpiry: true,
+            expiry,
+            graceEndsAt: new Date(graceEnd).toISOString(),
+            daysUntilExpiry: Math.ceil((expiryTime - now) / day),
+            daysUntilGraceEnd: Math.ceil((graceEnd - now) / day),
+            inGrace: now > expiryTime && now <= graceEnd,
+            warningWindow: now > (expiryTime - 5 * day) && now <= expiryTime,
+            currency: 'INR'
+        });
+    } catch (err) {
+        console.error('getPaymentStatus error:', err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// 10. ACCEPT TERMS & CONDITIONS (Protected)
 exports.acceptTerms = async (req, res) => {
     try {
         const userId = req.user.userId;

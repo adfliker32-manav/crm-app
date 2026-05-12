@@ -76,16 +76,51 @@ const authMiddleware = async (req, res, next) => {
         
         // --- 🚨 TRI-STATE ACCOUNT LIFECYCLE CHECK 🚨 ---
         if (req.workspace && Object.keys(req.workspace).length > 0) {
-            const isSuspendedOrFrozen = 
-                req.workspace.accountStatus === 'Frozen' || 
+            const isSuspendedOrFrozen =
+                req.workspace.accountStatus === 'Frozen' ||
                 req.workspace.accountStatus === 'Suspended';
-                
+
             if (isSuspendedOrFrozen) {
-                const reason = req.workspace.accountStatus === 'Suspended' 
-                    ? 'Account suspended by platform administration.' 
+                const reason = req.workspace.accountStatus === 'Suspended'
+                    ? 'Account suspended by platform administration.'
                     : 'Account temporarily frozen. Contact your agency administrator.';
                 return res.status(403).json({ message: reason });
             }
+        }
+
+        // --- 💰 PAYMENT EXPIRY + 7-DAY GRACE CHECK ---
+        // Business model: agencies have LIFETIME FREE access — they are our
+        // distribution partners, not paying customers. We only charge managers
+        // (agency sub-clients + direct managers). So we exempt:
+        //   - superadmin (the platform owner)
+        //   - agency (forever-free partners)
+        // Sub-clients and direct managers WILL be blocked once their
+        // planExpiryDate + 7-day grace has lapsed.
+        //
+        // The check is non-destructive — it does NOT change accountStatus. The
+        // tenant can come back online instantly the moment a payment is recorded.
+        const billableRole = req.user.role === 'manager' || req.user.role === 'agent';
+        if (billableRole && req.workspace?.planExpiryDate) {
+            const PAYMENT_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+            const expiry = new Date(req.workspace.planExpiryDate).getTime();
+            const graceEnd = expiry + PAYMENT_GRACE_MS;
+            const now = Date.now();
+
+            if (now > graceEnd) {
+                return res.status(402).json({
+                    error: 'payment_required',
+                    message: 'Your subscription has expired and the 7-day grace period has ended. Please contact your administrator to renew access.',
+                    expiredAt: req.workspace.planExpiryDate,
+                    graceEndedAt: new Date(graceEnd).toISOString()
+                });
+            }
+            // Surface status flags to downstream handlers + frontend (via /auth/me etc.)
+            req.paymentStatus = {
+                expiry: req.workspace.planExpiryDate,
+                inGrace: now > expiry && now <= graceEnd,
+                daysUntilExpiry: Math.ceil((expiry - now) / (24 * 60 * 60 * 1000)),
+                daysUntilGraceEnd: Math.ceil((graceEnd - now) / (24 * 60 * 60 * 1000))
+            };
         }
 
         // Base Tenant Isolation

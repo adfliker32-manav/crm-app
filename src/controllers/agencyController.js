@@ -411,11 +411,23 @@ const createClient = async (req, res) => {
 
         // 6. Initialize Workspace with the AGENCY-REQUESTED config (not hardcoded defaults).
         // The Super Admin will see this on the approval card and can override before approving.
+        //
+        // 14-day free trial — every new sub-client starts with a planExpiryDate set
+        // 14 days from now. They can't actually use the platform until Super Admin
+        // approves, but the clock starts the moment they're approved (see approveAccount
+        // for backfill if the trial has somehow already elapsed before approval).
+        const DEFAULT_TRIAL_DAYS = 14;
+        const trialExpiry = new Date(Date.now() + DEFAULT_TRIAL_DAYS * 24 * 60 * 60 * 1000);
+
         await WorkspaceSettings.create({
             userId: newClient._id,
             activeModules: requestedModules,
             agentLimit: resolvedAgentLimit,
-            planFeatures: resolvedPlanFeatures
+            planFeatures: resolvedPlanFeatures,
+            subscriptionPlan: 'Free Trial',
+            subscriptionStatus: 'trial',
+            billingType: 'trial',
+            planExpiryDate: trialExpiry
         });
 
         await IntegrationConfig.create({ userId: newClient._id });

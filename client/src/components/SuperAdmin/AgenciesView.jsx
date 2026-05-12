@@ -49,9 +49,10 @@ const AgenciesView = () => {
 
     const stats = useMemo(() => {
         const total = agencies.length;
-        const active = agencies.filter(c => !c.isFrozen).length;
-        const frozen = total - active;
-        return { total, active, frozen };
+        const suspended = agencies.filter(c => c.isSuspended).length;
+        const frozen = agencies.filter(c => c.isFrozen && !c.isSuspended).length;
+        const active = total - suspended - frozen;
+        return { total, active, frozen, suspended, restricted: frozen + suspended };
     }, [agencies]);
 
     const fetchCompanies = async () => {
@@ -188,12 +189,12 @@ const AgenciesView = () => {
                     gradient="from-emerald-500 to-emerald-600" 
                     iconBg="bg-emerald-100 text-emerald-600"
                 />
-                <StatCard 
-                    title="Frozen Accounts" 
-                    value={stats.frozen} 
-                    icon="fa-snowflake" 
-                    gradient="from-blue-500 to-blue-600" 
-                    iconBg="bg-blue-100 text-blue-600"
+                <StatCard
+                    title={stats.suspended > 0 ? "Restricted (Frozen + Suspended)" : "Frozen Accounts"}
+                    value={stats.restricted}
+                    icon={stats.suspended > 0 ? "fa-ban" : "fa-snowflake"}
+                    gradient={stats.suspended > 0 ? "from-red-500 to-red-600" : "from-blue-500 to-blue-600"}
+                    iconBg={stats.suspended > 0 ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"}
                 />
             </div>
 

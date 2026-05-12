@@ -75,9 +75,13 @@ const ManageAgencyModal = ({ isOpen, onClose, company, actions }) => {
                         Joined {new Date(company.createdAt).toLocaleDateString()}
                     </div>
                     <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${
-                        company.isFrozen ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-emerald-50 text-emerald-600 border-emerald-100'
+                        company.isSuspended ? 'bg-red-50 text-red-700 border-red-200' :
+                        company.isFrozen ? 'bg-blue-50 text-blue-600 border-blue-100' :
+                                           'bg-emerald-50 text-emerald-600 border-emerald-100'
                     }`}>
-                        {company.isFrozen ? 'Frozen' : (company.role === 'agency' ? 'Active Partner' : 'Active Merchant')}
+                        {company.isSuspended ? 'Suspended' :
+                         company.isFrozen ? 'Frozen' :
+                         company.role === 'agency' ? 'Active Partner' : 'Active Merchant'}
                     </div>
                 </div>
             </div>

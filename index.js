@@ -154,6 +154,40 @@ mongoose.connect(MONGO_URI, {
       console.error('Server will continue, but Super Admin may not be available.');
     }
 
+    // Normalize any agency workspace that still carries stale trial state from
+    // earlier code paths. Agencies are lifetime-free — they should never have a
+    // planExpiryDate or subscriptionStatus=trial. Idempotent and cheap to run.
+    try {
+      const User = require('./src/models/User');
+      const WorkspaceSettings = require('./src/models/WorkspaceSettings');
+      const agencies = await User.find({ role: 'agency' }).select('_id').lean();
+      if (agencies.length > 0) {
+        const result = await WorkspaceSettings.updateMany(
+          {
+            userId: { $in: agencies.map(a => a._id) },
+            $or: [
+              { planExpiryDate: { $ne: null } },
+              { subscriptionStatus: 'trial' },
+              { billingType: 'trial' }
+            ]
+          },
+          {
+            $set: {
+              planExpiryDate: null,
+              subscriptionPlan: 'Lifetime Free',
+              subscriptionStatus: 'active',
+              billingType: 'paid_by_agency'
+            }
+          }
+        );
+        if (result.modifiedCount > 0) {
+          console.log(`🤝 Normalized ${result.modifiedCount} agency workspace(s) to lifetime-free.`);
+        }
+      }
+    } catch (err) {
+      console.warn('⚠️  Agency normalization on startup failed:', err.message);
+    }
+
     // ℹ️  WhatsApp credentials are per-tenant (configured via Settings → WhatsApp Config).
     // Super Admin does NOT have a WhatsApp inbox, so no seed is needed.
 

@@ -6,16 +6,16 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
     const { showSuccess, showError } = useNotification();
     const [loading, setLoading] = useState(false);
     const [fetching, setFetching] = useState(false);
-    
-    // Default allocations
+
     const [limits, setLimits] = useState({
         maxClients: 5,
         whatsappMessagesPerMonth: 1000,
         emailsPerMonth: 5000
     });
+    const [usage, setUsage] = useState({ whatsappSent: 0, emailsSent: 0 });
 
     useEffect(() => {
-        if (isOpen && agency) {
+        if (isOpen && agency?._id) {
             fetchCurrentLimits();
         }
     }, [isOpen, agency]);
@@ -23,22 +23,19 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
     const fetchCurrentLimits = async () => {
         try {
             setFetching(true);
-            // Since there isn't a direct GET route for just limits by Super Admin, 
-            // we can fetch the agency's usage route by impersonating or just passing it.
-            // Wait, we need a way for Super Admin to see it!
-            // Actually, we can just send a GET /superadmin/companies/:id request.
-            // Oh, we might need to add planLimits to the user response or fetch AgencySettings directly.
-            // For now, let's hit a specialized endpoint or just assume it starts at defaults,
-            // but realistically we should fetch it. Let's try to get it from the company object if populated, 
-            // or just load defaults for now and let the Super Admin overwrite.
-            // Let's add a quick fetch inside super admin? There isn't an endpoint.
-            // Let's just default to safe values and allow overwrite for now.
-            
-            // Temporary workaround: default state is shown. If they had previous limits, we won't see them here right away.
-            // I'll make a mental note to fetch it if needed, but overwrite is fine since Super Admin dictates strictly.
-            setFetching(false);
+            const res = await api.get(`/superadmin/companies/${agency._id}/limits`);
+            if (res.data?.success) {
+                setLimits({
+                    maxClients: res.data.limits.maxClients ?? 5,
+                    whatsappMessagesPerMonth: res.data.limits.whatsappMessagesPerMonth ?? 1000,
+                    emailsPerMonth: res.data.limits.emailsPerMonth ?? 5000
+                });
+                setUsage(res.data.usage || { whatsappSent: 0, emailsSent: 0 });
+            }
         } catch (err) {
-            console.error(err);
+            console.error('Fetch limits error:', err);
+            showError('Failed to load current limits — showing defaults.');
+        } finally {
             setFetching(false);
         }
     };
@@ -119,7 +116,12 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
                                         className="flex-1 px-4 py-3 outline-none text-slate-900 font-bold"
                                     />
                                 </div>
-                                <p className="text-[10px] text-slate-400 mt-1">Total pool shared across all their sub-clients.</p>
+                                <p className="text-[10px] text-slate-400 mt-1">
+                                    Used this cycle: <span className="font-bold text-slate-600">{(usage.whatsappSent || 0).toLocaleString()}</span>
+                                    {limits.whatsappMessagesPerMonth > 0 && (
+                                        <> · {Math.round((usage.whatsappSent / limits.whatsappMessagesPerMonth) * 100)}% of allocated</>
+                                    )}
+                                </p>
                             </div>
 
                             <div>
@@ -137,6 +139,12 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
                                         className="flex-1 px-4 py-3 outline-none text-slate-900 font-bold"
                                     />
                                 </div>
+                                <p className="text-[10px] text-slate-400 mt-1">
+                                    Used this cycle: <span className="font-bold text-slate-600">{(usage.emailsSent || 0).toLocaleString()}</span>
+                                    {limits.emailsPerMonth > 0 && (
+                                        <> · {Math.round((usage.emailsSent / limits.emailsPerMonth) * 100)}% of allocated</>
+                                    )}
+                                </p>
                             </div>
                         </>
                     )}

@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import AgencySidebar from '../components/AgencySidebar';
 import SupportWidget from '../components/Support/SupportWidget';
+import PaymentBanner from '../components/PaymentBanner';
 
 const AgencyLayout = () => {
     useEffect(() => {
@@ -25,7 +26,7 @@ const AgencyLayout = () => {
 
             {/* Main Content Area */}
             <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-50">
-                
+                <PaymentBanner />
                 <main className="flex-1 overflow-y-auto p-4 md:p-8 relative scroll-smooth font-sans">
                     <Outlet />
                 </main>

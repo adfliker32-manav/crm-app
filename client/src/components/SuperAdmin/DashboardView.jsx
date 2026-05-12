@@ -5,10 +5,12 @@ import {
     Title, Tooltip, Legend, Filler
 } from 'chart.js';
 import api from '../../services/api';
+import { useConfirm } from '../../context/ConfirmContext';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
 const DashboardView = ({ setActiveView }) => {
+    const { showDanger } = useConfirm();
     const [stats, setStats] = useState({});
     const [recentSignups, setRecentSignups] = useState([]);
     const [growthData, setGrowthData] = useState(null);
@@ -68,7 +70,11 @@ const DashboardView = ({ setActiveView }) => {
     const orphanCount  = stats.orphanedAccounts || 0;
 
     const handleCleanupOrphans = async () => {
-        if (!window.confirm(`Permanently delete ${orphanCount} orphan account${orphanCount === 1 ? '' : 's'} and all their data? This cannot be undone.`)) return;
+        const confirmed = await showDanger(
+            `Permanently delete ${orphanCount} orphan account${orphanCount === 1 ? '' : 's'} and all their data (leads, agents, settings)? This cannot be undone.`,
+            'Clean up orphan accounts?'
+        );
+        if (!confirmed) return;
         setCleaningOrphans(true);
         try {
             const res = await api.post('/superadmin/cleanup/orphans');

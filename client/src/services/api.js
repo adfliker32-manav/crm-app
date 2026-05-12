@@ -64,6 +64,19 @@ api.interceptors.response.use(
             }
         }
 
+        // ── 402 Payment Required — Subscription expired past 7-day grace ──
+        if (status === 402 && error.response?.data?.error === 'payment_required') {
+            // Stash context so the PaymentRequired page can render dates
+            try {
+                sessionStorage.setItem('payment_required_info', JSON.stringify(error.response.data));
+            } catch { /* sessionStorage may be unavailable */ }
+            // Only redirect if we're not already on the blocked screen / login
+            const path = window.location.pathname;
+            if (path !== '/payment-required' && path !== '/login') {
+                window.location.replace('/payment-required');
+            }
+        }
+
         // ── 502/503/504 — Server temporarily unavailable (Render deploy/restart) ──
         if (status === 502 || status === 503 || status === 504) {
             error.response.data = {

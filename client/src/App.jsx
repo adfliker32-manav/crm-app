@@ -38,6 +38,7 @@ const TermsAndConditions = lazy(() => import('./pages/TermsAndConditions'));
 const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
 const DataDeletionStatus = lazy(() => import('./pages/DataDeletionStatus'));
 const NotFound = lazy(() => import('./pages/NotFound'));
+const PaymentRequired = lazy(() => import('./pages/PaymentRequired'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -58,6 +59,7 @@ function App() {
                     <Route path="/terms" element={<TermsAndConditions />} />
                     <Route path="/privacy" element={<PrivacyPolicy />} />
                     <Route path="/deletion-status" element={<DataDeletionStatus />} />
+                    <Route path="/payment-required" element={<PaymentRequired />} />
 
                     <Route element={<ProtectedRoute />}>
                       <Route path="/super-admin" element={<SuperAdmin />} />

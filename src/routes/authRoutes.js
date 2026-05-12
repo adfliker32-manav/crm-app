@@ -31,6 +31,9 @@ router.put('/profile', authMiddleware, authController.updateProfile);
 // 5. Accept Terms & Conditions
 router.post('/accept-terms', authMiddleware, authController.acceptTerms);
 
+// 5b. Payment status (for banner UI — 5-day warning / 7-day grace)
+router.get('/payment-status', authMiddleware, authController.getPaymentStatus);
+
 // 6. Public
 router.get('/app-name', authController.getAppName);
 
