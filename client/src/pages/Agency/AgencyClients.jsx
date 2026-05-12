@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useNotification } from '../../context/NotificationContext';
 import api from '../../services/api';
 import EditSubClientModal from '../../components/Agency/EditSubClientModal';
+import CreateSubClientModal from '../../components/Agency/CreateSubClientModal';
 
 // ✅ Status badge using the new approval-based fields
 const getStatusBadge = (client) => {
@@ -49,17 +50,20 @@ const AgencyClients = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('All');
 
+    // Agency's own workspace config — used by Create modal to enforce module inheritance
+    const [agencyWorkspace, setAgencyWorkspace] = useState({ activeModules: [], planFeatures: {}, agentLimit: 50 });
+
     // Create client modal
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-    const [isCreating, setIsCreating] = useState(false);
-    const [formData, setFormData] = useState({ companyName: '', adminEmail: '', adminName: '', phone: '' });
-    const [createdCredentials, setCreatedCredentials] = useState(null);
 
     // Edit client modal
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [selectedClient, setSelectedClient] = useState(null);
 
-    useEffect(() => { fetchClients(); }, []);
+    useEffect(() => {
+        fetchClients();
+        fetchAgencyWorkspace();
+    }, []);
 
     const fetchClients = async () => {
         try {
@@ -67,6 +71,15 @@ const AgencyClients = () => {
             if (response.data?.success) setClients(response.data.clients);
         } catch (error) { console.error("Failed to load agency clients:", error); }
         finally { setIsLoading(false); }
+    };
+
+    const fetchAgencyWorkspace = async () => {
+        try {
+            const response = await api.get('/agency/analytics');
+            if (response.data?.success && response.data.agencyWorkspace) {
+                setAgencyWorkspace(response.data.agencyWorkspace);
+            }
+        } catch (error) { console.error('Failed to load agency workspace:', error); }
     };
 
     const handleImpersonate = async (clientId, companyName) => {
@@ -116,24 +129,6 @@ const AgencyClients = () => {
         setIsEditModalOpen(true);
     };
 
-    // ✅ CREATE CLIENT (Approval-Based — replaces provisionTrial)
-    const handleCreateClient = async () => {
-        if (!formData.companyName || !formData.adminEmail) {
-            return showError("Company name and admin email are required.");
-        }
-        try {
-            setIsCreating(true);
-            const response = await api.post('/agency/clients', formData);
-            if (response.data?.success) {
-                setCreatedCredentials(response.data.credentials);
-                setFormData({ companyName: '', adminEmail: '', adminName: '', phone: '' });
-                fetchClients();
-            }
-        } catch (error) {
-            showError(error.response?.data?.message || "Failed to create client.");
-        } finally { setIsCreating(false); }
-    };
-
     const filteredClients = clients.filter(c => {
         const matchSearch = !searchTerm ||
             c.companyName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -161,7 +156,7 @@ const AgencyClients = () => {
                     <p className="text-slate-500 font-medium mt-2">Create and manage client workspaces. Accounts require Super Admin approval before they go live.</p>
                 </div>
                 <button
-                    onClick={() => { setIsCreateModalOpen(true); setCreatedCredentials(null); }}
+                    onClick={() => setIsCreateModalOpen(true)}
                     className="mt-4 md:mt-0 px-6 py-2.5 rounded-xl font-bold shadow-lg transition-all transform active:scale-95 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/20"
                 >
                     <i className="fa-solid fa-user-plus" />
@@ -325,102 +320,14 @@ const AgencyClients = () => {
             />
 
             {/* ============================================
-                CREATE CLIENT MODAL (Approval-Based)
+                CREATE CLIENT MODAL (Sectioned, Approval-Based)
                 ============================================ */}
-            {isCreateModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => { setIsCreateModalOpen(false); setCreatedCredentials(null); }} />
-                    <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
-                        {!createdCredentials ? (
-                            <>
-                                <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                                    <div>
-                                        <h2 className="text-xl font-black text-slate-900">Create Client Account</h2>
-                                        <p className="text-xs text-slate-500 font-semibold mt-1">Account will be pending Super Admin approval</p>
-                                    </div>
-                                    <button onClick={() => setIsCreateModalOpen(false)} className="w-8 h-8 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 flex items-center justify-center">
-                                        <i className="fa-solid fa-times" />
-                                    </button>
-                                </div>
-                                <div className="p-6 space-y-4">
-                                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
-                                        <i className="fa-solid fa-shield-check text-amber-600 mt-0.5" />
-                                        <p className="text-xs text-amber-700 font-semibold">The account will be created but will require Super Admin approval before the client can log in.</p>
-                                    </div>
-                                    <div>
-                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Company Name *</label>
-                                        <input type="text" value={formData.companyName}
-                                            onChange={e => setFormData({ ...formData, companyName: e.target.value })}
-                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
-                                            placeholder="e.g. Acme Corp" />
-                                    </div>
-                                    <div>
-                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Admin Name</label>
-                                        <input type="text" value={formData.adminName}
-                                            onChange={e => setFormData({ ...formData, adminName: e.target.value })}
-                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
-                                            placeholder="John Doe" />
-                                    </div>
-                                    <div>
-                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Admin Email (Login ID) *</label>
-                                        <input type="email" value={formData.adminEmail}
-                                            onChange={e => setFormData({ ...formData, adminEmail: e.target.value })}
-                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
-                                            placeholder="admin@acme.com" />
-                                    </div>
-                                    <div>
-                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Phone (Optional)</label>
-                                        <input type="text" value={formData.phone}
-                                            onChange={e => setFormData({ ...formData, phone: e.target.value })}
-                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
-                                            placeholder="+91 98765 43210" />
-                                    </div>
-                                </div>
-                                <div className="p-6 border-t border-slate-100 flex gap-3">
-                                    <button onClick={() => setIsCreateModalOpen(false)} className="px-5 py-2.5 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition">Cancel</button>
-                                    <button onClick={handleCreateClient} disabled={isCreating}
-                                        className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 disabled:opacity-70">
-                                        {isCreating ? <><i className="fa-solid fa-spinner fa-spin" />Creating...</> : <><i className="fa-solid fa-user-plus" />Create Account</>}
-                                    </button>
-                                </div>
-                            </>
-                        ) : (
-                            // Success screen with credentials
-                            <>
-                                <div className="p-6 text-center">
-                                    <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                                        <i className="fa-solid fa-circle-check text-emerald-600 text-3xl" />
-                                    </div>
-                                    <h2 className="text-xl font-black text-slate-900">Account Created!</h2>
-                                    <p className="text-sm text-slate-500 mt-1">Pending Super Admin approval. Share these credentials with your client.</p>
-                                </div>
-                                <div className="px-6 pb-2 space-y-3">
-                                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
-                                        <div className="flex justify-between items-center">
-                                            <span className="text-xs font-bold text-slate-500 uppercase">Email</span>
-                                            <span className="font-mono text-sm font-bold text-slate-800">{createdCredentials.email}</span>
-                                        </div>
-                                        <div className="flex justify-between items-center">
-                                            <span className="text-xs font-bold text-slate-500 uppercase">Temp Password</span>
-                                            <span className="font-mono text-sm font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{createdCredentials.tempPassword}</span>
-                                        </div>
-                                    </div>
-                                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
-                                        <i className="fa-solid fa-triangle-exclamation text-amber-600 mt-0.5 text-xs" />
-                                        <p className="text-xs text-amber-700">The client cannot log in until the Super Admin approves the account. Notify them accordingly.</p>
-                                    </div>
-                                </div>
-                                <div className="p-6">
-                                    <button onClick={() => { setIsCreateModalOpen(false); setCreatedCredentials(null); }}
-                                        className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl transition">
-                                        Done
-                                    </button>
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </div>
-            )}
+            <CreateSubClientModal
+                isOpen={isCreateModalOpen}
+                onClose={() => setIsCreateModalOpen(false)}
+                agencyWorkspace={agencyWorkspace}
+                onSuccess={fetchClients}
+            />
         </div>
     );
 };

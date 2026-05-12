@@ -98,7 +98,7 @@ async function processLeadgenWebhook(pageId, leadgenData) {
         const configs = await IntegrationConfig.find({
             'meta.metaPageId': pageId,
             'meta.metaLeadSyncEnabled': true
-        }).select('userId meta +meta.metaAccessToken +meta.metaPageAccessToken');
+        }).select('+meta.metaAccessToken +meta.metaPageAccessToken');
 
         if (!configs || configs.length === 0) {
             console.log(`⚠️ No integration configs found for page ${pageId} or sync disabled`);
@@ -401,7 +401,7 @@ const fetchHistoricalLeads = async (req, res) => {
     try {
         const ownerId = req.tenantId;
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('+meta.metaAccessToken +meta.metaPageAccessToken meta.metaTokenExpiry meta.metaFormId meta.metaLeadSyncEnabled');
+            .select('+meta.metaAccessToken +meta.metaPageAccessToken');
 
         if (!config?.meta?.metaPageAccessToken) {
             return res.status(400).json({ success: false, message: 'No Meta page connected. Please connect a page in settings first.' });

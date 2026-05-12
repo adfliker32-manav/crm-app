@@ -251,8 +251,12 @@ const DirectClientsView = () => {
                                             </div>
                                         </td>
                                         <td className="px-8 py-6">
-                                            {company.isFrozen ? (
-                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 text-slate-600 text-[10px] font-black uppercase rounded-full border border-slate-200">
+                                            {company.isSuspended ? (
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-50 text-red-700 text-[10px] font-black uppercase rounded-full border border-red-200">
+                                                    <i className="fa-solid fa-ban"></i> Suspended
+                                                </span>
+                                            ) : company.isFrozen ? (
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-600 text-[10px] font-black uppercase rounded-full border border-blue-100">
                                                     <i className="fa-solid fa-snowflake"></i> Frozen
                                                 </span>
                                             ) : (

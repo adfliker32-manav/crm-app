@@ -70,15 +70,15 @@ const AgenciesView = () => {
 
     const handleDeleteCompany = async (companyId) => {
         const confirmed = await showDanger(
-            'This will permanently delete the company and ALL associated data (leads, agents, templates, etc.). This action cannot be undone.',
-            'Delete Company?'
+            'This will permanently delete the AGENCY along with EVERY sub-client account it owns, all their agents, and ALL associated data (leads, templates, settings, integrations). This cascade is irreversible.',
+            'Delete Agency + All Sub-Clients?'
         );
 
         if (!confirmed) return;
 
         try {
-            await api.delete(`/superadmin/companies/${companyId}`);
-            showSuccess('Company deleted successfully');
+            const res = await api.delete(`/superadmin/companies/${companyId}`);
+            showSuccess(res.data?.message || 'Agency and sub-clients deleted successfully');
             fetchCompanies();
             setIsManageModalOpen(false);
         } catch (error) {
@@ -255,7 +255,11 @@ const AgenciesView = () => {
                                             </div>
                                         </td>
                                         <td className="px-8 py-6">
-                                            {company.isFrozen ? (
+                                            {company.isSuspended ? (
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-50 text-red-700 text-[10px] font-black uppercase rounded-full border border-red-200">
+                                                    <i className="fa-solid fa-ban"></i> Suspended
+                                                </span>
+                                            ) : company.isFrozen ? (
                                                 <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-600 text-[10px] font-black uppercase rounded-full border border-blue-100">
                                                     <i className="fa-solid fa-snowflake"></i> Frozen
                                                 </span>

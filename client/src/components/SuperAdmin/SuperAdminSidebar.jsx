@@ -1,16 +1,52 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import api from '../../services/api';
+import useSocket from '../../hooks/useSocket';
 
 const SuperAdminSidebar = ({ activeView, setActiveView }) => {
     const navigate = useNavigate();
     const { logout } = useAuth();
+    const { socket } = useSocket();
+    const [supportUnread, setSupportUnread] = useState(0);
+
+    useEffect(() => {
+        const fetchUnread = () => {
+            api.get('/support/admin/unread')
+                .then(r => setSupportUnread(r.data.unreadCount || 0))
+                .catch(() => {});
+        };
+        fetchUnread();
+        const interval = setInterval(fetchUnread, 60 * 1000);
+        return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        if (!socket) return;
+        const bump = () => setSupportUnread(c => c + 1);
+        const recount = () => {
+            api.get('/support/admin/unread').then(r => setSupportUnread(r.data.unreadCount || 0)).catch(() => {});
+        };
+        socket.on('support:newTicket', bump);
+        socket.on('support:newMessage', recount);
+        socket.on('support:ticketClosed', recount);
+        return () => {
+            socket.off('support:newTicket', bump);
+            socket.off('support:newMessage', recount);
+            socket.off('support:ticketClosed', recount);
+        };
+    }, [socket]);
+
+    useEffect(() => {
+        if (activeView === 'support') setSupportUnread(0);
+    }, [activeView]);
 
     const menuItems = [
         { id: 'dashboard',          icon: 'fa-chart-line',             label: 'Dashboard',           color: 'text-blue-600'  },
         { id: 'approvals',          icon: 'fa-shield-check',           label: 'Account Approvals',   color: 'text-amber-600 font-semibold' },
         { id: 'agencies',           icon: 'fa-network-wired',          label: 'Agencies',            color: 'text-purple-600' },
         { id: 'direct-clients',     icon: 'fa-user-tie',               label: 'Direct Clients',      color: 'text-emerald-600' },
+        { id: 'support',            icon: 'fa-life-ring',              label: 'Support Inbox',       color: 'text-orange-500', badge: supportUnread },
         { id: 'system-health',      icon: 'fa-heartbeat',              label: 'System Health',       color: 'text-cyan-500'  },
         { id: 'audit-logs',         icon: 'fa-terminal',               label: 'Command Center',      color: 'text-rose-500'  },
         { id: 'emergency-controls', icon: 'fa-triangle-exclamation',   label: 'Emergency Controls',  color: 'text-red-500 font-bold bg-red-900/20' },
@@ -51,7 +87,12 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
                     >
                         <i className={`fa-solid ${item.icon} ${activeView === item.id ? item.color : ''}`}></i>
                         <span className="font-medium">{item.label}</span>
-                        {activeView === item.id && (
+                        {item.badge > 0 && (
+                            <span className="ml-auto bg-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
+                                {item.badge}
+                            </span>
+                        )}
+                        {activeView === item.id && !item.badge && (
                             <i className="fa-solid fa-chevron-right ml-auto text-sm"></i>
                         )}
                     </button>

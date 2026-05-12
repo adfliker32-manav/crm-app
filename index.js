@@ -30,6 +30,7 @@ const analyticsRoutes = require('./src/routes/analyticsRoutes'); // Advanced Ana
 const automationRoutes = require('./src/routes/automationRoutes'); // Visual Automation Engine
 const appointmentRoutes = require('./src/routes/appointmentRoutes'); // Appointment Booking
 const bookingRoutes = require('./src/routes/bookingRoutes'); // Public Booking Pages
+const supportRoutes = require('./src/routes/supportRoutes'); // In-built Help Center
 const { authMiddleware } = require('./src/middleware/authMiddleware');
 const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
 
@@ -362,6 +363,9 @@ app.use('/api/tags', authMiddleware, require('./src/routes/tagRoutes'));
 app.use('/api/tasks', authMiddleware, taskRoutes);
 app.use('/api/automations', authMiddleware, automationRoutes);
 app.use('/api/appointments', authMiddleware, appointmentRoutes);
+
+// In-built Help Center (auth handled inside route file — supports customer + super admin)
+app.use('/api/support', supportRoutes);
 
 // Public booking page (no auth — customer-facing)
 app.use('/api/book', bookingRoutes);

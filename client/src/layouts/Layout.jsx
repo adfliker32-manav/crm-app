@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import SupportWidget from '../components/Support/SupportWidget';
 import useSocket from '../hooks/useSocket';
 import { useNotification } from '../context/NotificationContext';
 
@@ -66,6 +67,7 @@ const Layout = () => {
                     <Outlet />
                 </main>
             </div>
+            <SupportWidget />
         </div>
     );
 };

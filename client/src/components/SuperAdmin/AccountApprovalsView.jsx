@@ -1,6 +1,7 @@
 /* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import ReviewApprovalModal from './ReviewApprovalModal';
 
 const statusColors = {
     pending:  { bg: 'bg-amber-100',  text: 'text-amber-700',  border: 'border-amber-300',  dot: 'bg-amber-500'  },
@@ -8,7 +9,7 @@ const statusColors = {
     rejected: { bg: 'bg-red-100',    text: 'text-red-700',    border: 'border-red-300',    dot: 'bg-red-500'    },
 };
 
-const AccountCard = ({ account, onApprove, onReject, onDeactivate, showActions }) => {
+const AccountCard = ({ account, onReview, onApprove, onReject, onDeactivate, showActions }) => {
     const [loading, setLoading] = useState(false);
     const sc = statusColors[account.status] || statusColors.pending;
 
@@ -67,9 +68,63 @@ const AccountCard = ({ account, onApprove, onReject, onDeactivate, showActions }
                 </span>
             </div>
 
+            {/* Requested config preview — only on pending cards */}
+            {account.requestedActiveModules && (
+                <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+                    <div className="bg-slate-50 rounded-lg px-2 py-1.5 border border-slate-100">
+                        <div className="text-slate-400 font-semibold uppercase text-[9px] tracking-wider">Modules</div>
+                        <div className="font-bold text-slate-700">{account.requestedActiveModules.length}</div>
+                    </div>
+                    <div className="bg-slate-50 rounded-lg px-2 py-1.5 border border-slate-100">
+                        <div className="text-slate-400 font-semibold uppercase text-[9px] tracking-wider">Leads/mo</div>
+                        <div className="font-bold text-slate-700">{(account.requestedLeadLimit || 100).toLocaleString()}</div>
+                    </div>
+                    <div className="bg-slate-50 rounded-lg px-2 py-1.5 border border-slate-100">
+                        <div className="text-slate-400 font-semibold uppercase text-[9px] tracking-wider">Seats</div>
+                        <div className="font-bold text-slate-700">{account.requestedAgentLimit || 2}</div>
+                    </div>
+                </div>
+            )}
+
+            {/* Sub-permission tags */}
+            {account.requestedPlanFeatures && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                    {account.requestedPlanFeatures.aiChatbot && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                            <i className="fa-solid fa-robot text-[9px]" />Chatbot
+                        </span>
+                    )}
+                    {account.requestedPlanFeatures.metaSync && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                            <i className="fa-brands fa-meta text-[9px]" />Meta Sync
+                        </span>
+                    )}
+                    {account.requestedPlanFeatures.campaigns && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-50 text-orange-700 border border-orange-200">
+                            <i className="fa-solid fa-bullhorn text-[9px]" />Campaigns
+                        </span>
+                    )}
+                    {account.requestedPlanFeatures.webhooks && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                            <i className="fa-solid fa-plug text-[9px]" />Webhooks
+                        </span>
+                    )}
+                </div>
+            )}
+
             {/* Action Buttons */}
             {showActions && (
                 <div className="mt-4 flex gap-2 pt-3 border-t border-slate-100">
+                    {onReview && (
+                        <button
+                            onClick={onReview}
+                            disabled={loading}
+                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium transition disabled:opacity-50"
+                        >
+                            <i className="fa-solid fa-eye" />
+                            Review &amp; Approve
+                        </button>
+                    )}
                     {onApprove && (
                         <button
                             onClick={() => handle(onApprove)}
@@ -113,6 +168,7 @@ const AccountApprovalsView = () => {
     const [counts, setCounts] = useState({ pending: 0, active: 0, rejected: 0 });
     const [search, setSearch] = useState('');
     const [toast, setToast] = useState(null);
+    const [reviewing, setReviewing] = useState(null); // account being reviewed in modal
 
     const showToast = (message, type = 'success') => {
         setToast({ message, type });
@@ -254,13 +310,26 @@ const AccountApprovalsView = () => {
                             key={account._id}
                             account={account}
                             showActions={true}
-                            onApprove={activeTab === 'pending' || activeTab === 'rejected' ? () => handleAction(account._id, 'approve') : null}
+                            onReview={activeTab === 'pending' ? () => setReviewing(account) : null}
+                            onApprove={activeTab === 'rejected' ? () => handleAction(account._id, 'approve') : null}
                             onReject={activeTab === 'pending' ? () => handleAction(account._id, 'reject') : null}
                             onDeactivate={activeTab === 'active' ? () => handleAction(account._id, 'deactivate') : null}
                         />
                     ))}
                 </div>
             )}
+
+            {/* Review & Approve Modal — pending tab only */}
+            <ReviewApprovalModal
+                isOpen={!!reviewing}
+                account={reviewing}
+                onClose={() => setReviewing(null)}
+                onApproved={(hadOverrides) => {
+                    showToast(hadOverrides ? 'Account approved with overrides.' : 'Account approved as requested.');
+                    fetchAccounts();
+                    fetchCounts();
+                }}
+            />
         </div>
     );
 };

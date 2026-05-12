@@ -51,17 +51,29 @@ const SystemHealthView = () => {
         );
     }
 
-    const { alertStatus, api: apiStats, webhook, queue, database, delivery, server, topTenant } = health;
-    const isRedAlert = alertStatus.level === 'critical' || alertStatus.level === 'outage';
-    const isWarning = alertStatus.level === 'warning';
+    // Defensive destructuring — telemetry endpoints can degrade if a sub-system errors.
+    const alertStatus = health.alertStatus || { level: 'healthy', triggers: [] };
+    const apiStats   = health.api      || { errorRatePercent: 0, authFailurePercent: 0, totalRequests: 0, avgLatencyMs: 0 };
+    const webhook    = health.webhook  || { successRatePercent: 100, avgLatencyMs: 0, totalRetries: 0 };
+    const queue      = health.queue    || { agenda: { failed: 0, pending: 0, active: 0, automationFailures: 0, total: 0 } };
+    const database   = health.database || { connections: 0, activeQueries: 0, totalUsedBytes: 0, storageLimitBytes: 536870912 };
+    const delivery   = health.delivery || { whatsapp: { successRate: 100, sent24h: 0, failed24h: 0, totalAttempts: 0 } };
+    const server     = health.server   || { memoryUsageMB: 0, totalMemoryMB: 1, loadAverage: [0, 0, 0], uptimeSeconds: 0 };
+    const topTenant  = health.topTenant || null;
 
-    // Theme Config based on Level
-    const theme = {
-        'healthy': { bg: 'bg-emerald-500', text: 'text-emerald-500', icon: 'fa-check-circle', label: 'ALL SYSTEMS NOMINAL' },
-        'warning': { bg: 'bg-amber-500', text: 'text-amber-500', icon: 'fa-triangle-exclamation', label: 'WARNING DETECTED' },
-        'critical': { bg: 'bg-red-600', text: 'text-red-600', icon: 'fa-radiation', label: 'CRITICAL ALERT' },
-        'outage': { bg: 'bg-black', text: 'text-black', icon: 'fa-skull', label: 'SEVERE OUTAGE' }
-    }[alertStatus.level] || theme['healthy'];
+    const isRedAlert = alertStatus.level === 'critical' || alertStatus.level === 'outage';
+    const isWarning  = alertStatus.level === 'warning';
+
+    // Theme Config based on Level. Bug fix: previous version self-referenced `theme`
+    // in its own initializer (`|| theme['healthy']`) which threw `ReferenceError` on
+    // any unknown level and crashed the whole page.
+    const THEMES = {
+        healthy:  { bg: 'bg-emerald-500', text: 'text-emerald-500', icon: 'fa-check-circle',         label: 'ALL SYSTEMS NOMINAL' },
+        warning:  { bg: 'bg-amber-500',   text: 'text-amber-500',   icon: 'fa-triangle-exclamation', label: 'WARNING DETECTED'    },
+        critical: { bg: 'bg-red-600',     text: 'text-red-600',     icon: 'fa-radiation',            label: 'CRITICAL ALERT'      },
+        outage:   { bg: 'bg-black',       text: 'text-black',       icon: 'fa-skull',                label: 'SEVERE OUTAGE'       }
+    };
+    const theme = THEMES[alertStatus.level] || THEMES.healthy;
 
     return (
         <div className="space-y-6 animate-fade-in-up pb-12">

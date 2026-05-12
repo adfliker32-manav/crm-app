@@ -8,6 +8,7 @@ import GlobalSettingsView from '../components/SuperAdmin/GlobalSettingsView';
 import AuditLogsView from '../components/SuperAdmin/AuditLogsView';
 import EmergencyControlsView from '../components/SuperAdmin/EmergencyControlsView';
 import SystemHealthView from '../components/SuperAdmin/SystemHealthView';
+import SupportInboxView from '../components/SuperAdmin/SupportInboxView';
 
 const SuperAdmin = () => {
     const [activeView, setActiveView] = useState('dashboard');
@@ -15,13 +16,15 @@ const SuperAdmin = () => {
     const renderView = () => {
         switch (activeView) {
             case 'dashboard':
-                return <DashboardView />;
+                return <DashboardView setActiveView={setActiveView} />;
             case 'approvals':
                 return <AccountApprovalsView />;
             case 'agencies':
                 return <AgenciesView />;
             case 'direct-clients':
                 return <DirectClientsView />;
+            case 'support':
+                return <SupportInboxView />;
             case 'system-health':
                 return <SystemHealthView />;
             case 'audit-logs':

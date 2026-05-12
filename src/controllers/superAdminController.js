@@ -231,17 +231,26 @@ const getAllCompanies = async (req, res) => {
             {
                 $addFields: {
                     agentsCount: { $size: '$_agents' },
-                    leadsCount: { $ifNull: [{ $arrayElemAt: ['$_leadCount.count', 0] }, 0] }
+                    leadsCount: { $ifNull: [{ $arrayElemAt: ['$_leadCount.count', 0] }, 0] },
+                    // Derived flags for frontend — `accountStatus` is the source of truth.
+                    // Suspended = SuperAdmin freeze; Frozen = Agency freeze.
+                    isFrozen:    { $in: ['$accountStatus', ['Frozen', 'Suspended']] },
+                    isSuspended: { $eq: ['$accountStatus', 'Suspended'] }
                 }
             },
             { $project: { _agents: 0, _leadCount: 0 } }
         ]);
 
-        // Flatten workspace settings for frontend compatibility
-        const companiesWithStats = companies.map(company => ({
-            ...company,
-            ...(company.workspace || {})
-        }));
+        // Flatten workspace settings for frontend compatibility, but preserve top-level
+        // derived flags (isFrozen / isSuspended / accountStatus) — workspace.accountStatus
+        // can shadow user.accountStatus and break freeze toggles.
+        const companiesWithStats = companies.map(company => {
+            const { workspace, ...userFields } = company;
+            return {
+                ...(workspace || {}),
+                ...userFields // user fields take precedence over workspace fields
+            };
+        });
 
         res.json({
             success: true,
@@ -350,7 +359,13 @@ const updateCompany = async (req, res) => {
     }
 };
 
-// Delete company (and all its agents and leads)
+// Delete company (and all its agents, leads, and — if it's an agency — every sub-client too).
+//
+// Cascade rules:
+//   - Direct client (manager, no parentId): delete the company + its agents + owned data.
+//   - Agency: delete the agency + its agents + every sub-client manager under it
+//     + each sub-client's agents + each sub-client's owned data.
+// This prevents orphaned sub-clients (a manager whose parentId points at a deleted agency).
 const deleteCompany = async (req, res) => {
     try {
         const { id } = req.params;
@@ -360,35 +375,137 @@ const deleteCompany = async (req, res) => {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        const agents = await User.find({ parentId: id, role: 'agent' });
-        const agentIds = agents.map(a => a._id);
-        const allUserIds = [id, ...agentIds];
+        // Build list of every "company" to wipe — main + sub-clients (only if agency)
+        const companiesToWipe = [id];
+        let subClientIds = [];
+        if (company.role === 'agency') {
+            const subClients = await User.find({ parentId: id, role: 'manager' }).select('_id').lean();
+            subClientIds = subClients.map(c => c._id);
+            companiesToWipe.push(...subClientIds);
+        }
 
-        await Promise.all([
-            deleteOwnedRecords(allUserIds, { companyId: id }),
-            User.deleteMany({ parentId: id, role: 'agent' })
-        ]);
+        // Per-company cleanup: each tenant gets its agents and owned records wiped
+        // with the right `companyId` scope so ActivityLog rows are properly removed.
+        let totalAgentsDeleted = 0;
+        for (const companyId of companiesToWipe) {
+            const agents = await User.find({ parentId: companyId, role: 'agent' }).select('_id').lean();
+            const agentIds = agents.map(a => a._id);
+            totalAgentsDeleted += agentIds.length;
 
-        // Delete the company manager
+            await deleteOwnedRecords([companyId, ...agentIds], { companyId });
+            if (agentIds.length > 0) {
+                await User.deleteMany({ _id: { $in: agentIds } });
+            }
+        }
+
+        // Delete sub-client user docs (their data is already wiped above)
+        if (subClientIds.length > 0) {
+            await User.deleteMany({ _id: { $in: subClientIds } });
+        }
+
+        // Finally delete the company/agency itself
         await User.findByIdAndDelete(id);
 
         auditLogger.log({
             actor: req.user,
             actionCategory: 'COMPANY_MANAGEMENT',
-            action: 'COMPANY_DELETED',
+            action: company.role === 'agency' ? 'AGENCY_DELETED_CASCADE' : 'COMPANY_DELETED',
             targetType: 'Company',
             targetId: id,
             targetName: company.companyName || company.email,
+            details: {
+                role: company.role,
+                subClientsDeleted: subClientIds.length,
+                agentsDeleted: totalAgentsDeleted
+            },
+            req
+        });
+
+        const summary = company.role === 'agency' && subClientIds.length > 0
+            ? `Agency deleted along with ${subClientIds.length} sub-client${subClientIds.length === 1 ? '' : 's'} and ${totalAgentsDeleted} agent${totalAgentsDeleted === 1 ? '' : 's'}.`
+            : `Company deleted along with ${totalAgentsDeleted} agent${totalAgentsDeleted === 1 ? '' : 's'} and all associated data.`;
+
+        res.json({
+            success: true,
+            message: summary,
+            cascade: {
+                subClientsDeleted: subClientIds.length,
+                agentsDeleted: totalAgentsDeleted
+            }
+        });
+    } catch (error) {
+        console.error("Delete Company Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// ==========================================
+// 🧹 ORPHAN CLEANUP
+// ==========================================
+// Find managers whose parentId points to a User that no longer exists
+// (left over when an agency is deleted before this cascade-delete fix existed).
+// Wipes them and all their data using the same per-tenant cleanup as deleteCompany.
+const cleanupOrphanedAccounts = async (req, res) => {
+    try {
+        // Find all sub-clients (managers with a parentId)
+        const subClients = await User.find({ role: 'manager', parentId: { $ne: null } })
+            .select('_id companyName email parentId')
+            .lean();
+
+        if (subClients.length === 0) {
+            return res.json({ success: true, deleted: 0, message: 'No orphan accounts to clean up.' });
+        }
+
+        // Batch-look up parents that exist
+        const parentIds = subClients.map(c => c.parentId);
+        const existingParents = await User.find({ _id: { $in: parentIds } }).select('_id').lean();
+        const existingParentIds = new Set(existingParents.map(p => p._id.toString()));
+
+        // Orphans = sub-clients whose parent ID isn't in the existing set
+        const orphans = subClients.filter(c => !existingParentIds.has(c.parentId.toString()));
+
+        if (orphans.length === 0) {
+            return res.json({ success: true, deleted: 0, message: 'No orphan accounts to clean up.' });
+        }
+
+        // Wipe each orphan with full per-tenant cleanup
+        let totalAgentsDeleted = 0;
+        const wipedNames = [];
+        for (const orphan of orphans) {
+            const agents = await User.find({ parentId: orphan._id, role: 'agent' }).select('_id').lean();
+            const agentIds = agents.map(a => a._id);
+            totalAgentsDeleted += agentIds.length;
+
+            await deleteOwnedRecords([orphan._id, ...agentIds], { companyId: orphan._id });
+            if (agentIds.length > 0) {
+                await User.deleteMany({ _id: { $in: agentIds } });
+            }
+            await User.findByIdAndDelete(orphan._id);
+            wipedNames.push(orphan.companyName || orphan.email);
+        }
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'COMPANY_MANAGEMENT',
+            action: 'ORPHAN_CLEANUP',
+            details: {
+                deletedAccounts: orphans.length,
+                deletedAgents: totalAgentsDeleted,
+                names: wipedNames
+            },
             req
         });
 
         res.json({
             success: true,
-            message: "Company and all associated data deleted successfully"
+            deleted: orphans.length,
+            agentsDeleted: totalAgentsDeleted,
+            names: wipedNames,
+            message: `Removed ${orphans.length} orphan account${orphans.length === 1 ? '' : 's'} and ${totalAgentsDeleted} associated agent${totalAgentsDeleted === 1 ? '' : 's'}.`
         });
     } catch (error) {
-        console.error("Delete Company Error:", error);
-        res.status(500).json({ message: "Server Error" });
+        console.error('Orphan Cleanup Error:', error);
+        res.status(500).json({ message: 'Failed to clean up orphan accounts.' });
     }
 };
 
@@ -650,23 +767,120 @@ const updateAgentLimit = async (req, res) => {
 // Billing tracking removed
 
 // Get dashboard stats (for frontend dashboard)
+//
+// Rich metrics covering platform health from a SuperAdmin's perspective.
+// Replaces the previous `activeSubscriptions` query which was buggy
+// (looked for `'Active'` but the schema enum stores lowercase `'active'`).
 const getDashboardStats = async (req, res) => {
     try {
-        const [totalCompanies, totalLeads, totalAgents] = await Promise.all([
-            User.countDocuments({ role: { $in: ['manager', 'agency'] } }),
+        const SupportTicket = require('../models/SupportTicket');
+        const WhatsAppLog = require('../models/WhatsAppLog');
+
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const weekStart  = new Date(); weekStart.setDate(weekStart.getDate() - 7);
+
+        // 🧮 Math invariants (must hold for the dashboard breakdown to add up):
+        //   totalCompanies = totalAgencies + totalDirectClients + totalSubClients
+        //   totalCompanies = approvedAccounts + pendingApprovals + rejectedAccounts + deactivatedAccounts
+        //
+        // `approvedAccounts` = approved AND currently active. `deactivatedAccounts` covers
+        // approved-but-disabled accounts plus any legacy rows whose status was never set
+        // (e.g. accounts created before the approval-based system existed).
+        const COMPANY_FILTER = { role: { $in: ['manager', 'agency'] } };
+
+        const [
+            totalCompanies,
+            totalAgencies,
+            totalDirectClients,
+            totalSubClients,
+            totalAgents,
+            totalLeads,
+            approvedAccounts,
+            pendingApprovals,
+            rejectedAccounts,
+            frozenAccounts,
+            suspendedAccounts,
+            newSignupsToday,
+            newSignupsThisWeek,
+            leadsToday,
+            leadsThisWeek,
+            whatsappToday,
+            emailsToday,
+            openSupportTickets,
+            orphanedAccounts
+        ] = await Promise.all([
+            User.countDocuments(COMPANY_FILTER),
+            User.countDocuments({ role: 'agency' }),
+            User.countDocuments({ role: 'manager', parentId: null }),
+            User.countDocuments({ role: 'manager', parentId: { $ne: null } }),
+            User.countDocuments({ role: 'agent' }),
             Lead.countDocuments(),
-            User.countDocuments({ role: 'agent' })
+            User.countDocuments({ ...COMPANY_FILTER, status: 'approved', is_active: true }),
+            User.countDocuments({ ...COMPANY_FILTER, status: 'pending' }),
+            User.countDocuments({ ...COMPANY_FILTER, status: 'rejected' }),
+            User.countDocuments({ ...COMPANY_FILTER, accountStatus: 'Frozen' }),
+            User.countDocuments({ ...COMPANY_FILTER, accountStatus: 'Suspended' }),
+            User.countDocuments({ ...COMPANY_FILTER, createdAt: { $gte: todayStart } }),
+            User.countDocuments({ ...COMPANY_FILTER, createdAt: { $gte: weekStart } }),
+            Lead.countDocuments({ createdAt: { $gte: todayStart } }),
+            Lead.countDocuments({ createdAt: { $gte: weekStart } }),
+            WhatsAppLog.countDocuments({ createdAt: { $gte: todayStart } }).catch(() => 0),
+            EmailLog.countDocuments({ createdAt: { $gte: todayStart } }).catch(() => 0),
+            SupportTicket.countDocuments({ status: { $in: ['open', 'user_replied'] } }).catch(() => 0),
+            // Orphans: managers whose parentId points to a User row that no longer exists.
+            // Single-aggregation approach via $lookup so we don't N+1 the DB.
+            User.aggregate([
+                { $match: { role: 'manager', parentId: { $ne: null } } },
+                { $lookup: { from: 'users', localField: 'parentId', foreignField: '_id', as: '_parent' } },
+                { $match: { _parent: { $size: 0 } } },
+                { $count: 'count' }
+            ]).then(r => r[0]?.count || 0).catch(() => 0)
         ]);
 
-        const activeSubscriptions = await WorkspaceSettings.countDocuments({
-            subscriptionStatus: 'Active'
-        });
+        // Whatever isn't in one of the three named buckets ends up here.
+        // Most commonly: approved-but-deactivated accounts, or legacy rows missing the
+        // status field. Surfacing this prevents silent under-count on the UI.
+        const deactivatedAccounts = Math.max(
+            0,
+            totalCompanies - approvedAccounts - pendingApprovals - rejectedAccounts
+        );
 
         res.json({
+            // Headline counts (totalCompanies = agencies + direct + sub)
             totalCompanies,
-            totalLeads,
+            totalAgencies,
+            totalDirectClients,
+            totalSubClients,
             totalAgents,
-            activeSubscriptions
+            totalLeads,
+
+            // Approval-state counts (replaces buggy activeSubscriptions)
+            // These four sum to totalCompanies.
+            approvedAccounts,
+            pendingApprovals,
+            rejectedAccounts,
+            deactivatedAccounts,
+
+            // Lifecycle states (orthogonal to approval status)
+            frozenAccounts,
+            suspendedAccounts,
+
+            // Orphans — sub-clients whose parent agency was deleted
+            orphanedAccounts,
+
+            // Activity (today + this week)
+            newSignupsToday,
+            newSignupsThisWeek,
+            leadsToday,
+            leadsThisWeek,
+            whatsappToday,
+            emailsToday,
+
+            // Support
+            openSupportTickets,
+
+            // Backwards-compat for any frontend still reading this
+            activeSubscriptions: approvedAccounts
         });
     } catch (error) {
         console.error("Dashboard Stats Error:", error);
@@ -1384,25 +1598,47 @@ const getWorkspaceAnalytics = async (req, res) => {
 
 // @desc  Get all accounts pending Super Admin approval
 // @route GET /api/superadmin/accounts/pending
+//
+// Returns each pending account joined with its WorkspaceSettings so the admin
+// can see exactly what the agency requested (modules, limits, sub-permissions)
+// before approving.
 const getPendingRequests = async (req, res) => {
     try {
-        const accounts = await User.find({
-            role: { $in: ['manager', 'agency'] },
-            status: 'pending'
-        })
-            .select('-password')
-            .sort({ createdAt: -1 })
-            .lean();
+        const accounts = await User.aggregate([
+            { $match: { role: { $in: ['manager', 'agency'] }, status: 'pending' } },
+            {
+                $lookup: {
+                    from: 'workspacesettings',
+                    localField: '_id',
+                    foreignField: 'userId',
+                    as: 'workspace'
+                }
+            },
+            { $unwind: { path: '$workspace', preserveNullAndEmptyArrays: true } },
+            { $sort: { createdAt: -1 } },
+            { $project: { password: 0 } }
+        ]);
 
-        // Enrich with agency name if sub-client
-        const enriched = await Promise.all(accounts.map(async (acc) => {
+        const parentIds = [...new Set(accounts.filter(a => a.parentId).map(a => a.parentId.toString()))];
+        const agencies = parentIds.length > 0
+            ? await User.find({ _id: { $in: parentIds } }).select('companyName name email').lean()
+            : [];
+        const agencyMap = {};
+        agencies.forEach(a => { agencyMap[a._id.toString()] = a; });
+
+        const enriched = accounts.map(acc => {
             if (acc.parentId) {
-                const agency = await User.findById(acc.parentId).select('companyName name email').lean();
+                const agency = agencyMap[acc.parentId.toString()];
                 acc.agencyName = agency?.companyName || agency?.name || 'Unknown Agency';
                 acc.agencyEmail = agency?.email;
             }
+            // Surface requested config at top level for easy frontend consumption
+            acc.requestedActiveModules = acc.workspace?.activeModules || [];
+            acc.requestedAgentLimit = acc.workspace?.agentLimit || acc.workspace?.planFeatures?.agentLimit || 5;
+            acc.requestedLeadLimit = acc.workspace?.planFeatures?.leadLimit || 100;
+            acc.requestedPlanFeatures = acc.workspace?.planFeatures || {};
             return acc;
-        }));
+        });
 
         res.json({ success: true, accounts: enriched, total: enriched.length });
     } catch (error) {
@@ -1490,9 +1726,19 @@ const getRejectedAccounts = async (req, res) => {
 
 // @desc  Approve an account — sets it live and usable
 // @route PUT /api/superadmin/accounts/:id/approve
+//
+// Optional body (admin overrides — applied on top of what the agency requested):
+//   activeModules: string[]
+//   leadLimit: number
+//   agentLimit: number
+//   planFeatures: object  — sub-permissions (aiChatbot, webhooks, etc.)
+//
+// If no overrides are sent, the existing WorkspaceSettings (set during create) is preserved
+// — i.e. the agency-requested config goes live as-is.
 const approveAccount = async (req, res) => {
     try {
         const { id } = req.params;
+        const { activeModules, leadLimit, agentLimit, planFeatures } = req.body || {};
 
         const user = await User.findOneAndUpdate(
             { _id: id, role: { $in: ['manager', 'agency'] } },
@@ -1509,18 +1755,47 @@ const approveAccount = async (req, res) => {
 
         if (!user) return res.status(404).json({ message: 'Account not found' });
 
-        // Also ensure WorkspaceSettings exists
-        await WorkspaceSettings.findOneAndUpdate(
-            { userId: id },
-            {
-                $setOnInsert: {
-                    userId: id,
-                    activeModules: ['leads', 'team', 'reports', 'email', 'whatsapp', 'settings'],
-                    agentLimit: 5
+        // Build override set — only include fields the admin actually sent
+        const workspaceSet = {};
+        if (Array.isArray(activeModules)) workspaceSet.activeModules = activeModules;
+        if (leadLimit !== undefined) workspaceSet['planFeatures.leadLimit'] = parseInt(leadLimit, 10);
+        if (agentLimit !== undefined) workspaceSet.agentLimit = parseInt(agentLimit, 10);
+
+        // Sub-permissions: only honor known keys
+        const SUB_PERMISSION_KEYS = [
+            'aiChatbot', 'whatsappAutomation', 'emailAutomation', 'metaSync',
+            'campaigns', 'advancedAnalytics', 'webhooks', 'agentCreation'
+        ];
+        if (planFeatures && typeof planFeatures === 'object') {
+            for (const key of SUB_PERMISSION_KEYS) {
+                if (planFeatures[key] !== undefined) {
+                    workspaceSet[`planFeatures.${key}`] = !!planFeatures[key];
                 }
-            },
-            { upsert: true }
-        );
+            }
+        }
+
+        // If admin sent overrides, apply them. If not, leave WorkspaceSettings untouched
+        // (the agency-requested config from createClient stays in place).
+        if (Object.keys(workspaceSet).length > 0) {
+            await WorkspaceSettings.findOneAndUpdate(
+                { userId: id },
+                { $set: workspaceSet },
+                { upsert: true, setDefaultsOnInsert: true }
+            );
+        } else {
+            // Safety: ensure a WorkspaceSettings row exists with sane defaults if somehow missing
+            await WorkspaceSettings.findOneAndUpdate(
+                { userId: id },
+                {
+                    $setOnInsert: {
+                        userId: id,
+                        activeModules: ['leads', 'team', 'reports', 'settings'],
+                        agentLimit: 5
+                    }
+                },
+                { upsert: true }
+            );
+        }
 
         auditLogger.log({
             actor: req.user,
@@ -1529,6 +1804,7 @@ const approveAccount = async (req, res) => {
             targetType: 'User',
             targetId: user._id,
             targetName: user.companyName || user.name,
+            details: Object.keys(workspaceSet).length > 0 ? { overrides: workspaceSet } : undefined,
             req
         });
 
@@ -1651,5 +1927,7 @@ module.exports = {
     getRejectedAccounts,
     approveAccount,
     rejectAccount,
-    deactivateAccount
+    deactivateAccount,
+    // 🧹 Maintenance
+    cleanupOrphanedAccounts
 };

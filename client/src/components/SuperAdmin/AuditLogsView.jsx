@@ -46,21 +46,27 @@ const AuditLogsView = () => {
 
     const getCategoryBadge = (cat) => {
         switch (cat) {
-            case 'SECURITY': return 'bg-red-100 text-red-700 border-red-200';
-            case 'BILLING': return 'bg-green-100 text-green-700 border-green-200';
-            case 'IMPERSONATION': return 'bg-purple-100 text-purple-700 border-purple-200';
+            case 'SECURITY':           return 'bg-red-100 text-red-700 border-red-200';
+            case 'BILLING':            return 'bg-green-100 text-green-700 border-green-200';
+            case 'IMPERSONATION':      return 'bg-purple-100 text-purple-700 border-purple-200';
             case 'COMPANY_MANAGEMENT': return 'bg-orange-100 text-orange-700 border-orange-200';
-            default: return 'bg-blue-100 text-blue-700 border-blue-200'; // SYSTEM
+            case 'AGENCY_MANAGEMENT':  return 'bg-indigo-100 text-indigo-700 border-indigo-200';
+            case 'ACCOUNT_MANAGEMENT': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+            case 'SUPERADMIN_ACTION':  return 'bg-rose-100 text-rose-700 border-rose-200';
+            default:                   return 'bg-blue-100 text-blue-700 border-blue-200'; // SYSTEM
         }
     };
 
     const getCategoryIcon = (cat) => {
         switch (cat) {
-            case 'SECURITY': return 'fa-shield-halved';
-            case 'BILLING': return 'fa-credit-card';
-            case 'IMPERSONATION': return 'fa-user-secret';
+            case 'SECURITY':           return 'fa-shield-halved';
+            case 'BILLING':            return 'fa-credit-card';
+            case 'IMPERSONATION':      return 'fa-user-secret';
             case 'COMPANY_MANAGEMENT': return 'fa-building';
-            default: return 'fa-server';
+            case 'AGENCY_MANAGEMENT':  return 'fa-network-wired';
+            case 'ACCOUNT_MANAGEMENT': return 'fa-user-check';
+            case 'SUPERADMIN_ACTION':  return 'fa-crown';
+            default:                   return 'fa-server';
         }
     };
 
@@ -103,9 +109,12 @@ const AuditLogsView = () => {
                     >
                         <option value="">All Event Categories</option>
                         <option value="SECURITY">Security Alerts</option>
-                        <option value="BILLING">Billing Changes</option>
+                        <option value="ACCOUNT_MANAGEMENT">Account Approvals</option>
+                        <option value="AGENCY_MANAGEMENT">Agency Activity</option>
+                        <option value="SUPERADMIN_ACTION">Super Admin Actions</option>
                         <option value="IMPERSONATION">Impersonation Logs</option>
                         <option value="COMPANY_MANAGEMENT">Company Management</option>
+                        <option value="BILLING">Billing Changes</option>
                         <option value="SYSTEM">System Events</option>
                     </select>
                 </div>

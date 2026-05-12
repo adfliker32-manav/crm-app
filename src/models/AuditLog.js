@@ -19,7 +19,16 @@ const auditLogSchema = new mongoose.Schema({
     // Action Category & Specific Event
     actionCategory: {
         type: String,
-        enum: ['SECURITY', 'BILLING', 'SYSTEM', 'IMPERSONATION', 'COMPANY_MANAGEMENT'],
+        enum: [
+            'SECURITY',
+            'BILLING',
+            'SYSTEM',
+            'IMPERSONATION',
+            'COMPANY_MANAGEMENT',
+            'AGENCY_MANAGEMENT',   // Agency creates/freezes/impersonates clients
+            'ACCOUNT_MANAGEMENT',  // SuperAdmin approves/rejects/deactivates accounts
+            'SUPERADMIN_ACTION'    // SuperAdmin governance actions (e.g. limits)
+        ],
         required: true
     },
     action: {

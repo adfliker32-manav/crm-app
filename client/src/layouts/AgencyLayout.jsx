@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import AgencySidebar from '../components/AgencySidebar';
+import SupportWidget from '../components/Support/SupportWidget';
 
 const AgencyLayout = () => {
     useEffect(() => {
@@ -29,6 +30,7 @@ const AgencyLayout = () => {
                     <Outlet />
                 </main>
             </div>
+            <SupportWidget />
         </div>
     );
 };

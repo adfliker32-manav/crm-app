@@ -169,6 +169,51 @@ const getAgencyAnalytics = async (req, res) => {
         const statsResult = analyticsData[0]?.stats[0] || { totalClients: 0, activeClients: 0, pendingClients: 0, approvedClients: 0 };
         const recentSignups = analyticsData[0]?.recentSignups || [];
 
+        // Compute "this week" delta — was previously hardcoded to "2" in the UI.
+        const oneWeekAgo = new Date();
+        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        const newClientsThisWeek = await User.countDocuments({
+            parentId: new mongoose.Types.ObjectId(agencyId),
+            role: 'manager',
+            createdAt: { $gte: oneWeekAgo }
+        });
+
+        // Agency's own workspace config — needed by the Create Client modal to know
+        // which modules / sub-permissions can be granted (inheritance).
+        const agencyWorkspace = await WorkspaceSettings.findOne({ userId: agencyId })
+            .select('activeModules planFeatures agentLimit')
+            .lean();
+
+        // 30-day growth chart data (signup count per day)
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const growthAgg = await User.aggregate([
+            {
+                $match: {
+                    parentId: new mongoose.Types.ObjectId(agencyId),
+                    role: 'manager',
+                    createdAt: { $gte: thirtyDaysAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        const growthMap = {};
+        growthAgg.forEach(g => { growthMap[g._id] = g.count; });
+        const growthLabels = [];
+        const growthCounts = [];
+        for (let i = 29; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            const iso = d.toISOString().split('T')[0];
+            growthLabels.push(d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+            growthCounts.push(growthMap[iso] || 0);
+        }
+
         res.status(200).json({
             success: true,
             stats: {
@@ -176,7 +221,17 @@ const getAgencyAnalytics = async (req, res) => {
                 activeClients: statsResult.activeClients,
                 pendingClients: statsResult.pendingClients,
                 approvedClients: statsResult.approvedClients,
+                newClientsThisWeek,
                 recentSignups
+            },
+            agencyWorkspace: {
+                activeModules: agencyWorkspace?.activeModules || [],
+                planFeatures: agencyWorkspace?.planFeatures || {},
+                agentLimit: agencyWorkspace?.agentLimit || 5
+            },
+            growth: {
+                labels: growthLabels,
+                signups: growthCounts
             }
         });
     } catch (error) {
@@ -242,10 +297,31 @@ const toggleClientFreeze = async (req, res) => {
 // @desc    Agency creates a client account — goes to PENDING until Super Admin approves
 // @route   POST /api/agency/clients
 // @access  Private (Agency Only)
+//
+// Body accepts:
+//   companyName, adminEmail, adminName, phone, password (required-ish)
+//   activeModules: string[]   — modules the agency wants to grant (filtered by inheritance)
+//   leadLimit: number         — monthly lead limit
+//   agentLimit: number        — agent seat limit
+//   planFeatures: object      — sub-permissions (e.g. { aiChatbot: true, webhooks: false })
+//
+// Anything the agency requests is stored on the WorkspaceSettings document so that
+// the Super Admin sees exactly what was asked for during approval, and can override
+// before going live.
 const createClient = async (req, res) => {
     try {
         const agencyId = req.user.userId || req.user.id;
-        const { companyName, adminEmail, adminName, phone, password } = req.body;
+        const {
+            companyName,
+            adminEmail,
+            adminName,
+            phone,
+            password,
+            activeModules,
+            leadLimit,
+            agentLimit,
+            planFeatures
+        } = req.body;
 
         if (!companyName || !adminEmail) {
             return res.status(400).json({ message: 'Company name and admin email are required.' });
@@ -257,9 +333,65 @@ const createClient = async (req, res) => {
             return res.status(409).json({ message: 'An account with this email already exists.' });
         }
 
-        // 2. Generate password (use provided or auto-generate)
+        // 2. 🔐 SECURITY: Module inheritance — agency can only request modules they own
+        const agencyWorkspace = await WorkspaceSettings.findOne({ userId: agencyId })
+            .select('activeModules planFeatures')
+            .lean();
+        const allowedModules = agencyWorkspace?.activeModules || [];
+
+        let requestedModules = Array.isArray(activeModules) && activeModules.length > 0
+            ? activeModules.filter(m => typeof m === 'string')
+            : ['leads', 'team', 'reports', 'settings']; // sensible minimal default
+
+        const unauthorized = requestedModules.filter(m => !allowedModules.includes(m));
+        if (unauthorized.length > 0) {
+            return res.status(403).json({
+                success: false,
+                error: 'module_locked',
+                message: `You cannot grant modules you don't own: ${unauthorized.join(', ')}`
+            });
+        }
+
+        // 3. Generate password (use provided or auto-generate)
         const rawPassword = password || crypto.randomBytes(5).toString('hex');
-        // 3. Create sub-client with PENDING status — requires Super Admin approval
+
+        // 4. Resolve limits & sub-permissions (with safe bounds)
+        const resolvedLeadLimit = Math.max(0, parseInt(leadLimit, 10) || 100);
+        const resolvedAgentLimit = Math.max(1, parseInt(agentLimit, 10) || 2);
+
+        // Sub-permissions: only honor known boolean flags so we don't accept arbitrary input.
+        // Agency cannot grant a sub-permission they themselves don't have.
+        const SUB_PERMISSION_KEYS = [
+            'aiChatbot',
+            'whatsappAutomation',
+            'emailAutomation',
+            'metaSync',
+            'campaigns',
+            'advancedAnalytics',
+            'webhooks',
+            'agentCreation'
+        ];
+        const resolvedPlanFeatures = {};
+        if (planFeatures && typeof planFeatures === 'object') {
+            for (const key of SUB_PERMISSION_KEYS) {
+                if (planFeatures[key] === undefined) continue;
+                const requested = !!planFeatures[key];
+                // Inheritance: agency can only enable what they themselves have enabled
+                const agencyHas = agencyWorkspace?.planFeatures?.[key];
+                if (requested && agencyHas === false) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'feature_locked',
+                        message: `You cannot grant the "${key}" feature — you don't have it yourself.`
+                    });
+                }
+                resolvedPlanFeatures[key] = requested;
+            }
+        }
+        resolvedPlanFeatures.leadLimit = resolvedLeadLimit;
+        resolvedPlanFeatures.agentLimit = resolvedAgentLimit;
+
+        // 5. Create sub-client with PENDING status — requires Super Admin approval
         const newClient = await User.create({
             name: adminName || companyName,
             email: adminEmail.toLowerCase().trim(),
@@ -277,18 +409,19 @@ const createClient = async (req, res) => {
             status: 'pending'
         });
 
-        // 4. Initialize Workspace
+        // 6. Initialize Workspace with the AGENCY-REQUESTED config (not hardcoded defaults).
+        // The Super Admin will see this on the approval card and can override before approving.
         await WorkspaceSettings.create({
             userId: newClient._id,
-            activeModules: ['leads', 'team', 'reports', 'settings'], // Minimal defaults
-            agentLimit: 2, // Minimal initial limit
-            'planFeatures.leadLimit': 100 // Minimal initial limit
+            activeModules: requestedModules,
+            agentLimit: resolvedAgentLimit,
+            planFeatures: resolvedPlanFeatures
         });
 
         await IntegrationConfig.create({ userId: newClient._id });
         await AgencySettings.create({ agencyId: newClient._id });
 
-        // 5. Audit log
+        // 7. Audit log
         auditLogger.log({
             actor: req.user,
             actionCategory: 'AGENCY_MANAGEMENT',
@@ -296,7 +429,15 @@ const createClient = async (req, res) => {
             targetType: 'Client',
             targetId: newClient._id,
             targetName: newClient.companyName,
-            details: { agencyId, adminEmail, status: 'pending' },
+            details: {
+                agencyId,
+                adminEmail,
+                status: 'pending',
+                requestedModules,
+                requestedLeadLimit: resolvedLeadLimit,
+                requestedAgentLimit: resolvedAgentLimit,
+                requestedFeatures: resolvedPlanFeatures
+            },
             req
         });
 
@@ -309,7 +450,10 @@ const createClient = async (req, res) => {
                 email: newClient.email,
                 status: 'pending',
                 is_active: false,
-                approved_by_admin: false
+                approved_by_admin: false,
+                activeModules: requestedModules,
+                agentLimit: resolvedAgentLimit,
+                planFeatures: resolvedPlanFeatures
             },
             credentials: { email: adminEmail, tempPassword: rawPassword }
         });

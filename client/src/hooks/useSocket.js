@@ -42,7 +42,7 @@ const useSocket = () => {
             const url = getSocketUrl();
             socketInstance = io(url, {
                 auth: { token },
-                transports: ['websocket', 'polling'],
+                transports: ['polling', 'websocket'], // Default order: polling first, then upgrade
                 reconnection: true,
                 reconnectionAttempts: Infinity,
                 reconnectionDelay: 1000,
