@@ -14,7 +14,20 @@ const TemplateAutomationCard = ({ template, setTemplate, stages }) => {
                     Intelligent Automation
                 </h3>
                 <button
-                    onClick={() => setTemplate(prev => ({ ...prev, isAutomated: !prev.isAutomated }))}
+                    onClick={() => setTemplate(prev => {
+                        const nextIsAutomated = !prev.isAutomated;
+                        // FIX: When enabling automation, if triggerType is 'manual' (the default),
+                        // change it to 'on_lead_create' so the state matches the visual dropdown.
+                        const nextTriggerType = (nextIsAutomated && prev.triggerType === 'manual') 
+                            ? 'on_lead_create' 
+                            : prev.triggerType;
+                            
+                        return { 
+                            ...prev, 
+                            isAutomated: nextIsAutomated,
+                            triggerType: nextTriggerType
+                        };
+                    })}
                     className={`w-12 h-6 rounded-full transition-all duration-300 relative ${template.isAutomated ? 'bg-purple-600' : 'bg-slate-200 shadow-inner'}`}
                 >
                     <div className={`w-5 h-5 bg-white rounded-full shadow-md absolute top-0.5 transition-all duration-300 transform ${template.isAutomated ? 'translate-x-[1.6rem]' : 'translate-x-0.5'}`}></div>
