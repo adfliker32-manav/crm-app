@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const axios = require('axios');
 
@@ -277,11 +278,15 @@ const getStatus = async (req, res) => {
             .select('+meta.metaAccessToken meta.metaTokenExpiry meta.metaPageId meta.metaPageName meta.metaFormId meta.metaFormName meta.metaLeadSyncEnabled meta.metaLastSyncAt');
 
         const meta = config?.meta || {};
-        const isConnected = !!meta.metaAccessToken && new Date(meta.metaTokenExpiry) > new Date();
+        const hasToken = !!meta.metaAccessToken;
+        const tokenExpired = hasToken && meta.metaTokenExpiry && new Date(meta.metaTokenExpiry) <= new Date();
+        // Keep "connected" true even for expired tokens so the UI can show a reconnect warning
+        const isConnected = hasToken;
 
         res.json({
             success: true,
             connected: isConnected,
+            tokenExpired: tokenExpired || false,
             pageId: meta.metaPageId,
             pageName: meta.metaPageName,
             formId: meta.metaFormId,
@@ -417,18 +422,22 @@ const getPages = async (req, res) => {
             console.log(`   ⚠️  Could not read /me/permissions:`, e.response?.data?.error?.message || e.message);
         }
 
-        // Helper: fetch all pages from a paginated endpoint
+        // Helper: fetch all pages from a paginated endpoint (capped at 20 pages to prevent runaway loops)
+        const MAX_PAGINATION_PAGES = 20;
         const fetchAllPages = async (url, params = {}) => {
             const results = [];
             const first = await axios.get(url, { params: { ...params, limit: 100 }, timeout: META_API_TIMEOUT });
             results.push(...(first.data.data || []));
             let next = first.data.paging?.next || null;
             let pageNum = 1;
-            while (next) {
+            while (next && pageNum < MAX_PAGINATION_PAGES) {
                 pageNum++;
-                const res = await axios.get(next, { timeout: META_API_TIMEOUT });
-                results.push(...(res.data.data || []));
-                next = res.data.paging?.next || null;
+                const pageRes = await axios.get(next, { timeout: META_API_TIMEOUT });
+                results.push(...(pageRes.data.data || []));
+                next = pageRes.data.paging?.next || null;
+            }
+            if (pageNum >= MAX_PAGINATION_PAGES && next) {
+                console.warn(`     ⚠️ fetchAllPages: hit ${MAX_PAGINATION_PAGES}-page cap for ${url} — some results may be truncated`);
             }
             if (pageNum > 1) console.log(`     (paginated ${pageNum} pages of results from ${url})`);
             return results;
@@ -479,10 +488,10 @@ const getPages = async (req, res) => {
             console.log(`   ℹ️  /me/businesses failed → BM pages skipped: ${bizErr.response?.data?.error?.message || bizErr.message}`);
         }
 
+        // Never send page access tokens to the frontend — derive server-side on connect()
         const pages = allPages.map(page => ({
             id: page.id,
-            name: page.name,
-            accessToken: page.access_token
+            name: page.name
         }));
 
         console.log(`   ✅ Total unique pages returned: ${pages.length}`);
@@ -513,62 +522,120 @@ const getForms = async (req, res) => {
 
         // Auto-refresh token if expiring soon
         const meta = await checkAndRefreshToken(ownerId, config.meta);
+        const userToken = meta.metaAccessToken;
 
-        // First get page access token
-        const pagesResponse = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
-            params: { access_token: meta.metaAccessToken, fields: 'id,access_token' },
-            timeout: META_API_TIMEOUT
-        });
-
-        const page = pagesResponse.data.data.find(p => p.id === pageId);
-        if (!page) {
-            return res.status(404).json({ success: false, message: 'Page not found' });
+        // Source 1: direct admin pages via /me/accounts (pages_show_list scope)
+        let pageAccessToken = null;
+        try {
+            const accountsRes = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
+                params: { access_token: userToken, fields: 'id,access_token', limit: 100 },
+                timeout: META_API_TIMEOUT
+            });
+            const match = (accountsRes.data.data || []).find(p => p.id === pageId);
+            if (match) pageAccessToken = match.access_token;
+        } catch (e) {
+            console.warn('getForms: /me/accounts lookup failed:', e.response?.data?.error?.message || e.message);
         }
 
-        // Get lead forms using page token
+        // Source 2: derive page token directly from the user token (works for Business Manager pages)
+        if (!pageAccessToken) {
+            try {
+                const pageRes = await axios.get(`${META_GRAPH_URL}/${pageId}`, {
+                    params: { access_token: userToken, fields: 'access_token' },
+                    timeout: META_API_TIMEOUT
+                });
+                pageAccessToken = pageRes.data.access_token;
+            } catch (e) {
+                console.warn('getForms: direct page token derivation failed:', e.response?.data?.error?.message || e.message);
+            }
+        }
+
+        if (!pageAccessToken) {
+            return res.status(404).json({ success: false, message: 'Could not get access token for this page. Make sure you are an admin of this page and have granted the required permissions.' });
+        }
+
         const formsResponse = await axios.get(`${META_GRAPH_URL}/${pageId}/leadgen_forms`, {
-            params: { access_token: page.access_token, fields: 'id,name,status' },
+            params: { access_token: pageAccessToken, fields: 'id,name,status' },
             timeout: META_API_TIMEOUT
         });
 
-        const forms = formsResponse.data.data
+        const forms = (formsResponse.data.data || [])
             .filter(form => form.status === 'ACTIVE')
-            .map(form => ({
-                id: form.id,
-                name: form.name
-            }));
+            .map(form => ({ id: form.id, name: form.name }));
 
         res.json({ success: true, forms });
     } catch (error) {
-        console.error('❌ Meta getForms Error:', error.response?.data || error.message);
-        res.status(500).json({ success: false, message: 'Failed to fetch forms' });
+        const metaErr = error.response?.data?.error;
+        console.error('❌ Meta getForms Error:', metaErr || error.message);
+        if (metaErr?.code === 190 || error.response?.status === 401) {
+            return res.status(401).json({ success: false, message: 'Meta access token expired. Please reconnect your Facebook account.' });
+        }
+        res.status(500).json({ success: false, message: 'Failed to fetch lead forms. Please try again.' });
     }
 };
 
 // Save page and form selection, subscribe to webhook
 const connect = async (req, res) => {
     try {
-        const { pageId, pageName, pageAccessToken, formId, formName } = req.body;
+        // pageAccessToken is intentionally NOT accepted from the frontend — derived server-side below
+        const { pageId, pageName, formId, formName } = req.body;
 
-        if (!pageId || !formId) {
-            return res.status(400).json({ success: false, message: 'Page and Form are required' });
+        if (!pageId) {
+            return res.status(400).json({ success: false, message: 'Page is required' });
+        }
+
+        const tenantId = req.tenantId;
+        const isAnyForm = !formId; // null/undefined → capture leads from all forms on this page
+
+        // Derive the page access token server-side from the stored user token
+        const config = await IntegrationConfig.findOne({ userId: tenantId })
+            .select('+meta.metaAccessToken meta.metaTokenExpiry');
+
+        if (!config?.meta?.metaAccessToken) {
+            return res.status(400).json({ success: false, message: 'Not connected to Facebook. Please reconnect.' });
+        }
+
+        const meta = await checkAndRefreshToken(tenantId, config.meta);
+
+        // Try direct derivation first (works for both direct admin and BM pages)
+        let pageAccessToken = null;
+        try {
+            const pageRes = await axios.get(`${META_GRAPH_URL}/${pageId}`, {
+                params: { access_token: meta.metaAccessToken, fields: 'access_token' },
+                timeout: META_API_TIMEOUT
+            });
+            pageAccessToken = pageRes.data.access_token;
+        } catch (e) {
+            // Fallback: check /me/accounts
+            try {
+                const accountsRes = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
+                    params: { access_token: meta.metaAccessToken, fields: 'id,access_token', limit: 100 },
+                    timeout: META_API_TIMEOUT
+                });
+                const match = (accountsRes.data.data || []).find(p => p.id === pageId);
+                if (match) pageAccessToken = match.access_token;
+            } catch (e2) {
+                console.warn('connect: /me/accounts fallback failed:', e2.response?.data?.error?.message || e2.message);
+            }
+        }
+
+        if (!pageAccessToken) {
+            return res.status(400).json({ success: false, message: 'Could not get access token for this page. Make sure you are an admin of this page.' });
         }
 
         // Subscribe page to leadgen webhook
+        let webhookSubscribed = false;
         try {
             await axios.post(`${META_GRAPH_URL}/${pageId}/subscribed_apps`, null, {
                 params: { access_token: pageAccessToken, subscribed_fields: 'leadgen' },
                 timeout: META_API_TIMEOUT
             });
+            webhookSubscribed = true;
             console.log('✅ Subscribed to leadgen webhook for page:', pageId);
         } catch (subError) {
-            console.error('⚠️ Webhook subscription error:', subError.response?.data || subError.message);
-            // Continue anyway - manual subscription may be needed
+            console.error('⚠️ Webhook subscription error (manual setup may be needed):', subError.response?.data?.error?.message || subError.message);
         }
 
-        const tenantId = req.tenantId;
-
-        // Update configuration with selection
         await IntegrationConfig.findOneAndUpdate(
             { userId: tenantId },
             {
@@ -576,19 +643,51 @@ const connect = async (req, res) => {
                     'meta.metaPageId': pageId,
                     'meta.metaPageName': pageName,
                     'meta.metaPageAccessToken': pageAccessToken,
-                    'meta.metaFormId': formId,
-                    'meta.metaFormName': formName,
+                    'meta.metaFormId': isAnyForm ? null : formId,
+                    'meta.metaFormName': isAnyForm ? 'Any Form' : formName,
                     'meta.metaLeadSyncEnabled': true
                 }
             }
         );
 
-        console.log('✅ Meta Lead Sync configured for tenant:', tenantId);
-        res.json({ success: true, message: 'Meta Lead Sync enabled successfully!' });
+        const message = webhookSubscribed
+            ? 'Meta Lead Sync enabled successfully!'
+            : 'Meta Lead Sync enabled. Note: webhook subscription may need manual setup in Facebook Page Settings → Advanced Messaging.';
+
+        console.log(`✅ Meta Lead Sync configured for tenant ${tenantId} (form: ${isAnyForm ? 'ANY' : formId})`);
+        res.json({ success: true, message, webhookSubscribed });
 
     } catch (error) {
         console.error('❌ Meta connect Error:', error);
         res.status(500).json({ success: false, message: 'Failed to enable sync' });
+    }
+};
+
+// Reset page/form selection only — keeps the Facebook token intact so user can pick a different page
+const resetPage = async (req, res) => {
+    try {
+        const ownerId = req.tenantId;
+
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: ownerId },
+            {
+                $set: {
+                    'meta.metaPageId': null,
+                    'meta.metaPageName': null,
+                    'meta.metaPageAccessToken': null,
+                    'meta.metaFormId': null,
+                    'meta.metaFormName': null,
+                    'meta.metaLeadSyncEnabled': false
+                }
+            }
+        );
+
+        console.log('✅ Meta page selection reset for tenant:', ownerId);
+        res.json({ success: true, message: 'Page selection cleared. Select a new page to continue.' });
+
+    } catch (error) {
+        console.error('❌ Meta resetPage Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to reset page selection' });
     }
 };
 
@@ -629,12 +728,14 @@ const toggleSync = async (req, res) => {
         const ownerId = req.tenantId;
         const { enabled } = req.body;
 
+        const syncEnabled = enabled === true || enabled === 'true' || enabled === 1;
+
         await IntegrationConfig.findOneAndUpdate(
             { userId: ownerId },
-            { $set: { 'meta.metaLeadSyncEnabled': enabled } }
+            { $set: { 'meta.metaLeadSyncEnabled': syncEnabled } }
         );
 
-        res.json({ success: true, enabled });
+        res.json({ success: true, enabled: syncEnabled });
     } catch (error) {
         console.error('❌ Meta toggleSync Error:', error);
         res.status(500).json({ success: false, message: 'Failed to toggle sync' });
@@ -690,12 +791,13 @@ const updateCapiSettings = async (req, res) => {
         const updateData = {};
 
         // Trim whitespace — pasted tokens/IDs with spaces cause silent 400 errors from Meta
-        if (pixelId !== undefined) updateData['meta.metaPixelId'] = pixelId.trim();
+        // String() cast guards against non-string values (e.g., a number pixel ID)
+        if (pixelId !== undefined) updateData['meta.metaPixelId'] = String(pixelId).trim();
         // Only update token if user actually entered a new one (not the masked placeholder)
-        if (capiAccessToken !== undefined && !capiAccessToken.startsWith('••••')) {
-            updateData['meta.metaCapiAccessToken'] = capiAccessToken.trim();
+        if (capiAccessToken !== undefined && !String(capiAccessToken).startsWith('••••')) {
+            updateData['meta.metaCapiAccessToken'] = String(capiAccessToken).trim();
         }
-        if (testEventCode !== undefined) updateData['meta.metaTestEventCode'] = testEventCode.trim();
+        if (testEventCode !== undefined) updateData['meta.metaTestEventCode'] = String(testEventCode).trim();
         if (capiEnabled !== undefined) updateData['meta.metaCapiEnabled'] = capiEnabled;
         if (stageMapping !== undefined) updateData['meta.metaStageMapping'] = stageMapping;
 
@@ -848,7 +950,6 @@ const testCapiConnection = async (req, res) => {
 
 // Parse and verify a Meta signed_request (base64url-encoded HMAC-SHA256)
 function parseSignedRequest(signedRequest, appSecret) {
-    const crypto = require('crypto');
     const parts = signedRequest.split('.');
     if (parts.length !== 2) throw new Error('Invalid signed_request format');
     const [encodedSig, payload] = parts;
@@ -865,7 +966,6 @@ function parseSignedRequest(signedRequest, appSecret) {
 // Meta sends this when a user requests deletion of their data from Facebook settings.
 // Must return { url, confirmation_code } so Meta can show users a status link.
 const handleDataDeletion = async (req, res) => {
-    const crypto = require('crypto');
     try {
         const APP_SECRET = process.env.META_APP_SECRET;
         if (!APP_SECRET) {
@@ -975,6 +1075,7 @@ module.exports = {
     getPages,
     getForms,
     connect,
+    resetPage,
     disconnect,
     toggleSync,
     getCapiSettings,

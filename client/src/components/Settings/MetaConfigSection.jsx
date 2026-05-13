@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 
@@ -8,6 +8,7 @@ const MetaConfigSection = () => {
 
     const [status, setStatus] = useState({
         connected: false,
+        tokenExpired: false,
         pageId: null,
         pageName: null,
         formId: null,
@@ -20,6 +21,8 @@ const MetaConfigSection = () => {
     const [selectedPage, setSelectedPage] = useState(null);
     const [selectedForm, setSelectedForm] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [loadingPages, setLoadingPages] = useState(false);
+    const [loadingForms, setLoadingForms] = useState(false);
     const [connecting, setConnecting] = useState(false);
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
@@ -106,21 +109,28 @@ const MetaConfigSection = () => {
 
     const loadPages = async () => {
         try {
+            setLoadingPages(true);
             const res = await api.get('/meta/pages');
             setPages(res.data.pages || []);
         } catch (error) {
             console.error('Failed to load pages:', error);
-            showError('Failed to load Facebook pages');
+            showError(error.response?.data?.message || 'Failed to load Facebook pages');
+        } finally {
+            setLoadingPages(false);
         }
     };
 
     const loadForms = async (pageId) => {
         try {
+            setLoadingForms(true);
+            setForms([]);
             const res = await api.get(`/meta/forms/${pageId}`);
             setForms(res.data.forms || []);
         } catch (error) {
             console.error('Failed to load forms:', error);
-            showError('Failed to load lead forms');
+            showError(error.response?.data?.message || 'Failed to load lead forms');
+        } finally {
+            setLoadingForms(false);
         }
     };
 
@@ -181,25 +191,31 @@ const MetaConfigSection = () => {
 
     const handleFormChange = (e) => {
         const formId = e.target.value;
-        const form = forms.find(f => f.id === formId);
-        setSelectedForm(form);
+        if (formId === 'any') {
+            setSelectedForm({ id: null, name: 'Any Form' });
+        } else {
+            const form = forms.find(f => f.id === formId);
+            setSelectedForm(form || null);
+        }
     };
 
     const handleStartSync = async () => {
-        if (!selectedPage || !selectedForm) {
-            showError('Please select both a Page and a Form');
+        if (!selectedPage || selectedForm === null) {
+            showError('Please select a Page and a Form (or choose "Any Form")');
             return;
         }
 
         try {
             setSaving(true);
-            await api.post('/meta/connect', {
+            const res = await api.post('/meta/connect', {
                 pageId: selectedPage.id,
                 pageName: selectedPage.name,
-                pageAccessToken: selectedPage.accessToken,
                 formId: selectedForm.id,
                 formName: selectedForm.name
             });
+            if (!res.data.webhookSubscribed) {
+                showError('Lead Sync enabled, but webhook subscription failed. You may need to subscribe manually in Facebook Page Settings → Advanced Messaging.');
+            }
 
             showSuccess('Meta Lead Sync enabled successfully!');
             loadStatus();
@@ -219,6 +235,7 @@ const MetaConfigSection = () => {
             showSuccess('Meta disconnected successfully');
             setStatus({
                 connected: false,
+                tokenExpired: false,
                 pageId: null,
                 pageName: null,
                 formId: null,
@@ -233,6 +250,27 @@ const MetaConfigSection = () => {
         } catch (error) {
             console.error('Failed to disconnect:', error);
             showError('Failed to disconnect');
+        }
+    };
+
+    const handleChangePage = async () => {
+        try {
+            await api.post('/meta/reset-page');
+            setStatus(prev => ({
+                ...prev,
+                syncEnabled: false,
+                pageId: null,
+                pageName: null,
+                formId: null,
+                formName: null
+            }));
+            setSelectedPage(null);
+            setSelectedForm(null);
+            setForms([]);
+            showSuccess('Page selection cleared. Choose a new page below.');
+        } catch (error) {
+            console.error('Failed to reset page:', error);
+            showError('Failed to reset page selection. Please try again.');
         }
     };
 
@@ -292,8 +330,19 @@ const MetaConfigSection = () => {
     if (status.connected) {
         return (
             <div className="space-y-6">
+                {/* Token expired warning */}
+                {status.tokenExpired && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+                        <i className="fa-solid fa-triangle-exclamation text-amber-600 text-lg mt-0.5"></i>
+                        <div>
+                            <p className="text-amber-800 font-semibold text-sm">Facebook session expired</p>
+                            <p className="text-amber-700 text-xs mt-1">Your access token has expired and leads are no longer syncing. Log out and reconnect to resume.</p>
+                        </div>
+                    </div>
+                )}
+
                 {/* Lead Sync Section (Active or Setup) */}
-                {status.syncEnabled && status.pageId && status.formId ? (
+                {status.syncEnabled && status.pageId ? (
                     // ACTIVE STATE
                     <>
                         <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-6">
@@ -326,7 +375,7 @@ const MetaConfigSection = () => {
                             )}
                         </div>
 
-                        {/* Toggle & Disconnect */}
+                        {/* Toggle & Actions */}
                         <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
                             <div className="flex items-center gap-3">
                                 <label className="relative inline-flex items-center cursor-pointer">
@@ -343,13 +392,23 @@ const MetaConfigSection = () => {
                                 </span>
                             </div>
 
-                            <button
-                                onClick={handleDisconnect}
-                                className="text-red-600 hover:bg-red-50 px-4 py-2 rounded-lg border border-red-200 text-sm font-bold flex items-center gap-2 transition"
-                            >
-                                <i className="fa-solid fa-sign-out-alt"></i>
-                                Log out of Meta
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={handleChangePage}
+                                    className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg border border-blue-200 text-sm font-bold flex items-center gap-2 transition"
+                                    title="Change connected page without logging out"
+                                >
+                                    <i className="fa-solid fa-arrows-rotate"></i>
+                                    Change Page
+                                </button>
+                                <button
+                                    onClick={handleDisconnect}
+                                    className="text-red-600 hover:bg-red-50 px-4 py-2 rounded-lg border border-red-200 text-sm font-bold flex items-center gap-2 transition"
+                                >
+                                    <i className="fa-solid fa-sign-out-alt"></i>
+                                    Log out of Meta
+                                </button>
+                            </div>
                         </div>
                     </>
                 ) : (
@@ -370,16 +429,26 @@ const MetaConfigSection = () => {
                             <label className="block text-sm font-semibold text-slate-700 mb-2">
                                 Facebook Page
                             </label>
-                            <select
-                                value={selectedPage?.id || ''}
-                                onChange={handlePageChange}
-                                className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                            >
-                                <option value="">Select a page...</option>
-                                {pages.map(page => (
-                                    <option key={page.id} value={page.id}>{page.name}</option>
-                                ))}
-                            </select>
+                            <div className="relative">
+                                <select
+                                    value={selectedPage?.id || ''}
+                                    onChange={handlePageChange}
+                                    disabled={loadingPages}
+                                    className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-slate-50 disabled:text-slate-400"
+                                >
+                                    <option value="">
+                                        {loadingPages ? 'Loading pages...' : 'Select a page...'}
+                                    </option>
+                                    {pages.map(page => (
+                                        <option key={page.id} value={page.id}>{page.name}</option>
+                                    ))}
+                                </select>
+                                {loadingPages && (
+                                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                                        <i className="fa-solid fa-spinner fa-spin text-blue-500"></i>
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         {/* Form Selector */}
@@ -388,22 +457,31 @@ const MetaConfigSection = () => {
                                 <label className="block text-sm font-semibold text-slate-700 mb-2">
                                     Lead Form
                                 </label>
-                                {forms.length === 0 ? (
-                                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-sm">
-                                        <i className="fa-solid fa-exclamation-triangle mr-2"></i>
-                                        No active lead forms found on this page. Please create a Lead Form in Facebook Ads Manager.
+                                {loadingForms ? (
+                                    <div className="flex items-center gap-2 p-3 border border-slate-200 rounded-lg text-slate-500 text-sm bg-slate-50">
+                                        <i className="fa-solid fa-spinner fa-spin text-blue-500"></i>
+                                        Fetching lead forms...
                                     </div>
                                 ) : (
-                                    <select
-                                        value={selectedForm?.id || ''}
-                                        onChange={handleFormChange}
-                                        className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                                    >
-                                        <option value="">Select a form...</option>
-                                        {forms.map(form => (
-                                            <option key={form.id} value={form.id}>{form.name}</option>
-                                        ))}
-                                    </select>
+                                    <>
+                                        <select
+                                            value={selectedForm === null ? '' : (selectedForm.id === null ? 'any' : selectedForm.id)}
+                                            onChange={handleFormChange}
+                                            className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                        >
+                                            <option value="">Select a form...</option>
+                                            <option value="any">★ Any Form — receive leads from all active forms on this page</option>
+                                            {forms.map(form => (
+                                                <option key={form.id} value={form.id}>{form.name}</option>
+                                            ))}
+                                        </select>
+                                        {forms.length === 0 && (
+                                            <p className="text-xs text-amber-700 mt-2">
+                                                <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                                                No active forms found on this page — you can still choose "Any Form" or create a Lead Form in Ads Manager.
+                                            </p>
+                                        )}
+                                    </>
                                 )}
                             </div>
                         )}

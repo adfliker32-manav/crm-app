@@ -30,6 +30,7 @@ router.get('/debug-token', authMiddleware, metaController.debugToken); // Diagno
 router.get('/pages', authMiddleware, metaController.getPages);
 router.get('/forms/:pageId', authMiddleware, metaController.getForms);
 router.post('/connect', authMiddleware, metaController.connect);
+router.post('/reset-page', authMiddleware, metaController.resetPage);
 router.post('/disconnect', authMiddleware, metaController.disconnect);
 router.post('/toggle-sync', authMiddleware, metaController.toggleSync);
 

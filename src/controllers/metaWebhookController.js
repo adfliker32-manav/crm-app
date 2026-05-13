@@ -1,8 +1,13 @@
+const crypto = require('crypto');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const Lead = require('../models/Lead');
 const axios = require('axios');
 const { emitToUser } = require('../services/socketService');
+const { normalizePhoneForWhatsApp } = require('../utils/phoneUtils');
+const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
+const { evaluateLead } = require('../services/AutomationService');
+const { checkAndRefreshToken } = require('./metaController');
 
 const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
 const META_API_TIMEOUT = 8000; // 8s — prevents hung threads on slow Meta API
@@ -49,7 +54,6 @@ const handleLeadWebhook = async (req, res) => {
                 console.warn("⛔ Unauthorized - Missing Meta Signature");
                 return;
             }
-            const crypto = require('crypto');
             const payloadToVerify = req.rawBody || Buffer.from(JSON.stringify(body));
             const expectedSignature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(payloadToVerify).digest('hex');
             const sigBuffer = Buffer.from(signature);
@@ -91,7 +95,13 @@ const handleLeadWebhook = async (req, res) => {
 // Process leadgen webhook data
 async function processLeadgenWebhook(pageId, leadgenData) {
     try {
-        const { leadgen_id, form_id } = leadgenData;
+        const { leadgen_id, form_id } = leadgenData || {};
+
+        if (!leadgen_id || !pageId) {
+            console.warn('⚠️ processLeadgenWebhook: missing leadgen_id or pageId — skipping', { pageId, leadgen_id, form_id });
+            return;
+        }
+
         console.log(`📋 Processing lead: ${leadgen_id} from form: ${form_id}`);
 
         // +meta.metaAccessToken required so checkAndRefreshToken can read/refresh it (select:false field)
@@ -105,9 +115,6 @@ async function processLeadgenWebhook(pageId, leadgenData) {
             return;
         }
 
-        // BUG 3 FIX: Proactively refresh the user token before using the page token.
-        // Without this, stale tokens cause silent lead loss after 60 days.
-        const { checkAndRefreshToken } = require('./metaController');
         const refreshedMeta = await checkAndRefreshToken(configs[0].userId.toString(), configs[0].meta);
         const userToken = refreshedMeta.metaAccessToken || configs[0].meta.metaAccessToken;
 
@@ -322,7 +329,6 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
         }
 
         // Normalize phone to WhatsApp international format using workspace's country code
-        const { normalizePhoneForWhatsApp } = require('../utils/phoneUtils');
         const cleanPhone = normalizePhoneForWhatsApp(leadDetails.phone, workspace?.defaultCountryCode || null);
         const cleanEmail = leadDetails.email?.trim() || null;
 
@@ -355,10 +361,12 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
 
         const resolvedName = leadDetails.name || 'Unknown';
 
-        // BUG 7 FIX: Build notes array — flag missing name so users can identify dirty data
         const notes = [{ text: `Lead captured from Meta Lead Ads (Form: ${formId})`, date: new Date() }];
         if (!leadDetails.name) {
             notes.push({ text: '⚠️ Name not captured — the Meta lead form may not include a name field.', date: new Date() });
+        }
+        if (!cleanPhone && !leadDetails.email?.trim()) {
+            notes.push({ text: '⚠️ No phone or email captured — this lead cannot be contacted. Check the Meta form fields.', date: new Date() });
         }
 
         const newLead = new Lead({
@@ -401,10 +409,8 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
 
         console.log(`✅ Created Meta lead: ${newLead.name} (${newLead.phone || newLead.email})`);
 
-        // BUG 5 FIX: Include lead ID in all error logs so failures are traceable in logs
         setImmediate(() => {
             if (newLead.phone) {
-                const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
                 sendAutomatedWhatsAppOnLeadCreate(newLead, userId)
                     .then(sent => {
                         if (sent) {
@@ -418,7 +424,7 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
 
             (async () => {
                 try {
-                    const config = await require('../models/IntegrationConfig').findOne({ userId })
+                    const config = await IntegrationConfig.findOne({ userId })
                         .select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
                     if (config?.meta?.metaCapiEnabled) {
                         const { sendMetaEvent } = require('../services/metaConversionService');
@@ -430,7 +436,6 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
                 }
             })();
 
-            const { evaluateLead } = require('../services/AutomationService');
             evaluateLead(newLead, 'LEAD_CREATED')
                 .catch(err => console.error(`❌ [Lead:${newLead._id}] AutomationService (LEAD_CREATED) failed:`, err.message));
         });
@@ -443,63 +448,109 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
     }
 }
 
-// BUG 8 FIX: Manual backfill — fetch up to 100 historical leads from Meta for the connected form
+// Manual backfill — fetch up to 100 historical leads from Meta.
+// Supports both a specific form and "Any Form" (metaFormId === null).
 const fetchHistoricalLeads = async (req, res) => {
     try {
         const ownerId = req.tenantId;
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('+meta.metaAccessToken +meta.metaPageAccessToken');
+            .select('+meta.metaAccessToken +meta.metaPageAccessToken meta.metaFormId meta.metaPageId');
 
-        if (!config?.meta?.metaPageAccessToken) {
+        if (!config?.meta?.metaPageId) {
             return res.status(400).json({ success: false, message: 'No Meta page connected. Please connect a page in settings first.' });
         }
-        if (!config.meta.metaFormId) {
-            return res.status(400).json({ success: false, message: 'No lead form selected. Please select a form in settings.' });
-        }
 
-        const { checkAndRefreshToken } = require('./metaController');
         const meta = await checkAndRefreshToken(ownerId, config.meta);
-        const pageToken = meta.metaPageAccessToken;
 
-        const response = await axios.get(`${META_GRAPH_URL}/${config.meta.metaFormId}/leads`, {
-            params: { access_token: pageToken, fields: 'id,created_time,field_data', limit: 100 },
-            timeout: 15000
-        });
-
-        const metaLeads = response.data.data || [];
-        let created = 0, skipped = 0;
-
-        for (const metaLead of metaLeads) {
-            if (metaLead.id) {
-                const exists = await Lead.findOne({ userId: ownerId, metaLeadgenId: metaLead.id }).select('_id').lean();
-                if (exists) { skipped++; continue; }
-            }
-
-            const fields = {};
-            for (const field of (metaLead.field_data || [])) {
-                fields[field.name.toLowerCase()] = field.values?.[0];
-            }
-
-            const leadDetails = {
-                id: metaLead.id,
-                createdTime: metaLead.created_time,
-                name: fields.full_name || fields.name || (fields.first_name ? `${fields.first_name}${fields.last_name ? ' ' + fields.last_name : ''}` : null),
-                email: fields.email || null,
-                phone: fields.phone_number || fields.phone || fields.mobile_number || fields.whatsapp_number || fields.whatsapp || fields.mobile || null,
-                city: fields.city || null,
-                company: fields.company_name || fields.company || null,
-                rawFields: fields
-            };
-
-            const result = await createLeadFromMeta(ownerId, leadDetails, config.meta.metaFormId, metaLead.id);
-            if (result) created++; else skipped++;
+        // Re-derive a fresh page token (same approach as processLeadgenWebhook)
+        let pageToken = meta.metaPageAccessToken;
+        try {
+            const pageRes = await axios.get(`${META_GRAPH_URL}/${config.meta.metaPageId}`, {
+                params: { access_token: meta.metaAccessToken, fields: 'access_token' },
+                timeout: 15000
+            });
+            pageToken = pageRes.data.access_token;
+        } catch (e) {
+            console.warn('fetchHistoricalLeads: could not re-derive page token:', e.response?.data?.error?.message || e.message);
         }
 
-        console.log(`✅ Meta backfill for tenant ${ownerId}: ${created} created, ${skipped} skipped from ${metaLeads.length} total`);
+        if (!pageToken) {
+            return res.status(400).json({ success: false, message: 'Could not get page access token. Please reconnect your Meta page in settings.' });
+        }
+
+        // Determine which forms to backfill
+        const isAnyForm = !config.meta.metaFormId;
+        let formIds = [];
+
+        if (isAnyForm) {
+            // Fetch all active forms for this page
+            try {
+                const formsRes = await axios.get(`${META_GRAPH_URL}/${config.meta.metaPageId}/leadgen_forms`, {
+                    params: { access_token: pageToken, fields: 'id,status', limit: 100 },
+                    timeout: 15000
+                });
+                formIds = (formsRes.data.data || []).filter(f => f.status === 'ACTIVE').map(f => f.id);
+            } catch (e) {
+                console.error('fetchHistoricalLeads: failed to list forms for page:', e.response?.data?.error?.message || e.message);
+                return res.status(500).json({ success: false, message: 'Failed to list lead forms for this page. Please try again.' });
+            }
+        } else {
+            formIds = [config.meta.metaFormId];
+        }
+
+        if (formIds.length === 0) {
+            return res.json({ success: true, message: 'No active lead forms found on this page.', total: 0, created: 0, skipped: 0 });
+        }
+
+        let totalFetched = 0, totalCreated = 0, totalSkipped = 0;
+
+        for (const formId of formIds) {
+            let formLeads = [];
+            try {
+                const response = await axios.get(`${META_GRAPH_URL}/${formId}/leads`, {
+                    params: { access_token: pageToken, fields: 'id,created_time,field_data', limit: 100 },
+                    timeout: 15000
+                });
+                formLeads = response.data.data || [];
+            } catch (e) {
+                console.warn(`fetchHistoricalLeads: skipping form ${formId}:`, e.response?.data?.error?.message || e.message);
+                continue;
+            }
+
+            totalFetched += formLeads.length;
+
+            for (const metaLead of formLeads) {
+                if (metaLead.id) {
+                    const exists = await Lead.findOne({ userId: ownerId, metaLeadgenId: metaLead.id }).select('_id').lean();
+                    if (exists) { totalSkipped++; continue; }
+                }
+
+                const fields = {};
+                for (const field of (metaLead.field_data || [])) {
+                    fields[field.name.toLowerCase()] = field.values?.[0];
+                }
+
+                const leadDetails = {
+                    id: metaLead.id,
+                    createdTime: metaLead.created_time,
+                    name: fields.full_name || fields.name || (fields.first_name ? `${fields.first_name}${fields.last_name ? ' ' + fields.last_name : ''}` : null),
+                    email: fields.email || null,
+                    phone: fields.phone_number || fields.phone || fields.mobile_number || fields.whatsapp_number || fields.whatsapp || fields.mobile || null,
+                    city: fields.city || null,
+                    company: fields.company_name || fields.company || null,
+                    rawFields: fields
+                };
+
+                const result = await createLeadFromMeta(ownerId, leadDetails, formId, metaLead.id);
+                if (result) totalCreated++; else totalSkipped++;
+            }
+        }
+
+        console.log(`✅ Meta backfill for tenant ${ownerId}: ${totalCreated} created, ${totalSkipped} skipped from ${totalFetched} total`);
         res.json({
             success: true,
-            message: `Fetched ${metaLeads.length} leads from Meta. Created: ${created}, Skipped (duplicates): ${skipped}.`,
-            total: metaLeads.length, created, skipped
+            message: `Fetched ${totalFetched} leads from Meta. Created: ${totalCreated}, Skipped (duplicates): ${totalSkipped}.`,
+            total: totalFetched, created: totalCreated, skipped: totalSkipped
         });
 
     } catch (error) {
