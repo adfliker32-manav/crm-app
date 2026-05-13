@@ -71,7 +71,6 @@ const verifySignature = (req) => {
         return false;
     }
 
-    // WA_APP_SECRET is the secret for the WhatsApp Business app (separate from the auth app)
     const appSecret = process.env.WA_APP_SECRET || process.env.META_APP_SECRET;
     if (!appSecret) {
         console.error('❌ WA_APP_SECRET (or META_APP_SECRET) not set. Rejecting webhook for security.');
@@ -82,6 +81,9 @@ const verifySignature = (req) => {
     // JSON.stringify strips/changes whitespace, making the hash always mismatch.
     // The rawBody Buffer is attached in index.js via express.json({ verify: (req,res,buf) => req.rawBody=buf })
     const payloadToSign = req.rawBody || Buffer.from(JSON.stringify(req.body));
+    
+    debug(`🔐 Has req.rawBody: ${!!req.rawBody}`);
+    debug(`🔐 Using App Secret starting with: ${appSecret.substring(0, 4)}...`);
 
     const expectedSignature = 'sha256=' + crypto
         .createHmac('sha256', appSecret)
@@ -117,7 +119,8 @@ exports.handleWebhook = async (req, res) => {
 
             // Verify signature (optional but recommended)
             if (process.env.META_APP_SECRET && !verifySignature(req)) {
-                console.error('❌ Invalid webhook signature - dropping request');
+                const usedSecret = process.env.WA_APP_SECRET || process.env.META_APP_SECRET;
+                console.error(`❌ Invalid webhook signature - dropping request. App Secret starts with: "${usedSecret?.substring(0, 4)}..." | Has rawBody: ${!!req.rawBody} | Verify META_APP_SECRET matches your Meta App Dashboard → Settings → Basic → App Secret.`);
                 telemetryService.recordWebhook(false, false, 0);
                 return; // Exits the setImmediate block, response already sent
             }

@@ -127,7 +127,7 @@ async function processLeadgenWebhook(pageId, leadgenData) {
         const leadDetails = await fetchLeadDetails(leadgen_id, pageToken);
 
         if (!leadDetails) {
-            console.error(`❌ fetchLeadDetails failed for ${leadgen_id} after 3 attempts. Scheduling 30-min retry.`);
+            console.error(`❌ fetchLeadDetails failed for ${leadgen_id} after all attempts. Scheduling 30-min retry.`);
             // Tell tenants we're retrying automatically — no manual action needed yet
             for (const config of configs) {
                 emitToUser(config.userId.toString(), 'notification:agent', {
@@ -194,7 +194,7 @@ async function distributeLeadToTenants(leadDetails, configs, form_id, leadgen_id
 // Fetch lead details from Meta Graph API
 // BUG 1+2 FIX: Added timeout + retry with exponential backoff for transient errors
 async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
-    const MAX_ATTEMPTS = 3;
+    const MAX_ATTEMPTS = 5;
 
     // BUG 3 FIX: Validate token exists before attempting API call
     if (!accessToken) {
@@ -216,6 +216,10 @@ async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
             }
         }
 
+        if (attempt > 1) {
+            console.log(`✅ fetchLeadDetails succeeded on attempt ${attempt} for leadgen ${leadgenId}`);
+        }
+
         return {
             id: leadData.id,
             createdTime: leadData.created_time,
@@ -230,11 +234,27 @@ async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
     } catch (error) {
         const status = error.response?.status;
         const metaCode = error.response?.data?.error?.code;
+        const metaSubCode = error.response?.data?.error?.error_subcode;
 
         // Auth errors (token expired/invalid) — no point retrying with the same token
         if (status === 190 || status === 401 || status === 403 || metaCode === 190) {
             console.error(`❌ fetchLeadDetails: Token invalid/expired for leadgen ${leadgenId} (HTTP ${status}, code ${metaCode}). Reconnect Meta in settings.`);
             return null;
+        }
+
+        // RACE CONDITION FIX: Meta fires the leadgen webhook BEFORE the lead object is
+        // fully persisted in the Graph API. Error code 100 / subcode 33 means "object does
+        // not exist" — but it WILL exist within a few seconds. Retry with increasing delays.
+        // Test leads work fine because they're fetched manually after Meta has persisted them;
+        // real-time webhook leads hit this race condition frequently.
+        const isNotYetAvailable = (metaCode === 100 && metaSubCode === 33);
+
+        if (isNotYetAvailable && attempt < MAX_ATTEMPTS) {
+            // Escalating delays: 3s → 5s → 8s → 12s (total ~28s across 5 attempts)
+            const delay = [3000, 5000, 8000, 12000][attempt - 1] || 12000;
+            console.warn(`⏳ fetchLeadDetails: Lead ${leadgenId} not yet available in Graph API (race condition). Retry ${attempt}/${MAX_ATTEMPTS} in ${delay / 1000}s...`);
+            await new Promise(r => setTimeout(r, delay));
+            return fetchLeadDetails(leadgenId, accessToken, attempt + 1);
         }
 
         // BUG 6 FIX: Rate limit — respect Retry-After header
