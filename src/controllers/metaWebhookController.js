@@ -109,7 +109,34 @@ async function processLeadgenWebhook(pageId, leadgenData) {
         // Without this, stale tokens cause silent lead loss after 60 days.
         const { checkAndRefreshToken } = require('./metaController');
         const refreshedMeta = await checkAndRefreshToken(configs[0].userId.toString(), configs[0].meta);
-        const pageToken = refreshedMeta.metaPageAccessToken || configs[0].meta.metaPageAccessToken;
+        const userToken = refreshedMeta.metaAccessToken || configs[0].meta.metaAccessToken;
+
+        // PAGE TOKEN FIX: Always re-derive a FRESH page token from the current user token.
+        // The stored metaPageAccessToken was set once during connect() and never updated.
+        // When the user token gets refreshed, the old page token (derived from the old user
+        // token) becomes invalid — causing "Object does not exist" errors on lead fetch.
+        let pageToken = null;
+        try {
+            const pageRes = await axios.get(`${META_GRAPH_URL}/${pageId}`, {
+                params: { access_token: userToken, fields: 'access_token' },
+                timeout: META_API_TIMEOUT
+            });
+            pageToken = pageRes.data.access_token;
+            console.log(`🔑 Fresh page token derived for page ${pageId} (starts with: ${pageToken?.substring(0, 8)}...)`);
+
+            // Persist the fresh page token so other code paths also benefit
+            await IntegrationConfig.updateMany(
+                { 'meta.metaPageId': pageId },
+                { $set: { 'meta.metaPageAccessToken': pageToken } }
+            );
+        } catch (tokenErr) {
+            console.warn(`⚠️ Could not re-derive page token for page ${pageId}: ${tokenErr.response?.data?.error?.message || tokenErr.message}`);
+            // Fallback to stored page token
+            pageToken = refreshedMeta.metaPageAccessToken || configs[0].meta.metaPageAccessToken;
+            if (pageToken) {
+                console.log(`🔑 Falling back to stored page token (starts with: ${pageToken.substring(0, 8)}...)`);
+            }
+        }
 
         if (!pageToken) {
             console.error(`❌ No page access token for page ${pageId}. Lead ${leadgen_id} cannot be fetched. Reconnect Meta in settings.`);
