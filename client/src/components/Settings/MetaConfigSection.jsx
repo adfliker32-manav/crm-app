@@ -26,6 +26,7 @@ const MetaConfigSection = () => {
     const [connecting, setConnecting] = useState(false);
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
+    const [fetchingLeads, setFetchingLeads] = useState(false);
 
     // CAPI Settings
     const [capiSettings, setCapiSettings] = useState({
@@ -253,6 +254,20 @@ const MetaConfigSection = () => {
         }
     };
 
+    const handleFetchLeads = async () => {
+        if (!confirm('Fetch up to 100 recent leads from your connected Meta form?')) return;
+        setFetchingLeads(true);
+        try {
+            const res = await api.post('/meta/fetch-leads');
+            const { imported, skipped, failed } = res.data;
+            showSuccess(`Imported ${imported} lead${imported !== 1 ? 's' : ''}${skipped ? `, ${skipped} already existed` : ''}${failed ? `, ${failed} failed` : ''}`);
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to fetch leads');
+        } finally {
+            setFetchingLeads(false);
+        }
+    };
+
     const handleChangePage = async () => {
         try {
             await api.post('/meta/reset-page');
@@ -392,7 +407,16 @@ const MetaConfigSection = () => {
                                 </span>
                             </div>
 
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                    onClick={handleFetchLeads}
+                                    disabled={fetchingLeads}
+                                    className="text-green-700 hover:bg-green-50 px-4 py-2 rounded-lg border border-green-200 text-sm font-bold flex items-center gap-2 transition disabled:opacity-50"
+                                    title="Import recent leads from your connected Meta form"
+                                >
+                                    <i className={`fa-solid ${fetchingLeads ? 'fa-spinner fa-spin' : 'fa-download'}`}></i>
+                                    {fetchingLeads ? 'Fetching...' : 'Fetch Leads'}
+                                </button>
                                 <button
                                     onClick={handleChangePage}
                                     className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg border border-blue-200 text-sm font-bold flex items-center gap-2 transition"
