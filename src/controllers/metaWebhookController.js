@@ -158,34 +158,75 @@ async function processLeadgenWebhook(pageId, leadgenData) {
             return;
         }
 
-        const leadDetails = await fetchLeadDetails(leadgen_id, pageToken);
+        // Try page token first, then fall back to user token.
+        // If page token lacks leads_retrieval but user token has it, user token fetch succeeds.
+        let leadDetails = await fetchLeadDetails(leadgen_id, pageToken);
+
+        if (!leadDetails && userToken && userToken !== pageToken) {
+            console.warn(`⚠️ Page token fetch failed for ${leadgen_id} — trying user token as fallback...`);
+            leadDetails = await fetchLeadDetails(leadgen_id, userToken);
+            if (leadDetails) {
+                console.log(`✅ User token fallback succeeded for leadgen ${leadgen_id}`);
+            }
+        }
 
         if (!leadDetails) {
-            console.error(`❌ fetchLeadDetails failed for ${leadgen_id} after all attempts. Scheduling 30-min retry.`);
-            // Tell tenants we're retrying automatically — no manual action needed yet
+            console.error(`❌ fetchLeadDetails failed for ${leadgen_id} with both page and user tokens. Scheduling 30-min retry with fresh tokens.`);
             for (const config of configs) {
                 emitToUser(config.userId.toString(), 'notification:agent', {
                     type: 'meta_lead_drop',
-                    message: `⚠️ Meta lead fetch failed — retrying automatically in 30 minutes. No action needed yet.`,
+                    message: `⚠️ Meta lead fetch failed — retrying in 30 minutes. If it keeps failing, check that your Meta app has the leads_retrieval permission and the page is subscribed.`,
                     leadgenId: leadgen_id,
                     timestamp: new Date()
                 });
             }
-            // 30-minute retry — covers Meta API outages that last a few minutes
-            // Variables captured in closure: configs, pageToken, leadgen_id, form_id
+
+            // 30-min retry — re-derives fresh tokens from DB instead of using stale closure values
             setTimeout(async () => {
                 try {
                     console.log(`🔄 30-min retry firing for leadgen ${leadgen_id}...`);
-                    const retryDetails = await fetchLeadDetails(leadgen_id, pageToken);
+
+                    // Re-query DB for fresh config + tokens — don't trust 30-min-old closure values
+                    let retryPageToken = null;
+                    let retryUserToken = null;
+                    try {
+                        const retryConfigs = await IntegrationConfig.find({
+                            'meta.metaPageId': pageId,
+                            'meta.metaLeadSyncEnabled': true
+                        }).select('+meta.metaAccessToken +meta.metaPageAccessToken');
+
+                        if (retryConfigs.length > 0) {
+                            const retryMeta = await checkAndRefreshToken(retryConfigs[0].userId.toString(), retryConfigs[0].meta);
+                            retryUserToken = retryMeta.metaAccessToken;
+                            try {
+                                const retryPageRes = await axios.get(`${META_GRAPH_URL}/${pageId}`, {
+                                    params: { access_token: retryUserToken, fields: 'access_token' },
+                                    timeout: META_API_TIMEOUT
+                                });
+                                retryPageToken = retryPageRes.data.access_token;
+                            } catch (e) {
+                                retryPageToken = retryMeta.metaPageAccessToken;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn(`⚠️ 30-min retry: could not re-derive tokens, using stale values:`, e.message);
+                        retryPageToken = pageToken;
+                        retryUserToken = userToken;
+                    }
+
+                    const retryDetails =
+                        await fetchLeadDetails(leadgen_id, retryPageToken || pageToken) ||
+                        (retryUserToken && await fetchLeadDetails(leadgen_id, retryUserToken));
+
                     if (retryDetails) {
                         console.log(`✅ 30-min retry succeeded for leadgen ${leadgen_id}`);
                         await distributeLeadToTenants(retryDetails, configs, form_id, leadgen_id);
                     } else {
-                        console.error(`❌ 30-min retry also failed for leadgen ${leadgen_id}. Manual recovery needed.`);
+                        console.error(`❌ 30-min retry also failed for leadgen ${leadgen_id}. Likely a permissions issue.`);
                         for (const config of configs) {
                             emitToUser(config.userId.toString(), 'notification:agent', {
                                 type: 'meta_lead_drop',
-                                message: `⚠️ Meta lead permanently dropped after retry. Go to Settings → Meta → Fetch Leads to recover it.`,
+                                message: `⚠️ Meta lead could not be fetched after retry. Possible cause: your Meta app may not have leads_retrieval permission, or the lead form was created by a different app. Go to Settings → Meta → Fetch Leads to recover manually.`,
                                 leadgenId: leadgen_id,
                                 timestamp: new Date()
                             });
