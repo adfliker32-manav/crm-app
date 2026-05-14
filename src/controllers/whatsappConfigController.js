@@ -305,17 +305,34 @@ exports.updateWhatsAppSettings = async (req, res) => {
     }
 };
 
-// Exported so cronJobs.js can call it — only applies to tenants still on embedded signup
+// Exported so cronJobs.js can call it.
+// Prefers the tenant's own stored App ID + App Secret (manual-credentials tenants).
+// Falls back to global META_APP_ID / META_APP_SECRET for embedded-signup tenants.
 exports.refreshTokenForOwner = async (ownerId) => {
-    const appId     = process.env.META_APP_ID;
-    const appSecret = process.env.META_APP_SECRET;
-    if (!appId || !appSecret) throw new Error('META_APP_ID or META_APP_SECRET not configured on server');
+    const { decryptToken } = require('../utils/encryptionUtils');
 
     const config = await IntegrationConfig.findOne({ userId: ownerId })
-        .select('+whatsapp.waAccessToken');
+        .select('+whatsapp.waAccessToken +whatsapp.waAppSecret whatsapp.waAppId');
     if (!config?.whatsapp?.waAccessToken) throw new Error('No stored token found');
 
-    const currentToken = config.whatsapp.waAccessToken;
+    // Resolve App ID and App Secret — prefer per-tenant stored values
+    const storedAppId     = config.whatsapp?.waAppId;
+    const rawStoredSecret = config.whatsapp?.waAppSecret;
+    const storedAppSecret = rawStoredSecret
+        ? ((rawStoredSecret.includes(':') && rawStoredSecret.split(':')[0].length === 32)
+            ? decryptToken(rawStoredSecret)
+            : rawStoredSecret)
+        : null;
+
+    const appId     = storedAppId     || process.env.META_APP_ID;
+    const appSecret = storedAppSecret || process.env.META_APP_SECRET;
+
+    if (!appId || !appSecret) throw new Error('App ID or App Secret not available — configure them in WhatsApp Settings or set META_APP_ID / META_APP_SECRET on the server');
+
+    const rawToken     = config.whatsapp.waAccessToken;
+    const currentToken = (rawToken && rawToken.includes(':') && rawToken.split(':')[0].length === 32)
+        ? decryptToken(rawToken)
+        : rawToken;
 
     const GRAPH = 'https://graph.facebook.com/v25.0';
     const tokenRes = await axios.get(`${GRAPH}/oauth/access_token`, {

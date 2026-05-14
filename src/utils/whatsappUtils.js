@@ -16,7 +16,7 @@ async function getUserWhatsAppCredentials(userId) {
 
         // Must use '+' to include select:false fields (waAccessToken)
         const config = await IntegrationConfig.findOne({ userId: tenantId })
-            .select('+whatsapp.waAccessToken whatsapp.waPhoneNumberId whatsapp.waBusinessId');
+            .select('+whatsapp.waAccessToken whatsapp.waPhoneNumberId whatsapp.waBusinessId whatsapp.wabaId');
 
         if (!config || !config.whatsapp?.waPhoneNumberId || !config.whatsapp?.waAccessToken) {
             return null;
@@ -35,7 +35,9 @@ async function getUserWhatsAppCredentials(userId) {
         return {
             phoneNumberId: config.whatsapp.waPhoneNumberId,
             accessToken: accessToken,
-            businessId: config.whatsapp.waBusinessId
+            // waBusinessId is set by embedded-signup; wabaId is set by manual-connect.
+            // Return whichever is present so callers don't need to know which flow was used.
+            businessId: config.whatsapp.waBusinessId || config.whatsapp.wabaId || null
         };
     } catch (error) {
         console.error('Error getting user WhatsApp credentials:', error);
