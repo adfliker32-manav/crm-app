@@ -132,7 +132,20 @@ const SheetSyncSettings = () => {
             showSuccess('Connected to Google!');
             await fetchSheetsList(tokenResponse.access_token);
         },
-        onError: () => showError('Failed to connect to Google'),
+        onError: (err) => {
+            console.error('Google OAuth error:', err);
+            showError(`Failed to connect to Google: ${err?.error_description || err?.error || 'Unknown error'}`);
+        },
+        onNonOAuthError: (err) => {
+            console.error('Google popup error:', err);
+            if (err?.type === 'popup_closed') {
+                showError('Google sign-in was cancelled. If this keeps happening, check that your Google Cloud project has Drive & Sheets APIs enabled and adfliker.com is in Authorized JavaScript Origins.');
+            } else if (err?.type === 'popup_failed_to_open') {
+                showError('Popup was blocked by your browser. Please allow popups for this site.');
+            } else {
+                showError('Google sign-in failed. Please try again.');
+            }
+        },
         scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/spreadsheets.readonly'
     });
 
