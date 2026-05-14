@@ -219,9 +219,9 @@ const exchangeToken = async (req, res) => {
         const longLivedToken = longLivedResponse.data.access_token;
         const tokenExpiry = new Date(Date.now() + (longLivedResponse.data.expires_in || 5184000) * 1000);
 
-        // Get user info
+        // Get user info (name + profile picture)
         const userInfoResponse = await axios.get(`${META_GRAPH_URL}/me`, {
-            params: { access_token: longLivedToken },
+            params: { access_token: longLivedToken, fields: 'id,name,picture.type(large)' },
             timeout: META_API_TIMEOUT
         });
 
@@ -234,7 +234,9 @@ const exchangeToken = async (req, res) => {
                 $set: {
                     'meta.metaAccessToken': longLivedToken,
                     'meta.metaTokenExpiry': tokenExpiry,
-                    'meta.metaUserId': userInfoResponse.data.id
+                    'meta.metaUserId': userInfoResponse.data.id,
+                    'meta.metaUserName': userInfoResponse.data.name || null,
+                    'meta.metaUserPicture': userInfoResponse.data.picture?.data?.url || null
                 }
             },
             { upsert: true }
@@ -275,7 +277,7 @@ const getStatus = async (req, res) => {
         const ownerId = req.tenantId;
         // Must use '+' to include select:false fields (metaAccessToken)
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('+meta.metaAccessToken meta.metaTokenExpiry meta.metaPageId meta.metaPageName meta.metaFormId meta.metaFormName meta.metaLeadSyncEnabled meta.metaLastSyncAt');
+            .select('+meta.metaAccessToken meta.metaTokenExpiry meta.metaPageId meta.metaPageName meta.metaFormId meta.metaFormName meta.metaLeadSyncEnabled meta.metaLastSyncAt meta.metaUserName meta.metaUserPicture');
 
         const meta = config?.meta || {};
         const hasToken = !!meta.metaAccessToken;
@@ -293,7 +295,9 @@ const getStatus = async (req, res) => {
             formName: meta.metaFormName,
             syncEnabled: meta.metaLeadSyncEnabled,
             lastSyncAt: meta.metaLastSyncAt,
-            tokenExpiry: meta.metaTokenExpiry
+            tokenExpiry: meta.metaTokenExpiry,
+            connectedUserName: meta.metaUserName || null,
+            connectedUserPicture: meta.metaUserPicture || null
         });
     } catch (error) {
         console.error('❌ Meta getStatus Error:', error);
@@ -703,6 +707,8 @@ const disconnect = async (req, res) => {
                     'meta.metaAccessToken': null,
                     'meta.metaTokenExpiry': null,
                     'meta.metaUserId': null,
+                    'meta.metaUserName': null,
+                    'meta.metaUserPicture': null,
                     'meta.metaPageId': null,
                     'meta.metaPageName': null,
                     'meta.metaPageAccessToken': null,

@@ -14,7 +14,9 @@ const MetaConfigSection = () => {
         formId: null,
         formName: null,
         syncEnabled: false,
-        lastSyncAt: null
+        lastSyncAt: null,
+        connectedUserName: null,
+        connectedUserPicture: null
     });
     const [pages, setPages] = useState([]);
     const [forms, setForms] = useState([]);
@@ -242,7 +244,9 @@ const MetaConfigSection = () => {
                 formId: null,
                 formName: null,
                 syncEnabled: false,
-                lastSyncAt: null
+                lastSyncAt: null,
+                connectedUserName: null,
+                connectedUserPicture: null
             });
             setPages([]);
             setForms([]);
@@ -352,6 +356,36 @@ const MetaConfigSection = () => {
                         <div>
                             <p className="text-amber-800 font-semibold text-sm">Facebook session expired</p>
                             <p className="text-amber-700 text-xs mt-1">Your access token has expired and leads are no longer syncing. Log out and reconnect to resume.</p>
+                        </div>
+                    </div>
+                )}
+
+                {/* Connected As Banner — shows the Facebook user who linked the account */}
+                {(status.connectedUserName || status.connectedUserPicture) && (
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 flex items-center gap-4">
+                        {status.connectedUserPicture ? (
+                            <img
+                                src={status.connectedUserPicture}
+                                alt={status.connectedUserName || 'Facebook User'}
+                                className="w-12 h-12 rounded-full border-2 border-blue-300 shadow-sm object-cover"
+                                referrerPolicy="no-referrer"
+                            />
+                        ) : (
+                            <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center border-2 border-blue-300">
+                                <i className="fa-solid fa-user text-blue-500 text-lg"></i>
+                            </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                            <p className="text-xs text-blue-500 font-semibold uppercase tracking-wide">Connected As</p>
+                            <p className="text-base font-bold text-slate-800 truncate">{status.connectedUserName || 'Facebook User'}</p>
+                            <p className="text-[11px] text-blue-400 mt-0.5">
+                                <i className="fa-brands fa-facebook mr-1"></i>Business Asset User Profile
+                            </p>
+                        </div>
+                        <div className="shrink-0">
+                            <span className="inline-flex items-center gap-1.5 bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1.5 rounded-full">
+                                <i className="fa-solid fa-circle-check"></i> Linked
+                            </span>
                         </div>
                     </div>
                 )}
@@ -616,8 +650,9 @@ const MetaConfigSection = () => {
                                 <select
                                     value={capiSettings.stageMapping.first}
                                     onChange={(e) => setCapiSettings(prev => ({ ...prev, stageMapping: { ...prev.stageMapping, first: e.target.value } }))}
-                                    className="w-full p-2 border border-slate-200 rounded-lg text-sm"
+                                    className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white"
                                 >
+                                    {stages.length === 0 && <option value={capiSettings.stageMapping.first}>{capiSettings.stageMapping.first || 'Loading...'}</option>}
                                     {stages.map(stage => (
                                         <option key={stage._id} value={stage.name}>{stage.name}</option>
                                     ))}
@@ -628,8 +663,9 @@ const MetaConfigSection = () => {
                                 <select
                                     value={capiSettings.stageMapping.middle}
                                     onChange={(e) => setCapiSettings(prev => ({ ...prev, stageMapping: { ...prev.stageMapping, middle: e.target.value } }))}
-                                    className="w-full p-2 border border-slate-200 rounded-lg text-sm"
+                                    className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white"
                                 >
+                                    {stages.length === 0 && <option value={capiSettings.stageMapping.middle}>{capiSettings.stageMapping.middle || 'Loading...'}</option>}
                                     {stages.map(stage => (
                                         <option key={stage._id} value={stage.name}>{stage.name}</option>
                                     ))}
@@ -640,8 +676,9 @@ const MetaConfigSection = () => {
                                 <select
                                     value={capiSettings.stageMapping.qualified}
                                     onChange={(e) => setCapiSettings(prev => ({ ...prev, stageMapping: { ...prev.stageMapping, qualified: e.target.value } }))}
-                                    className="w-full p-2 border border-slate-200 rounded-lg text-sm"
+                                    className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white"
                                 >
+                                    {stages.length === 0 && <option value={capiSettings.stageMapping.qualified}>{capiSettings.stageMapping.qualified || 'Loading...'}</option>}
                                     {stages.map(stage => (
                                         <option key={stage._id} value={stage.name}>{stage.name}</option>
                                     ))}
@@ -652,8 +689,9 @@ const MetaConfigSection = () => {
                                 <select
                                     value={capiSettings.stageMapping.dead}
                                     onChange={(e) => setCapiSettings(prev => ({ ...prev, stageMapping: { ...prev.stageMapping, dead: e.target.value } }))}
-                                    className="w-full p-2 border border-slate-200 rounded-lg text-sm"
+                                    className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white"
                                 >
+                                    {stages.length === 0 && <option value={capiSettings.stageMapping.dead}>{capiSettings.stageMapping.dead || 'Loading...'}</option>}
                                     {stages.map(stage => (
                                         <option key={stage._id} value={stage.name}>{stage.name}</option>
                                     ))}
