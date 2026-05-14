@@ -277,7 +277,7 @@ const getStatus = async (req, res) => {
         const ownerId = req.tenantId;
         // Must use '+' to include select:false fields (metaAccessToken)
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('+meta.metaAccessToken meta.metaTokenExpiry meta.metaPageId meta.metaPageName meta.metaFormId meta.metaFormName meta.metaLeadSyncEnabled meta.metaLastSyncAt meta.metaUserName meta.metaUserPicture');
+            .select('+meta.metaAccessToken meta.metaTokenExpiry meta.metaPageId meta.metaPageName meta.metaPagePicture meta.metaFormId meta.metaFormName meta.metaLeadSyncEnabled meta.metaLastSyncAt meta.metaUserName meta.metaUserPicture');
 
         const meta = config?.meta || {};
         const hasToken = !!meta.metaAccessToken;
@@ -291,6 +291,7 @@ const getStatus = async (req, res) => {
             tokenExpired: tokenExpired || false,
             pageId: meta.metaPageId,
             pageName: meta.metaPageName,
+            pagePicture: meta.metaPagePicture,
             formId: meta.metaFormId,
             formName: meta.metaFormName,
             syncEnabled: meta.metaLeadSyncEnabled,
@@ -449,7 +450,7 @@ const getPages = async (req, res) => {
 
         // 1. Direct page admin roles (pages_show_list)
         const directPages = await fetchAllPages(`${META_GRAPH_URL}/me/accounts`, {
-            access_token: token, fields: 'id,name,access_token'
+            access_token: token, fields: 'id,name,access_token,picture{url}'
         });
         console.log(`   📄 /me/accounts returned ${directPages.length} page(s)`);
         directPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
@@ -469,7 +470,7 @@ const getPages = async (req, res) => {
                 let clientCount = 0;
                 try {
                     const bizPages = await fetchAllPages(`${META_GRAPH_URL}/${biz.id}/owned_pages`, {
-                        access_token: token, fields: 'id,name,access_token'
+                        access_token: token, fields: 'id,name,access_token,picture{url}'
                     });
                     ownedCount = bizPages.length;
                     bizPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
@@ -478,7 +479,7 @@ const getPages = async (req, res) => {
                 }
                 try {
                     const clientPages = await fetchAllPages(`${META_GRAPH_URL}/${biz.id}/client_pages`, {
-                        access_token: token, fields: 'id,name,access_token'
+                        access_token: token, fields: 'id,name,access_token,picture{url}'
                     });
                     clientCount = clientPages.length;
                     clientPages.forEach(p => { if (!seenIds.has(p.id)) { seenIds.add(p.id); allPages.push(p); } });
@@ -495,7 +496,8 @@ const getPages = async (req, res) => {
         // Never send page access tokens to the frontend — derive server-side on connect()
         const pages = allPages.map(page => ({
             id: page.id,
-            name: page.name
+            name: page.name,
+            picture: page.picture?.data?.url || null
         }));
 
         console.log(`   ✅ Total unique pages returned: ${pages.length}`);
@@ -582,7 +584,7 @@ const getForms = async (req, res) => {
 const connect = async (req, res) => {
     try {
         // pageAccessToken is intentionally NOT accepted from the frontend — derived server-side below
-        const { pageId, pageName, formId, formName } = req.body;
+        const { pageId, pageName, pagePicture, formId, formName } = req.body;
 
         if (!pageId) {
             return res.status(400).json({ success: false, message: 'Page is required' });
@@ -646,6 +648,7 @@ const connect = async (req, res) => {
                 $set: {
                     'meta.metaPageId': pageId,
                     'meta.metaPageName': pageName,
+                    'meta.metaPagePicture': pagePicture || null,
                     'meta.metaPageAccessToken': pageAccessToken,
                     'meta.metaFormId': isAnyForm ? null : formId,
                     'meta.metaFormName': isAnyForm ? 'Any Form' : formName,
@@ -678,6 +681,7 @@ const resetPage = async (req, res) => {
                 $set: {
                     'meta.metaPageId': null,
                     'meta.metaPageName': null,
+                    'meta.metaPagePicture': null,
                     'meta.metaPageAccessToken': null,
                     'meta.metaFormId': null,
                     'meta.metaFormName': null,
@@ -711,6 +715,7 @@ const disconnect = async (req, res) => {
                     'meta.metaUserPicture': null,
                     'meta.metaPageId': null,
                     'meta.metaPageName': null,
+                    'meta.metaPagePicture': null,
                     'meta.metaPageAccessToken': null,
                     'meta.metaFormId': null,
                     'meta.metaFormName': null,

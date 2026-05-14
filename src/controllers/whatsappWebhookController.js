@@ -61,8 +61,8 @@ exports.verifyWebhook = (req, res) => {
     }
 };
 
-// Verify signature from Meta
-const verifySignature = (req) => {
+// Verify signature from Meta using the provided app secret
+const verifySignature = (req, appSecret) => {
     const signature = req.headers['x-hub-signature-256'];
     debug(`🔐 Signature header: ${signature || '(not present)'}`);
 
@@ -71,9 +71,8 @@ const verifySignature = (req) => {
         return false;
     }
 
-    const appSecret = process.env.WA_APP_SECRET || process.env.META_APP_SECRET;
     if (!appSecret) {
-        console.error('❌ WA_APP_SECRET (or META_APP_SECRET) not set. Rejecting webhook for security.');
+        console.error('❌ No app secret available for signature verification. Rejecting webhook.');
         return false;
     }
 
@@ -110,6 +109,31 @@ const verifySignature = (req) => {
     return isValid;
 };
 
+// Resolve the app secret for a given WABA ID.
+// Each tenant stores their own app secret. Falls back to the global env secret
+// for any tenant still on the legacy embedded-signup flow.
+const resolveAppSecret = async (wabaId) => {
+    if (wabaId) {
+        try {
+            const { decryptToken } = require('../utils/encryptionUtils');
+            const config = await IntegrationConfig.findOne({ 'whatsapp.wabaId': wabaId })
+                .select('+whatsapp.waAppSecret');
+            const raw = config?.whatsapp?.waAppSecret;
+            if (raw) {
+                // Mongoose getters may or may not fire depending on access pattern —
+                // manually decrypt to be safe (same guard used in whatsappUtils.js).
+                return (raw.includes(':') && raw.split(':')[0].length === 32)
+                    ? decryptToken(raw)
+                    : raw;
+            }
+        } catch (e) {
+            console.warn('⚠️ [Webhook] Failed to look up per-tenant app secret:', e.message);
+        }
+    }
+    // Fall back to global platform secret (embedded signup tenants, or missing per-tenant secret)
+    return process.env.WA_APP_SECRET || process.env.META_APP_SECRET || null;
+};
+
 // Handle incoming webhook
 exports.handleWebhook = async (req, res) => {
     // 1. Respond immediately to acknowledge receipt and prevent Meta timeouts/retries
@@ -126,12 +150,14 @@ exports.handleWebhook = async (req, res) => {
             debug('📋 Request headers:', JSON.stringify(req.headers, null, 2));
             debugJSON('📦 Request body (raw)', req.body);
 
-            // Verify signature (optional but recommended)
-            if (process.env.META_APP_SECRET && !verifySignature(req)) {
-                const usedSecret = process.env.WA_APP_SECRET || process.env.META_APP_SECRET;
-                console.error(`❌ Invalid webhook signature - dropping request. App Secret starts with: "${usedSecret?.substring(0, 4)}..." | Has rawBody: ${!!req.rawBody} | Verify META_APP_SECRET matches your Meta App Dashboard → Settings → Basic → App Secret.`);
+            // Resolve per-tenant app secret using the WABA ID in the payload,
+            // then verify the HMAC signature before processing any content.
+            const wabaIdFromPayload = req.body?.entry?.[0]?.id;
+            const resolvedSecret = await resolveAppSecret(wabaIdFromPayload);
+            if (resolvedSecret && !verifySignature(req, resolvedSecret)) {
+                console.error(`❌ Invalid webhook signature - dropping request. WABA: ${wabaIdFromPayload} | Has rawBody: ${!!req.rawBody}`);
                 telemetryService.recordWebhook(false, false, 0);
-                return; // Exits the setImmediate block, response already sent
+                return;
             }
 
             const body = req.body;
@@ -199,10 +225,13 @@ const processTemplateStatusUpdate = async (wabaId, value) => {
         const { emitToUser } = require('../services/socketService');
 
         // Find template by metaTemplateId (set when it was submitted)
-        // Also try by name as fallback (Meta sometimes omits the ID on first approval)
+        // Also try by name as fallback (Meta sometimes omits the ID on first approval),
+        // but scope to the correct tenant to avoid cross-tenant name collisions.
         let template = await WhatsAppTemplate.findOne({ metaTemplateId });
         if (!template && templateName) {
-            template = await WhatsAppTemplate.findOne({ name: templateName });
+            const ownerConfig = await IntegrationConfig.findOne({ 'whatsapp.wabaId': wabaId }).select('userId').lean();
+            const tenantFilter = ownerConfig ? { userId: ownerConfig.userId, name: templateName } : { name: templateName };
+            template = await WhatsAppTemplate.findOne(tenantFilter);
         }
 
         if (!template) {
@@ -589,7 +618,7 @@ const processStatusUpdate = async (status, userId) => {
             statusTimestamp: timestamp,
             ...(statusType === 'failed' && updatePayload.$set.error && { error: updatePayload.$set.error })
         };
-        emitToUser(updatedMsg.userId, 'whatsapp:statusUpdate', statusPayload);
+        emitToUser(String(updatedMsg.userId), 'whatsapp:statusUpdate', statusPayload);
         emitToConversation(updatedMsg.conversationId.toString(), 'whatsapp:statusUpdate', {
             waMessageId,
             status: statusType

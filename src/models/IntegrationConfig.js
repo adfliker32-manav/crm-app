@@ -24,6 +24,7 @@ const integrationConfigSchema = new mongoose.Schema({
         // FIX 4.3: select:false prevents token leakage if a route returns the full config document
         waAccessToken: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         waAppId: { type: String, default: null },
+        waAppSecret: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         businessHours: {
             timezone: { type: String, default: 'UTC' }, // e.g. 'Asia/Kolkata'
             monday: { isOpen: { type: Boolean, default: true }, start: { type: String, default: '09:00' }, end: { type: String, default: '18:00' } },
@@ -63,8 +64,11 @@ const integrationConfigSchema = new mongoose.Schema({
         metaAccessToken: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         metaTokenExpiry: { type: Date, default: null },
         metaUserId: { type: String, default: null },
+        metaUserName: { type: String, default: null },
+        metaUserPicture: { type: String, default: null },
         metaPageId: { type: String, default: null },
         metaPageName: { type: String, default: null },
+        metaPagePicture: { type: String, default: null },
         metaPageAccessToken: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         metaFormId: { type: String, default: null },
         metaFormName: { type: String, default: null },

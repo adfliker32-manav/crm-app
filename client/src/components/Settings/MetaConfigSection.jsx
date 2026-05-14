@@ -213,6 +213,7 @@ const MetaConfigSection = () => {
             const res = await api.post('/meta/connect', {
                 pageId: selectedPage.id,
                 pageName: selectedPage.name,
+                pagePicture: selectedPage.picture,
                 formId: selectedForm.id,
                 formName: selectedForm.name
             });
@@ -241,6 +242,7 @@ const MetaConfigSection = () => {
                 tokenExpired: false,
                 pageId: null,
                 pageName: null,
+                pagePicture: null,
                 formId: null,
                 formName: null,
                 syncEnabled: false,
@@ -280,6 +282,7 @@ const MetaConfigSection = () => {
                 syncEnabled: false,
                 pageId: null,
                 pageName: null,
+                pagePicture: null,
                 formId: null,
                 formName: null
             }));
@@ -406,13 +409,20 @@ const MetaConfigSection = () => {
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                                <div className="bg-white rounded-lg p-4 border border-green-100">
-                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Facebook Page</p>
-                                    <p className="font-semibold text-slate-700">{status.pageName}</p>
+                                <div className="bg-white rounded-lg p-4 border border-green-100 flex items-center gap-3">
+                                    {status.pagePicture && (
+                                        <img src={status.pagePicture} alt={status.pageName} className="w-10 h-10 rounded-full border border-slate-200 object-cover" />
+                                    )}
+                                    <div>
+                                        <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Facebook Page</p>
+                                        <p className="font-semibold text-slate-700">{status.pageName}</p>
+                                    </div>
                                 </div>
-                                <div className="bg-white rounded-lg p-4 border border-green-100">
-                                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Lead Form</p>
-                                    <p className="font-semibold text-slate-700">{status.formName}</p>
+                                <div className="bg-white rounded-lg p-4 border border-green-100 flex items-center gap-3">
+                                    <div>
+                                        <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Lead Form</p>
+                                        <p className="font-semibold text-slate-700">{status.formName}</p>
+                                    </div>
                                 </div>
                             </div>
 
@@ -487,6 +497,14 @@ const MetaConfigSection = () => {
                             <label className="block text-sm font-semibold text-slate-700 mb-2">
                                 Facebook Page
                             </label>
+
+                            {selectedPage && selectedPage.picture && (
+                                <div className="flex items-center gap-3 mb-3 p-3 bg-white border border-slate-200 rounded-lg shadow-sm">
+                                    <img src={selectedPage.picture} alt={selectedPage.name} className="w-10 h-10 rounded-full border border-slate-200 object-cover" />
+                                    <span className="font-medium text-slate-800">{selectedPage.name}</span>
+                                </div>
+                            )}
+
                             <div className="relative">
                                 <select
                                     value={selectedPage?.id || ''}

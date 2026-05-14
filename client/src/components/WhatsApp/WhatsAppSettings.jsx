@@ -1,28 +1,10 @@
 /* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-
-const loadFbSdk = (appId) => {
-    return new Promise((resolve) => {
-        if (window.FB) { resolve(window.FB); return; }
-        window.fbAsyncInit = () => {
-            window.FB.init({ appId, cookie: true, xfbml: false, version: 'v25.0' });
-            resolve(window.FB);
-        };
-        if (!document.getElementById('facebook-jssdk')) {
-            const s = document.createElement('script');
-            s.id  = 'facebook-jssdk';
-            s.src = 'https://connect.facebook.net/en_US/sdk.js';
-            s.async = true;
-            s.defer = true;
-            document.body.appendChild(s);
-        }
-    });
-};
 
 const WhatsAppSettings = () => {
     const { showSuccess, showError } = useNotification();
@@ -31,10 +13,8 @@ const WhatsAppSettings = () => {
 
     // Connection state
     const [config, setConfig] = useState({
-        wabaId: '', waPhoneNumberId: '',
-        displayPhone: '', verifiedName: '',
-        isConfigured: false, embeddedSignupConnected: false,
-        tokenExpiresAt: null, tokenRefreshedAt: null
+        wabaId: '', waPhoneNumberId: '', waAppId: '',
+        displayPhone: '', verifiedName: '', isConfigured: false
     });
 
     // Automations state
@@ -57,50 +37,37 @@ const WhatsAppSettings = () => {
         }
     });
 
-    const [loading, setLoading]       = useState(true);
-    const [saving, setSaving]         = useState(false);
-    const [connecting, setConnecting] = useState(false);
-    const [refreshing, setRefreshing] = useState(false);
+    const [loading, setLoading]           = useState(true);
+    const [saving, setSaving]             = useState(false);
+    const [connecting, setConnecting]     = useState(false);
+    const [testing, setTesting]           = useState(false);
+    const [testResult, setTestResult]     = useState(null);
     const [connectionError, setConnectionError] = useState('');
+    const [showSecret, setShowSecret]     = useState(false);
 
-    // Manual connection state
-    const [showManual, setShowManual]         = useState(false);
-    const [manualConnecting, setManualConnecting] = useState(false);
-    const [manualForm, setManualForm] = useState({ wabaId: '', phoneNumberId: '', accessToken: '' });
-
-    // Public Meta config (appId + waConfigId)
-    const [metaAppId, setMetaAppId]     = useState('');
-    const [waConfigId, setWaConfigId]   = useState('');
-    const fbReady = useRef(false);
+    // Credential form state
+    const [form, setForm] = useState({
+        wabaId: '', phoneNumberId: '', accessToken: '', appId: '', appSecret: ''
+    });
 
     useEffect(() => { fetchData(); }, []);
-
-    // Load FB SDK once we have the appId
-    useEffect(() => {
-        if (!metaAppId || fbReady.current) return;
-        loadFbSdk(metaAppId).then(() => { fbReady.current = true; });
-    }, [metaAppId]);
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [cfgRes, settingsRes, pubRes] = await Promise.all([
+            const [cfgRes, settingsRes] = await Promise.all([
                 api.get('/whatsapp/config'),
-                api.get('/whatsapp/settings').catch(() => ({ data: { settings: null } })),
-                api.get('/whatsapp/public-config').catch(() => ({ data: {} }))
+                api.get('/whatsapp/settings').catch(() => ({ data: { settings: null } }))
             ]);
 
-            setConfig(prev => ({
-                ...prev,
-                wabaId:                  cfgRes.data.wabaId || '',
-                waPhoneNumberId:         cfgRes.data.waPhoneNumberId || '',
-                displayPhone:            cfgRes.data.displayPhone || '',
-                verifiedName:            cfgRes.data.verifiedName || '',
-                embeddedSignupConnected: cfgRes.data.embeddedSignupConnected || false,
-                isConfigured:            cfgRes.data.isConfigured || false,
-                tokenExpiresAt:          cfgRes.data.tokenExpiresAt || null,
-                tokenRefreshedAt:        cfgRes.data.tokenRefreshedAt || null
-            }));
+            setConfig({
+                wabaId:          cfgRes.data.wabaId || '',
+                waPhoneNumberId: cfgRes.data.waPhoneNumberId || '',
+                waAppId:         cfgRes.data.waAppId || '',
+                displayPhone:    cfgRes.data.displayPhone || '',
+                verifiedName:    cfgRes.data.verifiedName || '',
+                isConfigured:    cfgRes.data.isConfigured || false
+            });
 
             if (settingsRes?.data?.settings) {
                 setSettings(prev => ({
@@ -108,9 +75,6 @@ const WhatsAppSettings = () => {
                     autoReply:     { ...prev.autoReply,     ...(settingsRes.data.settings.autoReply     || {}) }
                 }));
             }
-
-            if (pubRes?.data?.appId) setMetaAppId(pubRes.data.appId);
-            if (pubRes?.data?.waConfigId) setWaConfigId(pubRes.data.waConfigId);
         } catch (error) {
             showError('Failed to load settings');
         } finally {
@@ -118,128 +82,65 @@ const WhatsAppSettings = () => {
         }
     };
 
-    // ── Embedded Signup ────────────────────────────────────────────────────────
-    const handleEmbeddedSignup = async () => {
+    const handleConnect = async (e) => {
+        e.preventDefault();
         setConnectionError('');
-        if (!metaAppId) { showError('Meta App ID not configured on the server'); setConnectionError('Meta App ID not configured on the server. Contact your administrator.'); return; }
-
-        try {
-            if (!window.FB) {
-                await loadFbSdk(metaAppId);
-                fbReady.current = true;
-            }
-            if (!window.FB) {
-                showError('Facebook SDK failed to load. Disable any ad-blockers and try again.');
-                return;
-            }
-        } catch {
-            showError('Facebook SDK failed to load. Disable any ad-blockers and try again.');
+        const { wabaId, phoneNumberId, accessToken, appId, appSecret } = form;
+        if (!wabaId || !phoneNumberId || !accessToken || !appId || !appSecret) {
+            setConnectionError('All five fields are required.');
             return;
         }
-
+        const numericOnly = /^\d+$/;
+        if (!numericOnly.test(wabaId) || !numericOnly.test(phoneNumberId) || !numericOnly.test(appId)) {
+            setConnectionError('WABA ID, Phone Number ID, and App ID must be numeric.');
+            return;
+        }
         setConnecting(true);
-
-        // sessionInfoVersion 3: Meta sends WABA ID + Phone Number ID via postMessage
-        // during the popup flow — capture it so we can pass it to the backend directly.
-        // This is the reliable way to detect which existing account the user selected.
-        let sessionInfo = null;
-        const onMessage = (e) => {
-            try {
-                const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
-                if (data?.type === 'WA_EMBEDDED_SIGNUP') {
-                    if (data.event === 'FINISH') {
-                        sessionInfo = data.data; // { phone_number_id, waba_id }
-                        console.log('📱 ES session info:', sessionInfo);
-                    } else if (data.event === 'CANCEL') {
-                        console.log('ℹ️ ES cancelled at step:', data.data?.current_step);
-                    }
-                }
-            } catch {}
-        };
-        window.addEventListener('message', onMessage);
-
-        const loginOptions = {
-            response_type: 'code',
-            override_default_response_type: true,
-            extras: { setup: {}, sessionInfoVersion: '3' }
-        };
-
-        if (waConfigId) {
-            loginOptions.config_id = String(waConfigId);
-        } else {
-            loginOptions.scope = 'whatsapp_business_management,whatsapp_business_messaging,business_management';
-        }
-
-        if (typeof window.FB?.login !== 'function') {
-            setConnecting(false);
-            window.removeEventListener('message', onMessage);
-            showError('Facebook SDK is not ready. Please refresh the page and disable ad blockers.');
-            return;
-        }
-
         try {
-            window.FB.login((response) => {
-                const processLogin = async () => {
-                    console.log('Facebook SDK Full Response:', JSON.stringify(response, null, 2));
-                    window.removeEventListener('message', onMessage);
-
-                    if (!response?.authResponse) {
-                        const reason = 'Facebook login was cancelled or the popup was blocked. Please try again.';
-                        console.warn('FB.login failed — no authResponse:', response);
-                        showError(reason);
-                        setConnectionError(reason);
-                        setConnecting(false);
-                        return;
-                    }
-
-                    const authCode = response.authResponse.code;
-                    const accessToken = response.authResponse.accessToken;
-
-                    if (!authCode && !accessToken) {
-                        const reason = 'Facebook did not return credentials. Please try again and complete all steps in the popup.';
-                        console.warn('FB.login — no code or accessToken:', response.authResponse);
-                        showError(reason);
-                        setConnectionError(reason);
-                        setConnecting(false);
-                        return;
-                    }
-
-                    try {
-                        const payload = {};
-                        if (authCode) {
-                            payload.code = authCode;
-                        } else {
-                            // Facebook returned a short-lived accessToken instead of a code
-                            payload.accessToken = accessToken;
+            const res = await api.post('/whatsapp/connect-manual', { wabaId, phoneNumberId, accessToken, appId, appSecret });
+            if (res.data.success) {
+                showSuccess(`WhatsApp connected! Phone: ${res.data.displayPhone}`);
+                setForm({ wabaId: '', phoneNumberId: '', accessToken: '', appId: '', appSecret: '' });
+                setConnectionError('');
+                setTestResult(null);
+                await fetchData();
+                if (!res.data.webhookSubscribed) {
+                    setTestResult({
+                        success: false,
+                        message: 'Connected, but WABA webhook subscription failed',
+                        results: {
+                            credentials: { ok: true, displayPhone: res.data.displayPhone, verifiedName: res.data.verifiedName },
+                            webhookSubscription: {
+                                ok: false,
+                                error: res.data.webhookSubscriptionError || 'Subscription failed. In your Meta App Dashboard → WhatsApp → Configuration, ensure your Callback URL is set and subscribe the WABA to your app.'
+                            }
                         }
-                        // Pass the IDs Meta told us about — backend uses these to skip
-                        // the debug_token scan and connect the exact existing account.
-                        if (sessionInfo?.waba_id)        payload.wabaId        = sessionInfo.waba_id;
-                        if (sessionInfo?.phone_number_id) payload.phoneNumberId = sessionInfo.phone_number_id;
-
-                        console.log('Sending to backend:', { hasCode: !!authCode, hasToken: !!accessToken, hasSessionInfo: !!sessionInfo });
-                        const res = await api.post('/whatsapp/connect-embedded', payload);
-                        if (res.data.success) {
-                            showSuccess(`WhatsApp connected! Phone: ${res.data.displayPhone}`);
-                            setConnectionError('');
-                            await fetchData();
-                        }
-                    } catch (err) {
-                        const errMsg = err.response?.data?.message || 'Failed to connect WhatsApp';
-                        showError(errMsg);
-                        setConnectionError(errMsg);
-                    } finally {
-                        setConnecting(false);
-                    }
-                };
-                processLogin();
-            }, loginOptions);
+                    });
+                }
+            }
         } catch (err) {
-            console.error('FB.login error:', err);
-            window.removeEventListener('message', onMessage);
-            showError(`Failed to open Facebook login: ${err.message || 'Unknown error'}`);
-            setConnectionError(`Failed to open Facebook login: ${err.message || 'Unknown error'}`);
+            const msg = err.response?.data?.message || 'Failed to connect WhatsApp';
+            showError(msg);
+            setConnectionError(msg);
+        } finally {
             setConnecting(false);
+        }
+    };
+
+    const handleTestConnection = async () => {
+        setTesting(true);
+        setTestResult(null);
+        try {
+            const res = await api.get('/whatsapp/test-connection');
+            setTestResult(res.data);
+        } catch (err) {
+            setTestResult({
+                success: false,
+                message: err.response?.data?.message || 'Failed to run connection test',
+                results: {}
+            });
+        } finally {
+            setTesting(false);
         }
     };
 
@@ -252,21 +153,6 @@ const WhatsAppSettings = () => {
             await fetchData();
         } catch (err) {
             showError(err.response?.data?.message || 'Failed to disconnect');
-        }
-    };
-
-    const handleRefreshToken = async () => {
-        setRefreshing(true);
-        try {
-            const res = await api.post('/whatsapp/token/refresh');
-            if (res.data.success) {
-                showSuccess('Token refreshed — valid for another 60 days');
-                setConfig(prev => ({ ...prev, tokenExpiresAt: res.data.tokenExpiresAt, tokenRefreshedAt: new Date().toISOString() }));
-            }
-        } catch (err) {
-            showError(err.response?.data?.message || 'Failed to refresh token');
-        } finally {
-            setRefreshing(false);
         }
     };
 
@@ -310,8 +196,8 @@ const WhatsAppSettings = () => {
             {/* Tabs */}
             <div className="flex border-b border-slate-200 mb-6">
                 {[
-                    { id: 'connection',  icon: 'fa-plug',   label: 'Connection' },
-                    { id: 'automations', icon: 'fa-robot',  label: 'Automations & OOO' }
+                    { id: 'connection',   icon: 'fa-plug',  label: 'Connection' },
+                    { id: 'automations', icon: 'fa-robot', label: 'Automations & OOO' }
                 ].map(t => (
                     <button
                         key={t.id}
@@ -327,16 +213,15 @@ const WhatsAppSettings = () => {
             {activeTab === 'connection' && (
                 <div className="space-y-5">
 
-                    {/* Connection Error Banner */}
+                    {/* Error banner */}
                     {connectionError && (
                         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
                             <div className="w-9 h-9 bg-red-100 rounded-full flex items-center justify-center shrink-0 mt-0.5">
                                 <i className="fa-solid fa-circle-exclamation text-red-600 text-lg"></i>
                             </div>
                             <div className="flex-1 min-w-0">
-                                <p className="font-bold text-red-800 text-sm">WhatsApp Connection Failed</p>
+                                <p className="font-bold text-red-800 text-sm">Connection Failed</p>
                                 <p className="text-xs text-red-600 mt-0.5">{connectionError}</p>
-                                <p className="text-xs text-red-500 mt-2">If this persists, ensure <strong>META_APP_SECRET</strong> is configured in your server environment variables (Render dashboard → Environment).</p>
                             </div>
                             <button onClick={() => setConnectionError('')} className="text-red-400 hover:text-red-600 text-lg shrink-0">
                                 <i className="fa-solid fa-xmark"></i>
@@ -344,147 +229,217 @@ const WhatsAppSettings = () => {
                         </div>
                     )}
 
-
                     {/* Connected banner */}
-                    {config.isConfigured && (() => {
-                        const daysLeft = config.tokenExpiresAt
-                            ? Math.ceil((new Date(config.tokenExpiresAt) - Date.now()) / 86400000)
-                            : null;
-                        const isExpired        = daysLeft !== null && daysLeft <= 0;
-                        const showTokenHealth  = config.embeddedSignupConnected && daysLeft !== null;
-                        const badge = showTokenHealth
-                            ? daysLeft > 15
-                                ? { color: 'emerald', icon: 'fa-shield-check',        label: `Token valid · ${daysLeft}d left` }
-                                : daysLeft >= 5
-                                    ? { color: 'amber', icon: 'fa-triangle-exclamation', label: `Expires in ${daysLeft}d — refresh soon` }
-                                    : { color: 'red',   icon: 'fa-circle-xmark',         label: isExpired ? 'Token expired' : `Expires in ${daysLeft}d` }
-                            : null;
-                        return (
-                            <>
-                                {/* Expired token — prominent action alert */}
-                                {isExpired && (
-                                    <div className="bg-red-50 border border-red-300 rounded-xl p-4 flex items-start gap-3">
-                                        <div className="w-9 h-9 bg-red-100 rounded-full flex items-center justify-center shrink-0 mt-0.5">
-                                            <i className="fa-solid fa-circle-exclamation text-red-600 text-lg"></i>
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="font-bold text-red-800 text-sm">WhatsApp token has expired</p>
-                                            <p className="text-xs text-red-600 mt-0.5">
-                                                Sending and receiving messages is paused. Click <strong>Continue with Facebook</strong> below to reconnect — your contacts and settings will not be lost.
-                                            </p>
+                    {config.isConfigured && (
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+                            <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center shrink-0">
+                                <i className="fa-brands fa-whatsapp text-emerald-600 text-xl"></i>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="font-bold text-emerald-800 text-sm">WhatsApp Connected</p>
+                                <p className="text-xs text-emerald-600 mt-0.5">
+                                    {config.verifiedName && <span className="font-semibold">{config.verifiedName} · </span>}
+                                    {config.displayPhone || `Phone ID: ${config.waPhoneNumberId}`}
+                                </p>
+                                {config.waAppId && (
+                                    <p className="text-[11px] text-emerald-500 mt-0.5">App ID: {config.waAppId}</p>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                    onClick={handleTestConnection}
+                                    disabled={testing}
+                                    className="text-xs font-semibold px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg transition disabled:opacity-50 flex items-center gap-1.5"
+                                >
+                                    <i className={`fa-solid ${testing ? 'fa-spinner fa-spin' : 'fa-plug-circle-check'}`}></i>
+                                    {testing ? 'Testing…' : 'Test Connection'}
+                                </button>
+                                <button
+                                    onClick={handleDisconnect}
+                                    className="text-xs text-red-500 hover:text-red-700 font-semibold px-3 py-1.5 hover:bg-red-50 rounded-lg transition"
+                                >
+                                    Disconnect
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Test result panel */}
+                    {testResult && (
+                        <div className={`rounded-xl border p-4 ${testResult.success ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
+                            <div className="flex items-center justify-between mb-3">
+                                <p className={`font-bold text-sm flex items-center gap-2 ${testResult.success ? 'text-emerald-800' : 'text-red-800'}`}>
+                                    <i className={`fa-solid ${testResult.success ? 'fa-circle-check' : 'fa-circle-xmark'}`}></i>
+                                    {testResult.message}
+                                </p>
+                                <button onClick={() => setTestResult(null)} className="text-slate-400 hover:text-slate-600 text-sm">
+                                    <i className="fa-solid fa-xmark"></i>
+                                </button>
+                            </div>
+                            <div className="space-y-2">
+                                {/* Credentials check */}
+                                {testResult.results?.credentials && (
+                                    <div className={`flex items-start gap-2 text-xs p-2.5 rounded-lg ${testResult.results.credentials.ok ? 'bg-emerald-100/60' : 'bg-red-100/60'}`}>
+                                        <i className={`fa-solid ${testResult.results.credentials.ok ? 'fa-check text-emerald-600' : 'fa-xmark text-red-600'} mt-0.5 shrink-0`}></i>
+                                        <div>
+                                            <span className="font-semibold">Access Token & Phone Number ID</span>
+                                            {testResult.results.credentials.ok ? (
+                                                <span className="text-emerald-700 ml-1">
+                                                    — {testResult.results.credentials.displayPhone}
+                                                    {testResult.results.credentials.qualityRating && <span className="ml-1 opacity-70">· Quality: {testResult.results.credentials.qualityRating}</span>}
+                                                    {testResult.results.credentials.status && <span className="ml-1 opacity-70">· {testResult.results.credentials.status}</span>}
+                                                </span>
+                                            ) : (
+                                                <span className="text-red-600 ml-1">— {testResult.results.credentials.error}{testResult.results.credentials.code ? ` (code ${testResult.results.credentials.code})` : ''}</span>
+                                            )}
                                         </div>
                                     </div>
                                 )}
+                                {/* Webhook subscription check */}
+                                {testResult.results?.webhookSubscription && (
+                                    <div className={`flex items-start gap-2 text-xs p-2.5 rounded-lg ${testResult.results.webhookSubscription.ok ? 'bg-emerald-100/60' : 'bg-amber-100/60'}`}>
+                                        <i className={`fa-solid ${testResult.results.webhookSubscription.ok ? 'fa-check text-emerald-600' : 'fa-triangle-exclamation text-amber-600'} mt-0.5 shrink-0`}></i>
+                                        <div>
+                                            <span className="font-semibold">WABA Webhook Subscription</span>
+                                            {testResult.results.webhookSubscription.ok ? (
+                                                <span className="text-emerald-700 ml-1">— App subscribed to WABA</span>
+                                            ) : (
+                                                <span className="text-amber-700 ml-1">— {testResult.results.webhookSubscription.error || 'App not subscribed. Go to Meta App Dashboard → WhatsApp → Configuration and subscribe.'}</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
 
-                                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
-                                    <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center shrink-0">
-                                        <i className="fa-brands fa-whatsapp text-emerald-600 text-xl"></i>
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="font-bold text-emerald-800 text-sm">WhatsApp Connected</p>
-                                        {config.displayPhone ? (
-                                            <p className="text-xs text-emerald-600 mt-0.5">
-                                                {config.verifiedName && <span className="font-semibold">{config.verifiedName} · </span>}
-                                                {config.displayPhone}
-                                                {config.embeddedSignupConnected && <span className="ml-2 bg-emerald-200 text-emerald-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">via Facebook</span>}
-                                            </p>
-                                        ) : (
-                                            <p className="text-xs text-emerald-600 mt-0.5">Phone ID: {config.waPhoneNumberId}</p>
-                                        )}
-                                        {badge && (
-                                            <p className={`text-[11px] font-semibold mt-1 text-${badge.color}-600`}>
-                                                <i className={`fa-solid ${badge.icon} mr-1`}></i>{badge.label}
-                                            </p>
-                                        )}
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                        {showTokenHealth && !isExpired && daysLeft <= 15 && (
-                                            <button
-                                                onClick={handleRefreshToken}
-                                                disabled={refreshing}
-                                                className="text-xs font-semibold px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-700 rounded-lg transition disabled:opacity-50 flex items-center gap-1.5"
-                                            >
-                                                <i className={`fa-solid ${refreshing ? 'fa-spinner fa-spin' : 'fa-rotate'}`}></i>
-                                                {refreshing ? 'Refreshing…' : 'Refresh Now'}
-                                            </button>
-                                        )}
-                                        <button
-                                            onClick={handleDisconnect}
-                                            className="text-xs text-red-500 hover:text-red-700 font-semibold px-3 py-1.5 hover:bg-red-50 rounded-lg transition"
-                                        >
-                                            Disconnect
-                                        </button>
-                                    </div>
-                                </div>
-                            </>
-                        );
-                    })()}
-
-                    {/* ── Embedded Signup Card ─────────────────────────────── */}
+                    {/* Credential Form */}
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                        <div className="flex items-center gap-3 mb-4 pb-4 border-b border-slate-100">
-                            <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center">
-                                <i className="fa-brands fa-facebook text-blue-600 text-xl"></i>
+                        <div className="flex items-center gap-3 mb-5 pb-4 border-b border-slate-100">
+                            <div className="w-10 h-10 bg-green-50 rounded-lg flex items-center justify-center">
+                                <i className="fa-brands fa-whatsapp text-[#00a884] text-xl"></i>
                             </div>
                             <div>
-                                <h3 className="text-base font-bold text-slate-800">Connect via Facebook <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full ml-1">Recommended</span></h3>
-                                <p className="text-xs text-slate-500">One-click setup — no credentials to copy-paste</p>
+                                <h3 className="text-base font-bold text-slate-800">
+                                    {config.isConfigured ? 'Update Credentials' : 'Connect WhatsApp'}
+                                </h3>
+                                <p className="text-xs text-slate-500">Enter your Meta app credentials and WhatsApp account IDs</p>
                             </div>
                         </div>
 
-                        {/* What clients need */}
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
-                            {[
-                                { icon: 'fa-building', label: 'Meta Business Manager', sub: 'Will be created if you don\'t have one' },
-                                { icon: 'fa-whatsapp fa-brands', label: 'WhatsApp Business Account', sub: 'Created during signup' },
-                                { icon: 'fa-phone', label: 'Business Phone Number', sub: 'Not already on WhatsApp' }
-                            ].map((item, i) => (
-                                <div key={i} className="flex items-start gap-2.5 bg-slate-50 rounded-lg p-3">
-                                    <div className="w-7 h-7 bg-white rounded-lg flex items-center justify-center shrink-0 shadow-sm border border-slate-100">
-                                        <i className={`fa-solid ${item.icon} text-[#00a884] text-xs`}></i>
+                        <form onSubmit={handleConnect} className="space-y-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 mb-1">WABA ID <span className="text-red-500">*</span></label>
+                                    <input
+                                        type="text"
+                                        value={form.wabaId}
+                                        onChange={e => { setConnectionError(''); setForm(p => ({ ...p, wabaId: e.target.value.trim() })); }}
+                                        placeholder="WhatsApp Business Account ID"
+                                        className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 mb-1">Phone Number ID <span className="text-red-500">*</span></label>
+                                    <input
+                                        type="text"
+                                        value={form.phoneNumberId}
+                                        onChange={e => { setConnectionError(''); setForm(p => ({ ...p, phoneNumberId: e.target.value.trim() })); }}
+                                        placeholder="WhatsApp Phone Number ID"
+                                        className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none"
+                                        required
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-600 mb-1">Access Token <span className="text-red-500">*</span></label>
+                                <input
+                                    type="text"
+                                    value={form.accessToken}
+                                    onChange={e => { setConnectionError(''); setForm(p => ({ ...p, accessToken: e.target.value.trim() })); }}
+                                    placeholder="Permanent System User Access Token"
+                                    className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono"
+                                    required
+                                />
+                                <p className="text-[10px] text-slate-400 mt-1">Use a permanent System User token from your Meta Business Manager to avoid expiry.</p>
+                            </div>
+
+                            <div className="border-t border-slate-100 pt-4">
+                                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Your Meta App Credentials</p>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 mb-1">App ID <span className="text-red-500">*</span></label>
+                                        <input
+                                            type="text"
+                                            value={form.appId}
+                                            onChange={e => { setConnectionError(''); setForm(p => ({ ...p, appId: e.target.value.trim() })); }}
+                                            placeholder="Meta App ID"
+                                            className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none"
+                                            required
+                                        />
                                     </div>
                                     <div>
-                                        <p className="text-xs font-bold text-slate-700">{item.label}</p>
-                                        <p className="text-[10px] text-slate-400 mt-0.5">{item.sub}</p>
+                                        <label className="block text-xs font-semibold text-slate-600 mb-1">App Secret <span className="text-red-500">*</span></label>
+                                        <div className="relative">
+                                            <input
+                                                type={showSecret ? 'text' : 'password'}
+                                                value={form.appSecret}
+                                                onChange={e => { setConnectionError(''); setForm(p => ({ ...p, appSecret: e.target.value.trim() })); }}
+                                                placeholder="Meta App Secret"
+                                                className="w-full px-3 py-2.5 pr-10 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono"
+                                                required
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowSecret(p => !p)}
+                                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                            >
+                                                <i className={`fa-solid ${showSecret ? 'fa-eye-slash' : 'fa-eye'} text-xs`}></i>
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
-                            ))}
-                        </div>
+                                <p className="text-[10px] text-slate-400 mt-2">
+                                    Found in your Meta App Dashboard → Settings → Basic. The App Secret is used to verify incoming webhook signatures.
+                                </p>
+                            </div>
 
-                        {/* Permissions note */}
-                        <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 mb-5 flex items-start gap-2">
-                            <i className="fa-solid fa-shield-halved text-amber-500 text-sm mt-0.5 shrink-0"></i>
-                            <p className="text-xs text-amber-700">
-                                Your app will request <strong>whatsapp_business_management</strong> and <strong>whatsapp_business_messaging</strong> permissions — required for sending/receiving messages and running chatbots. You grant these during the Facebook popup.
-                            </p>
-                        </div>
-
-                        <button
-                            onClick={handleEmbeddedSignup}
-                            disabled={connecting}
-                            className="w-full py-3 bg-[#1877F2] hover:bg-[#166FE5] text-white rounded-xl font-bold text-sm transition shadow-sm disabled:opacity-60 flex items-center justify-center gap-2"
-                        >
-                            {connecting ? (
-                                <><i className="fa-solid fa-spinner fa-spin"></i> Connecting…</>
-                            ) : (
-                                <><i className="fa-brands fa-facebook text-lg"></i> Continue with Facebook</>
-                            )}
-                        </button>
-
-                        {!metaAppId && (
-                            <p className="text-center text-xs text-red-500 mt-2 font-medium">
-                                <i className="fa-solid fa-triangle-exclamation mr-1"></i>
-                                META_APP_ID not configured on server — add it to Render environment variables.
-                            </p>
-                        )}
-                        {metaAppId && !waConfigId && (
-                            <p className="text-center text-xs text-amber-600 mt-2">
-                                <i className="fa-solid fa-info-circle mr-1"></i>
-                                WA_EMBEDDED_CONFIG_ID not set — will use manual permission scopes. Add your Embedded Signup Config ID for best results.
-                            </p>
-                        )}
+                            <button
+                                type="submit"
+                                disabled={connecting}
+                                className="w-full py-3 bg-[#00a884] hover:bg-[#008f6f] text-white rounded-xl font-bold text-sm transition shadow-sm disabled:opacity-60 flex items-center justify-center gap-2"
+                            >
+                                {connecting ? (
+                                    <><i className="fa-solid fa-spinner fa-spin"></i> Connecting…</>
+                                ) : (
+                                    <><i className="fa-brands fa-whatsapp text-lg"></i> {config.isConfigured ? 'Update Connection' : 'Connect WhatsApp'}</>
+                                )}
+                            </button>
+                        </form>
                     </div>
 
+                    {/* Where to find credentials + webhook setup */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                        <div>
+                            <p className="text-xs font-bold text-slate-600 mb-2"><i className="fa-solid fa-circle-info mr-1.5 text-blue-500"></i>Where to find these values</p>
+                            <ul className="text-xs text-slate-500 space-y-1.5">
+                                <li><span className="font-semibold text-slate-600">WABA ID & Phone Number ID:</span> Meta Business Manager → WhatsApp → Getting Started, or WhatsApp Manager → Phone Numbers.</li>
+                                <li><span className="font-semibold text-slate-600">Access Token:</span> Meta Business Manager → System Users → generate a permanent token with <code className="bg-slate-200 px-1 rounded">whatsapp_business_messaging</code> and <code className="bg-slate-200 px-1 rounded">whatsapp_business_management</code> permissions.</li>
+                                <li><span className="font-semibold text-slate-600">App ID & App Secret:</span> developers.facebook.com → Your App → Settings → Basic.</li>
+                            </ul>
+                        </div>
+                        <div className="border-t border-slate-200 pt-3">
+                            <p className="text-xs font-bold text-amber-700 mb-1.5"><i className="fa-solid fa-triangle-exclamation mr-1.5"></i>Required: Register your webhook in your Meta App</p>
+                            <p className="text-xs text-slate-500 mb-1">In your Meta App Dashboard → WhatsApp → Configuration, add these settings:</p>
+                            <ul className="text-xs text-slate-500 space-y-1">
+                                <li><span className="font-semibold text-slate-600">Callback URL:</span> <code className="bg-slate-200 px-1 rounded">https://your-server.com/webhook/whatsapp</code></li>
+                                <li><span className="font-semibold text-slate-600">Verify Token:</span> The value of <code className="bg-slate-200 px-1 rounded">WA_WEBHOOK_VERIFY_TOKEN</code> from your server environment.</li>
+                                <li><span className="font-semibold text-slate-600">Subscribed Fields:</span> <code className="bg-slate-200 px-1 rounded">messages</code></li>
+                            </ul>
+                        </div>
+                    </div>
                 </div>
             )}
 
