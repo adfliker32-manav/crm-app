@@ -287,7 +287,7 @@ async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
         const fields = {};
         if (leadData.field_data) {
             for (const field of leadData.field_data) {
-                fields[field.name.toLowerCase()] = field.values?.[0];
+                fields[field.name.toLowerCase().replace(/\s+/g, '_')] = field.values?.[0];
             }
         }
 
@@ -295,12 +295,39 @@ async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
             console.log(`✅ fetchLeadDetails succeeded on attempt ${attempt} for leadgen ${leadgenId}`);
         }
 
+        // Exact matches first, then fuzzy fallback for custom-labelled fields
+        const exactName = fields.full_name || fields.name ||
+            (fields.first_name ? `${fields.first_name}${fields.last_name ? ' ' + fields.last_name : ''}` : null);
+
+        const exactPhone = fields.phone_number || fields.phone || fields.mobile_number ||
+            fields.whatsapp_number || fields.whatsapp || fields.mobile || fields.contact_number ||
+            fields.contact || fields.phone_no || fields.mobile_no;
+
+        // Fuzzy fallback: scan all field keys for name/phone clues
+        // (handles custom questions like "Your Name", "Contact Number", etc.)
+        const fuzzyNameKey = !exactName && Object.keys(fields).find(k =>
+            (k.includes('name') && !k.includes('business') && !k.includes('company') && !k.includes('brand'))
+        );
+        const fuzzyPhoneKey = !exactPhone && Object.keys(fields).find(k =>
+            k.includes('phone') || k.includes('mobile') || k.includes('whatsapp') ||
+            (k.includes('contact') && (k.includes('no') || k.includes('num')))
+        );
+
+        const resolvedName = exactName || (fuzzyNameKey ? fields[fuzzyNameKey] : null);
+        const resolvedPhone = exactPhone || (fuzzyPhoneKey ? fields[fuzzyPhoneKey] : null);
+
+        if (!resolvedName || !resolvedPhone) {
+            console.warn(`⚠️ Meta lead ${leadgenId} missing fields. Available keys: [${Object.keys(fields).join(', ')}]`);
+        }
+        if (fuzzyNameKey) console.log(`ℹ️ Meta lead name resolved via fuzzy key "${fuzzyNameKey}"`);
+        if (fuzzyPhoneKey) console.log(`ℹ️ Meta lead phone resolved via fuzzy key "${fuzzyPhoneKey}"`);
+
         return {
             id: leadData.id,
             createdTime: leadData.created_time,
-            name: fields.full_name || fields.name || (fields.first_name ? fields.first_name + (fields.last_name ? ' ' + fields.last_name : '') : null),
+            name: resolvedName || null,
             email: fields.email || null,
-            phone: fields.phone_number || fields.phone || fields.mobile_number || fields.whatsapp_number || fields.whatsapp || fields.mobile || null,
+            phone: resolvedPhone || null,
             city: fields.city || null,
             company: fields.company_name || fields.company || null,
             rawFields: fields
@@ -568,15 +595,29 @@ const fetchHistoricalLeads = async (req, res) => {
 
                 const fields = {};
                 for (const field of (metaLead.field_data || [])) {
-                    fields[field.name.toLowerCase()] = field.values?.[0];
+                    fields[field.name.toLowerCase().replace(/\s+/g, '_')] = field.values?.[0];
                 }
+
+                const exactName = fields.full_name || fields.name ||
+                    (fields.first_name ? `${fields.first_name}${fields.last_name ? ' ' + fields.last_name : ''}` : null);
+                const exactPhone = fields.phone_number || fields.phone || fields.mobile_number ||
+                    fields.whatsapp_number || fields.whatsapp || fields.mobile || fields.contact_number ||
+                    fields.contact || fields.phone_no || fields.mobile_no;
+
+                const fuzzyNameKey = !exactName && Object.keys(fields).find(k =>
+                    k.includes('name') && !k.includes('business') && !k.includes('company') && !k.includes('brand')
+                );
+                const fuzzyPhoneKey = !exactPhone && Object.keys(fields).find(k =>
+                    k.includes('phone') || k.includes('mobile') || k.includes('whatsapp') ||
+                    (k.includes('contact') && (k.includes('no') || k.includes('num')))
+                );
 
                 const leadDetails = {
                     id: metaLead.id,
                     createdTime: metaLead.created_time,
-                    name: fields.full_name || fields.name || (fields.first_name ? `${fields.first_name}${fields.last_name ? ' ' + fields.last_name : ''}` : null),
+                    name: exactName || (fuzzyNameKey ? fields[fuzzyNameKey] : null) || null,
                     email: fields.email || null,
-                    phone: fields.phone_number || fields.phone || fields.mobile_number || fields.whatsapp_number || fields.whatsapp || fields.mobile || null,
+                    phone: exactPhone || (fuzzyPhoneKey ? fields[fuzzyPhoneKey] : null) || null,
                     city: fields.city || null,
                     company: fields.company_name || fields.company || null,
                     rawFields: fields
