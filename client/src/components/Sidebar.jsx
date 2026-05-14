@@ -67,7 +67,7 @@ const Sidebar = () => {
         }
         api.get('/whatsapp/conversations/unread')
             .then(res => setWaUnreadCount(res.data.unreadCount || 0))
-            .catch(() => {});
+            .catch(() => { });
     }, [user, isWhatsAppPage, hasWhatsApp]);
 
     // Real-time increment via socket when a new inbound message arrives and inbox is not open
@@ -187,7 +187,7 @@ const Sidebar = () => {
             {/* PROFILE */}
             <div className="border-t border-slate-800 p-4">
 
-                <div className={`flex items-center ${collapsed ? "justify-center" : "gap-3"}`}>
+                <Link to="/settings" className={`flex items-center hover:opacity-80 transition cursor-pointer ${collapsed ? "justify-center" : "gap-3"}`}>
                     <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold text-white">
                         {user?.name?.charAt(0) || 'U'}
                     </div>
@@ -198,16 +198,27 @@ const Sidebar = () => {
                             <p className="text-xs text-slate-400">{user?.role}</p>
                         </div>
                     )}
-                </div>
+                </Link>
 
-                <button
-                    onClick={handleLogout}
-                    className={`w-full mt-3 text-sm text-slate-400 hover:text-red-400 transition 
-                    ${collapsed ? "text-center" : "text-left"}`}
-                >
-                    <i className="fa-solid fa-right-from-bracket mr-2"></i>
-                    {!collapsed && "Logout"}
-                </button>
+                <div className="flex flex-col gap-3 mt-4">
+                    <Link
+                        to="/settings"
+                        className={`w-full text-sm text-slate-400 hover:text-white transition 
+                        ${collapsed ? "text-center" : "text-left"}`}
+                    >
+                        <i className="fa-solid fa-gear mr-2"></i>
+                        {!collapsed && "Settings"}
+                    </Link>
+
+                    <button
+                        onClick={handleLogout}
+                        className={`w-full text-sm text-slate-400 hover:text-red-400 transition 
+                        ${collapsed ? "text-center" : "text-left"}`}
+                    >
+                        <i className="fa-solid fa-right-from-bracket mr-2"></i>
+                        {!collapsed && "Logout"}
+                    </button>
+                </div>
 
             </div>
         </aside>
