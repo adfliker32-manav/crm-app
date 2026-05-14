@@ -7,6 +7,7 @@ import MetaConfigSection from '../components/Settings/MetaConfigSection';
 import CustomFieldsSettings from '../components/Settings/CustomFieldsSettings';
 import SheetSyncSettings from '../components/Settings/SheetSyncSettings';
 import TagsSettings from '../components/Settings/TagsSettings';
+import WebLeadSettings from '../components/Settings/WebLeadSettings';
 
 const Settings = () => {
     const { user, updateUser } = useAuth();
@@ -28,7 +29,7 @@ const Settings = () => {
     // Sync tab with URL search params
     useEffect(() => {
         const tab = searchParams.get('tab');
-        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta'].includes(tab)) {
+        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead'].includes(tab)) {
             setActiveTab(tab);
         }
     }, [searchParams]);
@@ -81,6 +82,7 @@ const Settings = () => {
         { id: 'customFields', label: 'Custom Fields', icon: 'fa-list-check' },
         { id: 'sheetSync', label: 'Sheet Sync', icon: 'fa-table' },
         { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' },
+        { id: 'webLead', label: 'Web-to-Lead', icon: 'fa-code' },
     ];
 
     if (!canAccessSettings) return <Navigate to="/dashboard" replace />;
@@ -236,6 +238,14 @@ const Settings = () => {
                 {activeTab === 'sheetSync' && (
                     <div className="animate-in fade-in duration-300">
                         <SheetSyncSettings />
+                    </div>
+                )}
+
+                {activeTab === 'webLead' && (
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8">
+                            <WebLeadSettings />
+                        </div>
                     </div>
                 )}
             </div>

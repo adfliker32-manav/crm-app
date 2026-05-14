@@ -120,6 +120,23 @@ const workspaceSettingsSchema = new mongoose.Schema({
         color: { type: String, default: '#e2e8f0' }
     }],
 
+    // ── Web-to-Lead (Landing Page Embed) ────────────────────────────────────
+    // Unique per-tenant API key for the public /api/web-leads/capture endpoint.
+    // Indexed so lead capture lookups are O(log n) without touching any other path.
+    webLeadApiKey: {
+        type: String,
+        default: null,
+        index: { unique: true, sparse: true } // sparse: only enforce when key is set
+    },
+    webLeadDefaultStage: {
+        type: String,
+        default: null
+    },
+    webLeadDefaultTag: {
+        type: String,
+        default: null
+    },
+
     createdAt: {
         type: Date,
         default: Date.now

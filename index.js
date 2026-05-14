@@ -33,6 +33,7 @@ const bookingRoutes = require('./src/routes/bookingRoutes'); // Public Booking P
 const supportRoutes = require('./src/routes/supportRoutes'); // In-built Help Center
 const { authMiddleware } = require('./src/middleware/authMiddleware');
 const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
+const webLeadRoutes = require('./src/routes/webLeadRoutes'); // Web-to-Lead embed
 
 const app = express();
 
@@ -405,6 +406,9 @@ app.use('/api/support', supportRoutes);
 app.use('/api/book', bookingRoutes);
 app.use('/api/analytics', authMiddleware, analyticsRoutes);
 app.use('/api/dashboard', require('./src/routes/dashboardRoutes'));
+
+// 🌐 Web-to-Lead Capture (public /capture + authenticated /config, /regenerate)
+app.use('/api/web-leads', webLeadRoutes);
 
 // 3. Communications
 app.use('/api/email', authMiddleware, emailRoutes);
