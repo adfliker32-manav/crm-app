@@ -25,12 +25,11 @@ router.post('/send', authMiddleware, requireModule('whatsapp'), meterUsage('what
 // WhatsApp Configuration Routes
 const whatsappConfigController = require('../controllers/whatsappConfigController');
 router.get('/config', authMiddleware, requireModule('whatsapp'), whatsappConfigController.getWhatsAppConfig);
-router.put('/config', authMiddleware, requireModule('whatsapp'), whatsappConfigController.updateWhatsAppConfig);
-router.post('/config/test', authMiddleware, requireModule('whatsapp'), whatsappConfigController.testWhatsAppConfig);
 
 // WhatsApp Embedded Signup (Facebook JS SDK flow)
 router.get('/public-config', authMiddleware, whatsappConfigController.getWaPublicConfig);
 router.post('/connect-embedded', authMiddleware, requireModule('whatsapp'), whatsappConfigController.connectWhatsAppEmbedded);
+router.post('/connect-manual', authMiddleware, requireModule('whatsapp'), whatsappConfigController.connectWhatsAppManual);
 router.post('/disconnect', authMiddleware, requireModule('whatsapp'), whatsappConfigController.disconnectWhatsApp);
 router.post('/token/refresh', authMiddleware, requireModule('whatsapp'), whatsappConfigController.manualRefreshToken);
 

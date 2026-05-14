@@ -1,9 +1,7 @@
-const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
-const crypto = require('crypto');
 const axios = require('axios');
-const { encryptToken, decryptToken } = require('../utils/encryptionUtils');
+const { encryptToken } = require('../utils/encryptionUtils');
 const { extractCountryCodeFromDisplayPhone } = require('../utils/phoneUtils');
 
 // Return public (non-secret) Meta config needed by the frontend Embedded Signup
@@ -20,7 +18,8 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
         const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
         if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify WhatsApp settings' });
 
-        const { code } = req.body;
+        // wabaId / phoneNumberId may be pre-filled from sessionInfoVersion:3 postMessage
+        const { code, wabaId: hintWabaId, phoneNumberId: hintPhoneNumberId } = req.body;
         if (!code) return res.status(400).json({ success: false, message: 'Missing authorization code from Facebook' });
 
         const appId = process.env.META_APP_ID;
@@ -44,48 +43,60 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
         });
         const longToken = longRes.data.access_token;
 
-        // Step 3: Find the exact WABA the client granted via debug_token granular_scopes.
-        // This is more reliable than /me/businesses which only shows businesses the user admins.
         let wabaId = null, wabaName = null, phoneNumberId = null, displayPhone = null, verifiedName = null;
 
-        try {
-            const debugRes = await axios.get(`${GRAPH}/debug_token`, {
-                params: {
-                    input_token: longToken,
-                    access_token: `${appId}|${appSecret}`
-                },
-                timeout: 10000
-            });
-
-            const granularScopes = debugRes.data.data?.granular_scopes || [];
-            const wabaScope = granularScopes.find(s => s.scope === 'whatsapp_business_management');
-            const wabaIds = wabaScope?.target_ids || [];
-
-            if (wabaIds.length > 0) {
-                wabaId = wabaIds[0];
-                // Fetch WABA name and phone numbers
-                const wabaRes = await axios.get(`${GRAPH}/${wabaId}`, {
-                    params: { fields: 'id,name', access_token: longToken },
-                    timeout: 10000
-                });
-                wabaName = wabaRes.data.name;
-
-                const phonesRes = await axios.get(`${GRAPH}/${wabaId}/phone_numbers`, {
-                    params: { fields: 'id,display_phone_number,verified_name', access_token: longToken },
-                    timeout: 10000
-                });
-                const phones = phonesRes.data.data || [];
-                if (phones.length > 0) {
-                    phoneNumberId = phones[0].id;
-                    displayPhone  = phones[0].display_phone_number;
-                    verifiedName  = phones[0].verified_name;
-                }
+        // Step 3a: Use session info hints from sessionInfoVersion:3 postMessage (most reliable).
+        // This tells us exactly which existing WABA + phone the user selected in the popup.
+        if (hintWabaId && hintPhoneNumberId) {
+            wabaId        = hintWabaId;
+            phoneNumberId = hintPhoneNumberId;
+            try {
+                const [wabaRes, phoneRes] = await Promise.all([
+                    axios.get(`${GRAPH}/${wabaId}`, { params: { fields: 'id,name', access_token: longToken }, timeout: 10000 }),
+                    axios.get(`${GRAPH}/${phoneNumberId}`, { params: { fields: 'display_phone_number,verified_name', access_token: longToken }, timeout: 10000 })
+                ]);
+                wabaName     = wabaRes.data.name;
+                displayPhone = phoneRes.data.display_phone_number;
+                verifiedName = phoneRes.data.verified_name;
+            } catch (e) {
+                console.warn('⚠️ Could not fetch details using session info hints:', e.message);
             }
-        } catch (debugErr) {
-            console.warn('⚠️ debug_token WABA lookup failed, falling back to /me/businesses:', debugErr.message);
         }
 
-        // Fallback: scan /me/businesses if debug_token didn't find a WABA
+        // Step 3b: Fallback — scan via debug_token granular_scopes (used when no hints)
+        if (!wabaId) {
+            try {
+                const debugRes = await axios.get(`${GRAPH}/debug_token`, {
+                    params: { input_token: longToken, access_token: `${appId}|${appSecret}` },
+                    timeout: 10000
+                });
+                const granularScopes = debugRes.data.data?.granular_scopes || [];
+                const wabaScope = granularScopes.find(s => s.scope === 'whatsapp_business_management');
+                const wabaIds = wabaScope?.target_ids || [];
+
+                if (wabaIds.length > 0) {
+                    wabaId = wabaIds[0];
+                    const wabaRes = await axios.get(`${GRAPH}/${wabaId}`, {
+                        params: { fields: 'id,name', access_token: longToken }, timeout: 10000
+                    });
+                    wabaName = wabaRes.data.name;
+
+                    const phonesRes = await axios.get(`${GRAPH}/${wabaId}/phone_numbers`, {
+                        params: { fields: 'id,display_phone_number,verified_name', access_token: longToken }, timeout: 10000
+                    });
+                    const phones = phonesRes.data.data || [];
+                    if (phones.length > 0) {
+                        phoneNumberId = phones[0].id;
+                        displayPhone  = phones[0].display_phone_number;
+                        verifiedName  = phones[0].verified_name;
+                    }
+                }
+            } catch (debugErr) {
+                console.warn('⚠️ debug_token WABA lookup failed, falling back to /me/businesses:', debugErr.message);
+            }
+        }
+
+        // Step 3c: Last resort — scan /me/businesses
         if (!wabaId) {
             const bizRes = await axios.get(`${GRAPH}/me/businesses`, {
                 params: {
@@ -180,6 +191,90 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
     }
 };
 
+// Connect WhatsApp manually (for accounts already on Cloud API)
+exports.connectWhatsAppManual = async (req, res) => {
+    try {
+        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
+        if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify WhatsApp settings' });
+
+        const { wabaId, phoneNumberId, accessToken } = req.body;
+        if (!wabaId || !phoneNumberId || !accessToken) {
+            return res.status(400).json({ success: false, message: 'WABA ID, Phone Number ID, and Access Token are all required' });
+        }
+
+        const GRAPH = 'https://graph.facebook.com/v25.0';
+
+        // Verify credentials by fetching phone number details from Meta
+        let displayPhone = null, verifiedName = null;
+        try {
+            const phoneRes = await axios.get(`${GRAPH}/${phoneNumberId}`, {
+                params: { fields: 'display_phone_number,verified_name', access_token: accessToken },
+                timeout: 10000
+            });
+            displayPhone = phoneRes.data.display_phone_number;
+            verifiedName = phoneRes.data.verified_name;
+        } catch (err) {
+            const metaErr = err.response?.data?.error?.message;
+            return res.status(400).json({ success: false, message: metaErr ? `Meta: ${metaErr}` : 'Invalid credentials — could not verify Phone Number ID or Access Token.' });
+        }
+
+        // Subscribe app to WABA webhooks using app token (system-level, not user token)
+        const appId     = process.env.META_APP_ID;
+        const appSecret = process.env.META_APP_SECRET;
+        try {
+            await axios.post(`${GRAPH}/${wabaId}/subscribed_apps`, null, {
+                params: { access_token: `${appId}|${appSecret}` },
+                timeout: 10000
+            });
+            console.log(`✅ Subscribed app to WABA ${wabaId} webhooks`);
+        } catch (subErr) {
+            console.warn(`⚠️ WABA webhook subscription failed (non-fatal): ${subErr.message}`);
+        }
+
+        const ownerId = req.tenantId;
+        const encryptedToken = encryptToken(accessToken);
+        if (!encryptedToken) {
+            return res.status(500).json({ success: false, message: 'Failed to encrypt access token. Check server encryption configuration.' });
+        }
+
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: ownerId },
+            {
+                $set: {
+                    'whatsapp.wabaId':                wabaId,
+                    'whatsapp.waPhoneNumberId':       phoneNumberId,
+                    'whatsapp.waAccessToken':         encryptedToken,
+                    'whatsapp.displayPhone':          displayPhone,
+                    'whatsapp.verifiedName':          verifiedName,
+                    'whatsapp.embeddedSignupConnected': false,
+                    'whatsapp.tokenExpiresAt':        null,
+                    'whatsapp.tokenRefreshedAt':      new Date()
+                }
+            },
+            { upsert: true }
+        );
+
+        try {
+            const detectedCode = extractCountryCodeFromDisplayPhone(displayPhone);
+            if (detectedCode) {
+                await WorkspaceSettings.findOneAndUpdate(
+                    { userId: ownerId },
+                    { $set: { defaultCountryCode: detectedCode } },
+                    { upsert: true }
+                );
+            }
+        } catch (e) { /* non-fatal */ }
+
+        console.log(`✅ WhatsApp manual connect for tenant ${ownerId}: WABA ${wabaId}, Phone ${phoneNumberId}`);
+        res.json({ success: true, message: 'WhatsApp connected successfully!', wabaId, phoneNumberId, displayPhone, verifiedName });
+
+    } catch (error) {
+        console.error('❌ WhatsApp manual connect error:', error.response?.data || error.message);
+        const metaMsg = error.response?.data?.error?.message;
+        res.status(500).json({ success: false, message: metaMsg ? `Meta: ${metaMsg}` : 'Failed to connect WhatsApp. Please try again.' });
+    }
+};
+
 // Disconnect WhatsApp — clears all WhatsApp credentials for this tenant
 exports.disconnectWhatsApp = async (req, res) => {
     try {
@@ -213,184 +308,27 @@ exports.disconnectWhatsApp = async (req, res) => {
 exports.getWhatsAppConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        // Must use '+' to include select:false fields (waAccessToken)
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('+whatsapp.waAccessToken whatsapp.waPhoneNumberId whatsapp.waBusinessId whatsapp.wabaId whatsapp.displayPhone whatsapp.verifiedName whatsapp.embeddedSignupConnected');
+            .select('whatsapp.waPhoneNumberId whatsapp.wabaId whatsapp.displayPhone whatsapp.verifiedName whatsapp.embeddedSignupConnected whatsapp.tokenExpiresAt whatsapp.tokenRefreshedAt');
 
         if (!config) {
-            return res.json({ waBusinessId: '', waPhoneNumberId: '', isConfigured: false, embeddedSignupConnected: false });
+            return res.json({ waPhoneNumberId: '', isConfigured: false, embeddedSignupConnected: false });
         }
 
         const wa = config.whatsapp || {};
         res.json({
-            waBusinessId: wa.waBusinessId || '',
             wabaId: wa.wabaId || '',
             waPhoneNumberId: wa.waPhoneNumberId || '',
             displayPhone: wa.displayPhone || '',
             verifiedName: wa.verifiedName || '',
             embeddedSignupConnected: wa.embeddedSignupConnected || false,
-            isConfigured: !!(wa.waPhoneNumberId && wa.waAccessToken),
+            isConfigured: !!(wa.waPhoneNumberId && wa.wabaId),
             tokenExpiresAt: wa.tokenExpiresAt || null,
             tokenRefreshedAt: wa.tokenRefreshedAt || null
         });
     } catch (error) {
         console.error('Error fetching WhatsApp config:', error);
         res.status(500).json({ message: 'Error fetching WhatsApp configuration', error: 'Server error' });
-    }
-};
-
-// Update WhatsApp configuration
-exports.updateWhatsAppConfig = async (req, res) => {
-    try {
-        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
-        if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify WhatsApp settings' });
-
-        const ownerId = req.tenantId;
-        const { waBusinessId, waPhoneNumberId, waAccessToken } = req.body;
-        
-        // Validation
-        if (!waPhoneNumberId) {
-            return res.status(400).json({ message: 'Phone Number ID is required' });
-        }
-        
-        if (!waAccessToken) {
-            return res.status(400).json({ message: 'Access Token is required' });
-        }
-        
-        // Encrypt access token using SHARED encryptionUtils (same key as IntegrationConfig model)
-        const encryptedToken = encryptToken(waAccessToken);
-        if (!encryptedToken) {
-            return res.status(500).json({ message: 'Error encrypting access token' });
-        }
-        
-        const updateData = {
-            'whatsapp.waPhoneNumberId': waPhoneNumberId.trim(),
-            'whatsapp.waAccessToken': encryptedToken
-        };
-        
-        if (waBusinessId) {
-            updateData['whatsapp.waBusinessId'] = waBusinessId.trim();
-        }
-        
-        const config = await IntegrationConfig.findOneAndUpdate(
-            { userId: ownerId },
-            { $set: updateData },
-            { new: true, upsert: true, select: 'whatsapp' }
-        );
-
-        // Auto-detect country code from the registered WhatsApp phone number.
-        // Call Meta API to get display_phone_number (e.g. "+971 50 123 4567"),
-        // extract the country code, and save it so phone normalization works for
-        // any country without manual configuration.
-        try {
-            const metaRes = await axios.get(
-                `https://graph.facebook.com/v25.0/${waPhoneNumberId.trim()}`,
-                {
-                    params: { fields: 'display_phone_number' },
-                    headers: { Authorization: `Bearer ${waAccessToken}` },
-                    timeout: 8000
-                }
-            );
-            const displayPhone = metaRes.data?.display_phone_number;
-            const detectedCode = extractCountryCodeFromDisplayPhone(displayPhone);
-            if (detectedCode) {
-                await WorkspaceSettings.findOneAndUpdate(
-                    { userId: ownerId },
-                    { $set: { defaultCountryCode: detectedCode } },
-                    { upsert: true }
-                );
-                console.log(`✅ Auto-detected country code '${detectedCode}' from WhatsApp number ${displayPhone} for tenant ${ownerId}`);
-            }
-        } catch (detectErr) {
-            // Non-fatal — credentials are saved, country code detection just failed
-            console.warn(`⚠️ Could not auto-detect country code for tenant ${ownerId}:`, detectErr.message);
-        }
-
-        res.json({
-            success: true,
-            message: 'WhatsApp configuration updated successfully',
-            waBusinessId: config.whatsapp.waBusinessId,
-            waPhoneNumberId: config.whatsapp.waPhoneNumberId,
-            isConfigured: true
-        });
-    } catch (error) {
-        console.error('Error updating WhatsApp config:', error);
-        res.status(500).json({ message: 'Error updating WhatsApp configuration', error: 'Server error' });
-    }
-};
-
-// Test WhatsApp configuration
-exports.testWhatsAppConfig = async (req, res) => {
-    try {
-        // FIX #101: Restrict test endpoint to managers/admins (same as update)
-        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
-        if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to test WhatsApp settings' });
-
-        const ownerId = req.tenantId;
-        const { waPhoneNumberId, waAccessToken } = req.body;
-        
-        // Use provided credentials or get from user
-        let phoneNumberId = waPhoneNumberId;
-        let accessToken = waAccessToken;
-        
-        if (!phoneNumberId || !accessToken) {
-            // Must use '+' to include select:false fields (waAccessToken)
-            const config = await IntegrationConfig.findOne({ userId: ownerId })
-                .select('+whatsapp.waAccessToken whatsapp.waPhoneNumberId');
-            if (!config || !config.whatsapp?.waPhoneNumberId || !config.whatsapp?.waAccessToken) {
-                return res.status(400).json({ 
-                    message: 'WhatsApp configuration not found. Please configure your WhatsApp settings first.' 
-                });
-            }
-            phoneNumberId = config.whatsapp.waPhoneNumberId;
-            accessToken = decryptToken(config.whatsapp.waAccessToken);
-            if (!accessToken) {
-                return res.status(500).json({ message: 'Error decrypting access token' });
-            }
-        }
-        
-        // Test by getting phone number info
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}`;
-        
-        try {
-            const response = await axios.get(url, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-            
-            res.json({
-                success: true,
-                message: 'WhatsApp configuration is valid! Connection successful.',
-                phoneNumberInfo: response.data
-            });
-        } catch (apiError) {
-            if (apiError.response) {
-                const errorData = apiError.response.data?.error || {};
-                let errorMessage = 'Failed to test WhatsApp configuration';
-                
-                if (apiError.response.status === 401) {
-                    errorMessage = 'Invalid access token. Please check your token.';
-                } else if (apiError.response.status === 404) {
-                    errorMessage = 'Invalid Phone Number ID. Please check your Phone Number ID.';
-                } else {
-                    errorMessage = errorData.message || `API Error: ${apiError.response.status}`;
-                }
-                
-                return res.status(apiError.response.status).json({
-                    success: false,
-                    message: errorMessage
-                });
-            }
-            throw apiError;
-        }
-    } catch (error) {
-        console.error('Error testing WhatsApp config:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message || 'Failed to test WhatsApp configuration'
-        });
     }
 };
 

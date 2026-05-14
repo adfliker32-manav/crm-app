@@ -276,13 +276,20 @@ const WhatsAppInbox = () => {
             }
         };
 
-        const handleStatusUpdate = ({ waMessageId, status, conversationId, error }) => {
+        const handleStatusUpdate = ({ waMessageId, status, conversationId, error, statusTimestamp }) => {
             const currentChat = selectedChatRef.current;
             if (currentChat && currentChat._id === conversationId) {
                 setMessages(prev =>
                     prev.map(m =>
                         m.waMessageId === waMessageId
-                            ? { ...m, status, ...(error && { error }) }
+                            ? {
+                                ...m,
+                                status,
+                                ...(error && { error }),
+                                ...(statusTimestamp && {
+                                    statusTimestamps: { ...(m.statusTimestamps || {}), [status]: statusTimestamp }
+                                })
+                              }
                             : m
                     )
                 );
@@ -641,15 +648,29 @@ const WhatsAppInbox = () => {
         return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
     };
 
-    const getStatusIcon = (status, direction) => {
+    const getStatusIcon = (status, direction, statusTimestamps) => {
         if (direction !== 'outbound') return null;
-        switch (status) {
-            case 'read': return <i className="fa-solid fa-check-double text-[#53bdeb]"></i>;
-            case 'delivered': return <i className="fa-solid fa-check-double text-[#8696a0]"></i>;
-            case 'sent': return <i className="fa-solid fa-check text-[#8696a0]"></i>;
-            case 'failed': return <i className="fa-solid fa-exclamation-circle text-red-500"></i>;
-            default: return <i className="fa-regular fa-clock text-[#8696a0]"></i>;
-        }
+
+        const fmtTs = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+        const tooltip =
+            status === 'read'      && fmtTs(statusTimestamps?.read)       ? `Read at ${fmtTs(statusTimestamps.read)}`           :
+            status === 'delivered' && fmtTs(statusTimestamps?.delivered)   ? `Delivered at ${fmtTs(statusTimestamps.delivered)}` :
+            status === 'sent'      && fmtTs(statusTimestamps?.sent)        ? `Sent at ${fmtTs(statusTimestamps.sent)}`           : null;
+
+        const icon = status === 'read'      ? <i className="fa-solid fa-check-double text-[#53bdeb]"></i>
+                   : status === 'delivered' ? <i className="fa-solid fa-check-double text-[#8696a0]"></i>
+                   : status === 'sent'      ? <i className="fa-solid fa-check text-[#8696a0]"></i>
+                   : status === 'failed'    ? <i className="fa-solid fa-exclamation-circle text-red-500"></i>
+                   :                          <i className="fa-regular fa-clock text-[#8696a0]"></i>;
+
+        return tooltip ? (
+            <span className="relative group/tick cursor-default inline-flex">
+                {icon}
+                <span className="absolute bottom-5 right-0 bg-[#111b21] text-white text-[10px] px-2 py-1 rounded-md whitespace-nowrap opacity-0 group-hover/tick:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg">
+                    {tooltip}
+                </span>
+            </span>
+        ) : icon;
     };
 
     const renderMediaContent = (msg) => {
@@ -983,12 +1004,63 @@ const WhatsAppInbox = () => {
                                 {messages.map((msg) => (
                                     <div key={msg._id} className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}>
                                         <div className={`max-w-[65%] rounded-lg px-2.5 pt-1.5 pb-1 shadow-sm relative ${msg.direction === 'outbound' ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
+
+                                            {/* ── Automation badge (chatbot / broadcast / auto-reply) ── */}
+                                            {msg.isAutomated && msg.automationSource && (
+                                                <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full mb-1.5 ${
+                                                    msg.automationSource === 'chatbot'    ? 'bg-blue-100 text-blue-600'    :
+                                                    msg.automationSource === 'broadcast'  ? 'bg-purple-100 text-purple-600' :
+                                                    msg.automationSource === 'auto_reply' ? 'bg-amber-100 text-amber-700'  :
+                                                    'bg-slate-100 text-slate-500'
+                                                }`}>
+                                                    <i className={`fa-solid ${
+                                                        msg.automationSource === 'chatbot'    ? 'fa-robot'              :
+                                                        msg.automationSource === 'broadcast'  ? 'fa-bullhorn'           :
+                                                        msg.automationSource === 'auto_reply' ? 'fa-bolt'               :
+                                                        'fa-wand-magic-sparkles'
+                                                    } text-[9px]`}></i>
+                                                    {msg.automationSource === 'chatbot'    ? 'Chatbot'    :
+                                                     msg.automationSource === 'broadcast'  ? 'Broadcast'  :
+                                                     msg.automationSource === 'auto_reply' ? 'Auto Reply' : 'Automated'}
+                                                </span>
+                                            )}
+
+                                            {/* ── Click-to-WhatsApp ad referral banner ── */}
+                                            {msg.direction === 'inbound' && msg.content?.referral?.headline && (
+                                                <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mb-2 text-[11px]">
+                                                    <div className="flex items-center gap-1.5 text-blue-600 font-bold mb-0.5">
+                                                        <i className="fa-brands fa-meta text-[10px]"></i> Via Meta Ad
+                                                    </div>
+                                                    <p className="text-blue-800 font-semibold leading-tight truncate">{msg.content.referral.headline}</p>
+                                                    {msg.content.referral.source_type && (
+                                                        <p className="text-blue-500 mt-0.5 capitalize">{msg.content.referral.source_type.replace(/_/g, ' ')}</p>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* ── Reply thread — quoted message ── */}
+                                            {msg.contextMessageId && (() => {
+                                                const quoted = messages.find(m => m.waMessageId === msg.contextMessageId);
+                                                return (
+                                                    <div className="bg-black/10 rounded-md px-2.5 py-1.5 mb-1.5 border-l-[3px] border-[#00a884]">
+                                                        <p className="text-[11px] font-bold text-[#00a884] mb-0.5">
+                                                            {quoted?.direction === 'outbound' ? 'You' : (selectedChat?.displayName || 'Contact')}
+                                                        </p>
+                                                        <p className="text-[12px] text-[#111b21]/80 line-clamp-2">
+                                                            {quoted
+                                                                ? (quoted.content?.text || `📎 ${quoted.type}`)
+                                                                : <span className="italic opacity-60">Original message not available</span>}
+                                                        </p>
+                                                    </div>
+                                                );
+                                            })()}
+
                                             {msg.type === 'text' ? (
                                                 <p className="text-[14.2px] text-[#111b21] break-words whitespace-pre-wrap leading-[19px]">
                                                     {msg.content?.text}
                                                     <span className="float-right ml-3 mt-1 flex items-center gap-1">
                                                         <span className="text-[11px] text-[#8696a0]">{formatTime(msg.timestamp)}</span>
-                                                        {getStatusIcon(msg.status, msg.direction)}
+                                                        {getStatusIcon(msg.status, msg.direction, msg.statusTimestamps)}
                                                     </span>
                                                 </p>
                                             ) : (
@@ -996,7 +1068,7 @@ const WhatsAppInbox = () => {
                                                     {renderMediaContent(msg)}
                                                     <div className="flex items-center justify-end gap-1 mt-0.5">
                                                         <span className="text-[11px] text-[#8696a0]">{formatTime(msg.timestamp)}</span>
-                                                        {getStatusIcon(msg.status, msg.direction)}
+                                                        {getStatusIcon(msg.status, msg.direction, msg.statusTimestamps)}
                                                     </div>
                                                 </>
                                             )}

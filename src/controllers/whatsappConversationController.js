@@ -513,10 +513,29 @@ exports.startConversation = async (req, res) => {
         await conversation.save();
         await message.save();
 
+        const savedMsg = message.toObject();
         res.json({
             success: true,
             conversation: conversation.toObject(),
-            message: message.toObject()
+            message: savedMsg
+        });
+
+        // 🔌 Push to frontend via Socket.IO (real-time for other tabs/agents)
+        emitToUser(userId, 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToUser(userId, 'whatsapp:conversationUpdate', {
+            conversationId: conversation._id,
+            updates: {
+                lastMessage: conversation.lastMessage,
+                lastMessageAt: conversation.lastMessageAt,
+                lastMessageDirection: 'outbound'
+            }
         });
     } catch (error) {
         const { msg: errorMsg, code: errorCode, category } = parseMetaError(error);
@@ -677,7 +696,26 @@ exports.sendMediaMessage = async (req, res) => {
         conversation.metadata.totalOutbound = (conversation.metadata.totalOutbound || 0) + 1;
         await conversation.save();
 
-        res.json({ success: true, message: message.toObject() });
+        const savedMsg = message.toObject();
+        res.json({ success: true, message: savedMsg });
+
+        // 🔌 Push to frontend via Socket.IO (real-time for other tabs/agents)
+        emitToUser(userId, 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToUser(userId, 'whatsapp:conversationUpdate', {
+            conversationId: conversation._id,
+            updates: {
+                lastMessage: conversation.lastMessage,
+                lastMessageAt: conversation.lastMessageAt,
+                lastMessageDirection: 'outbound'
+            }
+        });
     } catch (error) {
         console.error('Error sending media:', error.response?.data || error.message);
         const metaError = error.response?.data?.error?.message || error.message;

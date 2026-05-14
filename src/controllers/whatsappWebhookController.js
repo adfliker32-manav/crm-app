@@ -77,11 +77,14 @@ const verifySignature = (req) => {
         return false;
     }
 
-    // FIX: Use req.rawBody (the exact bytes Meta signed) instead of JSON.stringify(req.body).
-    // JSON.stringify strips/changes whitespace, making the hash always mismatch.
-    // The rawBody Buffer is attached in index.js via express.json({ verify: (req,res,buf) => req.rawBody=buf })
+    // Use req.rawBody (the exact bytes Meta signed). It is attached in index.js via
+    // express.json({ verify: (req, res, buf) => req.rawBody = buf }).
+    // Falling back to JSON.stringify will always produce a wrong hash — warn loudly.
+    if (!req.rawBody) {
+        console.error('❌ [Webhook] req.rawBody is missing — express.json verify callback not firing. Signature check will fail. Check index.js middleware order.');
+    }
     const payloadToSign = req.rawBody || Buffer.from(JSON.stringify(req.body));
-    
+
     debug(`🔐 Has req.rawBody: ${!!req.rawBody}`);
     debug(`🔐 Using App Secret starting with: ${appSecret.substring(0, 4)}...`);
 
@@ -93,10 +96,16 @@ const verifySignature = (req) => {
     debug(`🔐 Expected signature: ${expectedSignature}`);
     debug(`🔐 Received signature: ${signature}`);
 
-    const isValid = crypto.timingSafeEqual(
-        Buffer.from(signature),
-        Buffer.from(expectedSignature)
-    );
+    // timingSafeEqual requires both buffers to be the same length — guard against
+    // a malformed or truncated signature header to prevent an unhandled throw.
+    const sigBuf      = Buffer.from(signature);
+    const expectedBuf = Buffer.from(expectedSignature);
+    if (sigBuf.length !== expectedBuf.length) {
+        console.error(`❌ [Webhook] Signature length mismatch: received ${sigBuf.length} bytes, expected ${expectedBuf.length}. Rejecting.`);
+        return false;
+    }
+
+    const isValid = crypto.timingSafeEqual(sigBuf, expectedBuf);
     debug(`🔐 Signature valid: ${isValid}`);
     return isValid;
 };
@@ -403,11 +412,28 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
             updatePayload.$set.displayName = displayName;
         }
 
-        const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { userId: targetUserId, waContactId: upsertContactId },
-            updatePayload,
-            { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
+        let conversation;
+        try {
+            conversation = await WhatsAppConversation.findOneAndUpdate(
+                { userId: targetUserId, waContactId: upsertContactId },
+                updatePayload,
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
+        } catch (upsertErr) {
+            // E11000: two concurrent webhooks for the same new contact raced on insert.
+            // The document was created by the other request — retry as a plain update.
+            if (upsertErr.code === 11000) {
+                debug('⚠️ E11000 on conversation upsert — retrying as update after race');
+                conversation = await WhatsAppConversation.findOneAndUpdate(
+                    { userId: targetUserId, waContactId: upsertContactId },
+                    { $set: updatePayload.$set, $inc: updatePayload.$inc },
+                    { new: true }
+                );
+                if (!conversation) throw new Error(`Conversation not found after E11000 retry for contact ${upsertContactId}`);
+            } else {
+                throw upsertErr;
+            }
+        }
 
         debug(`✅ Conversation upserted: ${conversation._id}, unread: ${conversation.unreadCount}`);
 
@@ -560,6 +586,7 @@ const processStatusUpdate = async (status, userId) => {
             waMessageId,
             status: statusType,
             conversationId: updatedMsg.conversationId,
+            statusTimestamp: timestamp,
             ...(statusType === 'failed' && updatePayload.$set.error && { error: updatePayload.$set.error })
         };
         emitToUser(updatedMsg.userId, 'whatsapp:statusUpdate', statusPayload);

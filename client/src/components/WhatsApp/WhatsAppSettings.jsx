@@ -31,8 +31,8 @@ const WhatsAppSettings = () => {
 
     // Connection state
     const [config, setConfig] = useState({
-        waBusinessId: '', wabaId: '', waPhoneNumberId: '',
-        displayPhone: '', verifiedName: '', waAccessToken: '',
+        wabaId: '', waPhoneNumberId: '',
+        displayPhone: '', verifiedName: '',
         isConfigured: false, embeddedSignupConnected: false,
         tokenExpiresAt: null, tokenRefreshedAt: null
     });
@@ -59,11 +59,13 @@ const WhatsAppSettings = () => {
 
     const [loading, setLoading]       = useState(true);
     const [saving, setSaving]         = useState(false);
-    const [testing, setTesting]       = useState(false);
     const [connecting, setConnecting] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
-    const [showToken, setShowToken]   = useState(false);
-    const [showManual, setShowManual] = useState(false);
+
+    // Manual connection state
+    const [showManual, setShowManual]         = useState(false);
+    const [manualConnecting, setManualConnecting] = useState(false);
+    const [manualForm, setManualForm] = useState({ wabaId: '', phoneNumberId: '', accessToken: '' });
 
     // Public Meta config (appId + waConfigId)
     const [metaAppId, setMetaAppId]     = useState('');
@@ -89,7 +91,6 @@ const WhatsAppSettings = () => {
 
             setConfig(prev => ({
                 ...prev,
-                waBusinessId:            cfgRes.data.waBusinessId || '',
                 wabaId:                  cfgRes.data.wabaId || '',
                 waPhoneNumberId:         cfgRes.data.waPhoneNumberId || '',
                 displayPhone:            cfgRes.data.displayPhone || '',
@@ -136,10 +137,29 @@ const WhatsAppSettings = () => {
 
         setConnecting(true);
 
+        // sessionInfoVersion 3: Meta sends WABA ID + Phone Number ID via postMessage
+        // during the popup flow — capture it so we can pass it to the backend directly.
+        // This is the reliable way to detect which existing account the user selected.
+        let sessionInfo = null;
+        const onMessage = (e) => {
+            try {
+                const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+                if (data?.type === 'WA_EMBEDDED_SIGNUP') {
+                    if (data.event === 'FINISH') {
+                        sessionInfo = data.data; // { phone_number_id, waba_id }
+                        console.log('📱 ES session info:', sessionInfo);
+                    } else if (data.event === 'CANCEL') {
+                        console.log('ℹ️ ES cancelled at step:', data.data?.current_step);
+                    }
+                }
+            } catch {}
+        };
+        window.addEventListener('message', onMessage);
+
         const loginOptions = {
             response_type: 'code',
             override_default_response_type: true,
-            extras: { setup: {}, sessionInfoVersion: '2' }
+            extras: { setup: {}, sessionInfoVersion: '3' }
         };
 
         if (waConfigId) {
@@ -150,6 +170,7 @@ const WhatsAppSettings = () => {
 
         if (typeof window.FB?.login !== 'function') {
             setConnecting(false);
+            window.removeEventListener('message', onMessage);
             showError('Facebook SDK is not ready. Please refresh the page and disable ad blockers.');
             return;
         }
@@ -158,15 +179,21 @@ const WhatsAppSettings = () => {
             window.FB.login((response) => {
                 const processLogin = async () => {
                     console.log('Facebook SDK Response:', response);
+                    window.removeEventListener('message', onMessage);
+
                     if (!response?.authResponse?.code) {
                         setConnecting(false);
-                        // Facebook sometimes fires this callback prematurely when the popup opens.
-                        // We silently exit without showing an annoying error toast.
                         return;
                     }
 
                     try {
-                        const res = await api.post('/whatsapp/connect-embedded', { code: response.authResponse.code });
+                        const payload = { code: response.authResponse.code };
+                        // Pass the IDs Meta told us about — backend uses these to skip
+                        // the debug_token scan and connect the exact existing account.
+                        if (sessionInfo?.waba_id)        payload.wabaId        = sessionInfo.waba_id;
+                        if (sessionInfo?.phone_number_id) payload.phoneNumberId = sessionInfo.phone_number_id;
+
+                        const res = await api.post('/whatsapp/connect-embedded', payload);
                         if (res.data.success) {
                             showSuccess(`WhatsApp connected! Phone: ${res.data.displayPhone}`);
                             await fetchData();
@@ -181,6 +208,7 @@ const WhatsAppSettings = () => {
             }, loginOptions);
         } catch (err) {
             console.error('FB.login error:', err);
+            window.removeEventListener('message', onMessage);
             showError(`Failed to open Facebook login: ${err.message || 'Unknown error'}`);
             setConnecting(false);
         }
@@ -210,55 +238,6 @@ const WhatsAppSettings = () => {
             showError(err.response?.data?.message || 'Failed to refresh token');
         } finally {
             setRefreshing(false);
-        }
-    };
-
-    // ── Manual config handlers ─────────────────────────────────────────────────
-    const handleConfigChange = (e) => {
-        const { name, value } = e.target;
-        setConfig(prev => ({ ...prev, [name]: value }));
-    };
-
-    const handleSaveConfig = async (e) => {
-        e.preventDefault();
-        if (!config.waPhoneNumberId.trim()) { showError('Phone Number ID is required'); return; }
-        if (!config.waAccessToken.trim())   { showError('Access Token is required');    return; }
-        setSaving(true);
-        try {
-            const res = await api.put('/whatsapp/config', {
-                waBusinessId:   config.waBusinessId.trim(),
-                waPhoneNumberId: config.waPhoneNumberId.trim(),
-                waAccessToken:  config.waAccessToken.trim()
-            });
-            if (res.data.success) {
-                showSuccess('API credentials saved!');
-                setConfig(prev => ({ ...prev, waAccessToken: '', isConfigured: true }));
-            }
-        } catch (error) {
-            showError(error.response?.data?.message || 'Failed to save configuration');
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    const handleTest = async () => {
-        if (!config.isConfigured && (!config.waPhoneNumberId || !config.waAccessToken)) {
-            showError('Please save your configuration first');
-            return;
-        }
-        setTesting(true);
-        try {
-            const payload = {};
-            if (config.waPhoneNumberId && config.waAccessToken) {
-                payload.waPhoneNumberId = config.waPhoneNumberId;
-                payload.waAccessToken   = config.waAccessToken;
-            }
-            const res = await api.post('/whatsapp/config/test', payload);
-            if (res.data.success) showSuccess(res.data.message || 'Connection is valid!');
-        } catch (error) {
-            showError(error.response?.data?.message || 'Connection test failed');
-        } finally {
-            setTesting(false);
         }
     };
 
@@ -459,74 +438,6 @@ const WhatsAppSettings = () => {
                         )}
                     </div>
 
-                    {/* ── Manual / Advanced credentials ───────────────────── */}
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                        <button
-                            onClick={() => setShowManual(v => !v)}
-                            className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-slate-50 transition"
-                        >
-                            <div className="flex items-center gap-3">
-                                <i className="fa-solid fa-terminal text-slate-400"></i>
-                                <div>
-                                    <p className="text-sm font-bold text-slate-700">Manual API Credentials</p>
-                                    <p className="text-xs text-slate-400">For advanced users with a System User token</p>
-                                </div>
-                            </div>
-                            <i className={`fa-solid fa-chevron-${showManual ? 'up' : 'down'} text-slate-400 text-xs`}></i>
-                        </button>
-
-                        {showManual && (
-                            <div className="px-6 pb-6 border-t border-slate-100 pt-4">
-                                <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5">
-                                    <p className="text-xs font-bold text-blue-800 mb-2 flex items-center gap-1.5">
-                                        <i className="fa-solid fa-circle-info"></i> Where to find these
-                                    </p>
-                                    <ol className="space-y-1.5 text-xs text-blue-700">
-                                        <li><span className="font-bold">1.</span> business.facebook.com → Business Settings → WhatsApp Accounts → your account → copy <strong>Account ID</strong></li>
-                                        <li><span className="font-bold">2.</span> WhatsApp Accounts → Phone Numbers → click your number → copy <strong>Phone Number ID</strong></li>
-                                        <li><span className="font-bold">3.</span> Business Settings → Users → System Users → Generate Token → enable <strong>whatsapp_business_messaging</strong> → copy token</li>
-                                    </ol>
-                                </div>
-
-                                <form onSubmit={handleSaveConfig} className="space-y-4">
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-700 mb-1">Business Account ID <span className="text-slate-400 font-normal">(Optional)</span></label>
-                                        <input type="text" name="waBusinessId" value={config.waBusinessId} onChange={handleConfigChange}
-                                            placeholder="123456789012345"
-                                            className="w-full p-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono text-sm" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-700 mb-1">Phone Number ID <span className="text-red-500">*</span></label>
-                                        <input type="text" name="waPhoneNumberId" value={config.waPhoneNumberId} onChange={handleConfigChange}
-                                            placeholder="123456789012345" required
-                                            className="w-full p-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono text-sm" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-700 mb-1">Access Token <span className="text-red-500">*</span></label>
-                                        <div className="relative">
-                                            <input type={showToken ? 'text' : 'password'} name="waAccessToken" value={config.waAccessToken} onChange={handleConfigChange}
-                                                placeholder={config.isConfigured ? 'Enter new token to update' : 'Paste your system user token'}
-                                                required={!config.isConfigured}
-                                                className="w-full p-2.5 pr-12 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono text-sm" />
-                                            <button type="button" onClick={() => setShowToken(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                                                <i className={`fa-solid ${showToken ? 'fa-eye-slash' : 'fa-eye'}`}></i>
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div className="flex gap-3 pt-2">
-                                        <button type="button" onClick={handleTest} disabled={testing || (!config.isConfigured && (!config.waPhoneNumberId || !config.waAccessToken))}
-                                            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold text-sm transition disabled:opacity-50">
-                                            <i className={`fa-solid ${testing ? 'fa-spinner fa-spin' : 'fa-vial'} mr-1.5`}></i>Test
-                                        </button>
-                                        <button type="submit" disabled={saving}
-                                            className="flex-1 px-4 py-2 bg-[#00a884] hover:bg-[#008f6f] text-white rounded-lg font-semibold text-sm transition shadow-sm disabled:opacity-50">
-                                            <i className={`fa-solid ${saving ? 'fa-spinner fa-spin' : 'fa-save'} mr-1.5`}></i>Save Credentials
-                                        </button>
-                                    </div>
-                                </form>
-                            </div>
-                        )}
-                    </div>
                 </div>
             )}
 
