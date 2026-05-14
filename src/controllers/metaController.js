@@ -1079,6 +1079,35 @@ const handleDeauth = async (req, res) => {
     }
 };
 
+// Get current field mapping + last raw field keys seen from Meta
+const getFieldMapping = async (req, res) => {
+    try {
+        const config = await IntegrationConfig.findOne({ userId: req.tenantId })
+            .select('meta.metaFieldMapping meta.metaLastRawFields').lean();
+        res.json({
+            fieldMapping: config?.meta?.metaFieldMapping || {},
+            lastRawFields: config?.meta?.metaLastRawFields || []
+        });
+    } catch (e) {
+        res.status(500).json({ message: 'Failed to load field mapping' });
+    }
+};
+
+// Save custom field mapping
+const saveFieldMapping = async (req, res) => {
+    try {
+        const { name, phone, email, city } = req.body;
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: req.tenantId },
+            { $set: { 'meta.metaFieldMapping': { name: name || null, phone: phone || null, email: email || null, city: city || null } } },
+            { upsert: true }
+        );
+        res.json({ success: true, message: 'Field mapping saved' });
+    } catch (e) {
+        res.status(500).json({ message: 'Failed to save field mapping' });
+    }
+};
+
 module.exports = {
     getAuthUrl,
     handleCallback,
@@ -1096,5 +1125,7 @@ module.exports = {
     handleDataDeletion,
     handleDeauth,
     debugToken,
-    checkAndRefreshToken
+    checkAndRefreshToken,
+    getFieldMapping,
+    saveFieldMapping
 };

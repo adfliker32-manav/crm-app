@@ -84,10 +84,10 @@ const integrationConfigSchema = new mongoose.Schema({
         metaTestEventCode: { type: String, default: null },
         metaStageMapping: {
             type: {
-                first: String,      // First funnel stage
-                middle: String,     // Middle funnel stage
-                qualified: String,  // Qualified/Won stage
-                dead: String        // Dead lead stage
+                first: String,
+                middle: String,
+                qualified: String,
+                dead: String
             },
             default: {
                 first: 'New',
@@ -95,7 +95,16 @@ const integrationConfigSchema = new mongoose.Schema({
                 qualified: 'Won',
                 dead: 'Dead Lead'
             }
-        }
+        },
+        // Custom field key mapping — lets users override auto-detection
+        metaFieldMapping: {
+            name:  { type: String, default: null },
+            phone: { type: String, default: null },
+            email: { type: String, default: null },
+            city:  { type: String, default: null },
+        },
+        // Last set of raw field keys received from Meta (for mapping UI)
+        metaLastRawFields: { type: [String], default: [] }
     },
 
     // 📊 Google Sheet Push-Based Sync Configuration

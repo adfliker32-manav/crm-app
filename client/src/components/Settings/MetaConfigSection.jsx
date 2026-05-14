@@ -45,6 +45,11 @@ const MetaConfigSection = () => {
     });
     const [stages, setStages] = useState([]);
 
+    // Field mapping
+    const [fieldMapping, setFieldMapping] = useState({ name: '', phone: '', email: '', city: '' });
+    const [lastRawFields, setLastRawFields] = useState([]);
+    const [fieldMappingSaving, setFieldMappingSaving] = useState(false);
+
     // Check URL params for OAuth result
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -84,13 +89,13 @@ const MetaConfigSection = () => {
 
     // Load status on mount
     useEffect(() => {
-        // Prevent double loading if exchanging token
         const params = new URLSearchParams(window.location.search);
         if (params.get('meta_code')) return;
 
         loadStatus();
         loadCapiSettings();
         loadStages();
+        loadFieldMapping();
     }, []);
 
     const loadStatus = async () => {
@@ -293,6 +298,33 @@ const MetaConfigSection = () => {
         } catch (error) {
             console.error('Failed to reset page:', error);
             showError('Failed to reset page selection. Please try again.');
+        }
+    };
+
+    const loadFieldMapping = async () => {
+        try {
+            const res = await api.get('/meta/field-mapping');
+            setFieldMapping({
+                name: res.data.fieldMapping?.name || '',
+                phone: res.data.fieldMapping?.phone || '',
+                email: res.data.fieldMapping?.email || '',
+                city: res.data.fieldMapping?.city || '',
+            });
+            setLastRawFields(res.data.lastRawFields || []);
+        } catch (e) {
+            console.error('Failed to load field mapping:', e);
+        }
+    };
+
+    const handleSaveFieldMapping = async () => {
+        try {
+            setFieldMappingSaving(true);
+            await api.post('/meta/field-mapping', fieldMapping);
+            showSuccess('Field mapping saved! New leads will use this mapping.');
+        } catch (e) {
+            showError('Failed to save field mapping');
+        } finally {
+            setFieldMappingSaving(false);
         }
     };
 
@@ -596,6 +628,62 @@ const MetaConfigSection = () => {
                         </div>
                     </>
                 )}
+
+                {/* Field Mapping — lets user tell the system which Meta field = Name/Phone */}
+                <div className="mt-6 bg-orange-50 border border-orange-200 rounded-xl p-6">
+                    <h4 className="font-bold text-orange-800 mb-1 flex items-center gap-2">
+                        <i className="fa-solid fa-sliders"></i>
+                        Lead Field Mapping
+                    </h4>
+                    <p className="text-xs text-orange-600 mb-4">
+                        Tell the system which field in your Meta form contains the Name, Phone, etc.
+                        {lastRawFields.length > 0
+                            ? <> Detected fields from your last lead: <span className="font-mono font-semibold">{lastRawFields.join(', ')}</span></>
+                            : <> No leads received yet — field keys will appear here after your first lead comes in.</>}
+                    </p>
+
+                    {[
+                        { key: 'name',  label: 'Name Field',  icon: 'fa-user',  placeholder: 'e.g. full_name' },
+                        { key: 'phone', label: 'Phone Field', icon: 'fa-phone', placeholder: 'e.g. phone_number' },
+                        { key: 'email', label: 'Email Field', icon: 'fa-envelope', placeholder: 'e.g. email' },
+                        { key: 'city',  label: 'City Field',  icon: 'fa-location-dot', placeholder: 'e.g. city' },
+                    ].map(({ key, label, icon, placeholder }) => (
+                        <div key={key} className="mb-3">
+                            <label className="block text-xs font-semibold text-slate-600 mb-1">
+                                <i className={`fa-solid ${icon} mr-1 text-orange-500`}></i>{label}
+                            </label>
+                            {lastRawFields.length > 0 ? (
+                                <select
+                                    value={fieldMapping[key] || ''}
+                                    onChange={e => setFieldMapping(prev => ({ ...prev, [key]: e.target.value }))}
+                                    className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-orange-400 outline-none"
+                                >
+                                    <option value="">— Auto-detect —</option>
+                                    {lastRawFields.map(f => (
+                                        <option key={f} value={f}>{f}</option>
+                                    ))}
+                                </select>
+                            ) : (
+                                <input
+                                    type="text"
+                                    value={fieldMapping[key] || ''}
+                                    onChange={e => setFieldMapping(prev => ({ ...prev, [key]: e.target.value }))}
+                                    placeholder={placeholder}
+                                    className="w-full p-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-400 outline-none"
+                                />
+                            )}
+                        </div>
+                    ))}
+
+                    <button
+                        onClick={handleSaveFieldMapping}
+                        disabled={fieldMappingSaving}
+                        className="mt-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-5 py-2 rounded-lg font-bold text-sm transition flex items-center gap-2"
+                    >
+                        <i className={`fa-solid ${fieldMappingSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`}></i>
+                        {fieldMappingSaving ? 'Saving...' : 'Save Field Mapping'}
+                    </button>
+                </div>
 
                 {/* Meta Conversion API Settings (Always Visible when connected) */}
                 <div className="mt-6 bg-purple-50 border border-purple-200 rounded-xl p-6">

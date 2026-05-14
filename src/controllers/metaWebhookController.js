@@ -386,7 +386,6 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             const currentCount = await Lead.countDocuments({ userId });
             if (currentCount >= leadLimit) {
                 console.warn(`⚠️ Lead limit reached for tenant ${userId} (${currentCount}/${leadLimit}). Meta lead dropped.`);
-                // FIX 1: notify the user so they know to upgrade — previously this was silent
                 emitToUser(userId.toString(), 'notification:agent', {
                     type: 'meta_lead_drop',
                     message: `⚠️ Lead limit reached (${currentCount}/${leadLimit}). A Meta lead was dropped. Upgrade your plan to receive more leads.`,
@@ -394,6 +393,25 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
                 });
                 return null;
             }
+        }
+
+        // Apply custom field mapping and save raw field keys for the mapping UI
+        if (leadDetails.rawFields && Object.keys(leadDetails.rawFields).length > 0) {
+            const rawKeys = Object.keys(leadDetails.rawFields);
+            // Save last seen field keys (non-blocking)
+            IntegrationConfig.findOneAndUpdate(
+                { userId },
+                { $set: { 'meta.metaLastRawFields': rawKeys } },
+                { new: false }
+            ).exec().catch(() => {});
+
+            // Apply custom mapping overrides if configured
+            const integConfig = await IntegrationConfig.findOne({ userId }).select('meta.metaFieldMapping').lean();
+            const mapping = integConfig?.meta?.metaFieldMapping || {};
+            if (mapping.name  && leadDetails.rawFields[mapping.name])  leadDetails.name  = leadDetails.rawFields[mapping.name];
+            if (mapping.phone && leadDetails.rawFields[mapping.phone]) leadDetails.phone = leadDetails.rawFields[mapping.phone];
+            if (mapping.email && leadDetails.rawFields[mapping.email]) leadDetails.email = leadDetails.rawFields[mapping.email];
+            if (mapping.city  && leadDetails.rawFields[mapping.city])  leadDetails.city  = leadDetails.rawFields[mapping.city];
         }
 
         // Normalize phone to WhatsApp international format using workspace's country code
