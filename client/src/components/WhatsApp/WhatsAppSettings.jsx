@@ -61,6 +61,7 @@ const WhatsAppSettings = () => {
     const [saving, setSaving]         = useState(false);
     const [connecting, setConnecting] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
+    const [connectionError, setConnectionError] = useState('');
 
     // Manual connection state
     const [showManual, setShowManual]         = useState(false);
@@ -119,7 +120,8 @@ const WhatsAppSettings = () => {
 
     // ── Embedded Signup ────────────────────────────────────────────────────────
     const handleEmbeddedSignup = async () => {
-        if (!metaAppId) { showError('Meta App ID not configured on the server'); return; }
+        setConnectionError('');
+        if (!metaAppId) { showError('Meta App ID not configured on the server'); setConnectionError('Meta App ID not configured on the server. Contact your administrator.'); return; }
 
         try {
             if (!window.FB) {
@@ -182,6 +184,12 @@ const WhatsAppSettings = () => {
                     window.removeEventListener('message', onMessage);
 
                     if (!response?.authResponse?.code) {
+                        const reason = !response?.authResponse
+                            ? 'Facebook login was cancelled or the popup was blocked. Please try again.'
+                            : 'Facebook did not return an authorization code. Please try again and make sure to complete all steps in the popup.';
+                        console.warn('FB.login failed — no auth code:', response);
+                        showError(reason);
+                        setConnectionError(reason);
                         setConnecting(false);
                         return;
                     }
@@ -196,10 +204,13 @@ const WhatsAppSettings = () => {
                         const res = await api.post('/whatsapp/connect-embedded', payload);
                         if (res.data.success) {
                             showSuccess(`WhatsApp connected! Phone: ${res.data.displayPhone}`);
+                            setConnectionError('');
                             await fetchData();
                         }
                     } catch (err) {
-                        showError(err.response?.data?.message || 'Failed to connect WhatsApp');
+                        const errMsg = err.response?.data?.message || 'Failed to connect WhatsApp';
+                        showError(errMsg);
+                        setConnectionError(errMsg);
                     } finally {
                         setConnecting(false);
                     }
@@ -297,6 +308,24 @@ const WhatsAppSettings = () => {
             {/* ── CONNECTION TAB ─────────────────────────────────────────────── */}
             {activeTab === 'connection' && (
                 <div className="space-y-5">
+
+                    {/* Connection Error Banner */}
+                    {connectionError && (
+                        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+                            <div className="w-9 h-9 bg-red-100 rounded-full flex items-center justify-center shrink-0 mt-0.5">
+                                <i className="fa-solid fa-circle-exclamation text-red-600 text-lg"></i>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="font-bold text-red-800 text-sm">WhatsApp Connection Failed</p>
+                                <p className="text-xs text-red-600 mt-0.5">{connectionError}</p>
+                                <p className="text-xs text-red-500 mt-2">If this persists, ensure <strong>META_APP_SECRET</strong> is configured in your server environment variables (Render dashboard → Environment).</p>
+                            </div>
+                            <button onClick={() => setConnectionError('')} className="text-red-400 hover:text-red-600 text-lg shrink-0">
+                                <i className="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                    )}
+
 
                     {/* Connected banner */}
                     {config.isConfigured && (() => {
