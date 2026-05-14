@@ -201,15 +201,6 @@ const Sidebar = () => {
                 </Link>
 
                 <div className="flex flex-col gap-3 mt-4">
-                    <Link
-                        to="/settings"
-                        className={`w-full text-sm text-slate-400 hover:text-white transition 
-                        ${collapsed ? "text-center" : "text-left"}`}
-                    >
-                        <i className="fa-solid fa-gear mr-2"></i>
-                        {!collapsed && "Settings"}
-                    </Link>
-
                     <button
                         onClick={handleLogout}
                         className={`w-full text-sm text-slate-400 hover:text-red-400 transition 
