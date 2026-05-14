@@ -19,8 +19,8 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
         if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify WhatsApp settings' });
 
         // wabaId / phoneNumberId may be pre-filled from sessionInfoVersion:3 postMessage
-        const { code, wabaId: hintWabaId, phoneNumberId: hintPhoneNumberId } = req.body;
-        if (!code) return res.status(400).json({ success: false, message: 'Missing authorization code from Facebook' });
+        const { code, accessToken: directToken, wabaId: hintWabaId, phoneNumberId: hintPhoneNumberId } = req.body;
+        if (!code && !directToken) return res.status(400).json({ success: false, message: 'Missing authorization code or access token from Facebook' });
 
         const appId = process.env.META_APP_ID;
         const appSecret = process.env.META_APP_SECRET;
@@ -28,20 +28,38 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
 
         const GRAPH = 'https://graph.facebook.com/v25.0';
 
-        // Step 1: Exchange auth code for short-lived user token
-        // redirect_uri must be empty string for JS SDK popup flow (Meta requirement)
-        const tokenRes = await axios.get(`${GRAPH}/oauth/access_token`, {
-            params: { client_id: appId, client_secret: appSecret, redirect_uri: '', code },
-            timeout: 10000
-        });
-        const shortToken = tokenRes.data.access_token;
+        let longToken;
 
-        // Step 2: Exchange for long-lived user token (60-day)
-        const longRes = await axios.get(`${GRAPH}/oauth/access_token`, {
-            params: { grant_type: 'fb_exchange_token', client_id: appId, client_secret: appSecret, fb_exchange_token: shortToken },
-            timeout: 10000
-        });
-        const longToken = longRes.data.access_token;
+        if (code) {
+            // Path A: Exchange auth code → short-lived token → long-lived token
+            console.log('📱 WhatsApp ES: Using authorization code flow');
+            const tokenRes = await axios.get(`${GRAPH}/oauth/access_token`, {
+                params: { client_id: appId, client_secret: appSecret, redirect_uri: '', code },
+                timeout: 10000
+            });
+            const shortToken = tokenRes.data.access_token;
+
+            const longRes = await axios.get(`${GRAPH}/oauth/access_token`, {
+                params: { grant_type: 'fb_exchange_token', client_id: appId, client_secret: appSecret, fb_exchange_token: shortToken },
+                timeout: 10000
+            });
+            longToken = longRes.data.access_token;
+        } else {
+            // Path B: Facebook returned a short-lived accessToken directly (no code)
+            // Exchange it for a long-lived token (60-day)
+            console.log('📱 WhatsApp ES: Using direct accessToken flow (no code returned by FB SDK)');
+            try {
+                const longRes = await axios.get(`${GRAPH}/oauth/access_token`, {
+                    params: { grant_type: 'fb_exchange_token', client_id: appId, client_secret: appSecret, fb_exchange_token: directToken },
+                    timeout: 10000
+                });
+                longToken = longRes.data.access_token;
+            } catch (exchangeErr) {
+                console.warn('⚠️ Long-lived token exchange failed, using short-lived token as fallback:', exchangeErr.response?.data || exchangeErr.message);
+                // If exchange fails, use the short-lived token directly (will expire in ~1 hour)
+                longToken = directToken;
+            }
+        }
 
         let wabaId = null, wabaName = null, phoneNumberId = null, displayPhone = null, verifiedName = null;
 

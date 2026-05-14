@@ -180,14 +180,24 @@ const WhatsAppSettings = () => {
         try {
             window.FB.login((response) => {
                 const processLogin = async () => {
-                    console.log('Facebook SDK Response:', response);
+                    console.log('Facebook SDK Full Response:', JSON.stringify(response, null, 2));
                     window.removeEventListener('message', onMessage);
 
-                    if (!response?.authResponse?.code) {
-                        const reason = !response?.authResponse
-                            ? 'Facebook login was cancelled or the popup was blocked. Please try again.'
-                            : 'Facebook did not return an authorization code. Please try again and make sure to complete all steps in the popup.';
-                        console.warn('FB.login failed — no auth code:', response);
+                    if (!response?.authResponse) {
+                        const reason = 'Facebook login was cancelled or the popup was blocked. Please try again.';
+                        console.warn('FB.login failed — no authResponse:', response);
+                        showError(reason);
+                        setConnectionError(reason);
+                        setConnecting(false);
+                        return;
+                    }
+
+                    const authCode = response.authResponse.code;
+                    const accessToken = response.authResponse.accessToken;
+
+                    if (!authCode && !accessToken) {
+                        const reason = 'Facebook did not return credentials. Please try again and complete all steps in the popup.';
+                        console.warn('FB.login — no code or accessToken:', response.authResponse);
                         showError(reason);
                         setConnectionError(reason);
                         setConnecting(false);
@@ -195,12 +205,19 @@ const WhatsAppSettings = () => {
                     }
 
                     try {
-                        const payload = { code: response.authResponse.code };
+                        const payload = {};
+                        if (authCode) {
+                            payload.code = authCode;
+                        } else {
+                            // Facebook returned a short-lived accessToken instead of a code
+                            payload.accessToken = accessToken;
+                        }
                         // Pass the IDs Meta told us about — backend uses these to skip
                         // the debug_token scan and connect the exact existing account.
                         if (sessionInfo?.waba_id)        payload.wabaId        = sessionInfo.waba_id;
                         if (sessionInfo?.phone_number_id) payload.phoneNumberId = sessionInfo.phone_number_id;
 
+                        console.log('Sending to backend:', { hasCode: !!authCode, hasToken: !!accessToken, hasSessionInfo: !!sessionInfo });
                         const res = await api.post('/whatsapp/connect-embedded', payload);
                         if (res.data.success) {
                             showSuccess(`WhatsApp connected! Phone: ${res.data.displayPhone}`);
@@ -221,6 +238,7 @@ const WhatsAppSettings = () => {
             console.error('FB.login error:', err);
             window.removeEventListener('message', onMessage);
             showError(`Failed to open Facebook login: ${err.message || 'Unknown error'}`);
+            setConnectionError(`Failed to open Facebook login: ${err.message || 'Unknown error'}`);
             setConnecting(false);
         }
     };
