@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext } from 'react';
+import React, { createContext, useState, useContext, useEffect } from 'react';
 import api from '../services/api';
 
 const AuthContext = createContext(null);
@@ -21,6 +21,23 @@ export const AuthProvider = ({ children }) => {
         return null;
     });
     const [loading, _setLoading] = useState(false);
+
+    // Refresh user permissions from server on mount so that changes made by
+    // superadmin (e.g. enabling aiChatbot) are picked up without requiring re-login.
+    useEffect(() => {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        api.get('/auth/me')
+            .then(res => {
+                const fresh = res.data?.user;
+                if (fresh) {
+                    const merged = { ...JSON.parse(localStorage.getItem('user') || '{}'), ...fresh };
+                    localStorage.setItem('user', JSON.stringify(merged));
+                    setUser(merged);
+                }
+            })
+            .catch(() => { /* silent — stale cache is better than broken UI */ });
+    }, []);
 
     const login = async (email, password) => {
         try {

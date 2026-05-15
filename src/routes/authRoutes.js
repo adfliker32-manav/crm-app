@@ -16,6 +16,9 @@ const authLimiter = rateLimit({
 router.post('/login', authLimiter, validate(schemas.login), authController.login);
 router.post('/google', authLimiter, authController.googleLogin);
 
+// 1.5. Get fresh user + workspace data (refresh cached permissions)
+router.get('/me', authMiddleware, authController.getMe);
+
 // 2. Add New Agent (Manager Only)
 router.post('/add-agent', authMiddleware, validate(schemas.createAgent), authController.createAgent);
 

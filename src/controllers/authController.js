@@ -47,6 +47,7 @@ const buildLoginUserResponse = (user, workspace) => ({
     approved_by_admin: user.approved_by_admin,
     status: user.status,
     activeModules: workspace?.activeModules || [],
+    planFeatures: workspace?.planFeatures || {},
     termsAccepted: !!user.termsAcceptedAt
 });
 
@@ -55,6 +56,7 @@ const buildGoogleUserResponse = (user, workspace) => ({
     subscriptionStatus: workspace?.subscriptionStatus || 'Trial',
     planExpiryDate: workspace?.planExpiryDate,
     activeModules: workspace?.activeModules || [],
+    planFeatures: workspace?.planFeatures || {},
     termsAccepted: !!user.termsAcceptedAt
 });
 
@@ -108,6 +110,20 @@ const blockUnapprovedLogin = (user, res) => {
 
 const findManagedAgent = (managerId, agentId) =>
     User.findOne({ _id: agentId, parentId: managerId, role: 'agent' });
+
+// 1.5. GET ME — returns fresh user + workspace data (used to refresh cached permissions)
+exports.getMe = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId).select('-password');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        const workspace = await getWorkspaceForUser(user);
+        res.json({ user: buildLoginUserResponse(user, workspace) });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
 
 // 2. LOGIN (Purana User)
 exports.login = async (req, res) => {
