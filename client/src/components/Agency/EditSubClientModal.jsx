@@ -3,15 +3,14 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 
 const ALL_MODULES = [
-    { id: 'whatsapp', name: 'WhatsApp Marketing', icon: 'fa-whatsapp' },
-    { id: 'chatbot', name: 'AI Chatbot (WhatsApp)', icon: 'fa-robot' },
-    { id: 'email', name: 'Email Marketing', icon: 'fa-envelope' },
+    { id: 'leads',       name: 'Lead Management',     icon: 'fa-address-book' },
+    { id: 'whatsapp',    name: 'WhatsApp Marketing',  icon: 'fa-whatsapp' },
+    { id: 'email',       name: 'Email Marketing',      icon: 'fa-envelope' },
     { id: 'automations', name: 'Workflow Automations', icon: 'fa-bolt' },
-    { id: 'team', name: 'Team Management', icon: 'fa-users' },
-    { id: 'reports', name: 'Advanced Reports', icon: 'fa-chart-pie' },
-    { id: 'leads', name: 'Lead Management', icon: 'fa-address-book' },
-    { id: 'api', name: 'API Access', icon: 'fa-code' },
-    { id: 'whitelabel', name: 'White-Label Branding', icon: 'fa-palette' }
+    { id: 'team',        name: 'Team Management',      icon: 'fa-users' },
+    { id: 'reports',     name: 'Advanced Reports',     icon: 'fa-chart-pie' },
+    { id: 'api',         name: 'API Access',           icon: 'fa-code' },
+    { id: 'whitelabel',  name: 'White-Label Branding', icon: 'fa-palette' }
 ];
 
 const EditSubClientModal = ({ isOpen, onClose, client, agencyModules = [], onSuccess }) => {
