@@ -23,7 +23,16 @@ const requireModule = (moduleName) => {
             }
 
             // Check if moduleName exists in the tenant's allowed features array
-            if (!activeModules.includes(moduleName)) {
+            let hasAccess = activeModules.includes(moduleName);
+
+            // Chatbot flows are part of the WhatsApp module; aiChatbot is an optional add-on
+            if (moduleName === 'chatbot') {
+                const hasPlanFeature = req.workspace?.planFeatures?.aiChatbot;
+                const hasWhatsApp = activeModules.includes('whatsapp');
+                hasAccess = hasAccess || hasPlanFeature || hasWhatsApp;
+            }
+
+            if (!hasAccess) {
                 return res.status(403).json({
                     success: false,
                     error: 'module_locked',

@@ -19,6 +19,12 @@ const WhatsAppManagement = () => {
 
     const hasModule = (moduleName) => {
         if (['superadmin', 'agency'].includes(user?.role)) return true;
+        if (moduleName === 'chatbot') {
+            // Flows are part of the WhatsApp module; aiChatbot is an optional add-on
+            return user?.planFeatures?.aiChatbot
+                || (user?.activeModules && user.activeModules.includes('chatbot'))
+                || (user?.activeModules && user.activeModules.includes('whatsapp'));
+        }
         return user?.activeModules ? user.activeModules.includes(moduleName) : true;
     };
 
