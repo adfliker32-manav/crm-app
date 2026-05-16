@@ -13,7 +13,7 @@ const WhatsAppSettings = () => {
 
     // Connection state
     const [config, setConfig] = useState({
-        wabaId: '', waPhoneNumberId: '', waAppId: '',
+        wabaId: '', waPhoneNumberId: '',
         displayPhone: '', verifiedName: '', isConfigured: false
     });
 
@@ -43,11 +43,9 @@ const WhatsAppSettings = () => {
     const [testing, setTesting]           = useState(false);
     const [testResult, setTestResult]     = useState(null);
     const [connectionError, setConnectionError] = useState('');
-    const [showSecret, setShowSecret]     = useState(false);
-
     // Credential form state
     const [form, setForm] = useState({
-        wabaId: '', phoneNumberId: '', accessToken: '', appId: '', appSecret: ''
+        wabaId: '', phoneNumberId: '', accessToken: ''
     });
 
     useEffect(() => { fetchData(); }, []);
@@ -63,7 +61,6 @@ const WhatsAppSettings = () => {
             setConfig({
                 wabaId:          cfgRes.data.wabaId || '',
                 waPhoneNumberId: cfgRes.data.waPhoneNumberId || '',
-                waAppId:         cfgRes.data.waAppId || '',
                 displayPhone:    cfgRes.data.displayPhone || '',
                 verifiedName:    cfgRes.data.verifiedName || '',
                 isConfigured:    cfgRes.data.isConfigured || false
@@ -85,22 +82,22 @@ const WhatsAppSettings = () => {
     const handleConnect = async (e) => {
         e.preventDefault();
         setConnectionError('');
-        const { wabaId, phoneNumberId, accessToken, appId, appSecret } = form;
-        if (!wabaId || !phoneNumberId || !accessToken || !appId || !appSecret) {
-            setConnectionError('All five fields are required.');
+        const { wabaId, phoneNumberId, accessToken } = form;
+        if (!wabaId || !phoneNumberId || !accessToken) {
+            setConnectionError('All three fields are required.');
             return;
         }
         const numericOnly = /^\d+$/;
-        if (!numericOnly.test(wabaId) || !numericOnly.test(phoneNumberId) || !numericOnly.test(appId)) {
-            setConnectionError('WABA ID, Phone Number ID, and App ID must be numeric.');
+        if (!numericOnly.test(wabaId) || !numericOnly.test(phoneNumberId)) {
+            setConnectionError('WABA ID and Phone Number ID must be numeric.');
             return;
         }
         setConnecting(true);
         try {
-            const res = await api.post('/whatsapp/connect-manual', { wabaId, phoneNumberId, accessToken, appId, appSecret });
+            const res = await api.post('/whatsapp/connect-manual', { wabaId, phoneNumberId, accessToken });
             if (res.data.success) {
                 showSuccess(`WhatsApp connected! Phone: ${res.data.displayPhone}`);
-                setForm({ wabaId: '', phoneNumberId: '', accessToken: '', appId: '', appSecret: '' });
+                setForm({ wabaId: '', phoneNumberId: '', accessToken: '' });
                 setConnectionError('');
                 setTestResult(null);
                 await fetchData();
@@ -323,7 +320,7 @@ const WhatsAppSettings = () => {
                                 <h3 className="text-base font-bold text-slate-800">
                                     {config.isConfigured ? 'Update Credentials' : 'Connect WhatsApp'}
                                 </h3>
-                                <p className="text-xs text-slate-500">Enter your Meta app credentials and WhatsApp account IDs</p>
+                                <p className="text-xs text-slate-500">Enter your WhatsApp Business Account details</p>
                             </div>
                         </div>
 
@@ -364,46 +361,6 @@ const WhatsAppSettings = () => {
                                     required
                                 />
                                 <p className="text-[10px] text-slate-400 mt-1">Use a permanent System User token from your Meta Business Manager to avoid expiry.</p>
-                            </div>
-
-                            <div className="border-t border-slate-100 pt-4">
-                                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Your Meta App Credentials</p>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-600 mb-1">App ID <span className="text-red-500">*</span></label>
-                                        <input
-                                            type="text"
-                                            value={form.appId}
-                                            onChange={e => { setConnectionError(''); setForm(p => ({ ...p, appId: e.target.value.trim() })); }}
-                                            placeholder="Meta App ID"
-                                            className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none"
-                                            required
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-600 mb-1">App Secret <span className="text-red-500">*</span></label>
-                                        <div className="relative">
-                                            <input
-                                                type={showSecret ? 'text' : 'password'}
-                                                value={form.appSecret}
-                                                onChange={e => { setConnectionError(''); setForm(p => ({ ...p, appSecret: e.target.value.trim() })); }}
-                                                placeholder="Meta App Secret"
-                                                className="w-full px-3 py-2.5 pr-10 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono"
-                                                required
-                                            />
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowSecret(p => !p)}
-                                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                                            >
-                                                <i className={`fa-solid ${showSecret ? 'fa-eye-slash' : 'fa-eye'} text-xs`}></i>
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <p className="text-[10px] text-slate-400 mt-2">
-                                    Found in your Meta App Dashboard → Settings → Basic. The App Secret is used to verify incoming webhook signatures.
-                                </p>
                             </div>
 
                             <button

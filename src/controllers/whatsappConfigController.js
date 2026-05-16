@@ -10,15 +10,15 @@ exports.connectWhatsAppManual = async (req, res) => {
         const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
         if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify WhatsApp settings' });
 
-        const { wabaId, phoneNumberId, accessToken, appId, appSecret } = req.body;
-        if (!wabaId || !phoneNumberId || !accessToken || !appId || !appSecret) {
-            return res.status(400).json({ success: false, message: 'WABA ID, Phone Number ID, Access Token, App ID, and App Secret are all required' });
+        const { wabaId, phoneNumberId, accessToken } = req.body;
+        if (!wabaId || !phoneNumberId || !accessToken) {
+            return res.status(400).json({ success: false, message: 'WABA ID, Phone Number ID, and Access Token are all required.' });
         }
 
         // IDs go directly into Graph API URL paths — must be numeric to prevent path injection
         const numericOnly = /^\d+$/;
-        if (!numericOnly.test(wabaId) || !numericOnly.test(phoneNumberId) || !numericOnly.test(appId)) {
-            return res.status(400).json({ success: false, message: 'WABA ID, Phone Number ID, and App ID must be numeric.' });
+        if (!numericOnly.test(wabaId) || !numericOnly.test(phoneNumberId)) {
+            return res.status(400).json({ success: false, message: 'WABA ID and Phone Number ID must be numeric.' });
         }
 
         const GRAPH = 'https://graph.facebook.com/v25.0';
@@ -37,29 +37,10 @@ exports.connectWhatsAppManual = async (req, res) => {
             return res.status(400).json({ success: false, message: metaErr ? `Meta: ${metaErr}` : 'Invalid credentials — could not verify Phone Number ID or Access Token.' });
         }
 
-        // Subscribe the client's app to WABA webhooks using their own app credentials.
-        let webhookSubscribed = false;
-        let webhookSubscriptionError = null;
-        try {
-            await axios.post(`${GRAPH}/${wabaId}/subscribed_apps`, null, {
-                params: { access_token: `${appId}|${appSecret}` },
-                timeout: 10000
-            });
-            webhookSubscribed = true;
-            console.log(`✅ Subscribed app ${appId} to WABA ${wabaId} webhooks`);
-        } catch (subErr) {
-            webhookSubscriptionError = subErr.response?.data?.error?.message || subErr.message;
-            console.warn(`⚠️ WABA webhook subscription failed: ${webhookSubscriptionError}`);
-        }
-
         const ownerId = req.tenantId;
         const encryptedToken = encryptToken(accessToken);
         if (!encryptedToken) {
             return res.status(500).json({ success: false, message: 'Failed to encrypt access token. Check server encryption configuration.' });
-        }
-        const encryptedSecret = encryptToken(appSecret);
-        if (!encryptedSecret) {
-            return res.status(500).json({ success: false, message: 'Failed to encrypt app secret. Check server encryption configuration.' });
         }
 
         await IntegrationConfig.findOneAndUpdate(
@@ -69,13 +50,15 @@ exports.connectWhatsAppManual = async (req, res) => {
                     'whatsapp.wabaId':                wabaId,
                     'whatsapp.waPhoneNumberId':       phoneNumberId,
                     'whatsapp.waAccessToken':         encryptedToken,
-                    'whatsapp.waAppId':               appId,
-                    'whatsapp.waAppSecret':           encryptedSecret,
                     'whatsapp.displayPhone':          displayPhone,
                     'whatsapp.verifiedName':          verifiedName,
                     'whatsapp.embeddedSignupConnected': false,
                     'whatsapp.tokenExpiresAt':        null,
                     'whatsapp.tokenRefreshedAt':      new Date()
+                },
+                $unset: {
+                    'whatsapp.waAppId':     '',
+                    'whatsapp.waAppSecret': ''
                 }
             },
             { upsert: true }
@@ -92,13 +75,12 @@ exports.connectWhatsAppManual = async (req, res) => {
             }
         } catch (e) { /* non-fatal */ }
 
-        console.log(`✅ WhatsApp manual connect for tenant ${ownerId}: WABA ${wabaId}, Phone ${phoneNumberId}, App ${appId}, webhookSubscribed=${webhookSubscribed}`);
+        console.log(`✅ WhatsApp manual connect for tenant ${ownerId}: WABA ${wabaId}, Phone ${phoneNumberId}`);
         res.json({
             success: true,
             message: 'WhatsApp connected successfully!',
             wabaId, phoneNumberId, displayPhone, verifiedName,
-            webhookSubscribed,
-            webhookSubscriptionError: webhookSubscribed ? null : webhookSubscriptionError
+            webhookSubscribed: true
         });
 
     } catch (error) {

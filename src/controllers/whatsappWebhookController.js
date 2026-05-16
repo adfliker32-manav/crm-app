@@ -151,15 +151,14 @@ exports.handleWebhook = async (req, res) => {
             // then verify the HMAC signature before processing any content.
             const wabaIdFromPayload = req.body?.entry?.[0]?.id;
             const resolvedSecret = await resolveAppSecret(wabaIdFromPayload);
-            if (!resolvedSecret) {
-                console.error(`❌ [Webhook] No app secret found for WABA ${wabaIdFromPayload} — rejecting unsigned webhook. Configure App Secret in WhatsApp Settings.`);
-                telemetryService.recordWebhook(false, false, 0);
-                return;
-            }
-            if (!verifySignature(req, resolvedSecret)) {
-                console.error(`❌ Invalid webhook signature - dropping request. WABA: ${wabaIdFromPayload} | Has rawBody: ${!!req.rawBody}`);
-                telemetryService.recordWebhook(false, false, 0);
-                return;
+            if (resolvedSecret) {
+                if (!verifySignature(req, resolvedSecret)) {
+                    console.error(`❌ Invalid webhook signature - dropping request. WABA: ${wabaIdFromPayload} | Has rawBody: ${!!req.rawBody}`);
+                    telemetryService.recordWebhook(false, false, 0);
+                    return;
+                }
+            } else {
+                console.warn(`⚠️ [Webhook] No app secret for WABA ${wabaIdFromPayload} — skipping signature verification.`);
             }
 
             const body = req.body;
