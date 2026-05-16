@@ -37,7 +37,7 @@ exports.connectWhatsAppManual = async (req, res) => {
             return res.status(400).json({ success: false, message: metaErr ? `Meta: ${metaErr}` : 'Invalid credentials — could not verify Phone Number ID or Access Token.' });
         }
 
-        // Subscribe the client's app to WABA webhooks using their own app token
+        // Subscribe the client's app to WABA webhooks using their own app credentials.
         let webhookSubscribed = false;
         let webhookSubscriptionError = null;
         try {
@@ -306,8 +306,7 @@ exports.updateWhatsAppSettings = async (req, res) => {
 };
 
 // Exported so cronJobs.js can call it.
-// Prefers the tenant's own stored App ID + App Secret (manual-credentials tenants).
-// Falls back to global META_APP_ID / META_APP_SECRET for embedded-signup tenants.
+// Uses the tenant's own stored App ID + App Secret (set during manual credentials setup).
 exports.refreshTokenForOwner = async (ownerId) => {
     const { decryptToken } = require('../utils/encryptionUtils');
 
@@ -315,19 +314,17 @@ exports.refreshTokenForOwner = async (ownerId) => {
         .select('+whatsapp.waAccessToken +whatsapp.waAppSecret whatsapp.waAppId');
     if (!config?.whatsapp?.waAccessToken) throw new Error('No stored token found');
 
-    // Resolve App ID and App Secret — prefer per-tenant stored values
     const storedAppId     = config.whatsapp?.waAppId;
     const rawStoredSecret = config.whatsapp?.waAppSecret;
-    const storedAppSecret = rawStoredSecret
+    const appSecret = rawStoredSecret
         ? ((rawStoredSecret.includes(':') && rawStoredSecret.split(':')[0].length === 32)
             ? decryptToken(rawStoredSecret)
             : rawStoredSecret)
         : null;
 
-    const appId     = storedAppId     || process.env.META_APP_ID;
-    const appSecret = storedAppSecret || process.env.META_APP_SECRET;
+    const appId = storedAppId;
 
-    if (!appId || !appSecret) throw new Error('App ID or App Secret not available — configure them in WhatsApp Settings or set META_APP_ID / META_APP_SECRET on the server');
+    if (!appId || !appSecret) throw new Error('App ID or App Secret not available — reconnect WhatsApp in Settings to save credentials.');
 
     const rawToken     = config.whatsapp.waAccessToken;
     const currentToken = (rawToken && rawToken.includes(':') && rawToken.split(':')[0].length === 32)

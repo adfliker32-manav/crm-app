@@ -109,9 +109,7 @@ const verifySignature = (req, appSecret) => {
     return isValid;
 };
 
-// Resolve the app secret for a given WABA ID.
-// Each tenant stores their own app secret. Falls back to the global env secret
-// for any tenant still on the legacy embedded-signup flow.
+// Resolve the app secret for a given WABA ID from the tenant's stored credentials.
 const resolveAppSecret = async (wabaId) => {
     if (wabaId) {
         try {
@@ -130,8 +128,7 @@ const resolveAppSecret = async (wabaId) => {
             console.warn('⚠️ [Webhook] Failed to look up per-tenant app secret:', e.message);
         }
     }
-    // Fall back to global platform secret (embedded signup tenants, or missing per-tenant secret)
-    return process.env.WA_APP_SECRET || process.env.META_APP_SECRET || null;
+    return null;
 };
 
 // Handle incoming webhook
