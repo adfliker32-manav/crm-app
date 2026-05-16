@@ -50,6 +50,8 @@ const impersonateClient = async (req, res) => {
             req
         });
 
+        const workspace = await WorkspaceSettings.findOne({ userId: client._id }).lean();
+
         res.status(200).json({
             success: true,
             message: `Securely hijacking session for ${client.companyName || client.name}...`,
@@ -61,6 +63,8 @@ const impersonateClient = async (req, res) => {
                 role: client.role,
                 companyName: client.companyName,
                 permissions: client.permissions,
+                activeModules: workspace?.activeModules || [],
+                planFeatures: workspace?.planFeatures || {},
                 isImpersonated: true
             }
         });

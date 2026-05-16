@@ -1151,6 +1151,8 @@ const impersonateUser = async (req, res) => {
             req
         });
 
+        const workspace = await WorkspaceSettings.findOne({ userId: targetUser._id }).lean();
+
         res.json({
             success: true,
             message: `Impersonating ${targetUser.name}`,
@@ -1159,7 +1161,12 @@ const impersonateUser = async (req, res) => {
                 _id: targetUser._id,
                 name: targetUser.name,
                 email: targetUser.email,
-                role: targetUser.role
+                role: targetUser.role,
+                companyName: targetUser.companyName,
+                permissions: targetUser.permissions,
+                activeModules: workspace?.activeModules || [],
+                planFeatures: workspace?.planFeatures || {},
+                isImpersonated: true
             }
         });
 
