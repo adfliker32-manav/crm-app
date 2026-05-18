@@ -854,22 +854,22 @@ const testCapiConnection = async (req, res) => {
             });
         }
 
-        // Prepare test event
+        // Prepare test event — mirror real CRM event shape (system_generated + lead_event_source)
         const testEventData = {
             data: [{
-                event_name: 'PageView',
+                event_name: 'Lead',
                 event_time: Math.floor(Date.now() / 1000),
                 event_id: `test_${Date.now()}`,
-                action_source: 'website',
-                event_source_url: process.env.APP_URL || 'https://your-crm.com',
-                user_data: (() => {
-                    // req.ip can be IPv6 (e.g. "::1", "::ffff:1.2.3.4") — Meta only accepts IPv4
-                    const rawIp = req.ip || '';
-                    const ipv4 = rawIp.startsWith('::ffff:') ? rawIp.slice(7) : rawIp;
-                    const data = { client_user_agent: req.headers['user-agent'] || 'CRM-Test' };
-                    if (ipv4 && /^\d{1,3}(\.\d{1,3}){3}$/.test(ipv4)) data.client_ip_address = ipv4;
-                    return data;
-                })()
+                action_source: 'system_generated',
+                user_data: {
+                    em: [require('crypto').createHash('sha256').update('test@adfliker.com').digest('hex')],
+                    external_id: [`test_${Date.now()}`]
+                },
+                custom_data: {
+                    lead_event_source: 'Adfliker CRM',
+                    event_source: 'crm',
+                    lead_status: 'Test'
+                }
             }],
             access_token: meta.metaCapiAccessToken
         };

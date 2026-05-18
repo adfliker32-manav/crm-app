@@ -1,14 +1,13 @@
 // Meta Conversion API Service
-// Sends lead quality events to Meta for ad optimization
+// Sends lead lifecycle events to Meta for ad optimization & Conversion Leads attribution
 const axios = require('axios');
 const crypto = require('crypto');
 
 const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
+const LEAD_EVENT_SOURCE = 'Adfliker CRM';
 
 /**
- * Hash user data for privacy (Meta requirement)
- * @param {string} value - The value to hash
- * @returns {string} - SHA256 hash
+ * Hash user data for privacy (Meta requirement — SHA256, lowercase, trimmed)
  */
 function hashValue(value, type = 'text') {
     if (!value) return null;
@@ -21,26 +20,22 @@ function hashValue(value, type = 'text') {
 }
 
 /**
- * Send a conversion event to Meta Conversion API
- * @param {Object} user - The user object with Meta credentials
- * @param {Object} lead - The lead object
- * @param {string} newStatus - The new status of the lead
- * @param {string} oldStatus - The old status of the lead (optional)
+ * Send a CRM lifecycle event to Meta Conversions API
+ * @param {Object} config - IntegrationConfig document (or its .meta sub-object)
+ * @param {Object} lead - Lead document
+ * @param {string} newStatus - New lead status
+ * @param {string} oldStatus - Previous status (optional)
  */
 async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
     try {
-        // FIX 1.1: leadController passes the full IntegrationConfig document.
-        // Extract the nested meta sub-object so all field reads work correctly.
-        // Support both: sendMetaEvent(config, ...) and sendMetaEvent(config.meta, ...)
+        // Support both the full IntegrationConfig document and just its .meta sub-object
         const user = config?.meta || config;
 
-        // Check if CAPI is enabled and configured
         if (!user.metaCapiEnabled || !user.metaPixelId || !user.metaCapiAccessToken) {
             console.log('⚠️ Meta CAPI not fully configured for user:', lead.userId);
             return { success: false, reason: 'CAPI not enabled or configured' };
         }
 
-        // Determine event name based on stage mapping
         const eventName = determineEventName(user, newStatus);
 
         if (!eventName) {
@@ -48,48 +43,64 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
             return { success: false, reason: 'Status not mapped to Meta event' };
         }
 
-        // Prepare event data
+        // Split name into first/last
+        const nameParts = (lead.name || '').trim().split(/\s+/);
+        const firstName = nameParts[0] || null;
+        const lastName = nameParts.length > 1 ? nameParts.slice(-1)[0] : null;
+
+        // Deterministic event_id per (lead, stage) — enables Meta-side dedup on retries
+        const eventId = `${lead._id.toString()}_${eventName}`;
+
+        const userData = {
+            em: lead.email ? [hashValue(lead.email, 'email')] : null,
+            ph: lead.phone ? [hashValue(lead.phone, 'phone')] : null,
+            fn: firstName ? [hashValue(firstName)] : null,
+            ln: lastName ? [hashValue(lastName)] : null,
+            ct: lead.city ? [hashValue(lead.city)] : null,
+            country: [hashValue('in')], // ISO 3166-1 alpha-2, lowercase, hashed
+            external_id: [lead._id.toString()]
+        };
+
+        // Strip null values — Meta rejects payloads with nulls
+        Object.keys(userData).forEach(k => {
+            if (userData[k] === null) delete userData[k];
+        });
+
+        const customData = {
+            lead_event_source: LEAD_EVENT_SOURCE, // CRM platform name (required for Conversion Leads)
+            event_source: 'crm',                  // Identifies event origin as CRM
+            lead_status: newStatus,
+            previous_status: oldStatus || undefined,
+            lead_source: lead.source || 'Unknown'
+        };
+
+        // Attach Meta Lead Ads leadgen_id — critical for attributing CRM events back to the original ad
+        if (lead.metaLeadgenId) {
+            customData.lead_id = lead.metaLeadgenId;
+        }
+
+        // Only include monetary fields for Purchase (true conversion with value)
+        if (eventName === 'Purchase') {
+            customData.currency = 'INR';
+            customData.value = lead.value || 0;
+        }
+
         const eventData = {
-            data: [
-                {
-                    event_name: eventName,
-                    event_time: Math.floor(Date.now() / 1000),
-                    event_id: `${lead._id.toString()}_${Date.now()}`, // Unique per event to prevent Meta deduplication
-                    action_source: 'other', // CRM updates = 'other' per Meta docs
-                    event_source_url: process.env.APP_URL || 'https://your-crm.com',
-                    user_data: {
-                        em: lead.email ? [hashValue(lead.email, 'email')] : null,
-                        ph: lead.phone ? [hashValue(lead.phone, 'phone')] : null,
-                        fn: lead.name ? [hashValue(lead.name.split(' ')[0])] : null,
-                        ln: lead.name && lead.name.split(' ').length > 1 ? [hashValue(lead.name.split(' ').slice(-1)[0])] : null,
-                        ct: lead.city ? [hashValue(lead.city)] : null,
-                        external_id: [lead._id.toString()]
-                    },
-                    custom_data: {
-                        lead_status: newStatus,
-                        previous_status: oldStatus,
-                        lead_source: lead.source || 'Unknown',
-                        currency: 'INR',
-                        value: eventName === 'Purchase' ? (lead.value || 0) : 0
-                    }
-                }
-            ],
+            data: [{
+                event_name: eventName,
+                event_time: Math.floor(Date.now() / 1000),
+                event_id: eventId,
+                action_source: 'system_generated', // CRM/backend events per Meta CAPI CRM spec
+                user_data: userData,
+                custom_data: customData
+            }],
             access_token: user.metaCapiAccessToken
         };
 
-        // Add test_event_code if configured (for testing in Events Manager)
         if (user.metaTestEventCode) {
             eventData.test_event_code = user.metaTestEventCode;
         }
 
-        // Remove null values from user_data
-        Object.keys(eventData.data[0].user_data).forEach(key => {
-            if (eventData.data[0].user_data[key] === null) {
-                delete eventData.data[0].user_data[key];
-            }
-        });
-
-        // Send to Meta Conversion API
         const response = await axios.post(
             `${META_GRAPH_URL}/${user.metaPixelId}/events`,
             eventData,
@@ -99,7 +110,7 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
             }
         );
 
-        console.log(`✅ Meta CAPI Event Sent: ${eventName} for lead ${lead.name}`);
+        console.log(`✅ Meta CAPI Event Sent: ${eventName} for lead ${lead.name || 'Unknown'}`);
         console.log(`📊 Response:`, response.data);
 
         return {
@@ -118,10 +129,8 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
 }
 
 /**
- * Determine which Meta event to send based on user's stage mapping
- * @param {Object} user - User with stage mapping
- * @param {string} status - The lead status
- * @returns {string|null} - Meta event name or null
+ * Map CRM stage to Meta CRM lifecycle event
+ * Meta's standard CRM lifecycle: Lead → SubscribedLead → QualifiedLead → Purchase
  */
 function determineEventName(user, status) {
     const mapping = user.metaStageMapping || {
@@ -131,18 +140,17 @@ function determineEventName(user, status) {
         dead: 'Dead Lead'
     };
 
-    // Check which funnel stage this status matches
     if (status === mapping.first) {
-        return 'Lead'; // First funnel - initial lead
+        return 'Lead';
     } else if (status === mapping.middle) {
-        return 'Contact'; // Middle funnel - engagement
+        return 'SubscribedLead';
     } else if (status === mapping.qualified) {
-        return 'Purchase'; // Last qualified - conversion
+        return 'Purchase';
     } else if (status === mapping.dead) {
-        return 'Lead_Lost'; // Dead lead - custom event
+        return 'Lead_Lost';
     }
 
-    return null; // No mapping found
+    return null;
 }
 
 module.exports = {
