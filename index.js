@@ -34,6 +34,7 @@ const supportRoutes = require('./src/routes/supportRoutes'); // In-built Help Ce
 const { authMiddleware } = require('./src/middleware/authMiddleware');
 const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
 const webLeadRoutes = require('./src/routes/webLeadRoutes'); // Web-to-Lead embed
+const mcpRoutes = require('./src/routes/mcpRoutes'); // Claude AI / MCP server
 
 const app = express();
 
@@ -441,6 +442,7 @@ app.use('/api/chatbot/flows', chatbotRoutes);
 app.use('/api/meta', metaRoutes);
 app.use('/api/activity-logs', require('./src/routes/activityLogRoutes'));
 app.use('/api/reports', reportRoutes); // Reports & Analytics
+app.use('/mcp', mcpRoutes);           // Claude AI MCP server (API-key auth, no JWT)
 
 // Meta Webhook URL: /api/meta/webhook
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
+const mcpKeyController = require('../controllers/mcpKeyController');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const { validate, schemas } = require('../middleware/validateRequest');
 const rateLimit = require('express-rate-limit');
@@ -39,6 +40,11 @@ router.get('/payment-status', authMiddleware, authController.getPaymentStatus);
 
 // 6. Public
 router.get('/app-name', authController.getAppName);
+
+// 7. Claude AI / MCP key management (workspace owners only — enforced in controller)
+router.get('/mcp-key',    authMiddleware, mcpKeyController.getMcpKey);
+router.post('/mcp-key',   authMiddleware, mcpKeyController.generateMcpKey);
+router.delete('/mcp-key', authMiddleware, mcpKeyController.revokeMcpKey);
 
 module.exports = router;
 

@@ -137,6 +137,15 @@ const workspaceSettingsSchema = new mongoose.Schema({
         default: null
     },
 
+    // ── Claude AI / MCP Integration ──────────────────────────────────────────
+    // Per-tenant API key for Claude Code MCP server. Grants read-only analytics
+    // access scoped strictly to this tenant's data. Revocable at any time.
+    mcpApiKey: {
+        type: String,
+        default: null,
+        index: { unique: true, sparse: true }
+    },
+
     createdAt: {
         type: Date,
         default: Date.now

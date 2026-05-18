@@ -8,6 +8,7 @@ import CustomFieldsSettings from '../components/Settings/CustomFieldsSettings';
 import SheetSyncSettings from '../components/Settings/SheetSyncSettings';
 import TagsSettings from '../components/Settings/TagsSettings';
 import WebLeadSettings from '../components/Settings/WebLeadSettings';
+import ClaudeAISettings from '../components/Settings/ClaudeAISettings';
 
 const Settings = () => {
     const { user, updateUser } = useAuth();
@@ -29,7 +30,7 @@ const Settings = () => {
     // Sync tab with URL search params
     useEffect(() => {
         const tab = searchParams.get('tab');
-        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead'].includes(tab)) {
+        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead', 'claudeAI'].includes(tab)) {
             setActiveTab(tab);
         }
     }, [searchParams]);
@@ -83,6 +84,7 @@ const Settings = () => {
         { id: 'sheetSync', label: 'Sheet Sync', icon: 'fa-table' },
         { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' },
         { id: 'webLead', label: 'Web-to-Lead', icon: 'fa-code' },
+        { id: 'claudeAI', label: 'Claude AI', icon: 'fa-robot' },
     ];
 
     if (!canAccessSettings) return <Navigate to="/dashboard" replace />;
@@ -245,6 +247,18 @@ const Settings = () => {
                     <div className="animate-in fade-in duration-300">
                         <div className="p-8">
                             <WebLeadSettings />
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'claudeAI' && (
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
+                            <h2 className="text-xl font-bold text-slate-800">Claude AI</h2>
+                            <p className="text-sm text-slate-500 mt-1">Connect Claude Code to your CRM for AI-powered analytics and reporting in plain English.</p>
+                        </div>
+                        <div className="p-8">
+                            <ClaudeAISettings />
                         </div>
                     </div>
                 )}
