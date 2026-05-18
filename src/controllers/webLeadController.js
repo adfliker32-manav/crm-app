@@ -26,6 +26,8 @@ const crypto = require('crypto');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const Lead = require('../models/Lead');
 const { evaluateLead } = require('../services/AutomationService');
+const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationService');
+const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
 const { clearTenantCache } = require('../middleware/authMiddleware');
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -281,6 +283,9 @@ exports.captureLead = async (req, res) => {
         await lead.save();
 
         // Fire automations in background (non-blocking)
+        const ownerId = lead.userId.toString();
+        if (lead.email) sendAutomatedEmailOnLeadCreate(lead, ownerId).catch(e => console.error('[WebLead] email automation error:', e.message));
+        if (lead.phone) sendAutomatedWhatsAppOnLeadCreate(lead, ownerId).catch(e => console.error('[WebLead] whatsapp automation error:', e.message));
         evaluateLead(lead, 'LEAD_CREATED').catch(e =>
             console.error('[WebLead] automation trigger error:', e.message)
         );
