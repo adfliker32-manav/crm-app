@@ -281,7 +281,7 @@ exports.captureLead = async (req, res) => {
         await lead.save();
 
         // Fire automations in background (non-blocking)
-        evaluateLead(lead, 'lead_created').catch(e =>
+        evaluateLead(lead, 'LEAD_CREATED').catch(e =>
             console.error('[WebLead] automation trigger error:', e.message)
         );
 

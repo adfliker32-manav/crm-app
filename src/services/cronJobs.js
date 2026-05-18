@@ -19,6 +19,12 @@ const runTimeInStageTrigger = async () => {
         const AutomationRule = require('../models/AutomationRule');
         const Lead           = require('../models/Lead');
         const { evaluateLead } = require('./AutomationService');
+        const { isFeatureDisabled } = require('../utils/systemConfig');
+
+        if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) {
+            console.log('🛑 AUTOMATION KILL SWITCH ACTIVE. Skipping TIME_IN_STAGE cron.');
+            return;
+        }
 
         const rules = await AutomationRule.find({ isActive: true, trigger: 'TIME_IN_STAGE' }).lean();
         if (!rules.length) return;

@@ -2,10 +2,13 @@ const AutomationRule = require('../models/AutomationRule');
 const Lead = require('../models/Lead');
 const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
+const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+const User = require('../models/User');
 const { sendEmail } = require('./emailService');
 const { sendWhatsAppMessage } = require('./whatsappService');
 const { logActivity } = require('./auditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { replaceVariables } = require('../utils/emailTemplateUtils');
 
 // Prototype-safe property resolver (handles 'customData.Property' etc)
 const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -51,15 +54,32 @@ const executeRuleActions = async (rule, lead) => {
             // ── SEND_WHATSAPP ──────────────────────────────────────
             if (action.type === 'SEND_WHATSAPP') {
                 if (lead.phone) {
-                    await sendWhatsAppMessage(lead.phone, action.templateId || 'hello_world', lead.userId);
-                    historyEntries.push({ type: 'WhatsApp', subType: 'Auto', content: `Automated WhatsApp Sent (Rule: ${rule.name})`, date: new Date() });
-                    changesMade = true;
+                    const templateName = action.templateId || 'hello_world';
+                    const waTemplate = await WhatsAppTemplate.findOne({ userId: lead.userId, name: templateName }).lean();
+                    if (!waTemplate || waTemplate.status !== 'APPROVED') {
+                        console.warn(`⚠️ [Automation] SEND_WHATSAPP skipped — template "${templateName}" is not APPROVED (Rule: ${rule.name})`);
+                    } else {
+                        await sendWhatsAppMessage(lead.phone, templateName, lead.userId);
+                        historyEntries.push({ type: 'WhatsApp', subType: 'Auto', content: `Automated WhatsApp Sent (Rule: ${rule.name})`, date: new Date() });
+                        changesMade = true;
+                    }
                 }
 
             // ── SEND_EMAIL ─────────────────────────────────────────
             } else if (action.type === 'SEND_EMAIL') {
                 if (lead.email) {
-                    await sendEmail({ to: lead.email, subject: action.subject, text: action.body, userId: lead.userId });
+                    const user = await User.findById(lead.userId).select('name companyName').lean();
+                    const templateData = {
+                        leadName: lead.name || '',
+                        leadEmail: lead.email || '',
+                        leadPhone: lead.phone || '',
+                        companyName: user?.companyName || '',
+                        userName: user?.name || '',
+                        stageName: lead.status || ''
+                    };
+                    const subject = replaceVariables(action.subject || '', templateData);
+                    const body = replaceVariables(action.body || '', templateData);
+                    await sendEmail({ to: lead.email, subject, html: body, userId: lead.userId });
                     historyEntries.push({ type: 'Email', subType: 'Auto', content: `Automated Email Sent (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
                 }
