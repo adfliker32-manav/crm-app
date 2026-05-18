@@ -1,7 +1,13 @@
 const Lead = require('../models/Lead');
 const User = require('../models/User');
 const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
+const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const EmailMessage = require('../models/EmailMessage');
+const EmailTemplate = require('../models/EmailTemplate');
+const { sendWhatsAppMessage } = require('../services/whatsappService');
+const { buildMetaComponents } = require('../utils/templateVariableResolver');
+const { sendEmail } = require('../services/emailService');
+const { replaceVariables } = require('../utils/emailTemplateUtils');
 
 const MCP_VERSION = '2024-11-05';
 
@@ -117,6 +123,44 @@ const TOOLS = [
                     description: 'Time window. Default: month'
                 }
             }
+        }
+    },
+
+    // ── Action tools ──────────────────────────────────────────────────────────
+    {
+        name: 'list_whatsapp_templates',
+        description: 'Lists all WhatsApp templates for this workspace. Use this first to get template IDs before calling send_whatsapp_template_to_stage.',
+        inputSchema: { type: 'object', properties: {} }
+    },
+    {
+        name: 'list_email_templates',
+        description: 'Lists all email templates for this workspace. Use this first to get template IDs before calling send_email_template_to_stage.',
+        inputSchema: { type: 'object', properties: {} }
+    },
+    {
+        name: 'send_whatsapp_template_to_stage',
+        description: 'Sends a WhatsApp template message to all leads in a specific pipeline stage that have a valid phone number. Always run with dryRun:true first to preview how many leads will receive the message before actually sending.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                stage:      { type: 'string', description: 'Pipeline stage name (e.g. "Interested", "New"). Must match exactly.' },
+                templateId: { type: 'string', description: 'WhatsApp template _id from list_whatsapp_templates. Template must be APPROVED.' },
+                dryRun:     { type: 'boolean', description: 'true = preview only (default). false = actually send. Always confirm with user before setting false.' }
+            },
+            required: ['stage', 'templateId']
+        }
+    },
+    {
+        name: 'send_email_template_to_stage',
+        description: 'Sends an email template to all leads in a specific pipeline stage that have a valid email address. Always run with dryRun:true first to preview how many leads will receive the email before actually sending.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                stage:      { type: 'string', description: 'Pipeline stage name (e.g. "Interested", "New"). Must match exactly.' },
+                templateId: { type: 'string', description: 'Email template _id from list_email_templates.' },
+                dryRun:     { type: 'boolean', description: 'true = preview only (default). false = actually send. Always confirm with user before setting false.' }
+            },
+            required: ['stage', 'templateId']
         }
     }
 ];
@@ -414,6 +458,250 @@ const toolHandlers = {
                 count: s.count,
                 percentage: total > 0 ? `${((s.count / total) * 100).toFixed(1)}%` : '0%'
             }))
+        };
+    },
+
+    // ── Action tools ──────────────────────────────────────────────────────────
+
+    async list_whatsapp_templates(_args, tenantId) {
+        const templates = await WhatsAppTemplate.find({ userId: tenantId })
+            .select('_id name language category status quality isAutomated stage variableMapping components')
+            .sort({ status: 1, name: 1 })
+            .lean();
+
+        return {
+            count: templates.length,
+            templates: templates.map(t => ({
+                id: t._id,
+                name: t.name,
+                language: t.language,
+                category: t.category,
+                status: t.status,
+                quality: t.quality,
+                canSend: t.status === 'APPROVED',
+                isAutomated: t.isAutomated,
+                automationStage: t.stage || null,
+                bodyText: t.components?.find(c => c.type === 'BODY')?.text || null
+            }))
+        };
+    },
+
+    async list_email_templates(_args, tenantId) {
+        const templates = await EmailTemplate.find({ userId: tenantId })
+            .select('_id name subject stage isActive isAutomated triggerType')
+            .sort({ name: 1 })
+            .lean();
+
+        return {
+            count: templates.length,
+            templates: templates.map(t => ({
+                id: t._id,
+                name: t.name,
+                subject: t.subject,
+                isActive: t.isActive,
+                isAutomated: t.isAutomated,
+                automationStage: t.stage || null
+            }))
+        };
+    },
+
+    async send_whatsapp_template_to_stage(args, tenantId) {
+        const { stage, templateId, dryRun = true } = args;
+
+        if (!stage || typeof stage !== 'string') throw new Error('"stage" is required.');
+        if (!templateId || typeof templateId !== 'string') throw new Error('"templateId" is required.');
+
+        // 1. Validate template belongs to this tenant and is APPROVED
+        const template = await WhatsAppTemplate.findOne({ _id: templateId, userId: tenantId }).lean();
+        if (!template) throw new Error('Template not found or does not belong to this workspace.');
+        if (template.status !== 'APPROVED') {
+            throw new Error(`Template "${template.name}" is not APPROVED (current status: ${template.status}). Only APPROVED templates can be sent.`);
+        }
+
+        // 2. Find leads in the stage with valid phone numbers
+        const leads = await Lead.find({
+            userId: tenantId,
+            deletedAt: null,
+            status: stage,
+            phone: { $exists: true, $nin: [null, '', undefined] }
+        })
+        .select('_id name phone email status')
+        .lean();
+
+        const preview = {
+            stage,
+            templateName: template.name,
+            templateLanguage: template.language,
+            leadsFound: leads.length,
+            dryRun
+        };
+
+        if (leads.length === 0) {
+            return { ...preview, message: 'No leads with a phone number found in this stage. Nothing to send.' };
+        }
+
+        // 3. Dry-run: return preview without sending
+        if (dryRun) {
+            return {
+                ...preview,
+                message: `DRY RUN — ${leads.length} lead(s) in stage "${stage}" would receive the WhatsApp template "${template.name}". Set dryRun:false to actually send.`,
+                sampleLeads: leads.slice(0, 5).map(l => ({ name: l.name, phone: l.phone }))
+            };
+        }
+
+        // 4. Safety cap: MCP is for targeted sends, not mass campaigns
+        if (leads.length > 50) {
+            throw new Error(`${leads.length} leads found — MCP send is capped at 50 leads. Use the CRM Broadcasts feature for larger sends.`);
+        }
+
+        // 5. Fetch workspace owner details for variable resolution
+        const owner = await User.findById(tenantId).select('name companyName').lean();
+        const userName = owner?.name || '';
+        const companyName = owner?.companyName || '';
+
+        // 6. Send to each lead with a small delay to respect Meta rate limits
+        let sent = 0, failed = 0;
+        const errors = [];
+
+        for (const lead of leads) {
+            try {
+                const varData = {
+                    leadName: lead.name || '',
+                    leadPhone: lead.phone || '',
+                    leadEmail: lead.email || '',
+                    stageName: lead.status || stage,
+                    companyName,
+                    userName
+                };
+                const components = buildMetaComponents(template.components, template.variableMapping, varData);
+                await sendWhatsAppMessage(lead.phone, template.name, tenantId, components, template.language);
+                sent++;
+            } catch (err) {
+                failed++;
+                errors.push({ lead: lead.name, phone: lead.phone, error: err.message });
+            }
+
+            // 200ms between sends — stays well under Meta's rate limits
+            if (sent + failed < leads.length) {
+                await new Promise(r => setTimeout(r, 200));
+            }
+        }
+
+        return {
+            stage,
+            templateName: template.name,
+            leadsFound: leads.length,
+            sent,
+            failed,
+            errors: errors.slice(0, 10), // cap error list to avoid huge responses
+            dryRun: false,
+            message: `Sent "${template.name}" to ${sent} lead(s) in stage "${stage}". ${failed > 0 ? `${failed} failed — see errors.` : 'All successful.'}`
+        };
+    },
+
+    async send_email_template_to_stage(args, tenantId) {
+        const { stage, templateId, dryRun = true } = args;
+
+        if (!stage || typeof stage !== 'string') throw new Error('"stage" is required.');
+        if (!templateId || typeof templateId !== 'string') throw new Error('"templateId" is required.');
+
+        // 1. Validate template belongs to this tenant
+        const template = await EmailTemplate.findOne({ _id: templateId, userId: tenantId }).lean();
+        if (!template) throw new Error('Email template not found or does not belong to this workspace.');
+
+        // 2. Find leads in the stage with valid email addresses
+        const leads = await Lead.find({
+            userId: tenantId,
+            deletedAt: null,
+            status: stage,
+            email: { $exists: true, $nin: [null, '', undefined] }
+        })
+        .select('_id name phone email status')
+        .lean();
+
+        const preview = {
+            stage,
+            templateName: template.name,
+            templateSubject: template.subject,
+            leadsFound: leads.length,
+            dryRun
+        };
+
+        if (leads.length === 0) {
+            return { ...preview, message: 'No leads with an email address found in this stage. Nothing to send.' };
+        }
+
+        // 3. Dry-run: return preview without sending
+        if (dryRun) {
+            return {
+                ...preview,
+                message: `DRY RUN — ${leads.length} lead(s) in stage "${stage}" would receive email template "${template.name}" (subject: "${template.subject}"). Set dryRun:false to actually send.`,
+                sampleLeads: leads.slice(0, 5).map(l => ({ name: l.name, email: l.email }))
+            };
+        }
+
+        // 4. Safety cap
+        if (leads.length > 50) {
+            throw new Error(`${leads.length} leads found — MCP send is capped at 50 leads. Use the CRM Email Campaigns feature for larger sends.`);
+        }
+
+        // 5. Fetch workspace owner details
+        const owner = await User.findById(tenantId).select('name companyName').lean();
+        const userName = owner?.name || '';
+        const companyName = owner?.companyName || '';
+
+        // 6. Send to each lead
+        let sent = 0, failed = 0, skipped = 0;
+        const errors = [];
+
+        for (const lead of leads) {
+            try {
+                const varData = {
+                    leadName: lead.name || '',
+                    leadPhone: lead.phone || '',
+                    leadEmail: lead.email || '',
+                    stageName: lead.status || stage,
+                    companyName,
+                    userName
+                };
+
+                const subject = replaceVariables(template.subject, varData);
+                const html    = replaceVariables(template.body, varData);
+
+                await sendEmail({
+                    to: lead.email,
+                    subject,
+                    html,
+                    attachments: template.attachments || [],
+                    userId: tenantId
+                });
+                sent++;
+            } catch (err) {
+                // Suppression list rejections count as skipped, not failures
+                if (err.message?.includes('unsubscribed') || err.message?.includes('suppression')) {
+                    skipped++;
+                } else {
+                    failed++;
+                    errors.push({ lead: lead.name, email: lead.email, error: err.message });
+                }
+            }
+
+            // Small delay between sends
+            if (sent + failed + skipped < leads.length) {
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }
+
+        return {
+            stage,
+            templateName: template.name,
+            leadsFound: leads.length,
+            sent,
+            failed,
+            skipped,
+            errors: errors.slice(0, 10),
+            dryRun: false,
+            message: `Sent "${template.name}" to ${sent} lead(s) in stage "${stage}". ${skipped > 0 ? `${skipped} skipped (unsubscribed). ` : ''}${failed > 0 ? `${failed} failed — see errors.` : 'All successful.'}`
         };
     }
 };

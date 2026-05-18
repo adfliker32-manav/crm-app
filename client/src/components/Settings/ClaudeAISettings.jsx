@@ -286,7 +286,8 @@ const ClaudeAISettings = () => {
             <div className="flex items-start gap-3 p-4 bg-slate-50 border border-slate-200 rounded-xl">
                 <i className="fa-solid fa-shield-halved text-slate-400 mt-0.5 flex-shrink-0"></i>
                 <div className="text-xs text-slate-500 leading-relaxed space-y-1">
-                    <p><strong className="text-slate-600">Read-only access.</strong> Claude can only read your data — it cannot create, edit, or delete anything.</p>
+                    <p><strong className="text-slate-600">Safe by default.</strong> Send actions always preview first (dry run) and require your explicit confirmation before sending.</p>
+                    <p><strong className="text-slate-600">Capped sends.</strong> MCP sending is limited to 50 leads at a time. Larger campaigns must use the CRM Broadcasts feature.</p>
                     <p><strong className="text-slate-600">Fully isolated.</strong> Your key only accesses your workspace. No other client's data is ever exposed.</p>
                     <p><strong className="text-slate-600">Instant revocation.</strong> Revoking the key immediately blocks all Claude connections — no delay.</p>
                 </div>
