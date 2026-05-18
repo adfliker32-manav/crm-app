@@ -17,17 +17,23 @@ const mcpRateLimit = rateLimit({
 });
 
 const mcpAuthMiddleware = async (req, res, next) => {
-    const authHeader = req.headers['authorization'];
+    // Accept key from Authorization header (Claude Code CLI) OR query param (Claude.ai web connector)
+    let key = null;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        key = authHeader.slice(7).trim();
+    } else if (req.query.key && typeof req.query.key === 'string') {
+        key = req.query.key.trim();
+    }
+
+    if (!key) {
         return res.status(401).json({
             jsonrpc: '2.0',
-            error: { code: -32001, message: 'Missing Authorization header. Use: Authorization: Bearer mcp_<key>' },
+            error: { code: -32001, message: 'No API key provided. Use Authorization: Bearer mcp_<key> header or ?key=mcp_<key> query parameter.' },
             id: null
         });
     }
-
-    const key = authHeader.slice(7).trim();
 
     // Structural validation before any DB hit
     if (!key.startsWith('mcp_') || key.length !== 52) {
