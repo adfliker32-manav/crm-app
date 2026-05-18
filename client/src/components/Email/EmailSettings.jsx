@@ -101,7 +101,7 @@ const EmailSettings = () => {
         showInfo('Sending test email...');
         try {
             const payload = {};
-            if (config.emailUser && config.emailPassword) {
+            if (config.emailUser && config.emailPassword && config.emailPassword !== '••••••••') {
                 payload.emailUser = config.emailUser;
                 payload.emailPassword = config.emailPassword;
             }
