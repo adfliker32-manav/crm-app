@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import api from '../../services/api';
 import useSocket from '../../hooks/useSocket';
 import { useNotification } from '../../context/NotificationContext';
@@ -16,6 +17,7 @@ const fileUrl = (relativeUrl) => {
 };
 
 const SupportWidget = () => {
+    const { pathname } = useLocation();
     const [open, setOpen] = useState(false);
     const [view, setView] = useState('list'); // 'list' | 'new' | 'chat'
     const [tickets, setTickets] = useState([]);
@@ -188,6 +190,9 @@ const SupportWidget = () => {
             showError(e.response?.data?.message || 'Failed to close');
         }
     };
+
+    // Show Help button only on dashboard pages — it overlaps action buttons elsewhere
+    if (pathname !== '/dashboard' && pathname !== '/agency/dashboard') return null;
 
     return (
         <>
