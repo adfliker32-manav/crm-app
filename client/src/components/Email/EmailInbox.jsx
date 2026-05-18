@@ -357,13 +357,18 @@ const EmailInbox = () => {
                                                             {msg.subject || '(No Subject)'}
                                                         </div>
                                                         {/* Body */}
-                                                        <div
-                                                            className={`px-4 pt-2 pb-3 text-[13.5px] leading-relaxed max-h-[380px] overflow-y-auto custom-scrollbar
-                                                                ${isOut ? 'text-white/90' : 'text-slate-700'}`}
-                                                            dangerouslySetInnerHTML={msg.html ? { __html: DOMPurify.sanitize(msg.html) } : undefined}
-                                                        >
-                                                            {!msg.html && msg.text}
-                                                        </div>
+                                                        {msg.html ? (
+                                                            <div
+                                                                className={`px-4 pt-2 pb-3 text-[13.5px] leading-relaxed max-h-[380px] overflow-y-auto custom-scrollbar
+                                                                    ${isOut ? 'text-white/90' : 'text-slate-700'}`}
+                                                                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(msg.html) }}
+                                                            />
+                                                        ) : (
+                                                            <div className={`px-4 pt-2 pb-3 text-[13.5px] leading-relaxed max-h-[380px] overflow-y-auto custom-scrollbar
+                                                                ${isOut ? 'text-white/90' : 'text-slate-700'}`}>
+                                                                {msg.text}
+                                                            </div>
+                                                        )}
                                                         {/* Timestamp */}
                                                         <div className={`px-4 pb-2.5 flex items-center justify-end gap-1.5 text-[10px] font-medium
                                                             ${isOut ? 'text-indigo-300' : 'text-slate-300'}`}>

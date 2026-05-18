@@ -1,10 +1,55 @@
 const fs = require('fs');
 const EmailTemplate = require('../models/EmailTemplate');
 const User = require('../models/User');
+const Lead = require('../models/Lead');
+const EmailConversation = require('../models/EmailConversation');
+const EmailMessage = require('../models/EmailMessage');
 const { sendEmail, sendEmailWithRetry } = require('./emailService');
 const { logEmail } = require('./emailLogService');
 const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+
+// Upsert EmailConversation + create EmailMessage so automated emails appear in inbox
+const syncToInbox = async ({ userId, lead, subject, htmlBody, messageId, templateId }) => {
+    try {
+        const leadRecord = await Lead.findOne({ _id: lead._id || lead.id, userId }).lean();
+        if (!leadRecord) return;
+
+        let conversation = await EmailConversation.findOne({ userId, leadId: leadRecord._id });
+        if (!conversation) {
+            conversation = new EmailConversation({
+                userId,
+                leadId: leadRecord._id,
+                email: leadRecord.email,
+                displayName: leadRecord.name || leadRecord.email.split('@')[0]
+            });
+        }
+        conversation.lastMessage = subject;
+        conversation.lastMessageAt = new Date();
+        conversation.lastMessageDirection = 'outbound';
+        conversation.metadata = conversation.metadata || { totalMessages: 0, totalOutbound: 0, totalInbound: 0 };
+        conversation.metadata.totalMessages += 1;
+        conversation.metadata.totalOutbound += 1;
+        await conversation.save();
+
+        await new EmailMessage({
+            conversationId: conversation._id,
+            userId,
+            leadId: leadRecord._id,
+            messageId: messageId || null,
+            direction: 'outbound',
+            from: 'CRM',
+            to: leadRecord.email,
+            subject,
+            html: htmlBody,
+            status: 'sent',
+            isAutomated: true,
+            timestamp: new Date()
+        }).save();
+    } catch (err) {
+        console.error('⚠️ [EmailAuto] Inbox sync failed:', err.message);
+    }
+};
 
 // Send automated email when lead is created
 const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
@@ -73,39 +118,24 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                 const result = await sendEmailWithRetry(emailOptions, 1); // Retry once
                 console.log(`✅ Automated email sent to ${lead.email} using template: ${template.name}`);
 
-                // Log successful email
-                await logEmail({
-                    userId: userId,
-                    to: lead.email,
-                    subject: subject,
-                    body: body,
-                    status: 'sent',
-                    messageId: result.messageId,
-                    isAutomated: true,
-                    triggerType: 'on_lead_create',
-                    templateId: template._id,
-                    leadId: lead._id,
-                    attachments: template.attachments || []
-                });
+                // Log + sync to inbox
+                await Promise.all([
+                    logEmail({
+                        userId, to: lead.email, subject, body, status: 'sent',
+                        messageId: result.messageId, isAutomated: true,
+                        triggerType: 'on_lead_create', templateId: template._id,
+                        leadId: lead._id, attachments: template.attachments || []
+                    }),
+                    syncToInbox({ userId, lead, subject, htmlBody: emailOptions.html, messageId: result.messageId, templateId: template._id })
+                ]);
             } catch (error) {
                 console.error(`❌ Error sending automated email for template ${template.name}:`, error.message);
-
-                // Log failed email
                 await logEmail({
-                    userId: userId,
-                    to: lead.email,
-                    subject: template.subject,
-                    body: template.body,
-                    status: 'failed',
-                    error: error.message,
-                    isAutomated: true,
-                    triggerType: 'on_lead_create',
-                    templateId: template._id,
-                    leadId: lead._id,
-                    attachments: template.attachments || []
+                    userId, to: lead.email, subject: template.subject, body: template.body,
+                    status: 'failed', error: error.message, isAutomated: true,
+                    triggerType: 'on_lead_create', templateId: template._id,
+                    leadId: lead._id, attachments: template.attachments || []
                 });
-
-                // Continue with next template even if one fails
             }
         }
         return templates.length > 0;
@@ -183,39 +213,24 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                 const result = await sendEmailWithRetry(emailOptions, 1); // Retry once
                 console.log(`✅ Automated email sent to ${lead.email} for stage change to ${newStage}`);
 
-                // Log successful email
-                await logEmail({
-                    userId: userId,
-                    to: lead.email,
-                    subject: subject,
-                    body: body,
-                    status: 'sent',
-                    messageId: result.messageId,
-                    isAutomated: true,
-                    triggerType: 'on_stage_change',
-                    templateId: template._id,
-                    leadId: lead._id,
-                    attachments: template.attachments || []
-                });
+                // Log + sync to inbox
+                await Promise.all([
+                    logEmail({
+                        userId, to: lead.email, subject, body, status: 'sent',
+                        messageId: result.messageId, isAutomated: true,
+                        triggerType: 'on_stage_change', templateId: template._id,
+                        leadId: lead._id, attachments: template.attachments || []
+                    }),
+                    syncToInbox({ userId, lead, subject, htmlBody: emailOptions.html, messageId: result.messageId, templateId: template._id })
+                ]);
             } catch (error) {
                 console.error(`❌ Error sending automated email for template ${template.name}:`, error.message);
-
-                // Log failed email
                 await logEmail({
-                    userId: userId,
-                    to: lead.email,
-                    subject: template.subject,
-                    body: template.body,
-                    status: 'failed',
-                    error: error.message,
-                    isAutomated: true,
-                    triggerType: 'on_stage_change',
-                    templateId: template._id,
-                    leadId: lead._id,
-                    attachments: template.attachments || []
+                    userId, to: lead.email, subject: template.subject, body: template.body,
+                    status: 'failed', error: error.message, isAutomated: true,
+                    triggerType: 'on_stage_change', templateId: template._id,
+                    leadId: lead._id, attachments: template.attachments || []
                 });
-
-                // Continue with next template even if one fails
             }
         }
         return templates.length > 0;
