@@ -75,12 +75,25 @@ exports.connectWhatsAppManual = async (req, res) => {
             }
         } catch (e) { /* non-fatal */ }
 
+        // Subscribe the WABA to receive webhook events (incoming messages)
+        let webhookSubscribed = false;
+        try {
+            await axios.post(`${GRAPH}/${wabaId}/subscribed_apps`, null, {
+                params: { access_token: accessToken },
+                timeout: 10000
+            });
+            webhookSubscribed = true;
+            console.log(`✅ Webhook subscription registered for WABA ${wabaId}`);
+        } catch (subErr) {
+            console.warn(`⚠️ Webhook subscription failed for WABA ${wabaId}:`, subErr.response?.data?.error?.message || subErr.message);
+        }
+
         console.log(`✅ WhatsApp manual connect for tenant ${ownerId}: WABA ${wabaId}, Phone ${phoneNumberId}`);
         res.json({
             success: true,
             message: 'WhatsApp connected successfully!',
             wabaId, phoneNumberId, displayPhone, verifiedName,
-            webhookSubscribed: true
+            webhookSubscribed
         });
 
     } catch (error) {
@@ -196,21 +209,16 @@ exports.testWhatsAppConnection = async (req, res) => {
             };
         }
 
-        // Check 2: Verify WABA webhook subscription using the client's app credentials
-        if (wa.waAppId && wa.waAppSecret) {
-            const rawSecret = wa.waAppSecret;
-            const appSecret = (rawSecret && rawSecret.includes(':') && rawSecret.split(':')[0].length === 32)
-                ? decryptToken(rawSecret)
-                : rawSecret;
-
+        // Check 2: Verify WABA webhook subscription using the access token
+        if (wa.wabaId && accessToken) {
             try {
                 const subRes = await axios.get(`${GRAPH}/${wa.wabaId}/subscribed_apps`, {
-                    params: { access_token: `${wa.waAppId}|${appSecret}` },
+                    params: { access_token: accessToken },
                     timeout: 10000
                 });
                 const subscribedApps = subRes.data.data || [];
-                const isSubscribed = subscribedApps.some(app => app.id === wa.waAppId);
-                results.webhookSubscription = { ok: isSubscribed, subscribedApps: subscribedApps.map(a => a.id) };
+                const isSubscribed = subscribedApps.length > 0;
+                results.webhookSubscription = { ok: isSubscribed, subscribedApps: subscribedApps.map(a => a.name || a.id) };
             } catch (err) {
                 const errData = err.response?.data?.error;
                 results.webhookSubscription = {
