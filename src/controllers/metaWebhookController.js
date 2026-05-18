@@ -6,6 +6,7 @@ const axios = require('axios');
 const { emitToUser } = require('../services/socketService');
 const { normalizePhoneForWhatsApp } = require('../utils/phoneUtils');
 const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
+const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationService');
 const { evaluateLead } = require('../services/AutomationService');
 const { checkAndRefreshToken } = require('./metaController');
 
@@ -496,6 +497,11 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
         console.log(`✅ Created Meta lead: ${newLead.name} (${newLead.phone || newLead.email})`);
 
         setImmediate(() => {
+            if (newLead.email) {
+                sendAutomatedEmailOnLeadCreate(newLead, userId)
+                    .catch(err => console.error(`❌ [Lead:${newLead._id}] Email auto-message failed:`, err.message));
+            }
+
             if (newLead.phone) {
                 sendAutomatedWhatsAppOnLeadCreate(newLead, userId)
                     .then(sent => {
