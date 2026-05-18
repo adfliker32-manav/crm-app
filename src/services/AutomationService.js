@@ -8,7 +8,7 @@ const { sendEmail } = require('./emailService');
 const { sendWhatsAppMessage } = require('./whatsappService');
 const { logActivity } = require('./auditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
-const { replaceVariables } = require('../utils/emailTemplateUtils');
+const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
 
 // Prototype-safe property resolver (handles 'customData.Property' etc)
 const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -79,7 +79,7 @@ const executeRuleActions = async (rule, lead) => {
                     };
                     const subject = replaceVariables(action.subject || '', templateData);
                     const body = replaceVariables(action.body || '', templateData);
-                    await sendEmail({ to: lead.email, subject, html: body, userId: lead.userId });
+                    await sendEmail({ to: lead.email, subject, html: wrapEmailHtml(body), userId: lead.userId });
                     historyEntries.push({ type: 'Email', subType: 'Auto', content: `Automated Email Sent (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
                 }

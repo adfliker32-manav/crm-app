@@ -3,7 +3,7 @@ const EmailTemplate = require('../models/EmailTemplate');
 const User = require('../models/User');
 const { sendEmail, sendEmailWithRetry } = require('./emailService');
 const { logEmail } = require('./emailLogService');
-const { replaceVariables } = require('../utils/emailTemplateUtils');
+const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 
 // Send automated email when lead is created
@@ -64,7 +64,7 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                 const emailOptions = {
                     to: lead.email,
                     subject: subject,
-                    html: body,
+                    html: wrapEmailHtml(body),
                     attachments: attachments.length > 0 ? attachments : undefined,
                     userId: userId // Pass userId to use user-specific email config
                 };
@@ -174,7 +174,7 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                 const emailOptions = {
                     to: lead.email,
                     subject: subject,
-                    html: body,
+                    html: wrapEmailHtml(body),
                     attachments: attachments.length > 0 ? attachments : undefined,
                     userId: userId // Pass userId to use user-specific email config
                 };
