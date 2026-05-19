@@ -140,7 +140,19 @@ const LeadSchema = new mongoose.Schema({
         type: String,
         default: null,
         index: true
-    }
+    },
+
+    // Location & demographic fields — used in Meta CAPI user_data for event match quality
+    city:        { type: String, default: null },
+    state:       { type: String, default: null }, // 2-letter lowercase code where available
+    zipCode:     { type: String, default: null },
+    gender:      { type: String, default: null }, // 'm' or 'f' only
+    dateOfBirth: { type: String, default: null }, // YYYYMMDD format
+
+    // Meta tracking cookies — captured at form submission time on web leads.
+    // NOT hashed. NOT available for native Meta Lead Ads (no browser context).
+    fbc: { type: String, default: null }, // _fbc cookie (Meta click ID)
+    fbp: { type: String, default: null }  // _fbp cookie (Meta browser ID)
 
 }, { timestamps: true });
 

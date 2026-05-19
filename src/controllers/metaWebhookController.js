@@ -323,6 +323,25 @@ async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
         if (fuzzyNameKey) console.log(`ℹ️ Meta lead name resolved via fuzzy key "${fuzzyNameKey}"`);
         if (fuzzyPhoneKey) console.log(`ℹ️ Meta lead phone resolved via fuzzy key "${fuzzyPhoneKey}"`);
 
+        // Normalize gender → 'm' | 'f' | null (Meta CAPI only accepts single char)
+        const rawGender = (fields.gender || '').toLowerCase();
+        const gender = rawGender.startsWith('m') ? 'm' : rawGender.startsWith('f') ? 'f' : null;
+
+        // Normalize DOB → YYYYMMDD (Meta CAPI requirement)
+        const rawDob = fields.date_of_birth || fields.dob || fields.birthday || null;
+        let dateOfBirth = null;
+        if (rawDob) {
+            const s = rawDob.toString().trim();
+            if (/^\d{8}$/.test(s)) {
+                dateOfBirth = s; // already YYYYMMDD
+            } else if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+                dateOfBirth = s.replace(/-/g, ''); // ISO → YYYYMMDD
+            } else {
+                const parts = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+                if (parts) dateOfBirth = `${parts[3]}${parts[1].padStart(2,'0')}${parts[2].padStart(2,'0')}`;
+            }
+        }
+
         return {
             id: leadData.id,
             createdTime: leadData.created_time,
@@ -330,6 +349,10 @@ async function fetchLeadDetails(leadgenId, accessToken, attempt = 1) {
             email: fields.email || null,
             phone: resolvedPhone || null,
             city: fields.city || null,
+            state: (fields.state || fields.state_province || null)?.toLowerCase().trim() || null,
+            zipCode: (fields.zip_code || fields.postal_code || fields.zipcode || fields.pincode || null)?.toString().toLowerCase().replace(/\s/g, '') || null,
+            gender,
+            dateOfBirth,
             company: fields.company_name || fields.company || null,
             rawFields: fields
         };
@@ -464,6 +487,11 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             status: 'New',
             source: 'Meta',
             metaLeadgenId: leadgenId || null,
+            city: leadDetails.city || null,
+            state: leadDetails.state || null,
+            zipCode: leadDetails.zipCode || null,
+            gender: leadDetails.gender || null,
+            dateOfBirth: leadDetails.dateOfBirth || null,
             customData,
             notes
         });

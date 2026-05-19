@@ -94,13 +94,21 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
         const normalizedPhone = normalizePhone(lead.phone, phoneCountryCode);
 
         const userData = {
-            em: lead.email ? [hashValue(lead.email, 'email')] : null,
-            ph: normalizedPhone ? [hashValue(normalizedPhone, 'phone')] : null,
-            fn: firstName ? [hashValue(firstName, 'name')] : null,
-            ln: lastName ? [hashValue(lastName, 'name')] : null,
-            ct: lead.city ? [hashValue(lead.city, 'city')] : null,
-            country: [hashValue(defaultCountry)], // ISO 3166-1 alpha-2, lowercase, hashed
-            external_id: [lead._id.toString()]
+            em:          lead.email       ? [hashValue(lead.email, 'email')]           : null,
+            ph:          normalizedPhone  ? [hashValue(normalizedPhone, 'phone')]      : null,
+            fn:          firstName        ? [hashValue(firstName, 'name')]             : null,
+            ln:          lastName         ? [hashValue(lastName, 'name')]              : null,
+            ge:          lead.gender      ? [hashValue(lead.gender)]                   : null, // 'm' or 'f', hashed
+            db:          lead.dateOfBirth ? [hashValue(lead.dateOfBirth)]              : null, // YYYYMMDD, hashed
+            ct:          lead.city        ? [hashValue(lead.city, 'city')]             : null,
+            st:          lead.state       ? [hashValue(lead.state)]                    : null,
+            zp:          lead.zipCode     ? [hashValue(lead.zipCode)]                  : null,
+            country:     [hashValue(defaultCountry)],
+            external_id: [lead._id.toString()],
+            // fbc/fbp are browser cookies — never hashed, bare string values
+            // Available only for web-form leads; null for native Meta Lead Ads
+            fbc:         lead.fbc || null,
+            fbp:         lead.fbp || null
         };
 
         // Meta Lead Ads leadgen_id belongs in user_data as a bare value (not array, not hashed) —
