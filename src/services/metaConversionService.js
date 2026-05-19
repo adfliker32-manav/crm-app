@@ -7,15 +7,53 @@ const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
 const LEAD_EVENT_SOURCE = 'Adfliker CRM';
 
 /**
- * Hash user data for privacy (Meta requirement — SHA256, lowercase, trimmed)
+ * Normalize a phone number to Meta's expected E.164-digits form (no '+').
+ * Meta matches against international numbers including country code.
+ *
+ * Rules:
+ *  - Strip all non-digits
+ *  - Strip a leading 0 (some local formats prefix one)
+ *  - If the remaining number is 10 digits, prepend the tenant's default country code
+ *  - Otherwise assume it already includes the country code
+ */
+function normalizePhone(phone, defaultCountryCode = '91') {
+    if (!phone) return null;
+    let digits = phone.toString().replace(/\D/g, '');
+    if (!digits) return null;
+    if (digits.startsWith('0')) digits = digits.slice(1);
+    if (digits.length === 10) digits = defaultCountryCode + digits;
+    return digits;
+}
+
+/**
+ * Hash user data for privacy (Meta requirement — SHA256 of normalized value).
+ * Per-type normalization follows Meta's Parameter Builder spec:
+ *  - email:   lowercase + trim
+ *  - phone:   digits-only + country code (handled by normalizePhone caller-side)
+ *  - name:    lowercase + trim + strip digits/punctuation
+ *  - city:    lowercase + strip ALL non a-z chars (incl. spaces)
+ *  - country: ISO 3166-1 alpha-2, lowercase
  */
 function hashValue(value, type = 'text') {
     if (!value) return null;
 
-    const normalized = value.toString().toLowerCase().trim();
-    // Strip non-digits only for phone numbers — applying this to names/cities produces the SHA256 of ""
-    const cleaned = type === 'phone' ? normalized.replace(/\D/g, '') : normalized;
+    const lower = value.toString().toLowerCase().trim();
+    let cleaned;
+    switch (type) {
+        case 'phone':
+            cleaned = lower.replace(/\D/g, '');
+            break;
+        case 'name':
+            cleaned = lower.replace(/[\d\s!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, '');
+            break;
+        case 'city':
+            cleaned = lower.replace(/[^a-z]/g, '');
+            break;
+        default:
+            cleaned = lower;
+    }
 
+    if (!cleaned) return null;
     return crypto.createHash('sha256').update(cleaned).digest('hex');
 }
 
@@ -51,15 +89,25 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
         // Deterministic event_id per (lead, stage) — enables Meta-side dedup on retries
         const eventId = `${lead._id.toString()}_${eventName}`;
 
+        const defaultCountry = (user.metaDefaultCountry || 'in').toLowerCase();
+        const phoneCountryCode = user.metaDefaultPhoneCountryCode || '91';
+        const normalizedPhone = normalizePhone(lead.phone, phoneCountryCode);
+
         const userData = {
             em: lead.email ? [hashValue(lead.email, 'email')] : null,
-            ph: lead.phone ? [hashValue(lead.phone, 'phone')] : null,
-            fn: firstName ? [hashValue(firstName)] : null,
-            ln: lastName ? [hashValue(lastName)] : null,
-            ct: lead.city ? [hashValue(lead.city)] : null,
-            country: [hashValue('in')], // ISO 3166-1 alpha-2, lowercase, hashed
+            ph: normalizedPhone ? [hashValue(normalizedPhone, 'phone')] : null,
+            fn: firstName ? [hashValue(firstName, 'name')] : null,
+            ln: lastName ? [hashValue(lastName, 'name')] : null,
+            ct: lead.city ? [hashValue(lead.city, 'city')] : null,
+            country: [hashValue(defaultCountry)], // ISO 3166-1 alpha-2, lowercase, hashed
             external_id: [lead._id.toString()]
         };
+
+        // Meta Lead Ads leadgen_id belongs in user_data as a bare value (not array, not hashed) —
+        // Meta uses it as a top-priority matching parameter for Conversion Leads attribution
+        if (lead.metaLeadgenId) {
+            userData.lead_id = lead.metaLeadgenId;
+        }
 
         // Strip null values — Meta rejects payloads with nulls
         Object.keys(userData).forEach(k => {
@@ -73,11 +121,6 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
             previous_status: oldStatus || undefined,
             lead_source: lead.source || 'Unknown'
         };
-
-        // Attach Meta Lead Ads leadgen_id — critical for attributing CRM events back to the original ad
-        if (lead.metaLeadgenId) {
-            customData.lead_id = lead.metaLeadgenId;
-        }
 
         // Only include monetary fields for Purchase (true conversion with value)
         if (eventName === 'Purchase') {

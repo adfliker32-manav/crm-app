@@ -104,7 +104,12 @@ const integrationConfigSchema = new mongoose.Schema({
             city:  { type: String, default: null },
         },
         // Last set of raw field keys received from Meta (for mapping UI)
-        metaLastRawFields: { type: [String], default: [] }
+        metaLastRawFields: { type: [String], default: [] },
+        // Default country for CAPI user_data.country and phone normalization.
+        // ISO 3166-1 alpha-2 (e.g. 'in', 'us'); phone code is the dial prefix without '+'.
+        // Per-tenant so non-India tenants don't get Indian numbers prepended.
+        metaDefaultCountry: { type: String, default: 'in' },
+        metaDefaultPhoneCountryCode: { type: String, default: '91' }
     },
 
     // 📊 Google Sheet Push-Based Sync Configuration

@@ -287,12 +287,12 @@ For every lead stage change, your CRM POSTs to `https://graph.facebook.com/v25.0
       "ln": ["<sha256-hashed last name>"],
       "ct": ["<sha256-hashed city>"],
       "country": ["<sha256-hashed 'in'>"],
-      "external_id": ["<crm-lead-id>"]
+      "external_id": ["<crm-lead-id>"],
+      "lead_id": "<meta-leadgen-id>"
     },
     "custom_data": {
       "lead_event_source": "Adfliker CRM",
       "event_source": "crm",
-      "lead_id": "<meta-leadgen-id>",
       "lead_status": "Contacted",
       "lead_source": "Facebook"
     }
