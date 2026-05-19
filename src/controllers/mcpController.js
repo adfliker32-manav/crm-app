@@ -8,6 +8,13 @@ const { sendWhatsAppMessage } = require('../services/whatsappService');
 const { buildMetaComponents } = require('../utils/templateVariableResolver');
 const { sendEmail } = require('../services/emailService');
 const { replaceVariables } = require('../utils/emailTemplateUtils');
+const Task = require('../models/Task');
+const Appointment = require('../models/Appointment');
+const WhatsAppConversation = require('../models/WhatsAppConversation');
+const WhatsAppMessage = require('../models/WhatsAppMessage');
+const EmailConversation = require('../models/EmailConversation');
+const Goal = require('../models/Goal');
+const { sendWhatsAppTextMessage } = require('../services/whatsappService');
 
 const MCP_VERSION = '2024-11-05';
 
@@ -18,6 +25,14 @@ const periodStart = (period) => {
     if (period === 'week')  return new Date(now - 7  * 86400000);
     if (period === 'month') return new Date(now - 30 * 86400000);
     return null; // 'all'
+};
+
+const periodRange = (period) => {
+    const now = new Date();
+    if (period === 'today') return { start: new Date(now.getFullYear(), now.getMonth(), now.getDate()), end: now };
+    if (period === 'week')  return { start: new Date(now - 7  * 86400000), end: now };
+    if (period === 'month') return { start: new Date(now - 30 * 86400000), end: now };
+    return null; // 'all' — no date filter
 };
 
 // Prevents ReDoS: escapes all regex metacharacters in user-supplied strings
@@ -161,6 +176,286 @@ const TOOLS = [
                 dryRun:     { type: 'boolean', description: 'true = preview only (default). false = actually send. Always confirm with user before setting false.' }
             },
             required: ['stage', 'templateId']
+        }
+    },
+
+    // ── Lead Management ───────────────────────────────────────────────────────
+    {
+        name: 'create_lead',
+        description: 'Creates a new lead in the CRM. Only name is required; all other fields are optional.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                name:               { type: 'string', description: 'Full name of the lead (required).' },
+                phone:              { type: 'string', description: 'Phone number (international format preferred, e.g. +919876543210).' },
+                email:              { type: 'string', description: 'Email address.' },
+                status:             { type: 'string', description: 'Pipeline stage (e.g. "New", "Contacted"). Default: "New".' },
+                source:             { type: 'string', description: 'Lead source (e.g. "Manual", "Meta", "WhatsApp"). Default: "Manual".' },
+                dealValue:          { type: 'number', description: 'Expected deal value in the workspace currency.' },
+                tags:               { type: 'array', items: { type: 'string' }, description: 'Tags to attach to the lead.' },
+                qualificationLevel: { type: 'string', enum: ['Cold', 'Warm', 'Hot'], description: 'Lead temperature. Default: "Cold".' }
+            },
+            required: ['name']
+        }
+    },
+    {
+        name: 'update_lead',
+        description: 'Updates fields on an existing lead. Provide leadId plus any fields to change. Lead deletion is not permitted via MCP.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId:             { type: 'string', description: 'The _id of the lead to update (required).' },
+                name:               { type: 'string', description: 'New name.' },
+                phone:              { type: 'string', description: 'New phone number.' },
+                email:              { type: 'string', description: 'New email address.' },
+                status:             { type: 'string', description: 'New pipeline stage (e.g. "Qualified", "Won").' },
+                dealValue:          { type: 'number', description: 'Updated deal value.' },
+                tags:               { type: 'array', items: { type: 'string' }, description: 'Replacement tag list.' },
+                qualificationLevel: { type: 'string', enum: ['Cold', 'Warm', 'Hot'], description: 'Lead temperature.' }
+            },
+            required: ['leadId']
+        }
+    },
+    {
+        name: 'assign_lead',
+        description: 'Assigns a lead to a team member. Provide agentId or agentName to assign; omit both to unassign.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId:    { type: 'string', description: 'The _id of the lead (required).' },
+                agentId:   { type: 'string', description: 'The _id of the agent to assign to.' },
+                agentName: { type: 'string', description: 'Agent name to search by (case-insensitive partial match).' }
+            },
+            required: ['leadId']
+        }
+    },
+    {
+        name: 'schedule_followup',
+        description: 'Sets or reschedules the next follow-up date for a lead.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId:           { type: 'string', description: 'The _id of the lead (required).' },
+                nextFollowUpDate: { type: 'string', description: 'ISO 8601 date for the next follow-up (e.g. "2026-05-25") (required).' }
+            },
+            required: ['leadId', 'nextFollowUpDate']
+        }
+    },
+    {
+        name: 'complete_followup',
+        description: 'Marks a follow-up as done. Optionally records a note, sets the next follow-up date, or marks the lead as a dead lead.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId:           { type: 'string', description: 'The _id of the lead (required).' },
+                note:             { type: 'string', description: 'Notes from the follow-up call/interaction.' },
+                nextFollowUpDate: { type: 'string', description: 'ISO 8601 date for the next follow-up. Leave empty if no follow-up needed.' },
+                markedAsDeadLead: { type: 'boolean', description: 'Set true to mark this lead as Dead Lead.' }
+            },
+            required: ['leadId']
+        }
+    },
+
+    // ── WhatsApp ──────────────────────────────────────────────────────────────
+    {
+        name: 'send_whatsapp_message',
+        description: 'Sends a free-form WhatsApp text message to a specific lead. Use for personalised one-on-one messages. Provide either leadId or phone.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId:  { type: 'string', description: 'Lead _id — phone will be looked up automatically.' },
+                phone:   { type: 'string', description: 'Direct phone number (international format) if no leadId.' },
+                message: { type: 'string', description: 'Text message to send (required).' }
+            },
+            required: ['message']
+        }
+    },
+    {
+        name: 'get_whatsapp_conversation',
+        description: 'Returns the recent WhatsApp message history for a lead. Read this before sending a message to understand the context.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId: { type: 'string', description: 'Lead _id to look up the conversation.' },
+                phone:  { type: 'string', description: 'Phone number to look up (if no leadId).' },
+                limit:  { type: 'number', description: 'Number of messages to return. Default: 20, max: 50.' }
+            }
+        }
+    },
+
+    // ── Email ─────────────────────────────────────────────────────────────────
+    {
+        name: 'send_email',
+        description: 'Sends a one-off email to a lead. Provide either leadId (email looked up automatically) or a direct "to" address.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId:  { type: 'string', description: 'Lead _id — email address will be looked up automatically.' },
+                to:      { type: 'string', description: 'Direct email address if no leadId.' },
+                subject: { type: 'string', description: 'Email subject line (required).' },
+                body:    { type: 'string', description: 'Email body — plain text or HTML (required).' }
+            },
+            required: ['subject', 'body']
+        }
+    },
+    {
+        name: 'get_email_conversation',
+        description: 'Returns the email thread history for a lead. Use to read context before replying.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId: { type: 'string', description: 'Lead _id to find their email conversation.' },
+                email:  { type: 'string', description: 'Email address to find the conversation (if no leadId).' },
+                limit:  { type: 'number', description: 'Number of messages to return. Default: 20, max: 50.' }
+            }
+        }
+    },
+
+    // ── Tasks & Reminders ─────────────────────────────────────────────────────
+    {
+        name: 'list_tasks',
+        description: 'Lists tasks. Filter by lead, status, or get all pending tasks across the workspace.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId: { type: 'string', description: 'Filter tasks for a specific lead.' },
+                status: { type: 'string', enum: ['Pending', 'Completed'], description: 'Filter by task status.' },
+                limit:  { type: 'number', description: 'Max results. Default: 20, max: 100.' }
+            }
+        }
+    },
+    {
+        name: 'create_task',
+        description: 'Creates a task or reminder, optionally linked to a lead.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                title:       { type: 'string', description: 'Task title (required).' },
+                leadId:      { type: 'string', description: 'Lead _id to link this task to.' },
+                description: { type: 'string', description: 'Additional details.' },
+                dueDate:     { type: 'string', description: 'ISO 8601 due date (e.g. "2026-05-25").' }
+            },
+            required: ['title']
+        }
+    },
+    {
+        name: 'update_task',
+        description: 'Updates a task — change its status, title, description, or due date.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                taskId:      { type: 'string', description: 'The _id of the task (required).' },
+                status:      { type: 'string', enum: ['Pending', 'Completed'], description: 'New status.' },
+                title:       { type: 'string', description: 'New title.' },
+                description: { type: 'string', description: 'New description.' },
+                dueDate:     { type: 'string', description: 'New due date (ISO 8601).' }
+            },
+            required: ['taskId']
+        }
+    },
+    {
+        name: 'delete_task',
+        description: 'Permanently deletes a task.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                taskId: { type: 'string', description: 'The _id of the task to delete (required).' }
+            },
+            required: ['taskId']
+        }
+    },
+
+    // ── Appointments ──────────────────────────────────────────────────────────
+    {
+        name: 'get_appointments',
+        description: 'Lists appointments with optional filters for lead, status, and date range.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                leadId:   { type: 'string', description: 'Filter by lead _id.' },
+                status:   { type: 'string', enum: ['Pending', 'Confirmed', 'Cancelled', 'Completed', 'No-Show'], description: 'Filter by status.' },
+                dateFrom: { type: 'string', description: 'ISO 8601 start date for appointment date filter.' },
+                dateTo:   { type: 'string', description: 'ISO 8601 end date for appointment date filter.' },
+                limit:    { type: 'number', description: 'Max results. Default: 20, max: 100.' }
+            }
+        }
+    },
+    {
+        name: 'create_appointment',
+        description: 'Books a new appointment. Optionally links to a lead.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                customerName:    { type: 'string', description: 'Name of the customer (required).' },
+                appointmentDate: { type: 'string', description: 'ISO 8601 date for the appointment (required).' },
+                appointmentTime: { type: 'string', description: 'Time string, e.g. "10:30 AM" (required).' },
+                leadId:          { type: 'string', description: 'Lead _id to link this appointment to.' },
+                customerPhone:   { type: 'string', description: 'Customer phone number.' },
+                customerEmail:   { type: 'string', description: 'Customer email.' },
+                serviceType:     { type: 'string', description: 'Service or meeting type.' },
+                notes:           { type: 'string', description: 'Additional notes.' },
+                status:          { type: 'string', enum: ['Pending', 'Confirmed'], description: 'Initial status. Default: "Pending".' }
+            },
+            required: ['customerName', 'appointmentDate', 'appointmentTime']
+        }
+    },
+    {
+        name: 'update_appointment',
+        description: 'Updates an appointment — status, date/time, customer name, or notes.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                appointmentId:   { type: 'string', description: 'The _id of the appointment (required).' },
+                status:          { type: 'string', enum: ['Pending', 'Confirmed', 'Cancelled', 'Completed', 'No-Show'], description: 'New status.' },
+                appointmentDate: { type: 'string', description: 'New date (ISO 8601).' },
+                appointmentTime: { type: 'string', description: 'New time string.' },
+                customerName:    { type: 'string', description: 'Updated customer name.' },
+                notes:           { type: 'string', description: 'Updated notes.' }
+            },
+            required: ['appointmentId']
+        }
+    },
+    {
+        name: 'delete_appointment',
+        description: 'Permanently deletes an appointment.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                appointmentId: { type: 'string', description: 'The _id of the appointment to delete (required).' }
+            },
+            required: ['appointmentId']
+        }
+    },
+
+    // ── Reporting & Analytics ─────────────────────────────────────────────────
+    {
+        name: 'get_funnel_analysis',
+        description: 'Shows the sales funnel with stage-by-stage drop-off rates and average time to close a deal. Use to spot where leads are getting stuck.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                period: { type: 'string', enum: ['today', 'week', 'month', 'all'], description: 'Time window for leads to analyse. Default: month' }
+            }
+        }
+    },
+    {
+        name: 'get_activity_metrics',
+        description: 'Shows per-agent activity: leads handled, follow-ups completed, and tasks done. Use to monitor team productivity.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                period: { type: 'string', enum: ['today', 'week', 'month', 'all'], description: 'Time window. Default: month' }
+            }
+        }
+    },
+    {
+        name: 'get_goals',
+        description: 'Shows monthly goal targets vs actual performance (leads, deals won, revenue, tasks) for each agent.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                month: { type: 'string', description: 'Month in YYYY-MM format (e.g. "2026-05"). Defaults to current month.' }
+            }
         }
     }
 ];
@@ -702,6 +997,707 @@ const toolHandlers = {
             errors: errors.slice(0, 10),
             dryRun: false,
             message: `Sent "${template.name}" to ${sent} lead(s) in stage "${stage}". ${skipped > 0 ? `${skipped} skipped (unsubscribed). ` : ''}${failed > 0 ? `${failed} failed — see errors.` : 'All successful.'}`
+        };
+    },
+
+    // ── Lead Management ───────────────────────────────────────────────────────
+
+    async create_lead(args, tenantId) {
+        const { name, phone, email, status, source, dealValue, tags, qualificationLevel } = args;
+        if (!name || typeof name !== 'string' || !name.trim()) throw new Error('"name" is required.');
+
+        const lead = await Lead.create({
+            userId: tenantId,
+            name: name.trim(),
+            phone: phone || null,
+            email: email || null,
+            status: status || 'New',
+            source: source || 'Manual',
+            dealValue: dealValue || 0,
+            tags: tags || [],
+            qualificationLevel: qualificationLevel || 'Cold'
+        });
+
+        return {
+            success: true,
+            leadId: lead._id,
+            message: `Lead "${lead.name}" created successfully.`,
+            lead: { id: lead._id, name: lead.name, phone: lead.phone, email: lead.email, status: lead.status, source: lead.source }
+        };
+    },
+
+    async update_lead(args, tenantId) {
+        const { leadId, name, phone, email, status, dealValue, tags, qualificationLevel } = args;
+        if (!leadId) throw new Error('"leadId" is required.');
+
+        const lead = await Lead.findOne({ _id: leadId, userId: tenantId, deletedAt: null }).lean();
+        if (!lead) throw new Error('Lead not found or does not belong to this workspace.');
+
+        const updates = {};
+        if (name               !== undefined) updates.name               = name;
+        if (phone              !== undefined) updates.phone              = phone;
+        if (email              !== undefined) updates.email              = email;
+        if (status             !== undefined) updates.status             = status;
+        if (dealValue          !== undefined) updates.dealValue          = dealValue;
+        if (tags               !== undefined) updates.tags               = tags;
+        if (qualificationLevel !== undefined) updates.qualificationLevel = qualificationLevel;
+
+        if (Object.keys(updates).length === 0) throw new Error('No fields to update. Provide at least one field to change.');
+
+        const updated = await Lead.findByIdAndUpdate(leadId, { $set: updates }, { new: true })
+            .select('name phone email status source dealValue tags qualificationLevel')
+            .lean();
+
+        return {
+            success: true,
+            message: `Lead "${updated.name}" updated successfully.`,
+            lead: { id: leadId, ...updated }
+        };
+    },
+
+    async assign_lead(args, tenantId) {
+        const { leadId, agentId, agentName } = args;
+        if (!leadId) throw new Error('"leadId" is required.');
+
+        const lead = await Lead.findOne({ _id: leadId, userId: tenantId, deletedAt: null }).lean();
+        if (!lead) throw new Error('Lead not found or does not belong to this workspace.');
+
+        let resolvedAgentId = null;
+        let resolvedAgentName = 'Unassigned';
+
+        if (agentId || agentName) {
+            const agentFilter = { $or: [{ _id: tenantId }, { parentId: tenantId }] };
+            if (agentId)   agentFilter._id  = agentId;
+            if (agentName) agentFilter.name = { $regex: escapeRegex(agentName), $options: 'i' };
+
+            const agent = await User.findOne(agentFilter).select('_id name').lean();
+            if (!agent) throw new Error(`Agent "${agentId || agentName}" not found in this workspace.`);
+            resolvedAgentId   = agent._id;
+            resolvedAgentName = agent.name;
+        }
+
+        await Lead.findByIdAndUpdate(leadId, { $set: { assignedTo: resolvedAgentId } });
+
+        return {
+            success: true,
+            message: resolvedAgentId
+                ? `Lead "${lead.name}" assigned to "${resolvedAgentName}".`
+                : `Lead "${lead.name}" unassigned.`,
+            leadId,
+            assignedTo: resolvedAgentName
+        };
+    },
+
+    async schedule_followup(args, tenantId) {
+        const { leadId, nextFollowUpDate } = args;
+        if (!leadId) throw new Error('"leadId" is required.');
+        if (!nextFollowUpDate) throw new Error('"nextFollowUpDate" is required.');
+
+        const d = new Date(nextFollowUpDate);
+        if (isNaN(d)) throw new Error('Invalid nextFollowUpDate. Use ISO 8601 format (e.g. 2026-05-25).');
+
+        const lead = await Lead.findOne({ _id: leadId, userId: tenantId, deletedAt: null }).lean();
+        if (!lead) throw new Error('Lead not found or does not belong to this workspace.');
+
+        const update = { nextFollowUpDate: d };
+        if (lead.nextFollowUpDate) update.lastFollowUpDate = lead.nextFollowUpDate;
+
+        await Lead.findByIdAndUpdate(leadId, { $set: update });
+
+        return {
+            success: true,
+            message: `Follow-up for "${lead.name}" scheduled on ${d.toISOString().slice(0, 10)}.`,
+            leadId,
+            nextFollowUpDate: d
+        };
+    },
+
+    async complete_followup(args, tenantId) {
+        const { leadId, note, nextFollowUpDate, markedAsDeadLead = false } = args;
+        if (!leadId) throw new Error('"leadId" is required.');
+
+        const lead = await Lead.findOne({ _id: leadId, userId: tenantId, deletedAt: null }).lean();
+        if (!lead) throw new Error('Lead not found or does not belong to this workspace.');
+
+        const now = new Date();
+        let nextDate = null;
+        if (nextFollowUpDate) {
+            nextDate = new Date(nextFollowUpDate);
+            if (isNaN(nextDate)) throw new Error('Invalid nextFollowUpDate format.');
+        }
+
+        const update = {
+            $push: {
+                followUpHistory: {
+                    note: note || '',
+                    completedDate: now,
+                    nextFollowUpDate: nextDate || null,
+                    markedAsDeadLead
+                },
+                history: { type: 'Follow-up', subType: 'Manual', content: note || 'Follow-up completed via AI', date: now }
+            },
+            $set: {
+                lastFollowUpDate: lead.nextFollowUpDate || now,
+                nextFollowUpDate: markedAsDeadLead ? null : (nextDate || null)
+            }
+        };
+
+        if (note) update.$push.notes = { text: note, date: now };
+        if (markedAsDeadLead) update.$set.status = 'Dead Lead';
+
+        await Lead.findByIdAndUpdate(leadId, update);
+
+        return {
+            success: true,
+            message: markedAsDeadLead
+                ? `Follow-up completed. Lead "${lead.name}" marked as Dead Lead.`
+                : `Follow-up completed for "${lead.name}". ${nextDate ? `Next follow-up: ${nextDate.toISOString().slice(0, 10)}.` : 'No next follow-up set.'}`,
+            leadId
+        };
+    },
+
+    // ── WhatsApp ──────────────────────────────────────────────────────────────
+
+    async send_whatsapp_message(args, tenantId) {
+        const { leadId, phone, message } = args;
+        if (!message || typeof message !== 'string' || !message.trim()) throw new Error('"message" is required.');
+        if (!leadId && !phone) throw new Error('Provide either "leadId" or "phone".');
+
+        let recipientPhone = phone;
+        let leadName = null;
+
+        if (leadId) {
+            const lead = await Lead.findOne({ _id: leadId, userId: tenantId, deletedAt: null })
+                .select('name phone').lean();
+            if (!lead) throw new Error('Lead not found or does not belong to this workspace.');
+            if (!lead.phone) throw new Error(`Lead "${lead.name}" has no phone number on file.`);
+            recipientPhone = lead.phone;
+            leadName = lead.name;
+        }
+
+        await sendWhatsAppTextMessage(recipientPhone, message.trim(), tenantId);
+
+        return {
+            success: true,
+            message: `WhatsApp message sent to ${leadName ? `"${leadName}" (${recipientPhone})` : recipientPhone}.`,
+            to: recipientPhone
+        };
+    },
+
+    async get_whatsapp_conversation(args, tenantId) {
+        const { leadId, phone, limit: rawLimit } = args;
+        if (!leadId && !phone) throw new Error('Provide either "leadId" or "phone".');
+
+        const limit = Math.min(Math.max(1, Number(rawLimit) || 20), 50);
+
+        const convFilter = { userId: tenantId };
+        if (leadId) convFilter.leadId = leadId;
+        else convFilter.phone = phone;
+
+        const conversation = await WhatsAppConversation.findOne(convFilter).lean();
+        if (!conversation) {
+            return { found: false, message: 'No WhatsApp conversation found for this lead/phone.' };
+        }
+
+        const messages = await WhatsAppMessage.find({ conversationId: conversation._id })
+            .select('direction type content status timestamp isAutomated')
+            .sort({ timestamp: -1 })
+            .limit(limit)
+            .lean();
+
+        return {
+            found: true,
+            conversationId: conversation._id,
+            contact: {
+                name: conversation.displayName,
+                phone: conversation.phone,
+                status: conversation.status,
+                unreadCount: conversation.unreadCount,
+                lastMessageAt: conversation.lastMessageAt
+            },
+            messages: messages.reverse().map(m => ({
+                direction: m.direction,
+                type: m.type,
+                text: m.content?.text || m.content?.caption || m.content?.templateName || null,
+                status: m.status,
+                isAutomated: m.isAutomated,
+                timestamp: m.timestamp
+            })),
+            totalReturned: messages.length
+        };
+    },
+
+    // ── Email ─────────────────────────────────────────────────────────────────
+
+    async send_email(args, tenantId) {
+        const { leadId, to, subject, body } = args;
+        if (!subject || typeof subject !== 'string') throw new Error('"subject" is required.');
+        if (!body    || typeof body    !== 'string') throw new Error('"body" is required.');
+        if (!leadId && !to) throw new Error('Provide either "leadId" or "to" (email address).');
+
+        let recipientEmail = to;
+        let leadName = null;
+
+        if (leadId) {
+            const lead = await Lead.findOne({ _id: leadId, userId: tenantId, deletedAt: null })
+                .select('name email').lean();
+            if (!lead) throw new Error('Lead not found or does not belong to this workspace.');
+            if (!lead.email) throw new Error(`Lead "${lead.name}" has no email address on file.`);
+            recipientEmail = lead.email;
+            leadName = lead.name;
+        }
+
+        await sendEmail({ to: recipientEmail, subject, html: body, userId: tenantId });
+
+        return {
+            success: true,
+            message: `Email sent to ${leadName ? `"${leadName}" (${recipientEmail})` : recipientEmail}.`,
+            to: recipientEmail,
+            subject
+        };
+    },
+
+    async get_email_conversation(args, tenantId) {
+        const { leadId, email, limit: rawLimit } = args;
+        if (!leadId && !email) throw new Error('Provide either "leadId" or "email".');
+
+        const limit = Math.min(Math.max(1, Number(rawLimit) || 20), 50);
+
+        const convFilter = { userId: tenantId };
+        if (leadId) convFilter.leadId = leadId;
+        else convFilter.email = email;
+
+        const conversation = await EmailConversation.findOne(convFilter).lean();
+        if (!conversation) {
+            return { found: false, message: 'No email conversation found for this lead/email.' };
+        }
+
+        const messages = await EmailMessage.find({ conversationId: conversation._id })
+            .select('direction from to subject text status timestamp isAutomated')
+            .sort({ timestamp: -1 })
+            .limit(limit)
+            .lean();
+
+        return {
+            found: true,
+            conversationId: conversation._id,
+            contact: {
+                name: conversation.displayName,
+                email: conversation.email,
+                status: conversation.status,
+                unreadCount: conversation.unreadCount,
+                lastMessageAt: conversation.lastMessageAt
+            },
+            messages: messages.reverse().map(m => ({
+                direction: m.direction,
+                from: m.from,
+                to: m.to,
+                subject: m.subject,
+                preview: m.text ? m.text.slice(0, 200) : null,
+                status: m.status,
+                isAutomated: m.isAutomated,
+                timestamp: m.timestamp
+            })),
+            totalReturned: messages.length
+        };
+    },
+
+    // ── Tasks & Reminders ─────────────────────────────────────────────────────
+
+    async list_tasks(args, tenantId) {
+        const { leadId, status, limit: rawLimit } = args;
+        const limit = Math.min(Math.max(1, Number(rawLimit) || 20), 100);
+
+        const filter = { userId: tenantId };
+        if (leadId) filter.leadId = leadId;
+        if (status) filter.status = status;
+
+        const tasks = await Task.find(filter)
+            .sort({ dueDate: 1, date: -1 })
+            .limit(limit)
+            .populate('leadId', 'name')
+            .lean();
+
+        return {
+            count: tasks.length,
+            tasks: tasks.map(t => ({
+                id:          t._id,
+                title:       t.title,
+                description: t.description || null,
+                status:      t.status,
+                dueDate:     t.dueDate || null,
+                lead:        t.leadId?.name || null,
+                leadId:      t.leadId?._id  || null,
+                createdAt:   t.date
+            }))
+        };
+    },
+
+    async create_task(args, tenantId) {
+        const { leadId, title, description, dueDate } = args;
+        if (!title || typeof title !== 'string' || !title.trim()) throw new Error('"title" is required.');
+
+        if (leadId) {
+            const lead = await Lead.findOne({ _id: leadId, userId: tenantId, deletedAt: null }).lean();
+            if (!lead) throw new Error('Lead not found or does not belong to this workspace.');
+        }
+
+        let parsedDueDate = null;
+        if (dueDate) {
+            parsedDueDate = new Date(dueDate);
+            if (isNaN(parsedDueDate)) throw new Error('Invalid dueDate. Use ISO 8601 format.');
+        }
+
+        const task = await Task.create({
+            userId:      tenantId,
+            leadId:      leadId || null,
+            title:       title.trim(),
+            description: description || '',
+            dueDate:     parsedDueDate,
+            status:      'Pending',
+            createdBy:   tenantId
+        });
+
+        return {
+            success: true,
+            taskId: task._id,
+            message: `Task "${task.title}" created${leadId ? ' for lead.' : '.'}`,
+            task: { id: task._id, title: task.title, status: task.status, dueDate: task.dueDate }
+        };
+    },
+
+    async update_task(args, tenantId) {
+        const { taskId, status, title, description, dueDate } = args;
+        if (!taskId) throw new Error('"taskId" is required.');
+
+        const task = await Task.findOne({ _id: taskId, userId: tenantId }).lean();
+        if (!task) throw new Error('Task not found or does not belong to this workspace.');
+
+        const updates = {};
+        if (status !== undefined) {
+            if (!['Pending', 'Completed'].includes(status)) throw new Error('"status" must be "Pending" or "Completed".');
+            updates.status = status;
+        }
+        if (title       !== undefined) updates.title       = title;
+        if (description !== undefined) updates.description = description;
+        if (dueDate     !== undefined) {
+            const d = new Date(dueDate);
+            if (isNaN(d)) throw new Error('Invalid dueDate format.');
+            updates.dueDate = d;
+        }
+
+        if (Object.keys(updates).length === 0) throw new Error('No fields to update.');
+
+        const updated = await Task.findByIdAndUpdate(taskId, { $set: updates }, { new: true }).lean();
+
+        return {
+            success: true,
+            message: `Task "${updated.title}" updated.`,
+            task: { id: updated._id, title: updated.title, status: updated.status, dueDate: updated.dueDate }
+        };
+    },
+
+    async delete_task(args, tenantId) {
+        const { taskId } = args;
+        if (!taskId) throw new Error('"taskId" is required.');
+
+        const task = await Task.findOneAndDelete({ _id: taskId, userId: tenantId }).lean();
+        if (!task) throw new Error('Task not found or does not belong to this workspace.');
+
+        return { success: true, message: `Task "${task.title}" deleted.` };
+    },
+
+    // ── Appointments ──────────────────────────────────────────────────────────
+
+    async get_appointments(args, tenantId) {
+        const { leadId, status, dateFrom, dateTo, limit: rawLimit } = args;
+        const limit = Math.min(Math.max(1, Number(rawLimit) || 20), 100);
+
+        const filter = { userId: tenantId };
+        if (leadId) filter.leadId = leadId;
+        if (status) filter.status = status;
+        if (dateFrom || dateTo) {
+            filter.appointmentDate = {};
+            if (dateFrom) {
+                const d = new Date(dateFrom);
+                if (isNaN(d)) throw new Error('Invalid dateFrom format.');
+                filter.appointmentDate.$gte = d;
+            }
+            if (dateTo) {
+                const d = new Date(dateTo);
+                if (isNaN(d)) throw new Error('Invalid dateTo format.');
+                filter.appointmentDate.$lte = d;
+            }
+        }
+
+        const appointments = await Appointment.find(filter)
+            .sort({ appointmentDate: 1 })
+            .limit(limit)
+            .lean();
+
+        return {
+            count: appointments.length,
+            appointments: appointments.map(a => ({
+                id:              a._id,
+                customerName:    a.customerName,
+                customerPhone:   a.customerPhone  || null,
+                customerEmail:   a.customerEmail  || null,
+                serviceType:     a.serviceType    || null,
+                appointmentDate: a.appointmentDate,
+                appointmentTime: a.appointmentTime,
+                status:          a.status,
+                notes:           a.notes  || null,
+                leadId:          a.leadId || null
+            }))
+        };
+    },
+
+    async create_appointment(args, tenantId) {
+        const { leadId, customerName, customerPhone, customerEmail, serviceType, appointmentDate, appointmentTime, notes, status } = args;
+        if (!customerName || typeof customerName !== 'string') throw new Error('"customerName" is required.');
+        if (!appointmentDate) throw new Error('"appointmentDate" is required.');
+        if (!appointmentTime) throw new Error('"appointmentTime" is required.');
+
+        const parsedDate = new Date(appointmentDate);
+        if (isNaN(parsedDate)) throw new Error('Invalid appointmentDate format.');
+
+        if (leadId) {
+            const lead = await Lead.findOne({ _id: leadId, userId: tenantId, deletedAt: null }).lean();
+            if (!lead) throw new Error('Lead not found or does not belong to this workspace.');
+        }
+
+        const validStatuses = ['Pending', 'Confirmed', 'Cancelled', 'Completed', 'No-Show'];
+        const apptStatus = (status && validStatuses.includes(status)) ? status : 'Pending';
+
+        const appointment = await Appointment.create({
+            userId:          tenantId,
+            leadId:          leadId        || null,
+            customerName,
+            customerPhone:   customerPhone || null,
+            customerEmail:   customerEmail || null,
+            serviceType:     serviceType   || null,
+            appointmentDate: parsedDate,
+            appointmentTime,
+            notes:           notes  || null,
+            status:          apptStatus,
+            source:          'manual'
+        });
+
+        return {
+            success: true,
+            appointmentId: appointment._id,
+            message: `Appointment for "${customerName}" created on ${parsedDate.toISOString().slice(0, 10)} at ${appointmentTime}.`,
+            appointment: { id: appointment._id, customerName, appointmentDate: parsedDate, appointmentTime, status: appointment.status }
+        };
+    },
+
+    async update_appointment(args, tenantId) {
+        const { appointmentId, status, notes, appointmentDate, appointmentTime, customerName } = args;
+        if (!appointmentId) throw new Error('"appointmentId" is required.');
+
+        const appt = await Appointment.findOne({ _id: appointmentId, userId: tenantId }).lean();
+        if (!appt) throw new Error('Appointment not found or does not belong to this workspace.');
+
+        const updates = {};
+        if (status !== undefined) {
+            const validStatuses = ['Pending', 'Confirmed', 'Cancelled', 'Completed', 'No-Show'];
+            if (!validStatuses.includes(status)) throw new Error(`"status" must be one of: ${validStatuses.join(', ')}.`);
+            updates.status = status;
+        }
+        if (notes           !== undefined) updates.notes           = notes;
+        if (customerName    !== undefined) updates.customerName    = customerName;
+        if (appointmentTime !== undefined) updates.appointmentTime = appointmentTime;
+        if (appointmentDate !== undefined) {
+            const d = new Date(appointmentDate);
+            if (isNaN(d)) throw new Error('Invalid appointmentDate format.');
+            updates.appointmentDate = d;
+        }
+
+        if (Object.keys(updates).length === 0) throw new Error('No fields to update.');
+
+        const updated = await Appointment.findByIdAndUpdate(appointmentId, { $set: updates }, { new: true }).lean();
+
+        return {
+            success: true,
+            message: `Appointment for "${updated.customerName}" updated.`,
+            appointment: { id: updated._id, status: updated.status, appointmentDate: updated.appointmentDate, appointmentTime: updated.appointmentTime }
+        };
+    },
+
+    async delete_appointment(args, tenantId) {
+        const { appointmentId } = args;
+        if (!appointmentId) throw new Error('"appointmentId" is required.');
+
+        const appt = await Appointment.findOneAndDelete({ _id: appointmentId, userId: tenantId }).lean();
+        if (!appt) throw new Error('Appointment not found or does not belong to this workspace.');
+
+        return {
+            success: true,
+            message: `Appointment for "${appt.customerName}" on ${new Date(appt.appointmentDate).toISOString().slice(0, 10)} deleted.`
+        };
+    },
+
+    // ── Reporting & Analytics ─────────────────────────────────────────────────
+
+    async get_funnel_analysis(args, tenantId) {
+        const { period = 'month' } = args;
+        const range = periodRange(period);
+        const base = { userId: tenantId, deletedAt: null };
+        const filter = range ? { ...base, createdAt: { $gte: range.start, $lte: range.end } } : base;
+
+        const [aggResult] = await Lead.aggregate([
+            { $match: filter },
+            {
+                $facet: {
+                    stageCounts: [
+                        { $group: { _id: { $ifNull: ['$status', 'New'] }, count: { $sum: 1 } } }
+                    ],
+                    timeToClose: [
+                        { $match: { wonAt: { $ne: null } } },
+                        {
+                            $group: {
+                                _id: null,
+                                closeCount: { $sum: 1 },
+                                totalDays: {
+                                    $sum: { $divide: [{ $subtract: ['$updatedAt', '$createdAt'] }, 1000 * 60 * 60 * 24] }
+                                }
+                            }
+                        }
+                    ],
+                    totalLeads: [{ $count: 'count' }]
+                }
+            }
+        ]);
+
+        const stageCounts = {};
+        (aggResult.stageCounts || []).forEach(s => { stageCounts[s._id] = s.count; });
+
+        const ttc = ((aggResult.timeToClose || [])[0]) || { closeCount: 0, totalDays: 0 };
+        const avgTimeToClose = ttc.closeCount > 0 ? parseFloat((ttc.totalDays / ttc.closeCount).toFixed(1)) : null;
+        const totalLeadsCount = (((aggResult.totalLeads || [])[0]) || {}).count || 0;
+
+        const stageOrder = ['New', 'Contacted', 'Qualified', 'Proposal Sent', 'Negotiation', 'Won'];
+        let runningTotal = 0;
+        const reachedCounts = {};
+        for (let i = stageOrder.length - 1; i >= 0; i--) {
+            runningTotal += (stageCounts[stageOrder[i]] || 0);
+            reachedCounts[stageOrder[i]] = runningTotal;
+        }
+        reachedCounts['New'] = Math.max(reachedCounts['New'] || 0, totalLeadsCount);
+
+        const funnel = stageOrder.map((stage, i) => {
+            const reached    = reachedCounts[stage] || 0;
+            const nextReached = i < stageOrder.length - 1 ? (reachedCounts[stageOrder[i + 1]] || 0) : 0;
+            const dropped    = Math.max(0, reached - nextReached);
+            const dropRate   = reached > 0 ? parseFloat(((dropped / reached) * 100).toFixed(1)) : 0;
+            return {
+                stage,
+                currentInStage: stageCounts[stage] || 0,
+                reached,
+                dropped:  i === stageOrder.length - 1 ? 0 : dropped,
+                dropRate: i === stageOrder.length - 1 ? 0 : dropRate
+            };
+        });
+
+        return { period, totalLeads: totalLeadsCount, funnel, avgTimeToCloseDays: avgTimeToClose };
+    },
+
+    async get_activity_metrics(args, tenantId) {
+        const { period = 'month' } = args;
+        const range = periodRange(period);
+        const start = range ? range.start : new Date(0);
+        const end   = range ? range.end   : new Date();
+
+        const agents = await User.find({ $or: [{ _id: tenantId }, { parentId: tenantId }] })
+            .select('_id name').lean();
+        const agentIds = agents.map(a => a._id);
+
+        const scope = { userId: tenantId, deletedAt: null };
+
+        const [leadsHandledStats, followUpStats, taskStats] = await Promise.all([
+            Lead.aggregate([
+                { $match: { ...scope, assignedTo: { $in: agentIds }, createdAt: { $gte: start, $lte: end } } },
+                { $group: { _id: '$assignedTo', leadsHandled: { $sum: 1 } } }
+            ]),
+            Lead.aggregate([
+                { $match: { ...scope, assignedTo: { $in: agentIds }, 'followUpHistory.completedDate': { $gte: start, $lte: end } } },
+                { $unwind: '$followUpHistory' },
+                { $match: { 'followUpHistory.completedDate': { $gte: start, $lte: end } } },
+                { $group: { _id: '$assignedTo', followUpsDone: { $sum: 1 } } }
+            ]),
+            Task.aggregate([
+                { $match: { userId: tenantId, createdBy: { $in: agentIds }, status: 'Completed', updatedAt: { $gte: start, $lte: end } } },
+                { $group: { _id: '$createdBy', tasksCompleted: { $sum: 1 } } }
+            ])
+        ]);
+
+        const leadsMap    = Object.fromEntries(leadsHandledStats.map(s => [s._id.toString(), s.leadsHandled]));
+        const followUpsMap = Object.fromEntries(followUpStats.map(s => [s._id.toString(), s.followUpsDone]));
+        const tasksMap    = Object.fromEntries(taskStats.map(s => [s._id.toString(), s.tasksCompleted]));
+
+        const agentActivity = agents.map(agent => {
+            const id = agent._id.toString();
+            return {
+                agentName:      agent.name,
+                leadsHandled:   leadsMap[id]     || 0,
+                followUpsDone:  followUpsMap[id] || 0,
+                tasksCompleted: tasksMap[id]     || 0,
+                activityScore:  (followUpsMap[id] || 0) + (tasksMap[id] || 0)
+            };
+        }).sort((a, b) => b.activityScore - a.activityScore);
+
+        return { period, agents: agentActivity };
+    },
+
+    async get_goals(args, tenantId) {
+        const currentMonth = args.month || new Date().toISOString().slice(0, 7);
+        if (!/^\d{4}-\d{2}$/.test(currentMonth)) throw new Error('Invalid month format. Use YYYY-MM (e.g. "2026-05").');
+
+        const [goals, agents] = await Promise.all([
+            Goal.find({ userId: tenantId, month: currentMonth }).lean(),
+            User.find({ $or: [{ _id: tenantId }, { parentId: tenantId }] }).select('_id name').lean()
+        ]);
+
+        const monthStart = new Date(currentMonth + '-01');
+        const monthEnd   = new Date(monthStart);
+        monthEnd.setMonth(monthEnd.getMonth() + 1);
+        const agentIds = agents.map(a => a._id);
+
+        const [leadStats, taskStats] = await Promise.all([
+            Lead.aggregate([
+                { $match: { userId: tenantId, deletedAt: null, assignedTo: { $in: agentIds }, createdAt: { $gte: monthStart, $lt: monthEnd } } },
+                {
+                    $group: {
+                        _id:        '$assignedTo',
+                        totalLeads: { $sum: 1 },
+                        wonLeads:   { $sum: { $cond: [{ $ne: ['$wonAt', null] }, 1, 0] } },
+                        wonRevenue: { $sum: { $cond: [{ $ne: ['$wonAt', null] }, { $ifNull: ['$dealValue', 0] }, 0] } }
+                    }
+                }
+            ]),
+            Task.aggregate([
+                { $match: { userId: tenantId, createdBy: { $in: agentIds }, status: 'Completed', updatedAt: { $gte: monthStart, $lt: monthEnd } } },
+                { $group: { _id: '$createdBy', totalTasks: { $sum: 1 } } }
+            ])
+        ]);
+
+        const leadStatsMap = Object.fromEntries(leadStats.map(s => [s._id.toString(), s]));
+        const taskStatsMap = Object.fromEntries(taskStats.map(s => [s._id.toString(), s]));
+
+        return {
+            month: currentMonth,
+            agents: agents.map(agent => {
+                const id   = agent._id.toString();
+                const goal = goals.find(g => g.agentId.toString() === id) || {};
+                const ls   = leadStatsMap[id] || { totalLeads: 0, wonLeads: 0, wonRevenue: 0 };
+                const ts   = taskStatsMap[id] || { totalTasks: 0 };
+                return {
+                    agentName: agent.name,
+                    month:     currentMonth,
+                    goals:   { targetLeads: goal.targetLeads || 0, targetWon: goal.targetWon || 0, targetRevenue: goal.targetRevenue || 0, targetTasks: goal.targetTasks || 0 },
+                    actuals: { leads: ls.totalLeads, won: ls.wonLeads, revenue: ls.wonRevenue, tasks: ts.totalTasks }
+                };
+            })
         };
     }
 };
