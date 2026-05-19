@@ -230,7 +230,7 @@ export default function BookingPage() {
                 </div>
             )}
 
-            <div className="max-w-lg mx-auto px-4 pt-4 pb-32">
+            <div className={`max-w-lg mx-auto px-4 pt-4 ${step === 1 ? 'pb-32' : 'pb-10'}`}>
 
                 {/* ── Step 3: Success ── */}
                 {step === 3 && (
@@ -490,39 +490,38 @@ export default function BookingPage() {
                                 {submitError}
                             </div>
                         )}
+
+                        {/* Buttons inside scroll — reliable on mobile after keyboard closes */}
+                        <div className="flex gap-3 pt-1">
+                            <button onClick={() => setStep(1)}
+                                className="flex-1 py-4 rounded-2xl border-2 border-slate-200 text-slate-600 font-bold text-sm"
+                                style={{ touchAction: 'manipulation' }}>
+                                ← Back
+                            </button>
+                            <button onClick={handleSubmit} disabled={submitting}
+                                className="flex-[2] py-4 rounded-2xl text-white font-bold text-sm disabled:opacity-60"
+                                style={{ backgroundColor: primaryColor, touchAction: 'manipulation' }}>
+                                {submitting
+                                    ? <span className="flex items-center justify-center gap-2">
+                                        <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
+                                        Booking…
+                                      </span>
+                                    : 'Confirm Booking ✓'}
+                            </button>
+                        </div>
                     </div>
                 )}
             </div>
 
-            {/* ── Sticky bottom action bar ── */}
+            {/* ── Sticky bottom bar — step 1 only (no inputs, safe to use fixed) ── */}
             {step === 1 && (
-                <div className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 px-4 py-4 safe-area-bottom">
+                <div className="fixed bottom-0 inset-x-0 z-50 bg-white border-t border-slate-200 px-4"
+                    style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)', paddingTop: '16px' }}>
                     <div className="max-w-lg mx-auto">
                         <button onClick={() => setStep(2)} disabled={!canContinue}
-                            className="w-full py-4 rounded-2xl text-white font-bold text-sm tracking-wide transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                            style={{ backgroundColor: primaryColor }}>
+                            className="w-full py-4 rounded-2xl text-white font-bold text-sm tracking-wide disabled:opacity-30 disabled:cursor-not-allowed"
+                            style={{ backgroundColor: primaryColor, touchAction: 'manipulation' }}>
                             {canContinue ? `Continue → ${selectedTime}` : 'Select Service, Date & Time'}
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {step === 2 && (
-                <div className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 px-4 py-4 safe-area-bottom">
-                    <div className="max-w-lg mx-auto flex gap-3">
-                        <button onClick={() => setStep(1)}
-                            className="flex-1 py-4 rounded-2xl border-2 border-slate-200 text-slate-600 font-bold text-sm transition-all">
-                            ← Back
-                        </button>
-                        <button onClick={handleSubmit} disabled={submitting}
-                            className="flex-[2] py-4 rounded-2xl text-white font-bold text-sm transition-all disabled:opacity-60"
-                            style={{ backgroundColor: primaryColor }}>
-                            {submitting
-                                ? <span className="flex items-center justify-center gap-2">
-                                    <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
-                                    Booking…
-                                  </span>
-                                : 'Confirm Booking ✓'}
                         </button>
                     </div>
                 </div>
