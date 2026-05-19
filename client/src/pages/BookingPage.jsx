@@ -140,6 +140,8 @@ export default function BookingPage() {
     const canContinue      = selectedService && selectedDate && selectedTime;
 
     const handleSubmit = async () => {
+        // Dismiss keyboard immediately so viewport reflow doesn't displace the button
+        if (document.activeElement) document.activeElement.blur();
         if (!name.trim() || !phone.trim()) { setSubmitError('Name and phone number are required.'); return; }
         for (const q of (page?.customQuestions || []).filter(q => q.required)) {
             if (!customAnswers[q.id]?.trim()) { setSubmitError(`"${q.question}" is required.`); return; }
@@ -498,9 +500,12 @@ export default function BookingPage() {
                                 style={{ touchAction: 'manipulation' }}>
                                 ← Back
                             </button>
-                            <button onClick={handleSubmit} disabled={submitting}
+                            <button
+                                onPointerDown={() => { if (document.activeElement) document.activeElement.blur(); }}
+                                onClick={handleSubmit}
+                                disabled={submitting}
                                 className="flex-[2] py-4 rounded-2xl text-white font-bold text-sm disabled:opacity-60"
-                                style={{ backgroundColor: primaryColor, touchAction: 'manipulation' }}>
+                                style={{ backgroundColor: primaryColor, touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}>
                                 {submitting
                                     ? <span className="flex items-center justify-center gap-2">
                                         <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
