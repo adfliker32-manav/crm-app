@@ -130,6 +130,11 @@ const queueLeadCreatedEffects = (lead, ownerId) => {
         evaluateLead(lead, 'LEAD_CREATED')
     );
 
+    runInBackground('Sequence enrollment error (LEAD_CREATED):', () => {
+        const { enrollLeadInSequences } = require('../services/sequenceService');
+        return enrollLeadInSequences(lead, 'LEAD_CREATED');
+    });
+
     // CAPI Lead event for manually created leads
     sendMetaEventIfEnabled(lead, lead.status, null)
         .catch(err => console.error('Meta CAPI error (Lead Created):', err));
@@ -138,6 +143,17 @@ const queueLeadCreatedEffects = (lead, ownerId) => {
 const queueLeadStageChangeEffects = (lead) => {
     runInBackground('Auto Error (STAGE_CHANGED):', () => evaluateLead(lead, 'STAGE_CHANGED'));
     // NOTE: TIME_IN_STAGE removed - it is time-based, not event-based. Needs a cron/Agenda job.
+
+    runInBackground('Sequence enrollment error (STAGE_CHANGED):', () => {
+        const { enrollLeadInSequences } = require('../services/sequenceService');
+        return enrollLeadInSequences(lead, 'STAGE_CHANGED', lead.status);
+    });
+
+    runInBackground('Score update error (STAGE_CHANGED):', () => {
+        const { updateLeadScore } = require('../services/leadScoringService');
+        const isLost = /lost|dead/i.test(lead.status || '');
+        return updateLeadScore(lead._id, isLost ? 'STAGE_LOST' : 'STAGE_FORWARD');
+    });
 };
 
 const sendMetaEventIfEnabled = async (lead, newStatus, oldStatus) => {

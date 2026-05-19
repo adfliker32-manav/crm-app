@@ -152,7 +152,13 @@ const LeadSchema = new mongoose.Schema({
     // Meta tracking cookies — captured at form submission time on web leads.
     // NOT hashed. NOT available for native Meta Lead Ads (no browser context).
     fbc: { type: String, default: null }, // _fbc cookie (Meta click ID)
-    fbp: { type: String, default: null }  // _fbp cookie (Meta browser ID)
+    fbp: { type: String, default: null }, // _fbp cookie (Meta browser ID)
+
+    // Lead scoring — incremented by engagement events (WhatsApp reply, email open, stage change, etc.)
+    score: { type: Number, default: 0, index: true },
+
+    // Lost lead recovery — set when a re-engagement message is sent (prevents repeated attempts)
+    recoveryAttemptedAt: { type: Date, default: null }
 
 }, { timestamps: true });
 

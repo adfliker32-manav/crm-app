@@ -146,11 +146,15 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
                 const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents);
                 const messageId = result?.messages?.[0]?.id;
                 console.log(`✅ [WA-Auto] Automated WhatsApp sent to ${lead.phone} using template: ${template.name} (msgId: ${messageId})`);
-                
+
                 // FIX #79: Sync to conversation DB (was missing — ghost messages)
                 if (messageId) {
                     await syncAutomatedSendToConversation(lead, userId, template.name, messageId, 'template');
                 }
+
+                // Update lead score for outbound engagement
+                const { updateLeadScore } = require('./leadScoringService');
+                updateLeadScore(lead._id, 'WHATSAPP_SENT').catch(() => {});
             } catch (error) {
                 console.error(`❌ [WA-Auto] Error sending template "${template.name}" to ${lead.phone}:`, error.response?.data || error.message);
             }
@@ -208,12 +212,15 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
                 const metaComponents = buildMetaComponents(template.components || [], template.variableMapping, templateData);
                 const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents);
                 console.log(`✅ Automated WhatsApp sent to ${lead.phone} for stage change to ${newStage} using template ${template.name}`);
-                
+
                 // FIX #79: Sync to conversation DB (was missing — ghost messages)
                 const messageId = result?.messages?.[0]?.id;
                 if (messageId) {
                     await syncAutomatedSendToConversation(lead, userId, template.name, messageId, 'template');
                 }
+
+                const { updateLeadScore } = require('./leadScoringService');
+                updateLeadScore(lead._id, 'WHATSAPP_SENT').catch(() => {});
             } catch (error) {
                 console.error(`❌ Error sending automated WhatsApp for template ${template.name}:`, error.message);
             }

@@ -128,6 +128,9 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                     }),
                     syncToInbox({ userId, lead, subject, htmlBody: emailOptions.html, messageId: result.messageId, templateId: template._id })
                 ]);
+
+                const { updateLeadScore } = require('./leadScoringService');
+                updateLeadScore(lead._id, 'EMAIL_SENT').catch(() => {});
             } catch (error) {
                 console.error(`❌ Error sending automated email for template ${template.name}:`, error.message);
                 await logEmail({
@@ -223,6 +226,9 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                     }),
                     syncToInbox({ userId, lead, subject, htmlBody: emailOptions.html, messageId: result.messageId, templateId: template._id })
                 ]);
+
+                const { updateLeadScore } = require('./leadScoringService');
+                updateLeadScore(lead._id, 'EMAIL_SENT').catch(() => {});
             } catch (error) {
                 console.error(`❌ Error sending automated email for template ${template.name}:`, error.message);
                 await logEmail({

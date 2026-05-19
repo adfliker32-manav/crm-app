@@ -31,7 +31,11 @@ const appointmentSchema = new mongoose.Schema({
         question:   { type: String },
         answer:     { type: String },
         _id: false
-    }]
+    }],
+
+    // Reminder tracking — prevents duplicate sends on each cron tick
+    reminder24hSent: { type: Boolean, default: false },
+    reminder1hSent:  { type: Boolean, default: false }
 }, { timestamps: true });
 
 appointmentSchema.index({ userId: 1, appointmentDate: 1, status: 1 });

@@ -102,7 +102,14 @@ const whatsappTemplateSchema = new mongoose.Schema({
     },
     triggerType: {
         type: String,
-        enum: ['on_lead_create', 'on_stage_change', 'manual'],
+        enum: [
+            'on_lead_create',
+            'on_stage_change',
+            'manual',
+            'appointment_reminder_24h',
+            'appointment_reminder_1h',
+            'lost_lead_recovery'
+        ],
         default: 'manual'
     },
     stage: {

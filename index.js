@@ -35,6 +35,7 @@ const { authMiddleware } = require('./src/middleware/authMiddleware');
 const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
 const webLeadRoutes = require('./src/routes/webLeadRoutes'); // Web-to-Lead embed
 const mcpRoutes = require('./src/routes/mcpRoutes'); // Claude AI / MCP server
+const sequenceRoutes = require('./src/routes/sequenceRoutes'); // Drip Sequences
 
 const app = express();
 
@@ -284,6 +285,10 @@ mongoose.connect(MONGO_URI, {
       const { defineEmailJobs } = require('./src/services/emailQueueService');
       defineEmailJobs(agenda);
 
+      // 4. Drip Sequence step jobs (PROCESS_SEQUENCE_STEP)
+      const { defineSequenceJobs } = require('./src/services/sequenceService');
+      defineSequenceJobs(agenda);
+
       // ✅ Start AFTER all definitions are registered
       await agenda.start();
       setAgenda(agenda); // Register for graceful shutdown
@@ -398,6 +403,7 @@ app.use('/api/custom-fields', authMiddleware, customFieldRoutes);
 app.use('/api/tags', authMiddleware, require('./src/routes/tagRoutes'));
 app.use('/api/tasks', authMiddleware, taskRoutes);
 app.use('/api/automations', authMiddleware, automationRoutes);
+app.use('/api/sequences', authMiddleware, sequenceRoutes);
 app.use('/api/appointments', authMiddleware, appointmentRoutes);
 
 // In-built Help Center (auth handled inside route file — supports customer + super admin)

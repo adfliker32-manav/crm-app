@@ -531,7 +531,21 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
             }
 
             try {
-                // Step 2: Trigger chatbot/auto-reply logic (runs AFTER watcher completes)
+                // Step 2: Score the reply and pause any active drip sequences
+                if (conversation.leadId) {
+                    const { updateLeadScore } = require('../services/leadScoringService');
+                    const { pauseLeadSequences } = require('../services/sequenceService');
+                    await Promise.all([
+                        updateLeadScore(conversation.leadId, 'WHATSAPP_REPLIED'),
+                        pauseLeadSequences(conversation.leadId)
+                    ]);
+                }
+            } catch (err) {
+                console.error('❌ Scoring/sequence pause error:', err);
+            }
+
+            try {
+                // Step 3: Trigger chatbot/auto-reply logic (runs AFTER watcher completes)
                 debug('🤖 Running chatbot engine in background...');
                 const chatbotEngine = require('../services/chatbotEngineService');
                 await chatbotEngine.processIncomingMessage(messageDoc, conversation._id, targetUserId);
