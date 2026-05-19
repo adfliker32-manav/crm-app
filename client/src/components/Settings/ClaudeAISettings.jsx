@@ -15,6 +15,7 @@ const ClaudeAISettings = () => {
     const [revoking, setRevoking] = useState(false);
     const [showConfirmRevoke, setShowConfirmRevoke] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [copiedUrl, setCopiedUrl] = useState(false);
 
     const fetchKeyStatus = useCallback(async () => {
         try {
@@ -67,6 +68,18 @@ const ClaudeAISettings = () => {
             await navigator.clipboard.writeText(text);
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
+        } catch {
+            showError('Could not copy to clipboard. Please copy manually.');
+        }
+    };
+
+    const browserUrl = `${MCP_URL}?key=${revealedKey || maskedKey || 'YOUR_MCP_KEY'}`;
+
+    const handleCopyUrl = async () => {
+        try {
+            await navigator.clipboard.writeText(browserUrl);
+            setCopiedUrl(true);
+            setTimeout(() => setCopiedUrl(false), 2000);
         } catch {
             showError('Could not copy to clipboard. Please copy manually.');
         }
@@ -281,6 +294,44 @@ const ClaudeAISettings = () => {
                     </li>
                 </ol>
             </div>
+
+            <hr className="border-slate-100" />
+
+            {/* Browser / Claude.ai connector */}
+            <div className="space-y-3">
+                <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wider">Connect via Browser (Claude.ai)</h4>
+                <p className="text-xs text-slate-500">
+                    Using Claude.ai in the browser? Copy this link and paste it into your <strong>Connectors</strong> settings on Claude.ai to connect.
+                </p>
+                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                    <i className="fa-solid fa-link text-slate-400 flex-shrink-0 text-sm"></i>
+                    <code className="flex-1 text-xs font-mono text-slate-700 break-all select-all">{browserUrl}</code>
+                    <button
+                        onClick={handleCopyUrl}
+                        disabled={!hasKey}
+                        className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                            !hasKey
+                                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                : copiedUrl
+                                    ? 'bg-emerald-500 text-white'
+                                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                        }`}
+                    >
+                        {copiedUrl
+                            ? <><i className="fa-solid fa-check mr-1"></i>Copied</>
+                            : <><i className="fa-solid fa-copy mr-1"></i>Copy</>
+                        }
+                    </button>
+                </div>
+                {!hasKey && (
+                    <p className="text-xs text-amber-600 flex items-center gap-1.5">
+                        <i className="fa-solid fa-circle-info"></i>
+                        Generate an API key first to get your browser connection URL.
+                    </p>
+                )}
+            </div>
+
+            <hr className="border-slate-100" />
 
             {/* Security note */}
             <div className="flex items-start gap-3 p-4 bg-slate-50 border border-slate-200 rounded-xl">
