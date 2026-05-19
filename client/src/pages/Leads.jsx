@@ -140,6 +140,10 @@ const Leads = () => {
                     return a.name.localeCompare(b.name);
                 case "name_desc":
                     return b.name.localeCompare(a.name);
+                case "score_desc":
+                    return (b.score || 0) - (a.score || 0);
+                case "score_asc":
+                    return (a.score || 0) - (b.score || 0);
                 default:
                     return 0;
             }
@@ -406,6 +410,8 @@ const Leads = () => {
                             <option value="last_updated">Last Updated</option>
                             <option value="name_asc">Name (A-Z)</option>
                             <option value="name_desc">Name (Z-A)</option>
+                            <option value="score_desc">Hottest Leads (High Score)</option>
+                            <option value="score_asc">Coldest Leads (Low Score)</option>
                         </select>
                         <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-400">
                             <i className="fa-solid fa-sort text-xs"></i>
@@ -615,13 +621,23 @@ const Leads = () => {
                                                                         }`}></div>
 
                                                                     <div className="pl-2">
-                                                                        <div className="flex justify-between items-start mb-2">
-                                                                            <h4 className="font-bold text-slate-800 text-base leading-tight group-hover:text-blue-600 transition-colors">
+                                                                        <div className="flex justify-between items-start mb-2 gap-2">
+                                                                            <h4 className="font-bold text-slate-800 text-base leading-tight group-hover:text-blue-600 transition-colors flex-1 min-w-0 truncate">
                                                                                 {item.name}
                                                                             </h4>
-                                                                            <button className="text-slate-300 hover:text-blue-500 transition-colors -mr-1">
-                                                                                <i className="fa-solid fa-ellipsis-vertical px-2"></i>
-                                                                            </button>
+                                                                            {(() => {
+                                                                                const s = Number(item.score) || 0;
+                                                                                if (s <= 0) return null;
+                                                                                const t = s >= 80 ? { icon: 'fa-fire',      cls: 'bg-red-50 text-red-700 ring-red-200' }
+                                                                                       : s >= 40 ? { icon: 'fa-sun',       cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
+                                                                                       :          { icon: 'fa-leaf',      cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' };
+                                                                                return (
+                                                                                    <span title={`Lead score ${s}`} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold ring-1 shrink-0 ${t.cls}`}>
+                                                                                        <i className={`fa-solid ${t.icon} text-[9px]`}></i>
+                                                                                        {s}
+                                                                                    </span>
+                                                                                );
+                                                                            })()}
                                                                         </div>
 
                                                                         <div className="space-y-1.5 mb-4">

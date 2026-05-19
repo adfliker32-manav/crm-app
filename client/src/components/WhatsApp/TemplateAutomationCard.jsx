@@ -43,8 +43,17 @@ const TemplateAutomationCard = ({ template, setTemplate, stages }) => {
                             onChange={(e) => setTemplate(prev => ({ ...prev, triggerType: e.target.value }))}
                             className="w-full px-4 py-3 bg-white border-2 border-transparent focus:border-purple-500/20 rounded-xl outline-none text-xs font-black text-slate-700 shadow-sm"
                         >
-                            <option value="on_lead_create">🆕 New Lead Acquired</option>
-                            <option value="on_stage_change">🔄 Pipeline Stage Updated</option>
+                            <optgroup label="Lead Lifecycle">
+                                <option value="on_lead_create">🆕 New Lead Acquired</option>
+                                <option value="on_stage_change">🔄 Pipeline Stage Updated</option>
+                            </optgroup>
+                            <optgroup label="Appointment Reminders">
+                                <option value="appointment_reminder_24h">📅 24 Hours Before Appointment</option>
+                                <option value="appointment_reminder_1h">⏰ 1 Hour Before Appointment</option>
+                            </optgroup>
+                            <optgroup label="Re-engagement">
+                                <option value="lost_lead_recovery">💔 Lost Lead Recovery (30 days)</option>
+                            </optgroup>
                         </select>
 
                         {template.triggerType === 'on_stage_change' && (

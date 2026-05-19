@@ -32,6 +32,7 @@ const SuperAdmin = lazy(() => import('./pages/SuperAdmin'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Automations = lazy(() => import('./pages/Automations'));
+const Sequences = lazy(() => import('./pages/Sequences'));
 const Appointments = lazy(() => import('./pages/Appointments'));
 const BookingPage = lazy(() => import('./pages/BookingPage'));
 const TermsAndConditions = lazy(() => import('./pages/TermsAndConditions'));
@@ -80,6 +81,7 @@ function App() {
                         <Route path="/whatsapp" element={<WhatsAppManagement />} />
                         <Route path="/team" element={<Team />} />
                         <Route path="/automations" element={<Automations />} />
+                        <Route path="/sequences" element={<Sequences />} />
                         <Route path="/appointments" element={<Appointments />} />
                         <Route path="/settings" element={<Settings />} />
                         <Route path="/reports" element={<Reports />} />

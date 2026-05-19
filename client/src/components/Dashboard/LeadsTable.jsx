@@ -10,6 +10,30 @@ const SortIcon = ({ sortConfig, column }) => {
         : <i className="fa-solid fa-sort-down text-blue-600 ml-1"></i>;
 };
 
+// Lead-score badge — colour scales with engagement (Mailchimp/HubSpot-style)
+const ScoreBadge = ({ score = 0 }) => {
+    const s = Number(score) || 0;
+    let tier, icon, classes;
+    if (s >= 80) {
+        tier = 'Hot';   icon = 'fa-fire';      classes = 'bg-red-50 text-red-700 ring-red-200';
+    } else if (s >= 40) {
+        tier = 'Warm';  icon = 'fa-sun';       classes = 'bg-amber-50 text-amber-700 ring-amber-200';
+    } else if (s >= 10) {
+        tier = 'Cool';  icon = 'fa-leaf';      classes = 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    } else {
+        tier = 'Cold';  icon = 'fa-snowflake'; classes = 'bg-slate-100 text-slate-500 ring-slate-200';
+    }
+    return (
+        <span
+            title={`${tier} lead · score ${s}`}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ring-1 ${classes}`}
+        >
+            <i className={`fa-solid ${icon} text-[9px]`}></i>
+            {s}
+        </span>
+    );
+};
+
 const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onBulkTag, onRefresh }) => {
     const { user } = useAuth();
     const [selectedIds, setSelectedIds] = useState([]);
@@ -226,6 +250,9 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                                 <th onClick={() => handleSort('name')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition">
                                     Name <SortIcon sortConfig={sortConfig} column="name" />
                                 </th>
+                                <th onClick={() => handleSort('score')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition text-center">
+                                    Score <SortIcon sortConfig={sortConfig} column="score" />
+                                </th>
                                 <th className="px-6 py-4">Status</th>
                                 <th onClick={() => handleSort('nextFollowUpDate')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition">
                                     Next Follow-up <SortIcon sortConfig={sortConfig} column="nextFollowUpDate" />
@@ -278,6 +305,9 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                                                 )}
                                             </div>
                                         </div>
+                                    </td>
+                                    <td className="px-6 py-4 text-center">
+                                        <ScoreBadge score={lead.score} />
                                     </td>
                                     <td className="px-6 py-4">
                                         <select

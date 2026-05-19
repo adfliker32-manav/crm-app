@@ -322,8 +322,17 @@ const WhatsAppTemplateModal = ({ isOpen, onClose, template, onSuccess }) => {
                                         className="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                                     >
                                         <option value="manual">Manual Only</option>
-                                        <option value="on_lead_create">On Lead Create</option>
-                                        <option value="on_stage_change">On Stage Change</option>
+                                        <optgroup label="Lead Lifecycle">
+                                            <option value="on_lead_create">On Lead Create</option>
+                                            <option value="on_stage_change">On Stage Change</option>
+                                        </optgroup>
+                                        <optgroup label="Appointment Reminders">
+                                            <option value="appointment_reminder_24h">24h Before Appointment</option>
+                                            <option value="appointment_reminder_1h">1h Before Appointment</option>
+                                        </optgroup>
+                                        <optgroup label="Re-engagement">
+                                            <option value="lost_lead_recovery">Lost Lead Recovery (30 days)</option>
+                                        </optgroup>
                                     </select>
                                 </div>
 

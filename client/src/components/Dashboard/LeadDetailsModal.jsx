@@ -194,6 +194,19 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                                     <span className="font-semibold text-indigo-300">{lead.qualificationLevel} Lead</span>
                                 </span>
                             )}
+                            {(() => {
+                                const s = Number(lead.score) || 0;
+                                const tier = s >= 80 ? { label: 'Hot', icon: 'fa-fire', color: 'text-red-300', bg: 'bg-red-500/20', border: 'border-red-500/30' }
+                                    : s >= 40 ? { label: 'Warm', icon: 'fa-sun', color: 'text-amber-300', bg: 'bg-amber-500/20', border: 'border-amber-500/30' }
+                                    : s >= 10 ? { label: 'Cool', icon: 'fa-leaf', color: 'text-emerald-300', bg: 'bg-emerald-500/20', border: 'border-emerald-500/30' }
+                                    : { label: 'Cold', icon: 'fa-snowflake', color: 'text-slate-300', bg: 'bg-slate-500/20', border: 'border-slate-500/30' };
+                                return (
+                                    <span title={`Lead score: ${s}`} className={`flex items-center gap-1.5 ${tier.bg} px-2 py-0.5 rounded-full border ${tier.border}`}>
+                                        <i className={`fa-solid ${tier.icon} ${tier.color}`}></i>
+                                        <span className={`font-semibold ${tier.color}`}>{tier.label} · {s}</span>
+                                    </span>
+                                );
+                            })()}
                             {lead.dealValue > 0 && (
                                 <span className="flex items-center gap-1.5 bg-emerald-500/20 px-2 py-0.5 rounded-full">
                                     <i className="fa-solid fa-indian-rupee-sign text-emerald-400"></i>
