@@ -540,6 +540,23 @@ function toAmPm(val) {
     return `${h % 12 || 12}:${String(m).padStart(2,'0')} ${p}`;
 }
 
+function generateSlots(startH, startM, endH, endM) {
+    const slots = [];
+    let h = startH, m = startM;
+    while (h < endH || (h === endH && m <= endM)) {
+        const p = h >= 12 ? 'PM' : 'AM';
+        slots.push(`${h % 12 || 12}:${String(m).padStart(2,'0')} ${p}`);
+        m += 30;
+        if (m >= 60) { m -= 60; h++; }
+    }
+    return slots;
+}
+const MORNING_SLOTS        = generateSlots(7,  0, 11, 30);
+const AFTERNOON_SLOTS      = generateSlots(12, 0, 16, 30);
+const EVENING_SLOTS        = generateSlots(17, 0, 21,  0);
+const BUSINESS_HOURS_SLOTS = generateSlots(9,  0, 17,  0);
+const ALL_PRESET_SLOTS     = [...MORNING_SLOTS, ...AFTERNOON_SLOTS, ...EVENING_SLOTS];
+
 function BookingPageCustomizer() {
     const { showSuccess, showError } = useNotification();
     const [config, setConfig]       = useState(null);
@@ -644,7 +661,16 @@ function BookingPageCustomizer() {
         if (!timeSlots.find(s => s.time === formatted)) setTimeSlots(p => [...p, { time: formatted }]);
         setNewTime('');
     };
-    const removeTimeSlot = t => setTimeSlots(p => p.filter(s => s.time !== t));
+    const removeTimeSlot   = t => setTimeSlots(p => p.filter(s => s.time !== t));
+    const toggleTimeSlot   = t => setTimeSlots(p =>
+        p.some(s => s.time === t) ? p.filter(s => s.time !== t) : [...p, { time: t }]
+    );
+    const selectGroup = slots => setTimeSlots(p => {
+        const allSelected = slots.every(t => p.some(s => s.time === t));
+        if (allSelected) return p.filter(s => !slots.includes(s.time));
+        const missing = slots.filter(t => !p.some(s => s.time === t)).map(t => ({ time: t }));
+        return [...p, ...missing];
+    });
     const toggleDay = n => setAvailableDays(p =>
         p.includes(n) ? p.filter(d => d !== n) : [...p, n].sort()
     );
@@ -945,32 +971,69 @@ function BookingPageCustomizer() {
                     {activeSection === 'slots' && (
                         <>
                         <CSection icon="fa-clock" title="Time Slots"
-                            desc="Define the appointment times customers can choose from.">
-                            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-4 min-h-[44px]">
-                                {timeSlots.length === 0 && (
-                                    <p className="text-slate-300 text-sm col-span-4">No time slots added yet.</p>
-                                )}
-                                {timeSlots.map(slot => (
-                                    <div key={slot.time}
-                                        className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
-                                        <span className="text-xs font-semibold text-slate-700">{slot.time}</span>
-                                        <button onClick={() => removeTimeSlot(slot.time)}
-                                            className="text-slate-300 hover:text-red-400 transition-colors ml-2">
-                                            <i className="fa-solid fa-xmark text-[10px]"></i>
+                            desc="Click any slot to toggle it on or off. Use quick-select to pick groups at once.">
+
+                            {/* Quick-select row */}
+                            <div className="flex flex-wrap items-center gap-2 mb-5 pb-4 border-b border-slate-100">
+                                <span className="text-xs font-semibold text-slate-400 mr-1">Quick select:</span>
+                                {[
+                                    { label: '🌅 Morning',       slots: MORNING_SLOTS },
+                                    { label: '☀️ Afternoon',     slots: AFTERNOON_SLOTS },
+                                    { label: '🌙 Evening',       slots: EVENING_SLOTS },
+                                    { label: '💼 Business Hours', slots: BUSINESS_HOURS_SLOTS },
+                                    { label: 'All Day',          slots: ALL_PRESET_SLOTS },
+                                ].map(({ label, slots }) => {
+                                    const allOn = slots.every(t => timeSlots.some(s => s.time === t));
+                                    return (
+                                        <button key={label} onClick={() => selectGroup(slots)}
+                                            className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                                                allOn
+                                                ? 'bg-blue-600 border-blue-600 text-white'
+                                                : 'border-slate-200 text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600'
+                                            }`}>
+                                            {label}
                                         </button>
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="flex gap-2">
-                                <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)}
-                                    className={`${iCls} flex-1`} />
-                                <button onClick={addTimeSlot}
-                                    className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-colors">
-                                    + Add
+                                    );
+                                })}
+                                <button onClick={() => setTimeSlots([])}
+                                    className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-red-100 text-red-400 hover:bg-red-50 hover:border-red-300 transition-colors ml-auto">
+                                    Clear All
                                 </button>
                             </div>
-                            <p className="text-xs text-slate-400 mt-2">
-                                Use the time picker to add slots. Times auto-format to AM/PM.
+
+                            {/* Slot grid grouped by period */}
+                            {[
+                                { label: 'Morning',   icon: 'fa-sun',       slots: MORNING_SLOTS },
+                                { label: 'Afternoon', icon: 'fa-cloud-sun', slots: AFTERNOON_SLOTS },
+                                { label: 'Evening',   icon: 'fa-moon',      slots: EVENING_SLOTS },
+                            ].map(group => (
+                                <div key={group.label} className="mb-5">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <i className={`fa-solid ${group.icon} text-slate-400 text-xs`}></i>
+                                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{group.label}</span>
+                                    </div>
+                                    <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+                                        {group.slots.map(slot => {
+                                            const active = timeSlots.some(s => s.time === slot);
+                                            return (
+                                                <button key={slot} onClick={() => toggleTimeSlot(slot)}
+                                                    className={`text-xs font-semibold py-2.5 px-1 rounded-xl border transition-all text-center select-none ${
+                                                        active
+                                                        ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                                                        : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50'
+                                                    }`}>
+                                                    {slot}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            ))}
+
+                            <p className="text-xs text-slate-400 mt-1">
+                                {timeSlots.length === 0
+                                    ? 'No slots selected yet.'
+                                    : `${timeSlots.length} slot${timeSlots.length !== 1 ? 's' : ''} selected`}
                             </p>
                         </CSection>
                         <SectionNav currentId="slots" onNavigate={setActiveSection} onSave={handleSave} saving={saving} />
