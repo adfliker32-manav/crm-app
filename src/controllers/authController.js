@@ -60,6 +60,8 @@ const buildGoogleUserResponse = (user, workspace) => ({
     termsAccepted: !!user.termsAcceptedAt
 });
 
+const getJwtSecret = () => process.env.JWT_SECRET;
+
 const signAuthToken = (user, rememberMe = false) => {
     const expiresIn = rememberMe ? '30d' : TOKEN_EXPIRY;
     return jwt.sign(buildAuthPayload(user), getJwtSecret(), { expiresIn });
