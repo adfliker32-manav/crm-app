@@ -131,7 +131,7 @@ const EmailManagement = () => {
                 className="mx-8 mb-8 bg-white border border-slate-200 border-t-0 rounded-b-2xl shadow-sm overflow-hidden"
                 style={{ height: 'calc(100vh - ' + (showStats ? '310px' : '200px') + ')' }}
             >
-                <div className="h-full overflow-y-auto">
+                <div className={`h-full ${activeTab === 'inbox' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
                     {activeTab === 'inbox'     && <EmailInbox />}
                     {activeTab === 'templates' && <EmailTemplates />}
                     {activeTab === 'analytics' && <EmailAnalytics />}

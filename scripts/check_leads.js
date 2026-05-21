@@ -15,10 +15,14 @@ const checkLeads = async () => {
         if (leads.length > 0) {
             console.log('Leads found:');
             leads.forEach((lead, index) => {
-                console.log(`${index + 1}. ${lead.name} | ${lead.phone} | ${lead.email || 'No email'}`);
+                console.log(`${index + 1}. Name: ${lead.name} | Phone: ${lead.phone} | Email: ${lead.email || 'No email'}`);
+                console.log(`   Source: ${lead.source || 'No source'} | Status: ${lead.status || 'New'}`);
                 console.log(`   User ID: ${lead.userId}`);
-                console.log(`   Status: ${lead.status || 'New'}`);
-                console.log(`   Created: ${lead.date || lead.createdAt}\n`);
+                console.log(`   Created: ${lead.date || lead.createdAt}`);
+                if (lead.name === 'Unknown' || lead.phone === null) {
+                    console.log(`   Notes: ${JSON.stringify(lead.notes)}`);
+                }
+                console.log();
             });
         } else {
             console.log('❌ No leads found in database!');

@@ -107,7 +107,7 @@ const renderPublicBookingPage = (slug) => {
           }
 
           if (state.done) {
-            const tyMsg = (state.page?.thankYouMessage || '').replace(/\{\{name\}\}/gi, esc(state.name));
+            const tyMsg = esc(state.page?.thankYouMessage || '').replace(/\{\{name\}\}/gi, esc(state.name));
             root.innerHTML = \`
               <div class="min-h-screen flex items-center justify-center p-6">
                 <div class="bg-white border border-slate-200 rounded-3xl p-10 shadow-sm text-center max-w-md w-full">
