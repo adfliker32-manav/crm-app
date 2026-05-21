@@ -39,10 +39,10 @@ export const AuthProvider = ({ children }) => {
             .catch(() => { /* silent — stale cache is better than broken UI */ });
     }, []);
 
-    const login = async (email, password) => {
+    const login = async (email, password, rememberMe = false) => {
         try {
             // Adjust endpoint if needed (current: /api/auth/login)
-            const res = await api.post('/auth/login', { email, password });
+            const res = await api.post('/auth/login', { email, password, rememberMe });
             const { token, role, user } = res.data;
 
             // Ensure role is included in user object for localStorage

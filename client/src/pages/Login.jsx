@@ -6,6 +6,7 @@ import { GoogleLogin } from '@react-oauth/google';
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { login, googleLogin } = useAuth();
@@ -16,7 +17,7 @@ const Login = () => {
     setError('');
     setIsLoading(true);
 
-    const result = await login(email, password);
+    const result = await login(email, password, rememberMe);
 
     if (result.success) {
       if (result.role === 'superadmin') navigate('/super-admin');
@@ -170,8 +171,14 @@ const Login = () => {
               </div>
 
               <div className="flex items-center gap-2 pt-2">
-                <input type="checkbox" className="w-4 h-4 text-green-600" />
-                <label className="text-sm text-gray-600">
+                <input
+                  type="checkbox"
+                  id="rememberMe"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
+                />
+                <label htmlFor="rememberMe" className="text-sm text-gray-600 cursor-pointer select-none">
                   Keep me signed in
                 </label>
               </div>

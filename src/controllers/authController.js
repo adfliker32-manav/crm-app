@@ -60,10 +60,10 @@ const buildGoogleUserResponse = (user, workspace) => ({
     termsAccepted: !!user.termsAcceptedAt
 });
 
-const getJwtSecret = () => process.env.JWT_SECRET;
-
-const signAuthToken = (user) =>
-    jwt.sign(buildAuthPayload(user), getJwtSecret(), { expiresIn: TOKEN_EXPIRY });
+const signAuthToken = (user, rememberMe = false) => {
+    const expiresIn = rememberMe ? '30d' : TOKEN_EXPIRY;
+    return jwt.sign(buildAuthPayload(user), getJwtSecret(), { expiresIn });
+};
 
 // password hashing is now handled by User model hooks
 
@@ -128,7 +128,7 @@ exports.getMe = async (req, res) => {
 // 2. LOGIN (Purana User)
 exports.login = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { email, password, rememberMe } = req.body;
 
         if (!email || !password) {
             return res.status(400).json({ message: 'Email and password are required' });
@@ -163,7 +163,7 @@ exports.login = async (req, res) => {
             return res.status(500).json({ error: 'Server configuration error' });
         }
 
-        const token = signAuthToken(user);
+        const token = signAuthToken(user, !!rememberMe);
 
         auditLogger.log({
             actor: user,
@@ -242,7 +242,7 @@ exports.googleLogin = async (req, res) => {
             return res.status(500).json({ error: 'Server configuration error' });
         }
 
-        const token = signAuthToken(user);
+        const token = signAuthToken(user, true);
 
         res.json({
             token,
