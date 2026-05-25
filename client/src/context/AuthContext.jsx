@@ -30,9 +30,13 @@ export const AuthProvider = ({ children }) => {
         api.get('/auth/me')
             .then(res => {
                 const fresh = res.data?.user;
+                const refreshedToken = res.data?.token;
                 if (fresh) {
                     const merged = { ...JSON.parse(localStorage.getItem('user') || '{}'), ...fresh };
                     localStorage.setItem('user', JSON.stringify(merged));
+                    // Backend returns a refreshed token for sliding rememberMe sessions.
+                    // Save it so the session slides forward on every visit.
+                    if (refreshedToken) localStorage.setItem('token', refreshedToken);
                     setUser(merged);
                 }
             })

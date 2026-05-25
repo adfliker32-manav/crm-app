@@ -64,7 +64,10 @@ const getJwtSecret = () => process.env.JWT_SECRET;
 
 const signAuthToken = (user, rememberMe = false) => {
     const expiresIn = rememberMe ? '30d' : TOKEN_EXPIRY;
-    return jwt.sign(buildAuthPayload(user), getJwtSecret(), { expiresIn });
+    // Carry the rememberMe choice forward in the JWT so /auth/me can re-issue
+    // a fresh long-lived token on each visit (sliding session).
+    const payload = { ...buildAuthPayload(user), remember: !!rememberMe };
+    return jwt.sign(payload, getJwtSecret(), { expiresIn });
 };
 
 // password hashing is now handled by User model hooks
@@ -120,7 +123,15 @@ exports.getMe = async (req, res) => {
         if (!user) return res.status(404).json({ message: 'User not found' });
 
         const workspace = await getWorkspaceForUser(user);
-        res.json({ user: buildLoginUserResponse(user, workspace) });
+        const response = { user: buildLoginUserResponse(user, workspace) };
+
+        // Sliding session: if the original login was a rememberMe login, refresh
+        // the token to a new 30-day window so active users never get logged out.
+        if (req.user.remember === true) {
+            response.token = signAuthToken(user, true);
+        }
+
+        res.json(response);
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Server error' });
