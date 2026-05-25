@@ -769,26 +769,84 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                 )}
 
                                 {selectedNode.data.blockType === 'question' && (
-                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-4">
-                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Save Answer As Variable</label>
-                                        <input
-                                            value={selectedNode.data.variableName || ''}
-                                            onChange={(e) => updateSelectedNodeData({ variableName: e.target.value.toLowerCase().replace(/\s+/g, '_') })}
-                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 shadow-sm focus:ring-2 focus:ring-teal-500"
-                                            placeholder="e.g., email, company_name, phone"
-                                        />
-                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Expected Input Type</label>
-                                        <select
-                                            value={selectedNode.data.expectedType || 'any'}
-                                            onChange={(e) => updateSelectedNodeData({ expectedType: e.target.value })}
-                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
-                                        >
-                                            <option value="any">Any text</option>
-                                            <option value="text">Letters only</option>
-                                            <option value="number">Number</option>
-                                            <option value="email">Email address</option>
-                                            <option value="phone">Phone number</option>
-                                        </select>
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-4 space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Save Answer As Variable</label>
+                                            <input
+                                                value={selectedNode.data.variableName || ''}
+                                                onChange={(e) => updateSelectedNodeData({ variableName: e.target.value.toLowerCase().replace(/\s+/g, '_') })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                placeholder="e.g., email, company_name, phone"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Expected Input Type</label>
+                                            <select
+                                                value={selectedNode.data.expectedType || 'any'}
+                                                onChange={(e) => updateSelectedNodeData({ expectedType: e.target.value })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                            >
+                                                <option value="any">Any text</option>
+                                                <option value="text">Letters only</option>
+                                                <option value="number">Number</option>
+                                                <option value="email">Email address</option>
+                                                <option value="phone">Phone number</option>
+                                            </select>
+                                        </div>
+                                        {/* No-Reply Timeout */}
+                                        <div className="bg-orange-50 p-3 rounded-lg border border-orange-200">
+                                            <label className="flex items-center gap-2 cursor-pointer mb-2">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!(selectedNode.data.noReplyTimeoutSeconds > 0)}
+                                                    onChange={(e) => {
+                                                        if (!e.target.checked) {
+                                                            updateSelectedNodeData({ noReplyTimeoutSeconds: 0, noReplyTimeoutDuration: 0, noReplyTimeoutUnit: 'minutes' });
+                                                        } else {
+                                                            updateSelectedNodeData({ noReplyTimeoutSeconds: 1800, noReplyTimeoutDuration: 30, noReplyTimeoutUnit: 'minutes' });
+                                                        }
+                                                    }}
+                                                    className="w-4 h-4 accent-orange-500"
+                                                />
+                                                <span className="text-sm font-semibold text-orange-700">Auto-continue if no reply</span>
+                                            </label>
+                                            {selectedNode.data.noReplyTimeoutSeconds > 0 && (
+                                                <>
+                                                    <div className="flex gap-2 mt-2">
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            max="9999"
+                                                            value={selectedNode.data.noReplyTimeoutDuration || 30}
+                                                            onChange={(e) => {
+                                                                const duration = Math.max(1, parseInt(e.target.value) || 1);
+                                                                const unit = selectedNode.data.noReplyTimeoutUnit || 'minutes';
+                                                                const secs = { seconds: 1, minutes: 60, hours: 3600 };
+                                                                updateSelectedNodeData({ noReplyTimeoutDuration: duration, noReplyTimeoutSeconds: duration * (secs[unit] || 60) });
+                                                            }}
+                                                            className="w-24 px-2 py-1.5 border border-orange-300 rounded-lg text-sm font-bold text-center focus:ring-2 focus:ring-orange-400 bg-white"
+                                                        />
+                                                        <select
+                                                            value={selectedNode.data.noReplyTimeoutUnit || 'minutes'}
+                                                            onChange={(e) => {
+                                                                const unit = e.target.value;
+                                                                const duration = selectedNode.data.noReplyTimeoutDuration || 30;
+                                                                const secs = { seconds: 1, minutes: 60, hours: 3600 };
+                                                                updateSelectedNodeData({ noReplyTimeoutUnit: unit, noReplyTimeoutSeconds: duration * (secs[unit] || 60) });
+                                                            }}
+                                                            className="flex-1 px-2 py-1.5 border border-orange-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-400 bg-white"
+                                                        >
+                                                            <option value="seconds">Seconds</option>
+                                                            <option value="minutes">Minutes</option>
+                                                            <option value="hours">Hours</option>
+                                                        </select>
+                                                    </div>
+                                                    <p className="text-xs text-orange-600 mt-2">
+                                                        If no reply in {selectedNode.data.noReplyTimeoutDuration || 30} {selectedNode.data.noReplyTimeoutUnit || 'minutes'}, flow continues automatically to the next node.
+                                                    </p>
+                                                </>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
 

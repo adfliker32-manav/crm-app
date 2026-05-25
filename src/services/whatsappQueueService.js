@@ -23,10 +23,10 @@ const defineWhatsAppJobs = (agenda) => {
     sharedAgenda = agenda;
 
     // ── Job 1: resume-chatbot-session ────────────────────────────────────────
-    // Fires when a chatbot delay node timer expires.
+    // Fires when a chatbot delay node timer expires OR a no-reply timeout fires.
     // Resumes the flow from the next node after the delay.
     agenda.define('resume-chatbot-session', { priority: 'normal', concurrency: 10 }, async (job) => {
-        const { sessionId, flowId, nextNodeId, cancelIfReplied, scheduledAt } = job.attrs.data;
+        const { sessionId, flowId, nextNodeId, cancelIfReplied, scheduledAt, isNoReplyTimeout, questionNodeId } = job.attrs.data;
         try {
             const ChatbotSession = mongoose.model('ChatbotSession');
             const chatbotEngineService = require('./chatbotEngineService');
@@ -35,6 +35,32 @@ const defineWhatsAppJobs = (agenda) => {
 
             if (!session || session.status !== 'active') {
                 console.log(`⏱️ [Queue] Skipping delayed node ${nextNodeId} — session ${sessionId} no longer active`);
+                await job.remove();
+                return;
+            }
+
+            // ── No-Reply Timeout Guard ────────────────────────────────────────
+            // If this job was scheduled as a no-reply timeout on a question node,
+            // skip it if the customer already answered (session moved past that node).
+            // Atomic check-and-update: prevents a race where a near-simultaneous
+            // customer reply would otherwise cause the next node to run twice.
+            if (isNoReplyTimeout && questionNodeId) {
+                const advanced = await ChatbotSession.findOneAndUpdate(
+                    { _id: sessionId, currentNodeId: questionNodeId, status: 'active' },
+                    { $set: { currentNodeId: nextNodeId } },
+                    { new: true }
+                );
+                if (!advanced) {
+                    console.log(`⏱️ [Queue] No-reply timeout for node ${questionNodeId} skipped — customer already replied or session inactive`);
+                    await job.remove();
+                    return;
+                }
+                console.log(`⏱️ [Queue] No-reply timeout fired for question node ${questionNodeId} — advancing session to ${nextNodeId}`);
+                const ChatbotFlow = mongoose.model('ChatbotFlow');
+                const flow = await ChatbotFlow.findById(flowId).lean();
+                if (flow && Array.isArray(flow.nodes) && chatbotEngineService.resumeExecution) {
+                    await chatbotEngineService.resumeExecution(advanced, flow, nextNodeId);
+                }
                 await job.remove();
                 return;
             }
@@ -216,6 +242,51 @@ exports.scheduleDelayNode = async (sessionId, flowId, nextNodeId, delaySeconds, 
         console.log(`⏱️ [Queue] Scheduled delay for node ${nextNodeId} in ${delaySeconds}s (cancelIfReplied=${cancelIfReplied})`);
     } catch (err) {
         console.error('❌ [Queue] scheduleDelayNode error:', err.message);
+    }
+};
+
+/**
+ * Schedule a no-reply timeout on a question node.
+ * If the customer doesn't reply within timeoutSeconds, the flow auto-advances to nextNodeId.
+ */
+exports.scheduleNoReplyTimeout = async (sessionId, flowId, questionNodeId, nextNodeId, timeoutSeconds) => {
+    if (!sharedAgenda) {
+        console.error('❌ [Queue] scheduleNoReplyTimeout called but sharedAgenda not initialized.');
+        return;
+    }
+    try {
+        const runAt = new Date(Date.now() + timeoutSeconds * 1000);
+        await sharedAgenda.schedule(runAt, 'resume-chatbot-session', {
+            sessionId,
+            flowId,
+            nextNodeId,
+            isNoReplyTimeout: true,
+            questionNodeId
+        });
+        console.log(`⏱️ [Queue] No-reply timeout scheduled for question node ${questionNodeId} → ${nextNodeId} in ${timeoutSeconds}s`);
+    } catch (err) {
+        console.error('❌ [Queue] scheduleNoReplyTimeout error:', err.message);
+    }
+};
+
+/**
+ * Cancel a pending no-reply timeout for a specific session + question node.
+ * Called when the customer actually replies before the timeout fires.
+ */
+exports.cancelNoReplyTimeout = async (sessionId, questionNodeId) => {
+    if (!sharedAgenda) return;
+    try {
+        const removed = await sharedAgenda.cancel({
+            name: 'resume-chatbot-session',
+            'data.sessionId': sessionId,
+            'data.isNoReplyTimeout': true,
+            'data.questionNodeId': questionNodeId
+        });
+        if (removed > 0) {
+            console.log(`✅ [Queue] Cancelled no-reply timeout for session ${sessionId} node ${questionNodeId}`);
+        }
+    } catch (err) {
+        console.error('❌ [Queue] cancelNoReplyTimeout error:', err.message);
     }
 };
 

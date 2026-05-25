@@ -1128,7 +1128,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             if (expectedType !== 'any' && expectedType !== 'text') {
                 let isValid = true;
                 let validationMsg = '';
-                
+
                 if (expectedType === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userResponse)) {
                     isValid = false;
                     validationMsg = 'Please enter a valid email address (e.g. name@example.com)';
@@ -1139,7 +1139,7 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                     isValid = false;
                     validationMsg = 'Please enter a valid phone number.';
                 }
-                
+
                 if (!isValid) {
                     if (conversation) {
                         const valResult = await sendWhatsAppTextMessage(conversation.phone, validationMsg, session.userId);
@@ -1148,7 +1148,12 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                     return { success: true }; // Stay on the same node, wait for valid input
                 }
             }
-            
+
+            // Cancel any pending no-reply timeout for this question node (customer replied in time)
+            if (currentNode.data.noReplyTimeoutSeconds > 0) {
+                whatsappQueueService.cancelNoReplyTimeout(session._id.toString(), currentNode.id).catch(() => {});
+            }
+
             // Store answer in variables
             const variableName = currentNode.data.variableName || 'answer';
             session.variables.set(variableName, userResponse);
@@ -1390,13 +1395,25 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 }
                 break;
 
-            case 'question':
+            case 'question': {
                 // Send question and wait for response
                 const questionText = replaceVariables(node.data.text, session.variables);
                 const questionResult = await sendWhatsAppTextMessage(conversation.phone, questionText, session.userId);
                 await saveBotMessage(session.conversationId, session.userId, questionText, 'text', questionResult);
+
+                // If a no-reply timeout is configured, schedule auto-advance
+                if (node.data.noReplyTimeoutSeconds > 0 && node.data.nextNodeId) {
+                    await whatsappQueueService.scheduleNoReplyTimeout(
+                        session._id.toString(),
+                        flow._id.toString(),
+                        node.id,
+                        node.data.nextNodeId,
+                        node.data.noReplyTimeoutSeconds
+                    );
+                }
                 // Session will wait for user response
                 break;
+            }
 
             case 'request_media':
                 // Prompt the user to upload a file. Session waits for the next inbound
