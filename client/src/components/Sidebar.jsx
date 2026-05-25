@@ -52,8 +52,13 @@ const Sidebar = () => {
 
     const canManageTeam = ['superadmin', 'agency', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
 
-    // Workspace-level Plan Feature Check
-    const hasModule = (moduleName) => user?.activeModules ? user.activeModules.includes(moduleName) : true;
+    // Workspace-level Plan Feature Check. Superadmin/agency are not bound by
+    // workspace plans — they have no WorkspaceSettings doc, so activeModules
+    // arrives as [] and must not gate the sidebar.
+    const hasModule = (moduleName) => {
+        if (user?.role === 'superadmin' || user?.role === 'agency') return true;
+        return user?.activeModules?.length ? user.activeModules.includes(moduleName) : true;
+    };
 
     const hasWhatsApp = (canManageTeam || user?.permissions?.viewWhatsApp === true) && hasModule('whatsapp');
     const isWhatsAppPage = location.pathname.startsWith('/whatsapp');
