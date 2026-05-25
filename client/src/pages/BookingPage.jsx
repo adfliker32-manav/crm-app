@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars */
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 
@@ -37,9 +37,9 @@ function getHour24(timeStr) {
 
 function groupSlots(slots) {
     const groups = [
-        { label: 'Morning',   icon: 'fa-sun',      slots: [] },
-        { label: 'Afternoon', icon: 'fa-cloud-sun', slots: [] },
-        { label: 'Evening',   icon: 'fa-moon',      slots: [] },
+        { label: 'Morning',   slots: [] },
+        { label: 'Afternoon', slots: [] },
+        { label: 'Evening',   slots: [] },
     ];
     slots.forEach(slot => {
         const h = getHour24(slot.time);
@@ -47,42 +47,42 @@ function groupSlots(slots) {
         else if (h < 17) groups[1].slots.push(slot);
         else             groups[2].slots.push(slot);
     });
-    // Sort each group earliest first
     groups.forEach(g => g.slots.sort((a, b) => getHour24(a.time) - getHour24(b.time)));
     return groups.filter(g => g.slots.length > 0);
 }
 
+const INPUT_CLS = 'w-full border border-slate-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none transition-colors bg-white text-slate-800 placeholder:text-slate-400';
+
 function CustomQuestionField({ question, value, onChange, primaryColor }) {
-    const label    = `${question.question}${question.required ? ' *' : ''}`;
-    const inputCls = 'w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none transition-colors bg-white';
-    const onFocus  = e => { e.target.style.borderColor = primaryColor; };
-    const onBlur   = e => { e.target.style.borderColor = '#e2e8f0'; };
+    const label   = `${question.question}${question.required ? ' *' : ''}`;
+    const onFocus = e => { e.target.style.borderColor = primaryColor; };
+    const onBlur  = e => { e.target.style.borderColor = '#e2e8f0'; };
 
     if (question.type === 'textarea') return (
         <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5">{label}</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5">{label}</label>
             <textarea value={value} onChange={e => onChange(e.target.value)} rows={3}
-                placeholder="Your answer…" className={`${inputCls} resize-none`}
+                placeholder="Your answer" className={`${INPUT_CLS} resize-none`}
                 onFocus={onFocus} onBlur={onBlur} />
         </div>
     );
     if (question.type === 'select') return (
         <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5">{label}</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5">{label}</label>
             <select value={value} onChange={e => onChange(e.target.value)}
-                className={inputCls} onFocus={onFocus} onBlur={onBlur}>
-                <option value="">Select an option…</option>
+                className={INPUT_CLS} onFocus={onFocus} onBlur={onBlur}>
+                <option value="">Select an option</option>
                 {(question.options || []).map(opt => <option key={opt} value={opt}>{opt}</option>)}
             </select>
         </div>
     );
     return (
         <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5">{label}</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5">{label}</label>
             <input
                 type={question.type === 'email' ? 'email' : question.type === 'phone' ? 'tel' : 'text'}
                 value={value} onChange={e => onChange(e.target.value)}
-                placeholder="Your answer…" className={inputCls}
+                placeholder="Your answer" className={INPUT_CLS}
                 onFocus={onFocus} onBlur={onBlur} />
         </div>
     );
@@ -137,10 +137,10 @@ export default function BookingPage() {
 
     const handleDateSelect = (d) => { setSelectedDate(d); fetchSlots(d); };
     const primaryColor     = (page?.primaryColor && page.primaryColor.trim()) ? page.primaryColor.trim() : '#3b82f6';
+    const tintBg           = `${primaryColor}14`; // ~8% alpha tint of brand color
     const canContinue      = selectedService && selectedDate && selectedTime;
 
     const handleSubmit = async () => {
-        // Dismiss keyboard immediately so viewport reflow doesn't displace the button
         if (document.activeElement) document.activeElement.blur();
         if (!name.trim() || !phone.trim()) { setSubmitError('Name and phone number are required.'); return; }
         for (const q of (page?.customQuestions || []).filter(q => q.required)) {
@@ -166,239 +166,190 @@ export default function BookingPage() {
     };
 
     if (loading) return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-            <div className="text-center">
-                <div className="w-10 h-10 border-4 border-t-transparent rounded-full animate-spin mx-auto mb-3"
-                    style={{ borderColor: primaryColor || '#3b82f6', borderTopColor: 'transparent' }}></div>
-                <p className="text-slate-400 text-sm">Loading…</p>
-            </div>
+        <div className="min-h-screen bg-white flex items-center justify-center">
+            <div className="w-8 h-8 border-2 rounded-full animate-spin"
+                style={{ borderColor: '#e2e8f0', borderTopColor: primaryColor }}></div>
         </div>
     );
 
     if (error) return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+        <div className="min-h-screen bg-white flex items-center justify-center px-4">
             <div className="text-center">
-                <i className="fa-solid fa-calendar-xmark text-4xl text-slate-300 mb-4 block"></i>
-                <h2 className="text-lg font-bold text-slate-700 mb-1">Page Not Found</h2>
+                <h2 className="text-lg font-semibold text-slate-800 mb-1">Page not found</h2>
                 <p className="text-slate-500 text-sm">{error}</p>
             </div>
         </div>
     );
 
-    const inputCls = 'w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none transition-colors bg-white';
-    const onFocus  = e => { e.target.style.borderColor = primaryColor; };
-    const onBlur   = e => { e.target.style.borderColor = '#e2e8f0'; };
+    const onInputFocus = e => { e.target.style.borderColor = primaryColor; };
+    const onInputBlur  = e => { e.target.style.borderColor = '#e2e8f0'; };
+
+    const selectedStyle = {
+        borderColor: primaryColor,
+        color: primaryColor,
+        backgroundColor: tintBg,
+    };
+    const unselectedStyle = {
+        borderColor: '#e2e8f0',
+        color: '#475569',
+        backgroundColor: '#ffffff',
+    };
+    const touchProps = { touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' };
 
     return (
-        <div className="min-h-screen bg-slate-100">
+        <div className="min-h-screen bg-white">
 
-            {/* ── Header ── */}
-            <div style={{ backgroundColor: primaryColor }} className="px-5 pt-10 pb-10 text-white text-center">
-                {page.logoUrl ? (
-                    <img src={page.logoUrl} alt="logo"
-                        className="w-14 h-14 object-contain rounded-2xl mx-auto mb-3 bg-white/20 p-1.5" />
-                ) : (
-                    <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mx-auto mb-3">
-                        <i className="fa-solid fa-calendar-check text-2xl"></i>
-                    </div>
+            {/* Thin brand accent strip */}
+            <div className="h-1 w-full" style={{ backgroundColor: primaryColor }} />
+
+            {/* Header — centered, restrained */}
+            <header className="px-5 pt-10 pb-6 text-center max-w-lg mx-auto">
+                {page.logoUrl && (
+                    <img src={page.logoUrl} alt=""
+                        className="w-14 h-14 object-contain rounded-2xl mx-auto mb-4 border border-slate-100 p-1.5 bg-white" />
                 )}
-                <h1 className="text-xl font-extrabold tracking-tight">{page.title}</h1>
-                {page.subtitle && <p className="text-white/75 mt-1 text-sm leading-relaxed max-w-xs mx-auto">{page.subtitle}</p>}
+                <h1 className="text-2xl font-bold text-slate-900 tracking-tight">{page.title}</h1>
+                {page.subtitle && (
+                    <p className="text-slate-500 mt-1.5 text-sm leading-relaxed max-w-sm mx-auto">{page.subtitle}</p>
+                )}
                 {page.businessName && (
-                    <p className="mt-2.5 text-xs font-semibold text-white/60 uppercase tracking-widest">{page.businessName}</p>
+                    <p className="mt-3 text-[11px] font-medium text-slate-400 uppercase tracking-widest">{page.businessName}</p>
                 )}
-            </div>
+            </header>
 
-            {/* ── Step indicator ── */}
+            {/* Step indicator (steps 1 & 2 only) */}
             {step !== 3 && (
-                <div style={{ backgroundColor: primaryColor }} className="px-4 pb-4">
-                    <div className="max-w-lg mx-auto flex items-center justify-center gap-3">
-                        {[{ n: 1, label: 'Choose Slot' }, { n: 2, label: 'Your Details' }].map((s, i) => (
-                            <div key={s.n} className="flex items-center gap-3">
-                                <div className="flex items-center gap-2">
-                                    <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                                        step >= s.n ? 'bg-white' : 'bg-white/20 text-white/50'
-                                    }`} style={step >= s.n ? { color: primaryColor } : {}}>
-                                        {step > s.n ? <i className="fa-solid fa-check text-[10px]"></i> : s.n}
-                                    </div>
-                                    <span className={`text-xs font-semibold ${step >= s.n ? 'text-white' : 'text-white/40'}`}>
-                                        {s.label}
-                                    </span>
-                                </div>
-                                {i === 0 && <div className="w-10 h-0.5 bg-white/25 rounded"></div>}
+                <div className="max-w-lg mx-auto px-5 pb-4 flex items-center justify-center gap-3">
+                    {[{ n: 1, label: 'Choose slot' }, { n: 2, label: 'Your details' }].map((s, i, arr) => (
+                        <React.Fragment key={s.n}>
+                            <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full transition-colors ${step >= s.n ? '' : 'bg-slate-200'}`}
+                                    style={step >= s.n ? { backgroundColor: primaryColor } : {}} />
+                                <span className={`text-xs font-medium transition-colors ${step >= s.n ? 'text-slate-800' : 'text-slate-400'}`}>
+                                    {s.label}
+                                </span>
                             </div>
-                        ))}
-                    </div>
+                            {i < arr.length - 1 && <div className="w-6 h-px bg-slate-200"></div>}
+                        </React.Fragment>
+                    ))}
                 </div>
             )}
 
-            <div className={`max-w-lg mx-auto px-4 pt-4 ${step === 1 ? 'pb-32' : 'pb-10'}`}>
+            <div className={`max-w-lg mx-auto px-5 ${step === 1 ? 'pb-32' : 'pb-12'}`}>
 
                 {/* ── Step 3: Success ── */}
                 {step === 3 && (
-                    <div className="pt-4">
-                        <div className="bg-white rounded-2xl border border-slate-100 p-7 text-center">
-                            <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
-                                style={{ backgroundColor: primaryColor }}>
-                                <i className="fa-solid fa-check text-white text-2xl"></i>
-                            </div>
-                            <h2 className="text-xl font-extrabold text-slate-800 mb-1">Booking Confirmed!</h2>
-                            <p className="text-slate-500 text-sm leading-relaxed mb-5 max-w-xs mx-auto">
-                                {page.thankYouMessage
-                                    ? page.thankYouMessage.replace('{{name}}', name)
-                                    : `Hi ${name}, your appointment has been confirmed. See you soon!`}
-                            </p>
-                            <div className="bg-slate-50 rounded-xl p-4 text-left space-y-3 border border-slate-100">
-                                {[
-                                    { icon: 'fa-briefcase', label: 'Service', val: selectedService },
-                                    { icon: 'fa-calendar',  label: 'Date',    val: formatFullDate(selectedDate) },
-                                    { icon: 'fa-clock',     label: 'Time',    val: selectedTime },
-                                ].map(row => (
-                                    <div key={row.label} className="flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                                            style={{ backgroundColor: primaryColor }}>
-                                            <i className={`fa-solid ${row.icon} text-white text-xs`}></i>
-                                        </div>
-                                        <div>
-                                            <p className="text-[11px] text-slate-400">{row.label}</p>
-                                            <p className="text-sm font-bold text-slate-700">{row.val}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="flex items-center justify-center gap-2 mt-5 text-sm text-green-600 font-semibold">
-                                <i className="fa-brands fa-whatsapp text-lg"></i>
-                                Confirmation sent to WhatsApp
-                            </div>
+                    <div className="pt-2 text-center">
+                        <div className="w-14 h-14 rounded-full mx-auto mb-5 flex items-center justify-center"
+                            style={{ backgroundColor: primaryColor }}>
+                            <i className="fa-solid fa-check text-white text-xl"></i>
+                        </div>
+                        <h2 className="text-xl font-bold text-slate-900">Booking confirmed</h2>
+                        <p className="text-slate-500 text-sm mt-2 max-w-xs mx-auto leading-relaxed">
+                            {page.thankYouMessage
+                                ? page.thankYouMessage.replace('{{name}}', name)
+                                : `Hi ${name}, your appointment is confirmed.`}
+                        </p>
+
+                        <div className="mt-6 text-left max-w-sm mx-auto divide-y divide-slate-100 border border-slate-200 rounded-xl">
+                            {[
+                                { label: 'Service', val: selectedService },
+                                { label: 'Date',    val: formatFullDate(selectedDate) },
+                                { label: 'Time',    val: selectedTime },
+                            ].map(row => row.val && (
+                                <div key={row.label} className="flex items-center justify-between px-4 py-3">
+                                    <span className="text-xs text-slate-500">{row.label}</span>
+                                    <span className="text-sm font-semibold text-slate-800 text-right ml-3">{row.val}</span>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="flex items-center justify-center gap-2 mt-6 text-sm text-slate-500">
+                            <i className="fa-brands fa-whatsapp" style={{ color: '#25d366' }}></i>
+                            Confirmation sent to WhatsApp
                         </div>
                     </div>
                 )}
 
                 {/* ── Step 1: Slot Selection ── */}
                 {step === 1 && (
-                    <div className="space-y-3">
+                    <div className="space-y-7">
 
-                        {/* Selected appointment — shown at TOP once date + time are both picked */}
-                        {selectedDate && selectedTime && (
-                            <div className="rounded-2xl p-4 text-white flex items-center justify-between"
-                                style={{ backgroundColor: primaryColor }}>
-                                <div>
-                                    <p className="text-[11px] text-white/65 font-medium uppercase tracking-wider">Your Appointment</p>
-                                    <p className="text-sm font-semibold mt-0.5">{formatFullDate(selectedDate)}</p>
-                                    <p className="text-2xl font-extrabold leading-tight">{selectedTime}</p>
-                                    {selectedService && (
-                                        <p className="text-xs text-white/70 mt-0.5">{selectedService}</p>
-                                    )}
-                                </div>
-                                <div className="w-14 h-14 rounded-2xl bg-white/15 flex items-center justify-center shrink-0">
-                                    <i className="fa-solid fa-calendar-check text-2xl text-white/90"></i>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Description */}
                         {page.description && (
-                            <div className="bg-white rounded-2xl border border-slate-100 px-4 py-3">
-                                <p className="text-slate-600 text-sm leading-relaxed">{page.description}</p>
-                            </div>
+                            <p className="text-slate-600 text-sm leading-relaxed text-center max-w-md mx-auto">
+                                {page.description}
+                            </p>
                         )}
 
                         {/* Services */}
                         {(page.services || []).length > 0 && (
-                            <div className="bg-white rounded-2xl border border-slate-100 p-4">
-                                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3">
-                                    <i className="fa-solid fa-briefcase mr-1.5"></i>Select Service
-                                </p>
+                            <section>
+                                <p className="text-xs font-semibold text-slate-700 mb-2.5">Service</p>
                                 <div className="flex flex-wrap gap-2">
                                     {page.services.map(svc => {
                                         const isSel = selectedService === svc;
                                         return (
-                                            <button key={svc} onClick={() => setSelectedService(svc)}
-                                                className="px-4 py-2.5 rounded-xl text-sm font-semibold border-2 transition-all min-h-[44px]"
-                                                style={isSel
-                                                    ? { backgroundColor: primaryColor, borderColor: primaryColor, color: 'white' }
-                                                    : { backgroundColor: '#f8fafc', borderColor: '#e2e8f0', color: '#475569' }
-                                                }>
+                                            <button key={svc} type="button" onClick={() => setSelectedService(svc)}
+                                                className="px-4 py-2.5 rounded-lg text-sm font-medium border transition-colors min-h-[44px]"
+                                                style={{ ...touchProps, ...(isSel ? selectedStyle : unselectedStyle) }}>
                                                 {svc}
                                             </button>
                                         );
                                     })}
                                 </div>
-                            </div>
+                            </section>
                         )}
 
                         {/* Date */}
-                        <div className="bg-white rounded-2xl border border-slate-100 p-4">
-                            <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3">
-                                <i className="fa-solid fa-calendar-days mr-1.5"></i>Select Date
-                            </p>
+                        <section>
+                            <p className="text-xs font-semibold text-slate-700 mb-2.5">Date</p>
                             {availableDates.length === 0 ? (
-                                <p className="text-slate-400 text-sm">No available dates.</p>
+                                <p className="text-slate-400 text-sm">No dates available.</p>
                             ) : (
                                 <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
                                     {availableDates.map(d => {
-                                        const key     = toDateStr(d);
-                                        const isSel   = selectedDate && toDateStr(selectedDate) === key;
-                                        const isToday = toDateStr(d) === toDateStr(new Date());
+                                        const key   = toDateStr(d);
+                                        const isSel = selectedDate && toDateStr(selectedDate) === key;
                                         return (
-                                            <button key={key} onClick={() => handleDateSelect(d)}
-                                                className="flex flex-col items-center px-3 py-3 rounded-xl border-2 shrink-0 transition-all min-w-[58px] min-h-[78px] justify-center"
-                                                style={isSel
-                                                    ? { backgroundColor: primaryColor, borderColor: primaryColor, color: 'white' }
-                                                    : isToday
-                                                        ? { backgroundColor: '#eff6ff', borderColor: '#bfdbfe', color: '#1e40af' }
-                                                        : { backgroundColor: '#f8fafc', borderColor: '#e2e8f0', color: '#475569' }
-                                                }>
-                                                <span className="text-[10px] font-bold uppercase tracking-wider opacity-75">{DAY_SHORT[d.getDay()]}</span>
-                                                <span className="text-xl font-extrabold leading-tight">{d.getDate()}</span>
+                                            <button key={key} type="button" onClick={() => handleDateSelect(d)}
+                                                className="flex flex-col items-center px-3 py-2.5 rounded-lg border shrink-0 transition-colors min-w-[58px] min-h-[68px] justify-center"
+                                                style={{ ...touchProps, ...(isSel ? selectedStyle : unselectedStyle) }}>
+                                                <span className="text-[10px] font-semibold uppercase tracking-wider opacity-75">{DAY_SHORT[d.getDay()]}</span>
+                                                <span className="text-lg font-bold leading-tight">{d.getDate()}</span>
                                                 <span className="text-[10px] opacity-70">{MON_SHORT[d.getMonth()]}</span>
-                                                {isToday && (
-                                                    <span className="text-[8px] font-extrabold uppercase mt-0.5" style={{ color: isSel ? 'rgba(255,255,255,0.8)' : primaryColor }}>
-                                                        Today
-                                                    </span>
-                                                )}
                                             </button>
                                         );
                                     })}
                                 </div>
                             )}
-                        </div>
+                        </section>
 
                         {/* Time slots */}
                         {selectedDate && (
-                            <div className="bg-white rounded-2xl border border-slate-100 p-4">
-                                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3">
-                                    <i className="fa-solid fa-clock mr-1.5"></i>Select Time
-                                </p>
+                            <section>
+                                <p className="text-xs font-semibold text-slate-700 mb-2.5">Time</p>
                                 {slotsLoading ? (
-                                    <div className="flex items-center justify-center gap-2 py-8 text-slate-400">
-                                        <div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin"
-                                            style={{ borderColor: primaryColor, borderTopColor: 'transparent' }}></div>
-                                        <span className="text-sm">Checking availability…</span>
+                                    <div className="flex items-center justify-center gap-2 py-6 text-slate-400">
+                                        <div className="w-4 h-4 border-2 rounded-full animate-spin"
+                                            style={{ borderColor: '#e2e8f0', borderTopColor: primaryColor }}></div>
+                                        <span className="text-sm">Checking availability</span>
                                     </div>
                                 ) : availableSlots.length === 0 ? (
-                                    <div className="text-center py-8">
-                                        <i className="fa-solid fa-calendar-xmark text-3xl text-slate-200 mb-3 block"></i>
-                                        <p className="text-slate-500 text-sm font-semibold">No slots available</p>
-                                        <p className="text-slate-400 text-xs mt-1">Try a different date.</p>
-                                    </div>
+                                    <p className="text-center text-slate-400 text-sm py-6">No slots on this day. Try another date.</p>
                                 ) : (
                                     <div className="space-y-4">
                                         {groupSlots(availableSlots).map(group => (
                                             <div key={group.label}>
-                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
-                                                    <i className={`fa-solid ${group.icon}`}></i>{group.label}
+                                                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2">
+                                                    {group.label}
                                                 </p>
                                                 <div className="grid grid-cols-3 gap-2">
                                                     {group.slots.map(slot => {
                                                         const isSel = selectedTime === slot.time;
                                                         return (
-                                                            <button key={slot.time} onClick={() => setSelectedTime(slot.time)}
-                                                                className="py-3 rounded-xl text-xs font-bold border-2 transition-all min-h-[44px]"
-                                                                style={isSel
-                                                                    ? { backgroundColor: primaryColor, borderColor: primaryColor, color: 'white' }
-                                                                    : { backgroundColor: '#f8fafc', borderColor: '#e2e8f0', color: '#475569' }
-                                                                }>
+                                                            <button key={slot.time} type="button" onClick={() => setSelectedTime(slot.time)}
+                                                                className="py-2.5 rounded-lg text-sm font-medium border transition-colors min-h-[44px]"
+                                                                style={{ ...touchProps, ...(isSel ? selectedStyle : unselectedStyle) }}>
                                                                 {slot.time}
                                                             </button>
                                                         );
@@ -408,74 +359,72 @@ export default function BookingPage() {
                                         ))}
                                     </div>
                                 )}
-                            </div>
+                            </section>
                         )}
                     </div>
                 )}
 
                 {/* ── Step 2: Contact Info ── */}
                 {step === 2 && (
-                    <div className="space-y-3">
+                    <div className="space-y-6">
 
-                        {/* Booking summary at top */}
-                        <div className="rounded-2xl p-4 text-white" style={{ backgroundColor: primaryColor }}>
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-[11px] text-white/65 font-medium uppercase tracking-wider">Your Appointment</p>
-                                    <p className="text-sm font-semibold mt-0.5">{formatFullDate(selectedDate)}</p>
-                                    <p className="text-2xl font-extrabold leading-tight">{selectedTime}</p>
-                                    {selectedService && <p className="text-xs text-white/70 mt-0.5">{selectedService}</p>}
-                                </div>
-                                <button onClick={() => setStep(1)}
-                                    className="text-xs font-bold bg-white/20 px-3 py-2 rounded-xl shrink-0">
-                                    Change
-                                </button>
+                        {/* Booking summary */}
+                        <div className="border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+                            <div>
+                                <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Your appointment</p>
+                                <p className="text-sm font-semibold text-slate-900 mt-1">{formatFullDate(selectedDate)}</p>
+                                <p className="text-2xl font-bold leading-tight mt-0.5" style={{ color: primaryColor }}>{selectedTime}</p>
+                                {selectedService && <p className="text-xs text-slate-500 mt-1">{selectedService}</p>}
                             </div>
+                            <button type="button" onClick={() => setStep(1)}
+                                className="text-xs font-semibold text-slate-600 border border-slate-200 rounded-lg px-3 py-2 shrink-0 hover:bg-slate-50 transition-colors"
+                                style={touchProps}>
+                                Change
+                            </button>
                         </div>
 
                         {/* Contact info */}
-                        <div className="bg-white rounded-2xl border border-slate-100 p-4 space-y-4">
-                            <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                                <i className="fa-solid fa-user mr-1.5"></i>Contact Information
-                            </p>
+                        <section className="space-y-4">
+                            <p className="text-xs font-semibold text-slate-700">Your details</p>
 
                             <div>
-                                <label className="block text-xs font-semibold text-slate-500 mb-1.5">Full Name *</label>
+                                <label className="block text-xs font-medium text-slate-500 mb-1.5">Full name *</label>
                                 <input type="text" value={name} onChange={e => setName(e.target.value)}
-                                    placeholder="Enter your full name" className={inputCls}
-                                    onFocus={onFocus} onBlur={onBlur} />
+                                    placeholder="Enter your full name" className={INPUT_CLS}
+                                    onFocus={onInputFocus} onBlur={onInputBlur} />
                             </div>
 
                             <div>
-                                <label className="block text-xs font-semibold text-slate-500 mb-1.5">WhatsApp Number *</label>
+                                <label className="block text-xs font-medium text-slate-500 mb-1.5">WhatsApp number *</label>
                                 <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
-                                    placeholder="e.g. 919876543210" className={inputCls}
-                                    onFocus={onFocus} onBlur={onBlur} />
+                                    placeholder="e.g. 919876543210" className={INPUT_CLS}
+                                    onFocus={onInputFocus} onBlur={onInputBlur} />
                                 <p className="text-[11px] text-slate-400 mt-1">Include country code (e.g. 91 for India)</p>
                             </div>
 
                             <div>
-                                <label className="block text-xs font-semibold text-slate-500 mb-1.5">Email Address</label>
+                                <label className="block text-xs font-medium text-slate-500 mb-1.5">
+                                    Email <span className="text-slate-400 font-normal">(optional)</span>
+                                </label>
                                 <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-                                    placeholder="your@email.com (optional)" className={inputCls}
-                                    onFocus={onFocus} onBlur={onBlur} />
+                                    placeholder="your@email.com" className={INPUT_CLS}
+                                    onFocus={onInputFocus} onBlur={onInputBlur} />
                             </div>
 
                             <div>
-                                <label className="block text-xs font-semibold text-slate-500 mb-1.5">Notes</label>
+                                <label className="block text-xs font-medium text-slate-500 mb-1.5">
+                                    Notes <span className="text-slate-400 font-normal">(optional)</span>
+                                </label>
                                 <textarea value={notes} onChange={e => setNotes(e.target.value)}
-                                    placeholder="Any specific requests or information?" rows={3}
-                                    className={`${inputCls} resize-none`}
-                                    onFocus={onFocus} onBlur={onBlur} />
+                                    placeholder="Anything we should know?" rows={3}
+                                    className={`${INPUT_CLS} resize-none`}
+                                    onFocus={onInputFocus} onBlur={onInputBlur} />
                             </div>
-                        </div>
+                        </section>
 
-                        {/* Custom questions */}
                         {(page.customQuestions || []).length > 0 && (
-                            <div className="bg-white rounded-2xl border border-slate-100 p-4 space-y-4">
-                                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                                    <i className="fa-solid fa-circle-question mr-1.5"></i>Additional Information
-                                </p>
+                            <section className="space-y-4">
+                                <p className="text-xs font-semibold text-slate-700">Additional information</p>
                                 {[...page.customQuestions].sort((a, b) => a.order - b.order).map(q => (
                                     <CustomQuestionField
                                         key={q.id} question={q}
@@ -483,50 +432,49 @@ export default function BookingPage() {
                                         onChange={val => setCustomAnswers(prev => ({ ...prev, [q.id]: val }))}
                                         primaryColor={primaryColor} />
                                 ))}
-                            </div>
+                            </section>
                         )}
 
                         {submitError && (
-                            <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-200 rounded-xl p-3.5">
+                            <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg p-3">
                                 <i className="fa-solid fa-triangle-exclamation shrink-0"></i>
                                 {submitError}
                             </div>
                         )}
 
-                        {/* Buttons inside scroll — reliable on mobile after keyboard closes */}
                         <div className="flex gap-3 pt-1">
-                            <button onClick={() => setStep(1)}
-                                className="flex-1 py-4 rounded-2xl border-2 border-slate-200 text-slate-600 font-bold text-sm"
-                                style={{ touchAction: 'manipulation' }}>
-                                ← Back
+                            <button type="button" onClick={() => setStep(1)}
+                                className="flex-1 py-3.5 rounded-xl border border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition-colors"
+                                style={touchProps}>
+                                Back
                             </button>
-                            <button
+                            <button type="button"
                                 onPointerDown={() => { if (document.activeElement) document.activeElement.blur(); }}
                                 onClick={handleSubmit}
                                 disabled={submitting}
-                                className="flex-[2] py-4 rounded-2xl text-white font-bold text-sm disabled:opacity-60"
-                                style={{ backgroundColor: primaryColor, touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}>
+                                className="flex-[2] py-3.5 rounded-xl text-white font-semibold text-sm disabled:opacity-60 transition-opacity"
+                                style={{ backgroundColor: primaryColor, ...touchProps }}>
                                 {submitting
                                     ? <span className="flex items-center justify-center gap-2">
                                         <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
-                                        Booking…
+                                        Booking
                                       </span>
-                                    : 'Confirm Booking ✓'}
+                                    : 'Confirm booking'}
                             </button>
                         </div>
                     </div>
                 )}
             </div>
 
-            {/* ── Sticky bottom bar — step 1 only (no inputs, safe to use fixed) ── */}
+            {/* Sticky bottom bar — step 1 only */}
             {step === 1 && (
-                <div className="fixed bottom-0 inset-x-0 z-50 bg-white border-t border-slate-200 px-4"
+                <div className="fixed bottom-0 inset-x-0 z-50 bg-white border-t border-slate-200 px-5"
                     style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)', paddingTop: '16px' }}>
                     <div className="max-w-lg mx-auto">
-                        <button onClick={() => setStep(2)} disabled={!canContinue}
-                            className="w-full py-4 rounded-2xl text-white font-bold text-sm tracking-wide disabled:opacity-30 disabled:cursor-not-allowed"
-                            style={{ backgroundColor: primaryColor, touchAction: 'manipulation' }}>
-                            {canContinue ? `Continue → ${selectedTime}` : 'Select Service, Date & Time'}
+                        <button type="button" onClick={() => setStep(2)} disabled={!canContinue}
+                            className="w-full py-3.5 rounded-xl text-white font-semibold text-sm disabled:opacity-30 disabled:cursor-not-allowed transition-opacity"
+                            style={{ backgroundColor: primaryColor, ...touchProps }}>
+                            {canContinue ? `Continue → ${selectedTime}` : 'Select service, date & time'}
                         </button>
                     </div>
                 </div>
