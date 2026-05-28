@@ -198,6 +198,18 @@ const getLeads = async (req, res) => {
             query.$or = [{ name: rx }, { phone: rx }, { email: rx }];
         }
 
+        // Tag filter — accepts comma-separated names, optional &tagMatch=any|all (default: all)
+        if (req.query.tags) {
+            const tagNames = String(req.query.tags)
+                .split(',')
+                .map(t => t.trim())
+                .filter(Boolean);
+            if (tagNames.length > 0) {
+                const op = req.query.tagMatch === 'any' ? '$in' : '$all';
+                query.tags = { [op]: tagNames };
+            }
+        }
+
         const [leads, total] = await Promise.all([
             Lead.find(query)
                 .select('-history -messages -followUpHistory -customData')

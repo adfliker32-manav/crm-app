@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import LeadsTable from '../components/Dashboard/LeadsTable';
 import AddLeadModal from '../components/Dashboard/AddLeadModal';
@@ -32,6 +33,10 @@ const Leads = () => {
 
     // Filter & Sort State
     const [filterSource, setFilterSource] = useState("All");
+    const [filterTags, setFilterTags] = useState([]); // array of tag names — server-side filter
+    const [filterTagMatch, setFilterTagMatch] = useState('all'); // 'all' = AND, 'any' = OR
+    const [isTagDropdownOpen, setIsTagDropdownOpen] = useState(false);
+    const tagDropdownRef = useRef(null);
     const [sortOption, setSortOption] = useState("newest");
 
     // Pipeline-specific state
@@ -56,8 +61,13 @@ const Leads = () => {
 
     const fetchData = useCallback(async () => {
         try {
+            const params = new URLSearchParams({ limit: '500' });
+            if (filterTags.length > 0) {
+                params.set('tags', filterTags.join(','));
+                params.set('tagMatch', filterTagMatch);
+            }
             const [leadsRes, stagesRes, tagsRes] = await Promise.all([
-                api.get('/leads?limit=500'),   // paginated endpoint — extract .leads
+                api.get(`/leads?${params.toString()}`),
                 api.get('/stages'),
                 api.get('/tags')
             ]);
@@ -80,11 +90,67 @@ const Leads = () => {
         } finally {
             setLoading(false);
         }
-    }, [showError]);
+    }, [showError, filterTags, filterTagMatch]);
 
     useEffect(() => {
         fetchData();
     }, [fetchData]);
+
+    // Close tag dropdown on outside click
+    useEffect(() => {
+        if (!isTagDropdownOpen) return;
+        const onClick = (e) => {
+            if (tagDropdownRef.current && !tagDropdownRef.current.contains(e.target)) {
+                setIsTagDropdownOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', onClick);
+        return () => document.removeEventListener('mousedown', onClick);
+    }, [isTagDropdownOpen]);
+
+    const toggleTagFilter = (tagName) => {
+        setFilterTags(prev =>
+            prev.includes(tagName) ? prev.filter(t => t !== tagName) : [...prev, tagName]
+        );
+    };
+
+    const clearTagFilters = () => {
+        setFilterTags([]);
+        setIsTagDropdownOpen(false);
+    };
+
+    // Deep-link: open lead detail when ?leadId=xxx is in the URL (e.g. from dashboard TaskModal)
+    const [searchParams, setSearchParams] = useSearchParams();
+    useEffect(() => {
+        const leadIdParam = searchParams.get('leadId');
+        if (!leadIdParam) return;
+
+        const openLead = async () => {
+            // Prefer the version in the current list (already paginated/populated)
+            let lead = leads.find(l => l._id === leadIdParam);
+            if (!lead) {
+                try {
+                    // Falls back to direct fetch — handles leads outside the current
+                    // tag/pagination window
+                    const res = await api.get(`/leads/${leadIdParam}`);
+                    lead = res.data;
+                } catch (err) {
+                    console.error('Failed to load lead from deep-link', err);
+                    showError('Could not load that lead');
+                    return;
+                }
+            }
+            setSelectedLead(lead);
+            setIsLeadDetailsModalOpen(true);
+            const next = new URLSearchParams(searchParams);
+            next.delete('leadId');
+            setSearchParams(next, { replace: true });
+        };
+
+        // Wait for the initial fetch to settle before deciding whether to fall back
+        if (loading) return;
+        openLead();
+    }, [leads, loading, searchParams, setSearchParams, showError]);
 
     // Focus the edit input when editing starts
     useEffect(() => {
@@ -397,6 +463,81 @@ const Leads = () => {
                             <i className="fa-solid fa-filter text-xs"></i>
                         </div>
                     </div>
+
+                    {/* Tag Filter (multi-select, server-side) */}
+                    {userTags && userTags.length > 0 && (
+                        <div className="relative w-full sm:w-auto" ref={tagDropdownRef}>
+                            <button
+                                type="button"
+                                onClick={() => setIsTagDropdownOpen(o => !o)}
+                                className={`w-full sm:w-auto inline-flex items-center gap-2 bg-slate-100/50 border rounded-xl py-2 pl-4 pr-3 text-sm font-medium transition shadow-sm hover:bg-slate-100 ${filterTags.length > 0 ? 'border-blue-400 text-blue-700 bg-blue-50/70' : 'border-slate-200 text-slate-700'}`}
+                            >
+                                <i className="fa-solid fa-tag text-xs"></i>
+                                {filterTags.length === 0 ? 'Tags' : `Tags (${filterTags.length})`}
+                                <i className={`fa-solid fa-chevron-down text-[10px] transition-transform ${isTagDropdownOpen ? 'rotate-180' : ''}`}></i>
+                            </button>
+
+                            {isTagDropdownOpen && (
+                                <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 rounded-xl shadow-xl z-30 p-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Filter by tag</span>
+                                        {filterTags.length > 0 && (
+                                            <button type="button" onClick={clearTagFilters} className="text-xs text-blue-600 hover:underline">Clear</button>
+                                        )}
+                                    </div>
+
+                                    {/* Match mode toggle — only shown when 2+ tags picked */}
+                                    {filterTags.length >= 2 && (
+                                        <div className="flex bg-slate-100 rounded-lg p-1 mb-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setFilterTagMatch('all')}
+                                                className={`flex-1 text-xs font-semibold py-1 rounded-md transition ${filterTagMatch === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}
+                                            >
+                                                Match all
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setFilterTagMatch('any')}
+                                                className={`flex-1 text-xs font-semibold py-1 rounded-md transition ${filterTagMatch === 'any' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}
+                                            >
+                                                Match any
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    <div className="max-h-60 overflow-y-auto space-y-1">
+                                        {userTags.map(tag => {
+                                            const checked = filterTags.includes(tag.name);
+                                            return (
+                                                <label
+                                                    key={tag._id || tag.name}
+                                                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onChange={() => toggleTagFilter(tag.name)}
+                                                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                                    />
+                                                    <span
+                                                        className="text-xs px-2 py-0.5 rounded border font-medium"
+                                                        style={{
+                                                            backgroundColor: tag.color ? `${tag.color}20` : '#f1f5f9',
+                                                            color: tag.color || '#64748b',
+                                                            borderColor: tag.color ? `${tag.color}40` : '#cbd5e1'
+                                                        }}
+                                                    >
+                                                        {tag.name}
+                                                    </span>
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* Sort Filter */}
                     <div className="relative w-full sm:w-auto">

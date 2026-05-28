@@ -173,6 +173,7 @@ LeadSchema.index({ userId: 1, phone: 1 });
 LeadSchema.index({ userId: 1, email: 1 });
 LeadSchema.index({ userId: 1, wonAt: -1 });
 LeadSchema.index({ userId: 1, lostAt: -1 });
+LeadSchema.index({ userId: 1, tags: 1 });
 // Sparse unique on (userId, metaLeadgenId) — only enforced when leadgen id present.
 // Allows the Meta webhook handler to upsert by leadgen id and stay idempotent
 // across retries without colliding with non-Meta leads (which have no leadgen id).

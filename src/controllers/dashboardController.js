@@ -107,8 +107,8 @@ const getDashboardSummary = async (req, res) => {
             ];
         });
 
-        // ---- RUN BOTH QUERIES IN PARALLEL ----
-        const [leadResults, todayTasks] = await Promise.all([
+        // ---- RUN ALL QUERIES IN PARALLEL ----
+        const [leadResults, todayTasks, overdueTaskCount] = await Promise.all([
             // 1. Single aggregation for ALL lead analytics
             Lead.aggregate([
                 { $match: leadQuery },
@@ -122,7 +122,13 @@ const getDashboardSummary = async (req, res) => {
             })
             .populate('leadId', 'name phone email status')
             .sort({ dueDate: 1 })
-            .lean()
+            .lean(),
+            // 3. Overdue task count (pending, before today)
+            Task.countDocuments({
+                userId: ownerId,
+                status: 'Pending',
+                dueDate: { $lt: today }
+            })
         ]);
 
         // ---- SHAPE THE RESPONSE ----
@@ -163,8 +169,10 @@ const getDashboardSummary = async (req, res) => {
             stageDistribution,
             // Follow-up leads (lean)
             followUpLeads: results.followUpLeadsToday || [],
-            // Tasks due today
-            todayTasks: todayTasks || []
+            // Tasks due today + overdue counts
+            todayTasks: todayTasks || [],
+            tasksToday: (todayTasks || []).length,
+            tasksOverdue: overdueTaskCount || 0
         });
     } catch (err) {
         console.error("Dashboard Summary Error:", err);

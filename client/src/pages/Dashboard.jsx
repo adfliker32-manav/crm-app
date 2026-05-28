@@ -3,8 +3,9 @@ import api from '../services/api';
 import StatCard from '../components/Dashboard/StatCard';
 import ChartsRow from '../components/Dashboard/ChartsRow';
 import FollowUpModal from '../components/Dashboard/FollowUpModal';
+import TaskModal from '../components/Dashboard/TaskModal';
 import TrialBanner from '../components/TrialBanner';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 const MOTIVATIONAL_QUOTES = [
     { tag: "🔥 Today's Focus", headline: "Seize every lead. Convert every conversation. Close every deal.", cls: "bg-orange-50 text-orange-600 border-orange-200" },
@@ -31,7 +32,9 @@ const Dashboard = () => {
     const [error, setError] = useState(null);
 
     const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
+    const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
     const [quote] = useState(() => MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)]);
+    const navigate = useNavigate();
 
     const fetchDashboardData = useCallback(async () => {
         try {
@@ -161,7 +164,7 @@ const Dashboard = () => {
                 </div>
 
                 {/* Primary KPI Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
                     <StatCard
                         title="Total Leads"
                         value={stats?.totalLeads?.toLocaleString() || 0}
@@ -186,6 +189,14 @@ const Dashboard = () => {
                             value={Array.isArray(followUpStats) ? followUpStats.length : 0}
                             icon="fa-bell"
                             subtext="Click to view"
+                        />
+                    </div>
+                    <div onClick={() => setIsTaskModalOpen(true)} className="cursor-pointer">
+                        <StatCard
+                            title="Tasks Today"
+                            value={stats?.tasksToday || todayTasks.length || 0}
+                            icon="fa-list-check"
+                            subtext={stats?.tasksOverdue > 0 ? `${stats.tasksOverdue} overdue · click to view` : 'Click to view'}
                         />
                     </div>
                 </div>
@@ -234,40 +245,6 @@ const Dashboard = () => {
                         </div>
                     </div>
                 </div>
-
-                {/* Today's Tasks Widget */}
-                {todayTasks.length > 0 && (
-                    <div className="bg-white/80 backdrop-blur-xl rounded-2xl border border-white/20 shadow-xl p-6 relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-32 h-32 bg-orange-400/10 rounded-full blur-3xl"></div>
-                        <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-3 relative z-10">
-                            <span className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-400 to-red-500 flex items-center justify-center shadow-lg shadow-orange-500/25">
-                                <i className="fa-solid fa-list-check text-white text-sm"></i>
-                            </span>
-                            Tasks Due Today
-                            <span className="ml-2 bg-orange-100 text-orange-600 text-xs px-2.5 py-1 rounded-full font-bold">{todayTasks.length}</span>
-                        </h2>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 relative z-10">
-                            {todayTasks.map(task => (
-                                <div key={task._id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
-                                    <h3 className="font-bold text-slate-800 text-sm truncate">{task.title}</h3>
-                                    <p className="text-xs text-slate-500 mt-1 mb-3 line-clamp-1">{task.description || 'No description'}</p>
-                                    <div className="flex justify-between items-center text-xs">
-                                        <span className="text-orange-600 font-semibold flex items-center gap-1.5 bg-orange-50 px-2 py-1 rounded-md">
-                                            <i className="fa-regular fa-clock"></i> Today
-                                        </span>
-                                        {task.leadId && (
-                                            <span className="text-slate-600 font-medium truncate max-w-[120px]">
-                                                <i className="fa-solid fa-user mr-1 text-slate-400"></i>
-                                                {task.leadId.name}
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
 
                 {/* Charts */}
                 <div>
@@ -323,6 +300,15 @@ const Dashboard = () => {
                     isOpen={isFollowUpModalOpen}
                     onClose={() => setIsFollowUpModalOpen(false)}
                     onSuccess={fetchDashboardData}
+                />
+                <TaskModal
+                    isOpen={isTaskModalOpen}
+                    onClose={() => setIsTaskModalOpen(false)}
+                    onSuccess={fetchDashboardData}
+                    onLeadClick={(leadRef) => {
+                        const id = typeof leadRef === 'string' ? leadRef : leadRef?._id;
+                        if (id) navigate(`/leads?leadId=${id}`);
+                    }}
                 />
             </div>
         </div>
