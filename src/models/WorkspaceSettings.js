@@ -120,6 +120,15 @@ const workspaceSettingsSchema = new mongoose.Schema({
         color: { type: String, default: '#e2e8f0' }
     }],
 
+    // ── WhatsApp Inbox Quick Replies (# shortcut) ───────────────────────────
+    // Pre-saved free-text messages typed by '#' inside the WhatsApp inbox.
+    // Capped at 10 server-side to keep the picker scannable.
+    quickReplies: [{
+        keyword: { type: String, required: true, trim: true, maxlength: 40 },
+        message: { type: String, required: true, maxlength: 1024 },
+        order: { type: Number, default: 0 }
+    }],
+
     // ── Web-to-Lead (Landing Page Embed) ────────────────────────────────────
     // Unique per-tenant API key for the public /api/web-leads/capture endpoint.
     // Indexed so lead capture lookups are O(log n) without touching any other path.

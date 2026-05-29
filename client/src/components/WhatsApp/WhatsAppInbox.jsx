@@ -33,6 +33,12 @@ const WhatsAppInbox = () => {
     const [uploading, setUploading] = useState(false);
     const [templateQuery, setTemplateQuery] = useState('');
     const [showInlineTemplatePicker, setShowInlineTemplatePicker] = useState(false);
+    // ── Quick Replies (# shortcut) ──
+    const [quickReplies, setQuickReplies] = useState([]);
+    const [quickReplyQuery, setQuickReplyQuery] = useState('');
+    const [showInlineQuickReplyPicker, setShowInlineQuickReplyPicker] = useState(false);
+    const [showQuickReplyManager, setShowQuickReplyManager] = useState(false);
+    const quickReplyPickerRef = useRef(null);
     const [convPage, setConvPage] = useState(1);
     const [convHasMore, setConvHasMore] = useState(true);
     const [convLoadingMore, setConvLoadingMore] = useState(false);
@@ -149,7 +155,7 @@ const WhatsAppInbox = () => {
         }
     }, [showError, hasMore, loadingMore]);
 
-    useEffect(() => { fetchConversations(); fetchTemplates(); }, [fetchConversations]);
+    useEffect(() => { fetchConversations(); fetchTemplates(); fetchQuickReplies(); }, [fetchConversations]);
 
     // Keep refs in sync for socket callbacks (avoids stale closures)
     useEffect(() => {
@@ -166,6 +172,13 @@ const WhatsAppInbox = () => {
             const data = res.data.templates || res.data;
             setTemplates(data.filter(t => t.status === 'APPROVED'));
         } catch (err) { console.error('Failed to load templates', err); }
+    };
+
+    const fetchQuickReplies = async () => {
+        try {
+            const res = await api.get('/whatsapp/quick-replies');
+            setQuickReplies(Array.isArray(res.data) ? res.data : []);
+        } catch (err) { console.error('Failed to load quick replies', err); }
     };
 
     // Check if the 24-hour messaging window is still open
@@ -386,6 +399,10 @@ const WhatsAppInbox = () => {
                 setShowInlineTemplatePicker(false);
                 setTemplateQuery('');
             }
+            if (quickReplyPickerRef.current && !quickReplyPickerRef.current.contains(e.target) && e.target !== inputRef.current) {
+                setShowInlineQuickReplyPicker(false);
+                setQuickReplyQuery('');
+            }
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
@@ -482,27 +499,46 @@ const WhatsAppInbox = () => {
         setMediaPreview(null);
     };
 
-    // ── Inline Template Picker (@trigger) ──
+    // ── Inline Template Picker (@trigger) + Quick Reply Picker (#trigger) ──
     const handleInputChange = (e) => {
         const value = e.target.value;
         setNewMessage(value);
 
-        // Detect @ trigger
+        // Detect @ trigger (templates)
         const atIdx = value.lastIndexOf('@');
         if (atIdx !== -1 && (atIdx === 0 || value[atIdx - 1] === ' ')) {
             const query = value.substring(atIdx + 1);
             setTemplateQuery(query);
             setShowInlineTemplatePicker(true);
+            setShowInlineQuickReplyPicker(false);
+            setQuickReplyQuery('');
+            return;
+        }
+        setShowInlineTemplatePicker(false);
+        setTemplateQuery('');
+
+        // Detect # trigger (quick replies)
+        const hashIdx = value.lastIndexOf('#');
+        if (hashIdx !== -1 && (hashIdx === 0 || value[hashIdx - 1] === ' ')) {
+            const query = value.substring(hashIdx + 1);
+            setQuickReplyQuery(query);
+            setShowInlineQuickReplyPicker(true);
         } else {
-            setShowInlineTemplatePicker(false);
-            setTemplateQuery('');
+            setShowInlineQuickReplyPicker(false);
+            setQuickReplyQuery('');
         }
     };
 
     const handleInputKeyDown = (e) => {
-        if (e.key === 'Escape' && showInlineTemplatePicker) {
-            setShowInlineTemplatePicker(false);
-            setTemplateQuery('');
+        if (e.key === 'Escape') {
+            if (showInlineTemplatePicker) {
+                setShowInlineTemplatePicker(false);
+                setTemplateQuery('');
+            }
+            if (showInlineQuickReplyPicker) {
+                setShowInlineQuickReplyPicker(false);
+                setQuickReplyQuery('');
+            }
         }
     };
 
@@ -516,6 +552,43 @@ const WhatsAppInbox = () => {
     const filteredInlineTemplates = templates.filter(t =>
         !templateQuery || t.name.toLowerCase().includes(templateQuery.toLowerCase())
     );
+
+    const filteredInlineQuickReplies = quickReplies.filter(q =>
+        !quickReplyQuery ||
+        q.keyword.toLowerCase().includes(quickReplyQuery.toLowerCase()) ||
+        (q.message || '').toLowerCase().includes(quickReplyQuery.toLowerCase())
+    );
+
+    const handleSelectInlineQuickReply = async (qr) => {
+        if (!selectedChat || !qr?.message) return;
+        setShowInlineQuickReplyPicker(false);
+        setQuickReplyQuery('');
+        setNewMessage('');
+        setSending(true);
+        shouldScrollToBottomRef.current = true;
+        try {
+            const res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send`, { text: qr.message });
+            setMessages(prev => {
+                const exists = prev.some(m =>
+                    (m._id && m._id === res.data.message._id) ||
+                    (m.waMessageId && m.waMessageId === res.data.message.waMessageId)
+                );
+                return exists ? prev : [...prev, res.data.message];
+            });
+            setConversations(prev => {
+                const updated = prev.map(c =>
+                    c._id === selectedChat._id
+                        ? { ...c, lastMessage: qr.message, lastMessageAt: new Date(), lastMessageDirection: 'outbound' }
+                        : c
+                );
+                return [...updated].sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
+            });
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to send quick reply');
+        } finally {
+            setSending(false);
+        }
+    };
 
     const handleStartNewChat = async () => {
         if (!newChatPhone.trim() || !newChatTemplate) return;
@@ -1200,7 +1273,7 @@ const WhatsAppInbox = () => {
                                         value={newMessage}
                                         onChange={handleInputChange}
                                         onKeyDown={handleInputKeyDown}
-                                        placeholder={mediaPreview ? 'Add a caption...' : isWindowOpen(selectedChat) ? 'Type a message — use @ to send a template' : 'Send a template to start messaging...'}
+                                        placeholder={mediaPreview ? 'Add a caption...' : isWindowOpen(selectedChat) ? 'Type a message — @ for template, # for quick reply' : 'Send a template to start messaging...'}
                                         className="w-full bg-transparent border-none focus:outline-none px-4 py-2.5 text-[15px] text-[#111b21]"
                                         disabled={sending || uploading || (!mediaPreview && !isWindowOpen(selectedChat))}
                                     />
@@ -1235,6 +1308,68 @@ const WhatsAppInbox = () => {
                                         <div ref={templatePickerRef} className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-xl shadow-2xl border border-slate-200 z-50 p-4 text-center">
                                             <i className="fa-solid fa-file-circle-xmark text-2xl text-slate-300 mb-1"></i>
                                             <p className="text-xs text-[#8696a0]">No matching templates</p>
+                                        </div>
+                                    )}
+
+                                    {/* # Quick Reply Picker Dropdown */}
+                                    {showInlineQuickReplyPicker && (
+                                        <div ref={quickReplyPickerRef} className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-xl shadow-2xl border border-slate-200 max-h-[260px] overflow-y-auto z-50">
+                                            <div className="px-3 py-2 border-b border-slate-100 flex items-center gap-2 sticky top-0 bg-white">
+                                                <i className="fa-solid fa-bolt text-[#f59e0b] text-xs"></i>
+                                                <span className="text-xs font-semibold text-[#8696a0] uppercase tracking-wider">Quick Replies</span>
+                                                {quickReplyQuery && <span className="text-xs text-slate-400 ml-2">filtering: "{quickReplyQuery}"</span>}
+                                                <button
+                                                    type="button"
+                                                    onMouseDown={(e) => e.preventDefault()}
+                                                    onClick={() => {
+                                                        setShowInlineQuickReplyPicker(false);
+                                                        setQuickReplyQuery('');
+                                                        setShowQuickReplyManager(true);
+                                                    }}
+                                                    className="ml-auto text-[11px] text-[#00a884] hover:text-[#008f6f] font-semibold flex items-center gap-1"
+                                                >
+                                                    <i className="fa-solid fa-gear text-[10px]"></i> Manage
+                                                </button>
+                                            </div>
+                                            {filteredInlineQuickReplies.length > 0 ? (
+                                                filteredInlineQuickReplies.map((q, idx) => (
+                                                    <button
+                                                        key={`${q.keyword}-${idx}`}
+                                                        onClick={() => handleSelectInlineQuickReply(q)}
+                                                        className="w-full text-left px-3 py-2.5 hover:bg-[#fff7ed] transition flex items-start gap-3 border-b border-slate-50 last:border-b-0"
+                                                    >
+                                                        <div className="w-8 h-8 bg-[#fef3c7] rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                                                            <i className="fa-solid fa-bolt text-[#f59e0b] text-sm"></i>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm font-medium text-[#111b21] truncate">#{q.keyword}</p>
+                                                            <p className="text-[11px] text-[#8696a0] truncate">{q.message}</p>
+                                                        </div>
+                                                        <i className="fa-solid fa-paper-plane text-[#00a884] text-xs mt-2"></i>
+                                                    </button>
+                                                ))
+                                            ) : (
+                                                <div className="p-4 text-center">
+                                                    <i className="fa-solid fa-bolt text-2xl text-slate-300 mb-1"></i>
+                                                    <p className="text-xs text-[#8696a0]">
+                                                        {quickReplies.length === 0 ? 'No quick replies saved yet.' : 'No matching quick replies'}
+                                                    </p>
+                                                    {quickReplies.length === 0 && (
+                                                        <button
+                                                            type="button"
+                                                            onMouseDown={(e) => e.preventDefault()}
+                                                            onClick={() => {
+                                                                setShowInlineQuickReplyPicker(false);
+                                                                setQuickReplyQuery('');
+                                                                setShowQuickReplyManager(true);
+                                                            }}
+                                                            className="mt-2 text-[11px] font-semibold text-[#00a884] hover:text-[#008f6f]"
+                                                        >
+                                                            <i className="fa-solid fa-plus mr-1"></i> Add one
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -1424,6 +1559,166 @@ const WhatsAppInbox = () => {
                     </div>
                 </div>
             )}
+
+            {/* ═══════════ MANAGE QUICK REPLIES MODAL ═══════════ */}
+            {showQuickReplyManager && (
+                <QuickReplyManager
+                    initial={quickReplies}
+                    onClose={() => setShowQuickReplyManager(false)}
+                    onSaved={(list) => { setQuickReplies(list); setShowQuickReplyManager(false); }}
+                    showSuccess={showSuccess}
+                    showError={showError}
+                />
+            )}
+            </div>
+        </div>
+    );
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Quick Reply Manager Modal — keyword + message, max 10 entries.
+// Triggered from the # picker in the chat input.
+// ─────────────────────────────────────────────────────────────────────────
+const QuickReplyManager = ({ initial, onClose, onSaved, showSuccess, showError }) => {
+    const MAX = 10;
+    const [items, setItems] = useState(() => (initial || []).map(q => ({ keyword: q.keyword || '', message: q.message || '' })));
+    const [saving, setSaving] = useState(false);
+
+    const updateItem = (idx, field, value) => {
+        setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
+    };
+    const addItem = () => {
+        if (items.length >= MAX) return;
+        setItems(prev => [...prev, { keyword: '', message: '' }]);
+    };
+    const removeItem = (idx) => {
+        setItems(prev => prev.filter((_, i) => i !== idx));
+    };
+
+    const handleSave = async () => {
+        const cleaned = items
+            .map(it => ({ keyword: (it.keyword || '').trim(), message: (it.message || '').trim() }))
+            .filter(it => it.keyword.length > 0 && it.message.length > 0);
+
+        const keys = cleaned.map(c => c.keyword.toLowerCase());
+        if (new Set(keys).size !== keys.length) {
+            showError('Keywords must be unique');
+            return;
+        }
+        if (cleaned.length > MAX) {
+            showError(`Maximum ${MAX} quick replies allowed`);
+            return;
+        }
+
+        setSaving(true);
+        try {
+            const res = await api.put('/whatsapp/quick-replies', { quickReplies: cleaned });
+            onSaved(res.data.quickReplies || []);
+            showSuccess('Quick replies saved');
+        } catch (err) {
+            showError(err.response?.data?.message || 'Failed to save quick replies');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+                <div className="bg-gradient-to-r from-[#f59e0b] to-[#f97316] p-5 text-white flex-shrink-0">
+                    <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                            <i className="fa-solid fa-bolt"></i> Manage Quick Replies
+                        </h3>
+                        <button onClick={onClose} className="text-white/80 hover:text-white transition">
+                            <i className="fa-solid fa-xmark text-xl"></i>
+                        </button>
+                    </div>
+                    <p className="text-sm text-white/85 mt-1">Type <span className="font-mono bg-white/15 px-1.5 rounded">#</span> in the chat input to pick one instantly. Up to {MAX} entries.</p>
+                </div>
+
+                <div className="p-5 space-y-3 overflow-y-auto flex-1">
+                    {items.length === 0 && (
+                        <div className="text-center py-8 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
+                            <i className="fa-solid fa-bolt text-3xl text-slate-300 mb-2"></i>
+                            <p className="text-sm text-slate-500">No quick replies yet. Add your first one below.</p>
+                        </div>
+                    )}
+
+                    {items.map((it, idx) => (
+                        <div key={idx} className="border border-slate-200 rounded-xl p-3 bg-slate-50/60">
+                            <div className="flex items-start gap-2">
+                                <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[#fef3c7] text-[#92400e] text-xs font-bold flex items-center justify-center mt-1">
+                                    {idx + 1}
+                                </div>
+                                <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-2">
+                                    <div className="md:col-span-1">
+                                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Keyword</label>
+                                        <div className="relative">
+                                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">#</span>
+                                            <input
+                                                type="text"
+                                                value={it.keyword}
+                                                onChange={(e) => updateItem(idx, 'keyword', e.target.value.replace(/\s+/g, ''))}
+                                                placeholder="thanks"
+                                                maxLength={40}
+                                                className="w-full pl-6 pr-2 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-400 outline-none"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="md:col-span-2">
+                                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Message</label>
+                                        <textarea
+                                            value={it.message}
+                                            onChange={(e) => updateItem(idx, 'message', e.target.value)}
+                                            placeholder="Thank you for reaching out!"
+                                            maxLength={1024}
+                                            rows={2}
+                                            className="w-full px-2.5 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-400 outline-none resize-none"
+                                        />
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => removeItem(idx)}
+                                    className="flex-shrink-0 text-red-500 hover:text-red-700 hover:bg-red-50 w-8 h-8 rounded-lg mt-1 transition"
+                                    title="Remove"
+                                >
+                                    <i className="fa-solid fa-trash text-sm"></i>
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+
+                    {items.length < MAX && (
+                        <button
+                            type="button"
+                            onClick={addItem}
+                            className="w-full py-2.5 border-2 border-dashed border-slate-300 rounded-xl text-sm font-semibold text-slate-500 hover:border-amber-400 hover:text-amber-600 hover:bg-amber-50 transition flex items-center justify-center gap-2"
+                        >
+                            <i className="fa-solid fa-plus"></i> Add Quick Reply ({items.length}/{MAX})
+                        </button>
+                    )}
+                </div>
+
+                <div className="p-4 border-t border-slate-100 flex items-center justify-end gap-2 flex-shrink-0 bg-slate-50">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200 rounded-lg transition"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleSave}
+                        disabled={saving}
+                        className="px-5 py-2 text-sm font-bold text-white bg-[#f59e0b] hover:bg-[#d97706] rounded-lg transition disabled:opacity-50 flex items-center gap-2"
+                    >
+                        {saving ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-check"></i>}
+                        Save
+                    </button>
+                </div>
             </div>
         </div>
     );

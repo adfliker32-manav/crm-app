@@ -435,6 +435,8 @@ app.use('/api/webhooks', sheetWebhookRoutes);
 app.use('/api/whatsapp/templates', whatsappTemplateRoutes);
 const whatsappBroadcastRoutes = require('./src/routes/whatsappBroadcastRoutes');
 app.use('/api/whatsapp/broadcasts', whatsappBroadcastRoutes);
+const quickReplyRoutes = require('./src/routes/quickReplyRoutes');
+app.use('/api/whatsapp/quick-replies', authMiddleware, quickReplyRoutes);
 
 // General WhatsApp Routes AFTER specific ones
 app.use('/api/whatsapp', whatsappRoutes);
