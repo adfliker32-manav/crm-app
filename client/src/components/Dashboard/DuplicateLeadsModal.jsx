@@ -3,7 +3,7 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 
 const DuplicateLeadsModal = ({ isOpen, onClose, onSuccess }) => {
-    const { showSuccess, showError } = useNotification();
+    const { showSuccess } = useNotification();
     const [loading, setLoading] = useState(true);
     const [deleting, setDeleting] = useState(false);
     const [data, setData] = useState(null);

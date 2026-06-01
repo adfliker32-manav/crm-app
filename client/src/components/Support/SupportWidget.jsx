@@ -46,7 +46,7 @@ const SupportWidget = () => {
             const list = res.data.tickets || [];
             setTickets(list);
             recomputeUnread(list);
-        } catch (e) { /* silent — widget is non-critical */ }
+        } catch { /* silent — widget is non-critical */ }
     }, [recomputeUnread]);
 
     const loadMessages = useCallback(async (ticketId) => {
@@ -54,7 +54,7 @@ const SupportWidget = () => {
             const res = await api.get(`/support/tickets/${ticketId}/messages`);
             setActiveTicket(res.data.ticket);
             setMessages(res.data.messages || []);
-        } catch (e) {
+        } catch {
             showError('Could not load conversation');
         }
     }, [showError]);
@@ -81,7 +81,7 @@ const SupportWidget = () => {
                 // Optimistically bump the red dot immediately so user sees it without re-fetch
                 setUnread(u => u + 1);
                 // Soft chime via browser if allowed (no-op if blocked)
-                try { new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=').play().catch(() => {}); } catch (_) {}
+                try { new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=').play().catch(() => {}); } catch { /* audio blocked — ignore */ }
                 loadTickets();
             }
         };

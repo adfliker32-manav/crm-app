@@ -21,7 +21,7 @@ const AutodebitView = () => {
         try {
             const res = await api.get('/billing/superadmin/subscriptions');
             setSubs(res.data?.subscriptions || []);
-        } catch (err) {
+        } catch {
             showError('Failed to load subscriptions');
         } finally {
             setLoading(false);

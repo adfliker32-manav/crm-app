@@ -130,7 +130,7 @@ const EmailTemplates = () => {
             setIsDetailsModalOpen(false);
             showSuccess("Template deleted successfully");
             fetchTemplates();
-        } catch (error) {
+        } catch {
             showError("Failed to delete template");
         }
     };

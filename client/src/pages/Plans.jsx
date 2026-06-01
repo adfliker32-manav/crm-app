@@ -33,7 +33,7 @@ const Plans = () => {
     const [couponError, setCouponError]   = useState('');
 
     const { user } = useAuth();
-    const { showError, showSuccess } = useNotification();
+    const { showError } = useNotification();
     const navigate = useNavigate();
 
     useEffect(() => {

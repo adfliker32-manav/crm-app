@@ -89,7 +89,7 @@ export default function WebLeadSettings() {
                 setDefaultStage(res.data.defaultStage || '');
                 setDefaultTag(res.data.defaultTag || '');
             }
-        } catch (err) {
+        } catch {
             setError('Failed to load Web-to-Lead config');
         } finally {
             setLoading(false);
@@ -129,7 +129,7 @@ export default function WebLeadSettings() {
             if (type === 'snippet') { setCopiedSnippet(true); setTimeout(() => setCopiedSnippet(false), 2000); }
             if (type === 'usage') { setCopiedUsage(true); setTimeout(() => setCopiedUsage(false), 2000); }
             if (type === 'key') { setCopiedKey(true); setTimeout(() => setCopiedKey(false), 2000); }
-        } catch { }
+        } catch { /* clipboard unavailable — ignore */ }
     };
 
     const snippetCode = apiKey ? buildEmbedCode(apiKey, backendUrl) : '';

@@ -40,7 +40,7 @@ const PlanCatalogView = () => {
         try {
             const res = await api.get('/billing/superadmin/plans');
             setPlans(res.data?.plans || []);
-        } catch (err) {
+        } catch {
             showError('Failed to load plan catalog');
         } finally {
             setLoading(false);

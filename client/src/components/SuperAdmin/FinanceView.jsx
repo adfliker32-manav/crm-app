@@ -146,6 +146,7 @@ const OverviewTab = ({ summary, chart, renewalsDueSoon, topClients, trialsExpiri
                     </div>
                     <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
                         {trialsExpiringSoon.map(t => {
+                            // eslint-disable-next-line react-hooks/purity -- relative "days left" display; recomputing per render is intended
                             const days = Math.max(0, Math.ceil((new Date(t.trialExpiresAt) - Date.now()) / (24*60*60*1000)));
                             return (
                                 <div key={t._id} className="px-6 py-3 flex items-center justify-between hover:bg-slate-50">
@@ -189,6 +190,7 @@ const OverviewTab = ({ summary, chart, renewalsDueSoon, topClients, trialsExpiri
                                 No renewals due in the next 30 days.
                             </div>
                         ) : renewalsDueSoon.map(r => {
+                            // eslint-disable-next-line react-hooks/purity -- relative "days left" display; recomputing per render is intended
                             const days = Math.ceil((new Date(r.latestExpiry) - Date.now()) / (24*60*60*1000));
                             const urgent = days <= 7;
                             return (

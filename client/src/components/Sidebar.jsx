@@ -67,6 +67,7 @@ const Sidebar = () => {
     useEffect(() => {
         if (!hasWhatsApp || !user) return;
         if (isWhatsAppPage) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clear unread when entering the inbox page
             setWaUnreadCount(0);
             return;
         }

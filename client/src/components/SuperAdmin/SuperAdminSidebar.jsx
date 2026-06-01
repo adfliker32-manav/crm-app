@@ -38,6 +38,7 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
     }, [socket]);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clear the unread badge when the support view opens
         if (activeView === 'support') setSupportUnread(0);
     }, [activeView]);
 

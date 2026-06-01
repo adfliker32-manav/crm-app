@@ -43,7 +43,7 @@ const SupportInboxView = () => {
         try {
             const res = await api.get('/support/admin/tickets');
             setTickets(res.data.tickets || []);
-        } catch (e) {
+        } catch {
             showError('Failed to load support inbox');
         }
     }, [showError]);
@@ -53,7 +53,7 @@ const SupportInboxView = () => {
             const r = await api.get('/support/admin/canned', { params: { tag: tag || 'general', ticketId } });
             setSuggestions(r.data.suggestions || (r.data.suggestion ? [r.data.suggestion] : []));
             setShowSuggestions(true);
-        } catch (_) { setSuggestions([]); }
+        } catch { setSuggestions([]); }
     }, []);
 
     const loadConversation = useCallback(async (ticketId) => {
@@ -65,7 +65,7 @@ const SupportInboxView = () => {
             loadSuggestions(ticketId, res.data.ticket?.tag);
             // Optimistically clear unread badge locally
             setTickets(prev => prev.map(t => t._id === ticketId ? { ...t, unreadByAdmin: 0 } : t));
-        } catch (e) {
+        } catch {
             showError('Could not load conversation');
         }
     }, [showError, loadSuggestions]);
