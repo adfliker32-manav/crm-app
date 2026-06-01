@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { GoogleLogin } from '@react-oauth/google';
 
@@ -11,6 +11,9 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const { login, googleLogin } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  // Set by the Register page after a successful sign-up (no auto-login).
+  const justRegistered = location.state?.registered;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -40,7 +43,7 @@ const Login = () => {
       else navigate('/dashboard');
     } else {
       if (result.message?.includes("don't have an account") || result.message?.includes("not have an account")) {
-        setError("No account found with this Google email. Start a free trial to get started.");
+        setError("No account found with this Google email. Register now to start your free trial.");
       } else {
         setError(result.message);
       }
@@ -102,6 +105,13 @@ const Login = () => {
               Log in to manage your leads and automation
             </p>
           </div>
+
+          {/* Registration success (redirected from /register) */}
+          {justRegistered && !error && (
+            <div className="bg-green-50 text-green-700 px-4 py-3 rounded-xl text-sm mb-6 border border-green-100">
+              Registration successful — your 14-day free trial has started. Please log in to continue.
+            </div>
+          )}
 
           {/* Error */}
           {error && (
@@ -191,17 +201,17 @@ const Login = () => {
                 {isLoading ? 'Authenticating...' : 'Access Dashboard'}
               </button>
 
-              {/* NEW SECTION */}
-              <div className="text-center text-sm text-gray-500 mt-4">
-                Don’t have an account?{" "}
-                <a
-                  href="https://adfliker.com/contact"
-                  className="text-green-600 font-semibold hover:underline"
-                >
-                  Contact us
-                </a>{" "}
-                and we’ll help you get started.
-              </div>
+              {/* Self-serve registration — highlighted CTA */}
+              <Link
+                to="/register"
+                className="mt-5 flex items-center justify-center gap-2 rounded-xl border-2 border-green-500 bg-green-50 px-4 py-3 text-center font-bold text-green-700 transition-all hover:bg-green-100 active:scale-[0.98]"
+              >
+                <span>Don’t have an account? Register here</span>
+                <span aria-hidden="true">→</span>
+              </Link>
+              <p className="text-center text-xs text-gray-400 mt-2">
+                Start your 14-day free trial — no credit card required
+              </p>
 
               <div className="text-center text-xs text-gray-400 mt-2">
                 By signing in you agree to our{" "}

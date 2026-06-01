@@ -35,14 +35,9 @@ const {
 } = require('../utils/controllerHelpers');
 
 const COMPANY_ROLE_FILTER = { $in: ['manager', 'agency'] };
-const DEFAULT_AGENT_LIMIT = 5;
-// Trial accounts get the FULL module set so they can evaluate everything during
-// the 14-day window. When the trial lapses the account goes read-only (see
-// authMiddleware); when they subscribe, the chosen plan's modules take over.
-// NOTE: these are real workspace MODULES only. chatbot/campaigns/webhooks are
-// planFeatures flags (enabled separately), not modules — kept out of this list.
-const DEFAULT_ACTIVE_MODULES = ['leads', 'team', 'reports', 'settings', 'whatsapp', 'email', 'automations'];
-const TRIAL_DURATION_MS = 14 * 24 * 60 * 60 * 1000;
+// Trial-provisioning constants are shared with the public self-registration flow
+// (authController.register) so both paths spin up an identical 14-day trial.
+const { TRIAL_DURATION_MS, DEFAULT_AGENT_LIMIT, DEFAULT_ACTIVE_MODULES } = require('../constants/trial');
 
 const findCompanyById = (id) => User.findOne({ _id: id, role: COMPANY_ROLE_FILTER });
 

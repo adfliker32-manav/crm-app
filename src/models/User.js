@@ -69,6 +69,15 @@ const userSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    // Captured during public self-registration (authController.register)
+    website: {
+        type: String,
+        default: null
+    },
+    onboardingNotes: {
+        type: String,
+        default: null
+    },
     industry: {
         type: String,
         default: null

@@ -1,6 +1,8 @@
 const User = require('../models/User');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const GlobalSetting = require('../models/GlobalSetting');
+const { TRIAL_DURATION_MS, DEFAULT_AGENT_LIMIT, DEFAULT_ACTIVE_MODULES } = require('../constants/trial');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
@@ -148,6 +150,91 @@ exports.getMe = async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// 1.6 REGISTER — public client self-onboarding.
+// Creates a `manager` tenant, auto-approves it, and spins up a 14-day trial
+// workspace (mirrors superAdminController.createCompany, the proven template).
+// No token is returned: the client is sent to the login page to sign in (UX
+// decision). Fields are validated upstream by validate(schemas.register).
+exports.register = async (req, res) => {
+    try {
+        const { name, companyName, email, password, phone, website, onboardingNotes } = req.body;
+
+        const normalizedEmail = normalizeEmail(email);
+        const existingUser = await User.findOne({ email: normalizedEmail });
+        if (existingUser) {
+            return res.status(409).json({ message: 'An account with this email already exists. Please log in instead.' });
+        }
+
+        const newUser = await User.create({
+            name,
+            companyName,
+            email: normalizedEmail,
+            password, // hashed by User model pre('save') hook
+            phone,
+            website: website || null,
+            onboardingNotes: onboardingNotes || null,
+            role: 'manager',
+            isOnboarded: true,
+            accountStatus: 'Active',
+            // Self-serve trial accounts are auto-approved so they can log in and
+            // start evaluating immediately — no manual SuperAdmin approval step.
+            is_active: true,
+            approved_by_admin: true,
+            status: 'approved'
+        });
+
+        // Trial workspace + integrations, created in parallel. The 14-day window
+        // and full module set come from the shared trial constants.
+        //
+        // If provisioning fails we must roll back the just-created user — otherwise
+        // the email is permanently taken by a broken, workspace-less account that
+        // can't load any modules on login.
+        try {
+            await Promise.all([
+                WorkspaceSettings.create({
+                    userId: newUser._id,
+                    agentLimit: DEFAULT_AGENT_LIMIT,
+                    activeModules: DEFAULT_ACTIVE_MODULES,
+                    subscriptionPlan: 'Free Trial',
+                    subscriptionStatus: 'trial',
+                    billingType: 'trial',
+                    planExpiryDate: new Date(Date.now() + TRIAL_DURATION_MS)
+                }),
+                IntegrationConfig.create({ userId: newUser._id })
+            ]);
+        } catch (provisionErr) {
+            await Promise.all([
+                User.deleteOne({ _id: newUser._id }),
+                WorkspaceSettings.deleteOne({ userId: newUser._id }),
+                IntegrationConfig.deleteOne({ userId: newUser._id })
+            ]).catch(() => { /* best-effort cleanup */ });
+            throw provisionErr;
+        }
+
+        auditLogger.log({
+            actor: newUser,
+            actionCategory: 'SECURITY',
+            action: 'CLIENT_REGISTERED',
+            details: { email: normalizedEmail, companyName },
+            req
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Registration successful. Your 14-day free trial has started — please log in to continue.'
+        });
+    } catch (err) {
+        console.error('Register error:', err);
+        // Only an email-key collision means "account already exists" (e.g. a race
+        // between the findOne check and create). Any OTHER duplicate-key error is a
+        // genuine server fault — don't mislabel it as a taken email.
+        if (err.code === 11000 && err.keyPattern && err.keyPattern.email) {
+            return res.status(409).json({ message: 'An account with this email already exists. Please log in instead.' });
+        }
+        res.status(500).json({ message: 'Registration failed. Please try again.' });
     }
 };
 

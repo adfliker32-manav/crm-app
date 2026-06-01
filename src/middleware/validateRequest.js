@@ -35,13 +35,19 @@ const validate = (schema) => (req, res, next) => {
 
 const schemas = {
 
-    // Auth
+    // Auth — public self-registration (creates a manager + 14-day trial workspace)
     register: Joi.object({
-        email:    Joi.string().email().lowercase().trim().required(),
-        password: Joi.string().min(8).max(128).required()
+        name:        Joi.string().trim().min(2).max(100).required(),
+        companyName: Joi.string().trim().min(2).max(150).required(),
+        email:       Joi.string().email().lowercase().trim().required(),
+        password:    Joi.string().min(8).max(128).required()
             .pattern(/[A-Z]/, 'uppercase letter')
             .pattern(/[0-9]/, 'number')
-            .pattern(/[^A-Za-z0-9]/, 'special character')
+            .pattern(/[^A-Za-z0-9]/, 'special character'),
+        phone:       Joi.string().trim().min(5).max(20).required(),
+        // Plain string (no .uri()) so users can type "example.com" without a scheme.
+        website:         Joi.string().trim().max(200).optional().allow(''),
+        onboardingNotes: Joi.string().trim().max(2000).optional().allow('')
     }),
 
     login: Joi.object({

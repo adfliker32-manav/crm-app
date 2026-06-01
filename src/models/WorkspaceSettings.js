@@ -150,9 +150,12 @@ const workspaceSettingsSchema = new mongoose.Schema({
     // ── Web-to-Lead (Landing Page Embed) ────────────────────────────────────
     // Unique per-tenant API key for the public /api/web-leads/capture endpoint.
     // Indexed so lead capture lookups are O(log n) without touching any other path.
+    // No `default: null` on purpose. A sparse UNIQUE index still indexes documents
+    // where the field is present-but-null, so defaulting every new workspace to
+    // `null` makes the 2nd workspace collide on { webLeadApiKey: null }. Leaving it
+    // absent means sparse correctly skips it until a real key is set.
     webLeadApiKey: {
         type: String,
-        default: null,
         index: { unique: true, sparse: true } // sparse: only enforce when key is set
     },
     webLeadDefaultStage: {
@@ -167,9 +170,9 @@ const workspaceSettingsSchema = new mongoose.Schema({
     // ── Claude AI / MCP Integration ──────────────────────────────────────────
     // Per-tenant API key for Claude Code MCP server. Grants read-only analytics
     // access scoped strictly to this tenant's data. Revocable at any time.
+    // No `default: null` — same sparse-unique reason as webLeadApiKey above.
     mcpApiKey: {
         type: String,
-        default: null,
         index: { unique: true, sparse: true }
     },
 

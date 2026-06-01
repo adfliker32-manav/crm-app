@@ -17,6 +17,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 
 // Direct import for Login (critical path)
 import Login from './pages/Login';
+const Register = lazy(() => import('./pages/Register'));
 
 // Lazy loaded pages
 const AgencyDashboard = lazy(() => import('./pages/Agency/AgencyDashboard'));
@@ -58,6 +59,7 @@ function App() {
                 <Suspense fallback={<GlobalLoader />}>
                   <Routes>
                     <Route path="/login" element={<Login />} />
+                    <Route path="/register" element={<Register />} />
                     <Route path="/book/:slug" element={<BookingPage />} />
                     <Route path="/terms" element={<TermsAndConditions />} />
                     <Route path="/privacy" element={<PrivacyPolicy />} />
