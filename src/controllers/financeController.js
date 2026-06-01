@@ -189,17 +189,72 @@ const listPayments = async (req, res) => {
 // ============================================================
 // DELETE /api/superadmin/finance/payments/:id
 //
-// Note: deleting a payment does NOT roll back the client's planExpiryDate.
-// That would require recomputing from the remaining payments, which is expensive
-// and surprising. If the admin wants to revoke access, they should adjust the
-// workspace directly via "Edit Company" or freeze the account.
+// Deleting a payment ROLLS BACK the access it granted. We recompute the client's
+// paid-through date from the REMAINING payments (each stores its own activationEnd,
+// which already encodes the stacking that was applied when it was recorded). If no
+// payments remain, we fall back to the deleted payment's activationStart — the
+// expiry that existed BEFORE this payment was applied. We only ever move the expiry
+// EARLIER, and only when this payment was actually governing the current expiry, so
+// deleting an old/superseded payment leaves a still-valid window untouched.
 const deletePayment = async (req, res) => {
     try {
         const { id } = req.params;
         const payment = await Payment.findById(id);
         if (!payment) return res.status(404).json({ message: 'Payment not found.' });
 
+        const clientId = payment.clientId;
+        const deletedActivationStart = payment.activationStart ? new Date(payment.activationStart) : null;
+
         await Payment.findByIdAndDelete(id);
+
+        const now = new Date();
+        let rolledBack = false;
+        let newExpiry = null;
+
+        const ws = await WorkspaceSettings.findOne({ userId: clientId })
+            .select('planExpiryDate subscriptionStatus').lean();
+
+        if (ws) {
+            // Remaining payments for this client (manual + autodebit). Each row's
+            // activationEnd is the period it paid through; the latest = paid-through.
+            const remaining = await Payment.find({ clientId })
+                .select('activationEnd paymentDate').lean();
+
+            const maxEnd = remaining.reduce((max, p) => {
+                const e = p.activationEnd ? new Date(p.activationEnd) : null;
+                return e && (!max || e > max) ? e : max;
+            }, null);
+            newExpiry = maxEnd || deletedActivationStart;
+
+            const current = ws.planExpiryDate ? new Date(ws.planExpiryDate) : null;
+            // Only roll back when this deletion actually shortens the paid window.
+            if (newExpiry && current && newExpiry < current) {
+                const set = { planExpiryDate: newExpiry };
+
+                const latestPayDate = remaining.reduce((max, p) => {
+                    const d = p.paymentDate ? new Date(p.paymentDate) : null;
+                    return d && (!max || d > max) ? d : max;
+                }, null);
+                if (latestPayDate) set.lastPaymentDate = latestPayDate;
+
+                // If the rolled-back window is already in the past, drop the account
+                // to read-only. Don't touch a pending mandate's status.
+                if (newExpiry <= now && ws.subscriptionStatus !== 'pending_auth') {
+                    set.subscriptionStatus = 'expired';
+                }
+
+                await WorkspaceSettings.updateOne({ userId: clientId }, { $set: set });
+
+                // updateOne bypasses the per-doc cache-clear hook — clear explicitly so
+                // the access change is live on the client's next request.
+                try {
+                    const { clearTenantCache } = require('../middleware/authMiddleware');
+                    clearTenantCache(clientId);
+                } catch { /* cache module optional */ }
+
+                rolledBack = true;
+            }
+        }
 
         auditLogger.log({
             actor: req.user,
@@ -208,11 +263,24 @@ const deletePayment = async (req, res) => {
             targetType: 'User',
             targetId: payment.clientId,
             targetName: payment.clientName,
-            details: { amount: payment.amount, paymentDate: payment.paymentDate },
+            details: {
+                amount: payment.amount,
+                paymentDate: payment.paymentDate,
+                rolledBack,
+                ...(rolledBack ? { newExpiry } : {})
+            },
             req
         });
 
-        res.json({ success: true, message: 'Payment record removed (client expiry unchanged).' });
+        const nowExpired = rolledBack && newExpiry <= now;
+        res.json({
+            success: true,
+            rolledBack,
+            newExpiryDate: rolledBack ? newExpiry : (ws?.planExpiryDate || null),
+            message: rolledBack
+                ? `Payment removed and plan rolled back — client paid through ${new Date(newExpiry).toLocaleDateString('en-IN')}${nowExpired ? ' (already passed → account is now read-only)' : ''}.`
+                : 'Payment record removed. Client expiry unchanged (this payment was already superseded by a later one).'
+        });
     } catch (err) {
         console.error('Delete Payment Error:', err);
         res.status(500).json({ message: 'Failed to delete payment.' });

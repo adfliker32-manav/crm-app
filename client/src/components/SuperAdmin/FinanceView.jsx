@@ -469,13 +469,13 @@ const FinanceView = () => {
 
     const handleDeletePayment = async (p) => {
         const ok = await showDanger(
-            `Delete the ₹${p.amount.toLocaleString('en-IN')} payment from ${p.clientName}? This is just bookkeeping — the client's expiry date is not rolled back.`,
-            'Delete payment record?'
+            `Delete the ₹${p.amount.toLocaleString('en-IN')} payment from ${p.clientName}? This also rolls back the plan extension it granted — the client's access is reduced accordingly, and becomes read-only if no paid time remains.`,
+            'Delete payment & roll back plan?'
         );
         if (!ok) return;
         try {
-            await api.delete(`/superadmin/finance/payments/${p._id}`);
-            showSuccess('Payment record removed.');
+            const res = await api.delete(`/superadmin/finance/payments/${p._id}`);
+            showSuccess(res.data?.message || 'Payment record removed.');
             fetchPayments();
             fetchOverview();
         } catch (e) {

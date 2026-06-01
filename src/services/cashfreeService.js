@@ -136,6 +136,10 @@ const createSubscription = async ({
 
 const getSubscription = (subId) => cfRequest('GET', `/subscriptions/${subId}`);
 
+// Lists every charge attempt on a subscription. Used by the daily reconcile to
+// replay any SUCCESS charge whose webhook we missed (entitlement repair).
+const getSubscriptionPayments = (subId) => cfRequest('GET', `/subscriptions/${subId}/payments`);
+
 const cancelSubscription = (subId) => cfRequest('POST', `/subscriptions/${subId}/cancel`, {});
 
 // Manually trigger a charge attempt. Used by SuperAdmin "retry now" button
@@ -214,6 +218,7 @@ module.exports = {
     createCustomer,
     createSubscription,
     getSubscription,
+    getSubscriptionPayments,
     cancelSubscription,
     chargeNow,
     verifyWebhookSignature

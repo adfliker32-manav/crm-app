@@ -50,6 +50,10 @@ const createCoupon = async (req, res) => {
         if (type === 'discount' && (!discountType || !discountValue)) {
             return res.status(400).json({ message: 'discountType and discountValue are required for discount coupons' });
         }
+        // A percentage discount above 100% would compute a negative charge — reject it.
+        if (type === 'discount' && discountType === 'percentage' && Number(discountValue) > 100) {
+            return res.status(400).json({ message: 'Percentage discount cannot exceed 100%' });
+        }
         if (type === 'trial_extension' && !extensionDays) {
             return res.status(400).json({ message: 'extensionDays is required for trial extension coupons' });
         }
@@ -86,6 +90,10 @@ const updateCoupon = async (req, res) => {
         ];
         for (const k of allowed) {
             if (req.body[k] !== undefined) coupon[k] = req.body[k];
+        }
+        // Same guard as create: a percentage discount can't exceed 100%.
+        if (coupon.discountType === 'percentage' && Number(coupon.discountValue) > 100) {
+            return res.status(400).json({ message: 'Percentage discount cannot exceed 100%' });
         }
         await coupon.save();
         res.json({ success: true, coupon });

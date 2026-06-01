@@ -77,6 +77,76 @@ const guardBillable = (req, res) => {
     return true;
 };
 
+// ─── Pricing resolver (shared by subscribe + change-plan) ──────────────────
+// Single source of truth for "what will we actually charge?". Applies the
+// plan-level sale discount (plan.discountPercentage) FIRST, then a discount
+// coupon on top — mirroring the frontend effectivePrice() exactly, so the
+// amount we put on the Cashfree mandate always equals the price the customer
+// was shown. (Previously the plan discount was displayed but never charged,
+// and the coupon was applied to the raw price — both are fixed here.)
+//
+// When a coupon is supplied it ATOMICALLY claims one use (maxUses guard) before
+// the mandate is built, so concurrent redemptions can't exceed the limit. If
+// the caller's mandate creation later fails it must release the claim via
+// releaseCouponClaim(). A mandate that is created but never authorized keeps its
+// claim (standard reservation semantics) — better to under-grant a capped
+// coupon than to over-grant it.
+const resolveSubscriptionPricing = async (planCode, cycle, couponCode) => {
+    const plan = await Plan.findOne({ code: planCode.toLowerCase(), isActive: true });
+    if (!plan) {
+        const e = new Error(`Plan "${planCode}" not found or inactive`); e.status = 400; throw e;
+    }
+
+    const billingCycle = cycle === 'yearly' ? 'yearly' : 'monthly';
+    const base = billingCycle === 'yearly'
+        ? (plan.yearlyPrice || plan.monthlyPrice * 12)
+        : plan.monthlyPrice;
+
+    // Plan-level sale discount.
+    const listAmount = plan.discountPercentage > 0
+        ? Math.round(base * (1 - Math.min(100, plan.discountPercentage) / 100))
+        : base;
+
+    let appliedCoupon = null;
+    let finalAmount   = listAmount;
+
+    if (couponCode) {
+        const coupon = await validateCouponCode(couponCode, planCode); // throws (tagged .status) if invalid
+        if (coupon.type !== 'discount') {
+            const e = new Error('This is a trial-extension coupon — apply it from the Billing page, not at checkout.');
+            e.status = 400; throw e;
+        }
+        // Atomic conditional claim: reserve the slot before the mandate is built,
+        // so two concurrent redemptions of a maxUses-capped coupon can't both win.
+        const claimed = await Coupon.findOneAndUpdate(
+            {
+                _id: coupon._id,
+                isActive: true,
+                $or: [{ maxUses: 0 }, { $expr: { $lt: ['$usedCount', '$maxUses'] } }]
+            },
+            { $inc: { usedCount: 1 } },
+            { new: true }
+        );
+        if (!claimed) {
+            const e = new Error('This coupon has reached its usage limit'); e.status = 400; throw e;
+        }
+        appliedCoupon = coupon;
+        finalAmount = coupon.discountType === 'percentage'
+            ? Math.round(listAmount * (1 - Math.min(100, coupon.discountValue) / 100))
+            : Math.max(0, listAmount - coupon.discountValue);
+    }
+
+    finalAmount = Math.max(0, finalAmount);
+    // Only override the service's own price lookup when there is a real discount;
+    // leaving it null for full price preserves the pending-sub reuse fast-path.
+    const amountOverride = (appliedCoupon || plan.discountPercentage > 0) ? finalAmount : null;
+
+    return { plan, base, listAmount, finalAmount, appliedCoupon, amountOverride };
+};
+
+const releaseCouponClaim = (couponId) =>
+    Coupon.findByIdAndUpdate(couponId, { $inc: { usedCount: -1 } }).catch(() => {});
+
 // ─── POST /api/billing/me/subscribe ────────────────────────────────────────
 // Body: { planCode, cycle?, couponCode? }
 const subscribe = async (req, res) => {
@@ -85,46 +155,32 @@ const subscribe = async (req, res) => {
         const { planCode, cycle, couponCode } = req.body;
         if (!planCode) return res.status(400).json({ message: 'planCode is required' });
 
-        // Resolve coupon discount (discount type only — trial_extension is not valid here)
-        let amountOverride = null;
-        let appliedCoupon  = null;
-        if (couponCode) {
-            try {
-                const coupon = await validateCouponCode(couponCode, planCode);
-                if (coupon.type === 'discount') {
-                    appliedCoupon = coupon;
-                }
-            } catch (e) {
-                return res.status(400).json({ message: e.message });
-            }
+        let pricing;
+        try {
+            pricing = await resolveSubscriptionPricing(planCode, cycle, couponCode);
+        } catch (e) {
+            return res.status(e.status || 400).json({ message: e.message });
         }
 
-        let couponBaseAmount = null; // plan price before discount, for audit
-        if (appliedCoupon) {
-            const plan = await Plan.findOne({ code: planCode.toLowerCase(), isActive: true });
-            if (plan) {
-                couponBaseAmount = (cycle || 'monthly') === 'yearly'
-                    ? (plan.yearlyPrice || plan.monthlyPrice * 12)
-                    : plan.monthlyPrice;
-                amountOverride = appliedCoupon.discountType === 'percentage'
-                    ? Math.round(couponBaseAmount * (1 - appliedCoupon.discountValue / 100))
-                    : Math.max(0, couponBaseAmount - appliedCoupon.discountValue);
-            }
+        let subscription, sessionId;
+        try {
+            ({ subscription, sessionId } = await subscriptionService.initiateSubscription(
+                req.tenantId, planCode, cycle || 'monthly', pricing.amountOverride
+            ));
+        } catch (e) {
+            // Mandate creation failed after we claimed a coupon use → release it.
+            if (pricing.appliedCoupon) await releaseCouponClaim(pricing.appliedCoupon._id);
+            throw e;
         }
 
-        const { subscription, sessionId } = await subscriptionService.initiateSubscription(
-            req.tenantId, planCode, cycle || 'monthly', amountOverride
-        );
-
-        // Record coupon usage after subscription created successfully
-        if (appliedCoupon) {
+        // The claim already incremented usedCount; just record provenance here.
+        if (pricing.appliedCoupon) {
             await Subscription.findByIdAndUpdate(subscription._id, {
                 $set: {
-                    couponCode: appliedCoupon.code,
-                    originalAmount: couponBaseAmount  // plan price BEFORE discount
+                    couponCode: pricing.appliedCoupon.code,
+                    originalAmount: pricing.base   // full list price before any discount
                 }
             });
-            await Coupon.findByIdAndUpdate(appliedCoupon._id, { $inc: { usedCount: 1 } });
         }
 
         res.json({
@@ -132,7 +188,7 @@ const subscribe = async (req, res) => {
             subscriptionId: subscription._id,
             subscriptionSessionId: sessionId,
             mode: cashfreeService.mode(),
-            ...(appliedCoupon ? { couponApplied: true, discountedAmount: amountOverride } : {})
+            ...(pricing.appliedCoupon ? { couponApplied: true, discountedAmount: pricing.finalAmount } : {})
         });
     } catch (err) {
         console.error('subscribe error:', err);
@@ -150,45 +206,35 @@ const changePlan = async (req, res) => {
         const { planCode, cycle, couponCode } = req.body;
         if (!planCode) return res.status(400).json({ message: 'planCode is required' });
 
-        let amountOverride = null;
-        let appliedCoupon  = null;
-        if (couponCode) {
-            try {
-                const coupon = await validateCouponCode(couponCode, planCode);
-                if (coupon.type === 'discount') appliedCoupon = coupon;
-            } catch (e) {
-                return res.status(400).json({ message: e.message });
-            }
-        }
-        let couponBaseAmount = null;
-        if (appliedCoupon) {
-            const plan = await Plan.findOne({ code: planCode.toLowerCase(), isActive: true });
-            if (plan) {
-                couponBaseAmount = (cycle || 'monthly') === 'yearly'
-                    ? (plan.yearlyPrice || plan.monthlyPrice * 12)
-                    : plan.monthlyPrice;
-                amountOverride = appliedCoupon.discountType === 'percentage'
-                    ? Math.round(couponBaseAmount * (1 - appliedCoupon.discountValue / 100))
-                    : Math.max(0, couponBaseAmount - appliedCoupon.discountValue);
-            }
+        let pricing;
+        try {
+            pricing = await resolveSubscriptionPricing(planCode, cycle, couponCode);
+        } catch (e) {
+            return res.status(e.status || 400).json({ message: e.message });
         }
 
-        const { subscription, sessionId } = await subscriptionService.changePlan(
-            req.tenantId, planCode, cycle || 'monthly', amountOverride
-        );
+        let subscription, sessionId;
+        try {
+            ({ subscription, sessionId } = await subscriptionService.changePlan(
+                req.tenantId, planCode, cycle || 'monthly', pricing.amountOverride
+            ));
+        } catch (e) {
+            if (pricing.appliedCoupon) await releaseCouponClaim(pricing.appliedCoupon._id);
+            throw e;
+        }
 
-        if (appliedCoupon) {
+        if (pricing.appliedCoupon) {
             await Subscription.findByIdAndUpdate(subscription._id, {
-                $set: { couponCode: appliedCoupon.code, originalAmount: couponBaseAmount }
+                $set: { couponCode: pricing.appliedCoupon.code, originalAmount: pricing.base }
             });
-            await Coupon.findByIdAndUpdate(appliedCoupon._id, { $inc: { usedCount: 1 } });
         }
 
         res.json({
             success: true,
             subscriptionId: subscription._id,
             subscriptionSessionId: sessionId,
-            mode: cashfreeService.mode()
+            mode: cashfreeService.mode(),
+            ...(pricing.appliedCoupon ? { couponApplied: true, discountedAmount: pricing.finalAmount } : {})
         });
     } catch (err) {
         console.error('changePlan error:', err);

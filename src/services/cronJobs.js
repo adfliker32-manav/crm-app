@@ -349,7 +349,8 @@ const runSubscriptionStatusSweep = async () => {
         const WorkspaceSettings = require('../models/WorkspaceSettings');
         const subscriptionService = require('./subscriptionService');
 
-        const cutoff = new Date(Date.now() - GRACE_DAYS * 24 * 3600 * 1000);
+        const now = Date.now();
+        const GRACE_MS = GRACE_DAYS * 24 * 3600 * 1000;
         const candidates = await Subscription.find({
             status: { $in: ['grace', 'cancelled'] }
         }).select('clientId status currentPeriodEnd').lean();
@@ -360,9 +361,14 @@ const runSubscriptionStatusSweep = async () => {
             if (!ws) continue;
             if (ws.subscriptionStatus === 'expired') continue; // already downgraded
 
-            const expiry = ws.planExpiryDate ? new Date(ws.planExpiryDate) : null;
-            // Grace expired when planExpiryDate + 7 days < now
-            if (!expiry || expiry < cutoff) {
+            const expiry = ws.planExpiryDate ? new Date(ws.planExpiryDate).getTime() : null;
+            // Failed-payment ('grace') accounts get a 7-day retry window past expiry.
+            // Voluntary cancellations keep exactly what they paid for — no extra grace
+            // (they're downgraded the moment planExpiryDate passes), matching the
+            // "access continues until current period end" promise in applyCancellation.
+            const graceWindow = sub.status === 'cancelled' ? 0 : GRACE_MS;
+            const deadline = expiry !== null ? expiry + graceWindow : null;
+            if (deadline === null || deadline < now) {
                 await subscriptionService.enforceDowngrade(sub.clientId);
                 downgraded++;
             }
@@ -432,7 +438,9 @@ const runRenewalReminder = async () => {
 const runSubscriptionReconcile = async () => {
     try {
         const Subscription = require('../models/Subscription');
+        const Payment = require('../models/Payment');
         const cashfreeService = require('./cashfreeService');
+        const subscriptionService = require('./subscriptionService');
 
         if (!cashfreeService.isConfigured()) {
             return; // Cashfree not set up yet — skip silently
@@ -444,6 +452,7 @@ const runSubscriptionReconcile = async () => {
         }).select('_id clientId cashfreeSubscriptionId status').lean();
 
         let repaired = 0;
+        let replayed = 0;
         for (const sub of subs) {
             try {
                 const cfSub = await cashfreeService.getSubscription(sub.cashfreeSubscriptionId);
@@ -461,10 +470,37 @@ const runSubscriptionReconcile = async () => {
                     await Subscription.findByIdAndUpdate(sub._id, { $set: { status: desired } });
                     repaired++;
                 }
+
+                // ── Entitlement repair ────────────────────────────────────────
+                // Fixing local status alone is not enough: if a PAYMENT_SUCCESS
+                // webhook was missed, the customer paid but planExpiryDate was
+                // never extended (and no ledger row exists), so they'd silently go
+                // read-only despite paying. When Cashfree reports the sub active,
+                // pull its charge history and replay any SUCCESS charge we haven't
+                // recorded. applyChargeSuccess is idempotent (unique cf_payment_id),
+                // so this is a no-op once the ledger row exists.
+                if (cfStatus === 'ACTIVE' || cfStatus === 'COMPLETED') {
+                    let payList = [];
+                    try {
+                        const resp = await cashfreeService.getSubscriptionPayments(sub.cashfreeSubscriptionId);
+                        payList = Array.isArray(resp) ? resp : (resp?.data || resp?.payments || []);
+                    } catch { /* payments endpoint unavailable — skip replay, status was still synced */ }
+
+                    for (const p of payList) {
+                        const status = (p.payment_status || p.status || '').toUpperCase();
+                        if (status && status !== 'SUCCESS') continue;
+                        const cfPaymentId = p.cf_payment_id || p.payment_id;
+                        if (!cfPaymentId) continue;
+                        const already = await Payment.exists({ cashfreePaymentId: String(cfPaymentId) });
+                        if (already) continue;
+                        await subscriptionService.applyChargeSuccess(sub.clientId, { payment: p });
+                        replayed++;
+                    }
+                }
             } catch (e) { /* per-sub failure shouldn't kill the sweep */ }
         }
-        if (repaired > 0) {
-            console.log(`🔧 [SubscriptionReconcile] Repaired ${repaired} drifted subscription(s)`);
+        if (repaired > 0 || replayed > 0) {
+            console.log(`🔧 [SubscriptionReconcile] Repaired ${repaired} status / replayed ${replayed} missed charge(s)`);
         }
     } catch (err) {
         console.error('❌ [SubscriptionReconcile] Cron error:', err.message);
