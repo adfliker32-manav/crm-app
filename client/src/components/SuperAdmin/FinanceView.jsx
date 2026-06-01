@@ -9,6 +9,8 @@ import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import RecordPaymentModal from './RecordPaymentModal';
 import RecordExpenseModal from './RecordExpenseModal';
+import AutodebitView from './AutodebitView';
+import AgencyFinanceView from './AgencyFinanceView';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend, Filler);
 
@@ -16,7 +18,7 @@ const fmtINR = (n) => `₹${(n || 0).toLocaleString('en-IN')}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 
 // ────────────────────────────────────────────── OVERVIEW TAB ──────────────────────────────────────────────
-const OverviewTab = ({ summary, chart, renewalsDueSoon, topClients, trialsExpiringSoon, trialDays, onRecordPayment }) => {
+const OverviewTab = ({ summary, chart, renewalsDueSoon, topClients, trialsExpiringSoon, trialDays, onRecordPayment, autodebitStats }) => {
     const s = summary || {};
 
     const chartData = chart ? {
@@ -109,11 +111,12 @@ const OverviewTab = ({ summary, chart, renewalsDueSoon, topClients, trialsExpiri
             </div>
 
             {/* Secondary metric strip — quick-reference small stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
                 <SmallStat label="Last Month Rev"  value={fmtINR(s.lastMonthRevenue)} count="completed cycle" color="text-emerald-600" icon="fa-calendar-day" />
                 <SmallStat label="Total Trials"    value={(s.trialsActive || 0).toLocaleString()} count={`${trialDays || 14}-day free trial`} color="text-amber-600" icon="fa-gift" />
                 <SmallStat label="Avg Per Payment" value={fmtINR(s.lifetimePaymentsCount > 0 ? Math.round(s.lifetimeRevenue / s.lifetimePaymentsCount) : 0)} count="across all payments" color="text-slate-700" icon="fa-divide" />
                 <SmallStat label="Profit Margin"   value={s.lifetimeRevenue > 0 ? `${Math.round((s.netProfit / s.lifetimeRevenue) * 100)}%` : '—'} count="net / revenue lifetime" color="text-indigo-600" icon="fa-percent" />
+                <SmallStat label="Autodebit MRR"   value={fmtINR(autodebitStats?.mrr || 0)} count={`${autodebitStats?.activeMandates || 0} mandates · ${autodebitStats?.inGrace || 0} failing`} color="text-blue-600" icon="fa-bolt" />
             </div>
 
             {/* Charts */}
@@ -286,9 +289,20 @@ const PaymentsTab = ({ payments, loading, onDelete, onRecord }) => (
                                     {expired && <div className="text-rose-600 font-bold">expired</div>}
                                 </td>
                                 <td className="px-4 py-3 text-xs">
-                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-full font-bold">
-                                        {p.paymentMethod}
-                                    </span>
+                                    <div className="flex flex-col gap-1 items-start">
+                                        <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-full font-bold">
+                                            {p.paymentMethod}
+                                        </span>
+                                        {p.gateway === 'cashfree' ? (
+                                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-bold text-[9px] uppercase">
+                                                <i className="fa-solid fa-bolt mr-1" />Autodebit
+                                            </span>
+                                        ) : (
+                                            <span className="px-2 py-0.5 bg-slate-50 text-slate-500 rounded-full font-bold text-[9px] uppercase border border-slate-200">
+                                                Manual
+                                            </span>
+                                        )}
+                                    </div>
                                 </td>
                                 <td className="px-4 py-3 text-[11px] text-slate-500">{fmtDate(p.paymentDate)}</td>
                                 <td className="px-4 py-3 text-right">
@@ -387,6 +401,7 @@ const FinanceView = () => {
     const [topClients, setTopClients] = useState([]);
     const [trialsExpiringSoon, setTrialsExpiringSoon] = useState([]);
     const [trialDays, setTrialDays] = useState(14);
+    const [autodebitStats, setAutodebitStats] = useState({ mrr: 0, activeMandates: 0, inGrace: 0 });
 
     const [payments, setPayments] = useState([]);
     const [expenses, setExpenses] = useState([]);
@@ -399,15 +414,28 @@ const FinanceView = () => {
     const fetchOverview = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await api.get('/superadmin/finance/summary');
-            if (res.data?.success) {
-                setSummary(res.data.summary || {});
-                setChart(res.data.chart || null);
-                setRenewalsDueSoon(res.data.renewalsDueSoon || []);
-                setTopClients(res.data.topClients || []);
-                setTrialsExpiringSoon(res.data.trialsExpiringSoon || []);
-                if (res.data.trialDays) setTrialDays(res.data.trialDays);
+            const [summaryRes, subsRes] = await Promise.all([
+                api.get('/superadmin/finance/summary'),
+                // Autodebit stats are a side-fetch — failure shouldn't block the main overview
+                api.get('/billing/superadmin/subscriptions').catch(() => ({ data: { subscriptions: [] } }))
+            ]);
+            if (summaryRes.data?.success) {
+                setSummary(summaryRes.data.summary || {});
+                setChart(summaryRes.data.chart || null);
+                setRenewalsDueSoon(summaryRes.data.renewalsDueSoon || []);
+                setTopClients(summaryRes.data.topClients || []);
+                setTrialsExpiringSoon(summaryRes.data.trialsExpiringSoon || []);
+                if (summaryRes.data.trialDays) setTrialDays(summaryRes.data.trialDays);
             }
+            const subs = subsRes.data?.subscriptions || [];
+            const active = subs.filter(s => s.status === 'active');
+            const mrr = active.reduce((sum, s) =>
+                sum + (s.billingCycle === 'yearly' ? (s.amount / 12) : s.amount), 0);
+            setAutodebitStats({
+                mrr: Math.round(mrr),
+                activeMandates: active.length,
+                inGrace: subs.filter(s => s.status === 'grace').length
+            });
         } catch (e) {
             console.error(e);
         } finally {
@@ -482,9 +510,11 @@ const FinanceView = () => {
     };
 
     const tabs = [
-        { id: 'overview', label: 'Overview',  icon: 'fa-chart-pie',     color: 'text-indigo-600' },
-        { id: 'payments', label: 'Payments',  icon: 'fa-indian-rupee-sign', color: 'text-emerald-600' },
-        { id: 'expenses', label: 'Expenses',  icon: 'fa-receipt',       color: 'text-rose-600' }
+        { id: 'overview',  label: 'Overview',  icon: 'fa-chart-pie',          color: 'text-indigo-600' },
+        { id: 'payments',  label: 'Payments',  icon: 'fa-indian-rupee-sign',  color: 'text-emerald-600' },
+        { id: 'autodebit', label: 'Autodebit', icon: 'fa-credit-card',        color: 'text-blue-600' },
+        { id: 'expenses',  label: 'Expenses',  icon: 'fa-receipt',            color: 'text-rose-600' },
+        { id: 'agency',    label: 'My Agency', icon: 'fa-briefcase',          color: 'text-violet-600' }
     ];
 
     return (
@@ -495,20 +525,22 @@ const FinanceView = () => {
                     <h1 className="text-3xl font-black text-slate-900 tracking-tight">Finance Manager</h1>
                     <p className="text-slate-500 mt-1">Track payments, expenses, and platform-wide profitability.</p>
                 </div>
-                <div className="flex items-center gap-2">
-                    <button onClick={() => { setPreselectedClient(null); setPayModalOpen(true); }}
-                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-2 shadow-md">
-                        <i className="fa-solid fa-plus text-xs" />Record Payment
-                    </button>
-                    <button onClick={() => setExpModalOpen(true)}
-                        className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold rounded-xl flex items-center gap-2 shadow-sm">
-                        <i className="fa-solid fa-receipt text-xs" />Add Expense
-                    </button>
-                    <button onClick={fetchOverview}
-                        className="w-10 h-10 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl flex items-center justify-center text-slate-500 shadow-sm">
-                        <i className={`fa-solid fa-rotate ${loading ? 'fa-spin' : ''}`} />
-                    </button>
-                </div>
+                {tab !== 'agency' && (
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => { setPreselectedClient(null); setPayModalOpen(true); }}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-2 shadow-md">
+                            <i className="fa-solid fa-plus text-xs" />Record Payment
+                        </button>
+                        <button onClick={() => setExpModalOpen(true)}
+                            className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold rounded-xl flex items-center gap-2 shadow-sm">
+                            <i className="fa-solid fa-receipt text-xs" />Add Expense
+                        </button>
+                        <button onClick={fetchOverview}
+                            className="w-10 h-10 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl flex items-center justify-center text-slate-500 shadow-sm">
+                            <i className={`fa-solid fa-rotate ${loading ? 'fa-spin' : ''}`} />
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Tabs */}
@@ -524,7 +556,9 @@ const FinanceView = () => {
             </div>
 
             {/* Body */}
-            {loading && tab === 'overview' ? (
+            {tab === 'agency' ? (
+                <AgencyFinanceView />
+            ) : loading && tab === 'overview' ? (
                 <div className="flex items-center justify-center h-72">
                     <i className="fa-solid fa-spinner fa-spin text-4xl text-slate-400" />
                 </div>
@@ -533,12 +567,15 @@ const FinanceView = () => {
                     summary={summary} chart={chart}
                     renewalsDueSoon={renewalsDueSoon} topClients={topClients}
                     trialsExpiringSoon={trialsExpiringSoon} trialDays={trialDays}
+                    autodebitStats={autodebitStats}
                     onRecordPayment={(c) => { setPreselectedClient(c); setPayModalOpen(true); }}
                 />
             ) : tab === 'payments' ? (
                 <PaymentsTab payments={payments} loading={tabLoading}
                     onDelete={handleDeletePayment}
                     onRecord={() => { setPreselectedClient(null); setPayModalOpen(true); }} />
+            ) : tab === 'autodebit' ? (
+                <AutodebitView />
             ) : (
                 <ExpensesTab expenses={expenses} loading={tabLoading}
                     onDelete={handleDeleteExpense}

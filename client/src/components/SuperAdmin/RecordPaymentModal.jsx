@@ -31,6 +31,7 @@ const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric',
 const RecordPaymentModal = ({ isOpen, onClose, onSuccess, preselectedClient = null }) => {
     const { showError } = useNotification();
     const [clients, setClients] = useState([]);
+    const [plans, setPlans] = useState([]);
     const [search, setSearch] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
@@ -42,7 +43,8 @@ const RecordPaymentModal = ({ isOpen, onClose, onSuccess, preselectedClient = nu
         paymentDate: todayIso,
         paymentMethod: 'bank_transfer',
         reference: '',
-        notes: ''
+        notes: '',
+        planCode: '' // optional — assign a tier's modules/limits with this payment
     });
 
     useEffect(() => {
@@ -55,14 +57,18 @@ const RecordPaymentModal = ({ isOpen, onClose, onSuccess, preselectedClient = nu
             paymentDate: todayIso,
             paymentMethod: 'bank_transfer',
             reference: '',
-            notes: ''
+            notes: '',
+            planCode: ''
         });
         setSearch(preselectedClient ? (preselectedClient.companyName || preselectedClient.name || '') : '');
 
-        // Fetch billable clients
+        // Fetch billable clients + the plan catalog (for the optional tier assignment)
         api.get('/superadmin/finance/clients')
             .then(r => setClients(r.data?.clients || []))
             .catch(() => setClients([]));
+        api.get('/billing/superadmin/plans')
+            .then(r => setPlans(r.data?.plans || []))
+            .catch(() => setPlans([]));
     }, [isOpen, preselectedClient]);
 
     const selectedClient = useMemo(
@@ -109,7 +115,8 @@ const RecordPaymentModal = ({ isOpen, onClose, onSuccess, preselectedClient = nu
                 paymentDate: form.paymentDate,
                 paymentMethod: form.paymentMethod,
                 reference: form.reference.trim(),
-                notes: form.notes.trim()
+                notes: form.notes.trim(),
+                ...(form.planCode ? { planCode: form.planCode } : {})
             });
             if (res.data?.success) {
                 if (onSuccess) onSuccess(res.data);
@@ -229,6 +236,30 @@ const RecordPaymentModal = ({ isOpen, onClose, onSuccess, preselectedClient = nu
                                 className="w-20 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 outline-none text-sm font-bold" />
                             <span className="text-xs text-slate-500">months</span>
                         </div>
+                    </div>
+
+                    {/* Optional plan tier — assigns modules + limits with this payment */}
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
+                            Assign Plan <span className="text-slate-400 normal-case font-medium">(optional — grants that tier's modules &amp; limits)</span>
+                        </label>
+                        <select value={form.planCode}
+                            onChange={e => setForm({ ...form, planCode: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium text-sm">
+                            <option value="">Keep current modules (extend date only)</option>
+                            {plans.map(p => (
+                                <option key={p.code} value={p.code}>
+                                    {p.name} — {(p.activeModules || []).length} modules
+                                    {p.planFeatures?.leadLimit === 0 ? ', unlimited leads' : p.planFeatures?.leadLimit != null ? `, ${p.planFeatures.leadLimit} leads` : ''}
+                                </option>
+                            ))}
+                        </select>
+                        {form.planCode && (
+                            <p className="text-[11px] text-emerald-700 mt-1.5">
+                                <i className="fa-solid fa-circle-check mr-1" />
+                                This client will be moved onto the <span className="font-bold capitalize">{form.planCode}</span> plan's modules &amp; limits.
+                            </p>
+                        )}
                     </div>
 
                     {/* Stacking preview */}

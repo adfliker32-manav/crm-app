@@ -2,6 +2,7 @@ const Payment = require('../models/Payment');
 const Expense = require('../models/Expense');
 const User = require('../models/User');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
+const Plan = require('../models/Plan');
 const auditLogger = require('../services/auditLogger');
 const mongoose = require('mongoose');
 
@@ -30,7 +31,7 @@ const addMonths = (date, months) => {
 // period starts from `paymentDate` (treats lapsed renewals as fresh activations).
 const recordPayment = async (req, res) => {
     try {
-        const { clientId, amount, durationMonths, paymentDate, paymentMethod, reference, notes } = req.body;
+        const { clientId, amount, durationMonths, paymentDate, paymentMethod, reference, notes, planCode } = req.body;
 
         if (!clientId || !mongoose.Types.ObjectId.isValid(clientId)) {
             return res.status(400).json({ message: 'Valid clientId is required.' });
@@ -54,7 +55,11 @@ const recordPayment = async (req, res) => {
             return res.status(404).json({ message: 'Billable client not found.' });
         }
 
-        const workspace = await WorkspaceSettings.findOne({ userId: clientId });
+        const Subscription = require('../models/Subscription');
+        const [workspace, existingSub] = await Promise.all([
+            WorkspaceSettings.findOne({ userId: clientId }),
+            Subscription.findOne({ clientId, status: 'pending_auth' }).select('status').lean()
+        ]);
         const now = new Date();
         const payDate = paymentDate ? new Date(paymentDate) : now;
 
@@ -81,17 +86,42 @@ const recordPayment = async (req, res) => {
             recordedBy: req.user?.id || req.user?.userId || null
         });
 
-        // Update workspace planExpiryDate + status. Status flips to 'active' so the
-        // tri-state check (and frontend banners) reflect the paid state.
+        // Build the workspace update. Status flips to 'active' so the lapse check
+        // (and frontend banners) reflect the paid state — restoring full access
+        // instantly for a previously read-only (lapsed) account.
+        // Exception: if the client has an open Cashfree mandate awaiting authorization
+        // (pending_auth), keep that status so the UI shows the correct pending state;
+        // the expiry extension still takes effect immediately.
+        const workspaceSet = {
+            planExpiryDate: activationEnd,
+            lastPaymentDate: payDate,
+            ...(!existingSub ? { subscriptionStatus: 'active' } : {})
+        };
+
+        // Optional: assign a plan tier with this cash/manual payment. Copies the
+        // tier's modules + feature flags + limits onto the workspace so a cash
+        // payer gets the same access an autodebit subscriber would (e.g. "cash for
+        // Pro, 1 year"). Without planCode, only the date/status change (legacy).
+        let appliedPlan = null;
+        if (planCode) {
+            appliedPlan = await Plan.findOne({ code: String(planCode).toLowerCase() });
+            if (!appliedPlan) {
+                return res.status(400).json({ message: `Plan "${planCode}" not found.` });
+            }
+            workspaceSet.currentPlanCode = appliedPlan.code;
+            workspaceSet.subscriptionPlan = appliedPlan.name;
+            workspaceSet.activeModules = appliedPlan.activeModules || ['leads', 'team', 'reports'];
+            workspaceSet.planFeatures = {
+                ...(appliedPlan.planFeatures || {}),
+                leadLimit: appliedPlan.planFeatures?.leadLimit ?? 100,
+                agentLimit: appliedPlan.planFeatures?.agentLimit ?? 5
+            };
+            workspaceSet.agentLimit = appliedPlan.planFeatures?.agentLimit ?? 5;
+        }
+
         await WorkspaceSettings.findOneAndUpdate(
             { userId: clientId },
-            {
-                $set: {
-                    planExpiryDate: activationEnd,
-                    subscriptionStatus: 'active',
-                    lastPaymentDate: payDate
-                }
-            },
+            { $set: workspaceSet },
             { upsert: true, setDefaultsOnInsert: true }
         );
 

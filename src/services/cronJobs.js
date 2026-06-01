@@ -332,8 +332,243 @@ const runScoreDecay = async () => {
     }
 };
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Autodebit subscription status sweep — runs hourly.
+// Walks every Subscription in 'grace' or 'cancelled' status whose paid window
+// (currentPeriodEnd / planExpiryDate) plus the 7-day grace has elapsed, and
+// calls enforceDowngrade() to strip modules + flip workspace to 'expired'.
+//
+// This is the cron half of "if payment not cut → downgrade plan". The other
+// half is the Cashfree SUBSCRIPTION_PAYMENT_FAILED webhook flipping status
+// from 'active' → 'grace' the moment Cashfree gives up retrying.
+// ──────────────────────────────────────────────────────────────────────────────
+const GRACE_DAYS = 7;
+const runSubscriptionStatusSweep = async () => {
+    try {
+        const Subscription = require('../models/Subscription');
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
+        const subscriptionService = require('./subscriptionService');
+
+        const cutoff = new Date(Date.now() - GRACE_DAYS * 24 * 3600 * 1000);
+        const candidates = await Subscription.find({
+            status: { $in: ['grace', 'cancelled'] }
+        }).select('clientId status currentPeriodEnd').lean();
+
+        let downgraded = 0;
+        for (const sub of candidates) {
+            const ws = await WorkspaceSettings.findOne({ userId: sub.clientId }).select('planExpiryDate subscriptionStatus').lean();
+            if (!ws) continue;
+            if (ws.subscriptionStatus === 'expired') continue; // already downgraded
+
+            const expiry = ws.planExpiryDate ? new Date(ws.planExpiryDate) : null;
+            // Grace expired when planExpiryDate + 7 days < now
+            if (!expiry || expiry < cutoff) {
+                await subscriptionService.enforceDowngrade(sub.clientId);
+                downgraded++;
+            }
+        }
+        if (downgraded > 0) {
+            console.log(`💸 [AutodebitSweep] Downgraded ${downgraded} tenant(s) past grace window`);
+        }
+    } catch (err) {
+        console.error('❌ [AutodebitSweep] Cron error:', err.message);
+    }
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Renewal reminder — runs daily at 9 AM.
+// Emails the customer T-7 / T-3 / T-1 days before their next autodebit charge
+// so they can update card / top up wallet before the charge attempt. Uses the
+// generic email sender; if the tenant has no email integration configured this
+// silently no-ops.
+// ──────────────────────────────────────────────────────────────────────────────
+const runRenewalReminder = async () => {
+    try {
+        const Subscription = require('../models/Subscription');
+        const User = require('../models/User');
+        const Plan = require('../models/Plan');
+        const billingEmailService = require('./billingEmailService');
+
+        const now = Date.now();
+        const windows = [7, 3, 1];
+
+        let totalSent = 0;
+        for (const days of windows) {
+            const start = new Date(now + (days - 0.5) * 24 * 3600 * 1000);
+            const end   = new Date(now + (days + 0.5) * 24 * 3600 * 1000);
+            const subs = await Subscription.find({
+                status: 'active',
+                nextChargeAt: { $gte: start, $lte: end }
+            }).lean();
+
+            for (const sub of subs) {
+                const client = await User.findById(sub.clientId).select('email name companyName').lean();
+                if (!client?.email) continue;
+                const plan = await Plan.findOne({ code: sub.planCode }).select('name').lean();
+                // Fire-and-forget so a slow SMTP doesn't stall the whole sweep.
+                billingEmailService.sendRenewalReminder(client, {
+                    planName: plan?.name,
+                    amount: sub.amount,
+                    daysUntil: days,
+                    chargeDate: sub.nextChargeAt
+                }).catch(err => console.error(`[RenewalReminder] email failed for ${client.email}:`, err.message));
+                totalSent++;
+            }
+        }
+        if (totalSent > 0) {
+            console.log(`📣 [RenewalReminder] ${totalSent} reminder email(s) dispatched`);
+        }
+    } catch (err) {
+        console.error('❌ [RenewalReminder] Cron error:', err.message);
+    }
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Drift reconciliation — runs daily at 2 AM.
+// For every active subscription, fetch the latest state from Cashfree and
+// repair local drift (catches the rare missed webhook). Safe to run as it
+// only flips local doc; never calls Cashfree write APIs.
+// ──────────────────────────────────────────────────────────────────────────────
+const runSubscriptionReconcile = async () => {
+    try {
+        const Subscription = require('../models/Subscription');
+        const cashfreeService = require('./cashfreeService');
+
+        if (!cashfreeService.isConfigured()) {
+            return; // Cashfree not set up yet — skip silently
+        }
+
+        const subs = await Subscription.find({
+            status: { $in: ['active', 'grace', 'pending_auth'] },
+            cashfreeSubscriptionId: { $ne: null }
+        }).select('_id clientId cashfreeSubscriptionId status').lean();
+
+        let repaired = 0;
+        for (const sub of subs) {
+            try {
+                const cfSub = await cashfreeService.getSubscription(sub.cashfreeSubscriptionId);
+                const cfStatus = (cfSub.subscription_status || '').toUpperCase();
+                const map = {
+                    INITIALIZED: 'pending_auth',
+                    ACTIVE: 'active',
+                    ON_HOLD: 'grace',
+                    BANK_APPROVAL_PENDING: 'grace',
+                    CANCELLED: 'cancelled',
+                    COMPLETED: 'completed'
+                };
+                const desired = map[cfStatus];
+                if (desired && desired !== sub.status) {
+                    await Subscription.findByIdAndUpdate(sub._id, { $set: { status: desired } });
+                    repaired++;
+                }
+            } catch (e) { /* per-sub failure shouldn't kill the sweep */ }
+        }
+        if (repaired > 0) {
+            console.log(`🔧 [SubscriptionReconcile] Repaired ${repaired} drifted subscription(s)`);
+        }
+    } catch (err) {
+        console.error('❌ [SubscriptionReconcile] Cron error:', err.message);
+    }
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Follow-up Template Auto-Send
+// Runs daily at 09:00 AM. Finds leads whose nextFollowUpDate is today and have
+// a scheduled template attached (followUpTemplateName set, followUpTemplateSent
+// false), then sends the WhatsApp or email template automatically.
+// ──────────────────────────────────────────────────────────────────────────────
+const runFollowUpTemplateSend = async () => {
+    try {
+        const Lead = require('../models/Lead');
+        const { sendWhatsAppMessage } = require('./whatsappService');
+        const { sendEmailWithRetry } = require('./emailService');
+        const EmailTemplate = require('../models/EmailTemplate');
+        const User = require('../models/User');
+        const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
+        const { isFeatureDisabled } = require('../utils/systemConfig');
+
+        if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
+
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+
+        const leads = await Lead.find({
+            nextFollowUpDate: { $gte: todayStart, $lte: todayEnd },
+            followUpTemplateName: { $ne: null },
+            followUpTemplateSent: { $ne: true }
+        }).select('_id name phone email status userId followUpTemplateType followUpTemplateName').lean();
+
+        if (!leads.length) return;
+
+        console.log(`📨 [FollowUpTemplate] Processing ${leads.length} lead(s) with scheduled templates`);
+
+        for (const lead of leads) {
+            try {
+                if (lead.followUpTemplateType === 'whatsapp') {
+                    if (!lead.phone) {
+                        await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } });
+                        continue;
+                    }
+                    await sendWhatsAppMessage(lead.phone, lead.followUpTemplateName, lead.userId.toString());
+                    await Lead.findByIdAndUpdate(lead._id, {
+                        $set: { followUpTemplateSent: true, followUpTemplateType: null, followUpTemplateName: null },
+                        $push: {
+                            history: {
+                                $each: [{ type: 'WhatsApp', subType: 'Auto', content: `Follow-up template "${lead.followUpTemplateName}" sent automatically`, date: new Date() }],
+                                $slice: -100
+                            }
+                        }
+                    });
+                    console.log(`✅ [FollowUpTemplate] WA template sent to ${lead.phone} (lead ${lead._id})`);
+
+                } else if (lead.followUpTemplateType === 'email') {
+                    if (!lead.email) {
+                        await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } });
+                        continue;
+                    }
+                    const template = await EmailTemplate.findOne({ _id: lead.followUpTemplateName, userId: lead.userId }).lean().catch(() => null);
+                    if (!template) {
+                        await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } });
+                        continue;
+                    }
+                    const user = await User.findById(lead.userId).select('name companyName').lean().catch(() => null);
+                    const templateData = {
+                        leadName: lead.name || '',
+                        leadEmail: lead.email || '',
+                        leadPhone: lead.phone || '',
+                        companyName: user?.companyName || '',
+                        userName: user?.name || '',
+                        stageName: lead.status || ''
+                    };
+                    const subject = replaceVariables(template.subject, templateData);
+                    const body = replaceVariables(template.body, templateData);
+                    await sendEmailWithRetry({ to: lead.email, subject, html: wrapEmailHtml(body), userId: lead.userId.toString() }, 1);
+                    await Lead.findByIdAndUpdate(lead._id, {
+                        $set: { followUpTemplateSent: true, followUpTemplateType: null, followUpTemplateName: null },
+                        $push: {
+                            history: {
+                                $each: [{ type: 'Email', subType: 'Auto', content: `Follow-up email template "${template.name}" sent automatically`, date: new Date() }],
+                                $slice: -100
+                            }
+                        }
+                    });
+                    console.log(`✅ [FollowUpTemplate] Email template sent to ${lead.email} (lead ${lead._id})`);
+                }
+            } catch (err) {
+                console.error(`❌ [FollowUpTemplate] Failed for lead ${lead._id}:`, err.message);
+                // Mark sent to avoid hammering on persistent errors
+                await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } }).catch(() => {});
+            }
+        }
+    } catch (err) {
+        console.error('❌ [FollowUpTemplate] Cron error:', err.message);
+    }
+};
+
 const startCronJobs = () => {
-    console.log('[CronJobs] Billing/trial cron jobs are disabled. System uses approval-based control.');
+    console.log('[CronJobs] Trial/expiry cron jobs disabled (approval-based). Autodebit jobs ENABLED below.');
 
     // Media cache cleanup — 3:00 AM daily (wall-clock, survives restarts)
     cron.schedule('0 3 * * *', cleanupWhatsAppMediaCache);
@@ -353,6 +588,10 @@ const startCronJobs = () => {
     cron.schedule('*/30 * * * *', runAppointmentReminders);
     console.log('[CronJobs] Appointment reminders scheduled (every 30 min)');
 
+    // Follow-up template auto-send — daily at 09:00 AM
+    cron.schedule('0 9 * * *', runFollowUpTemplateSend);
+    console.log('[CronJobs] Follow-up template auto-send scheduled (daily 09:00)');
+
     // Lost lead re-engagement — daily at 10:00 AM
     cron.schedule('0 10 * * *', runLostLeadRecovery);
     console.log('[CronJobs] Lost lead recovery scheduled (daily 10:00)');
@@ -360,6 +599,31 @@ const startCronJobs = () => {
     // Lead score decay — daily at 01:00 AM
     cron.schedule('0 1 * * *', runScoreDecay);
     console.log('[CronJobs] Lead score decay scheduled (daily 01:00)');
+
+    // ── Autodebit / Cashfree subscriptions ─────────────────────────────────
+    // Hourly grace-window sweep — the workhorse of "failed payment → downgrade".
+    cron.schedule('0 * * * *', runSubscriptionStatusSweep);
+    console.log('[CronJobs] Autodebit grace sweep scheduled (hourly)');
+
+    // Renewal reminders T-7 / T-3 / T-1 — daily at 09:00
+    cron.schedule('0 9 * * *', runRenewalReminder);
+    console.log('[CronJobs] Renewal reminders scheduled (daily 09:00)');
+
+    // Drift reconciliation against Cashfree — daily at 02:00
+    cron.schedule('0 2 * * *', runSubscriptionReconcile);
+    console.log('[CronJobs] Subscription drift reconcile scheduled (daily 02:00)');
 };
 
-module.exports = { startCronJobs, cleanupWhatsAppMediaCache, refreshExpiringTokens, runTimeInStageTrigger, runAppointmentReminders, runLostLeadRecovery, runScoreDecay };
+module.exports = {
+    startCronJobs,
+    cleanupWhatsAppMediaCache,
+    refreshExpiringTokens,
+    runTimeInStageTrigger,
+    runAppointmentReminders,
+    runFollowUpTemplateSend,
+    runLostLeadRecovery,
+    runScoreDecay,
+    runSubscriptionStatusSweep,
+    runRenewalReminder,
+    runSubscriptionReconcile
+};

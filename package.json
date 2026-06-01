@@ -23,7 +23,6 @@
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.76.5",
-    "cashfree-pg": "^5.1.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",

@@ -40,6 +40,8 @@ const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
 const DataDeletionStatus = lazy(() => import('./pages/DataDeletionStatus'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 const PaymentRequired = lazy(() => import('./pages/PaymentRequired'));
+const Plans = lazy(() => import('./pages/Plans'));
+const Billing = lazy(() => import('./pages/Billing'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -61,6 +63,7 @@ function App() {
                     <Route path="/privacy" element={<PrivacyPolicy />} />
                     <Route path="/deletion-status" element={<DataDeletionStatus />} />
                     <Route path="/payment-required" element={<PaymentRequired />} />
+                    <Route path="/plans" element={<Plans />} />
 
                     <Route element={<ProtectedRoute />}>
                       <Route path="/super-admin" element={<SuperAdmin />} />
@@ -85,6 +88,7 @@ function App() {
                         <Route path="/appointments" element={<Appointments />} />
                         <Route path="/settings" element={<Settings />} />
                         <Route path="/reports" element={<Reports />} />
+                        <Route path="/billing" element={<Billing />} />
                       </Route>
                     </Route>
 

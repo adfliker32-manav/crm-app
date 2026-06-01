@@ -32,10 +32,12 @@ const appointmentRoutes = require('./src/routes/appointmentRoutes'); // Appointm
 const bookingRoutes = require('./src/routes/bookingRoutes'); // Public Booking Pages
 const supportRoutes = require('./src/routes/supportRoutes'); // In-built Help Center
 const { authMiddleware } = require('./src/middleware/authMiddleware');
+const requireModule = require('./src/middleware/moduleMiddleware');
 const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
 const webLeadRoutes = require('./src/routes/webLeadRoutes'); // Web-to-Lead embed
 const mcpRoutes = require('./src/routes/mcpRoutes'); // Claude AI / MCP server
 const sequenceRoutes = require('./src/routes/sequenceRoutes'); // Drip Sequences
+const billingRoutes = require('./src/routes/billingRoutes'); // Cashfree Autodebit Subscriptions
 
 const app = express();
 
@@ -396,14 +398,22 @@ app.use('/api/auth', authRoutes);
 app.use('/api/superadmin', superAdminRoutes);
 app.use('/api/agency', agencyRoutes);
 
+// 1b. Billing / Cashfree Autodebit Subscriptions
+// Webhook is public (signature-verified inside the controller); customer +
+// superadmin routes apply authMiddleware per-route inside billingRoutes.js.
+app.use('/api/billing', billingRoutes);
+
 // 2. Leads System
 app.use('/api/leads', authMiddleware, leadRoutes);
 app.use('/api/stages', authMiddleware, stageRoutes);
 app.use('/api/custom-fields', authMiddleware, customFieldRoutes);
 app.use('/api/tags', authMiddleware, require('./src/routes/tagRoutes'));
 app.use('/api/tasks', authMiddleware, taskRoutes);
-app.use('/api/automations', authMiddleware, automationRoutes);
-app.use('/api/sequences', authMiddleware, sequenceRoutes);
+// Plan-gated by the 'automations' module (drip Sequences are part of Automations,
+// not a separate module). Mirrors the email/whatsapp/chatbot gates so a Basic-tier
+// user can't reach these APIs directly even if the nav is hidden.
+app.use('/api/automations', authMiddleware, requireModule('automations'), automationRoutes);
+app.use('/api/sequences', authMiddleware, requireModule('automations'), sequenceRoutes);
 app.use('/api/appointments', authMiddleware, appointmentRoutes);
 
 // In-built Help Center (auth handled inside route file — supports customer + super admin)

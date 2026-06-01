@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
-// Shows a warning banner when the tenant's plan is approaching expiry (5-day window)
-// or within the 7-day grace period after expiry.
-// Past-grace tenants don't reach the layout — they get blocked by 402 and redirected
-// to the PaymentRequired screen.
+// Top-of-app banner reflecting the tenant's subscription posture:
+//   • lapsed  → account is READ-ONLY (trial/plan ended). Non-dismissible, with a
+//               Subscribe CTA for managers. Reads still work; writes are blocked
+//               server-side with `subscription_required`.
+//   • warning → plan expires within 5 days. Amber, dismissible.
+// Agencies/superadmin are lifetime-free and never see this (payment-status
+// returns hasExpiry:false for them).
 const PaymentBanner = () => {
+    const { user } = useAuth();
     const [status, setStatus] = useState(null);
     const [dismissed, setDismissed] = useState(false);
 
@@ -15,8 +21,10 @@ const PaymentBanner = () => {
             try {
                 const res = await api.get('/auth/payment-status');
                 if (cancelled) return;
-                if (res.data?.success && res.data.hasExpiry && (res.data.warningWindow || res.data.inGrace)) {
+                if (res.data?.success && res.data.hasExpiry && (res.data.warningWindow || res.data.lapsed)) {
                     setStatus(res.data);
+                } else {
+                    setStatus(null);
                 }
             } catch { /* silent — banner is purely informational */ }
         };
@@ -26,28 +34,35 @@ const PaymentBanner = () => {
         return () => { cancelled = true; clearInterval(id); };
     }, []);
 
-    if (!status || dismissed) return null;
+    if (!status) return null;
 
-    if (status.inGrace) {
-        const days = Math.max(0, status.daysUntilGraceEnd);
+    const isManager = user?.role === 'manager';
+
+    // ── READ-ONLY LOCK (trial/plan ended) — not dismissible ──
+    if (status.lapsed) {
         return (
-            <div className="bg-red-50 border-b-2 border-red-400 text-red-800 px-4 py-2.5 flex items-center justify-between gap-3 text-sm">
+            <div className="bg-rose-600 text-white px-4 py-2.5 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2">
-                    <i className="fa-solid fa-triangle-exclamation text-red-600" />
+                    <i className="fa-solid fa-lock" />
                     <span>
-                        <span className="font-bold">Payment overdue.</span>{' '}
-                        Your access will be cut off in <span className="font-black">{days} day{days === 1 ? '' : 's'}</span>.
-                        Please pay outstanding bill to continue using the platform.
+                        <span className="font-black">Your account is read-only.</span>{' '}
+                        {isManager
+                            ? 'Your plan has ended — subscribe to restore full access. Your data is safe.'
+                            : 'Your account owner needs to renew the subscription to restore full access.'}
                     </span>
                 </div>
-                <button onClick={() => setDismissed(true)} className="text-red-600 hover:text-red-800 p-1 flex-shrink-0">
-                    <i className="fa-solid fa-times" />
-                </button>
+                {isManager && (
+                    <Link to="/plans"
+                        className="flex-shrink-0 bg-white text-rose-700 hover:bg-rose-50 font-bold px-4 py-1.5 rounded-lg transition">
+                        Subscribe now
+                    </Link>
+                )}
             </div>
         );
     }
 
-    // Warning window (within 5 days of expiry but not expired yet)
+    // ── WARNING WINDOW (expires within 5 days) — dismissible ──
+    if (dismissed) return null;
     const days = Math.max(0, status.daysUntilExpiry);
     return (
         <div className="bg-amber-50 border-b border-amber-300 text-amber-800 px-4 py-2 flex items-center justify-between gap-3 text-sm">
@@ -55,7 +70,7 @@ const PaymentBanner = () => {
                 <i className="fa-solid fa-clock text-amber-600" />
                 <span>
                     Subscription expires in <span className="font-black">{days} day{days === 1 ? '' : 's'}</span>.
-                    Renew soon to avoid disruption.
+                    {isManager && <> Renew from <Link to="/billing" className="underline font-bold">Billing</Link> to avoid going read-only.</>}
                 </span>
             </div>
             <button onClick={() => setDismissed(true)} className="text-amber-600 hover:text-amber-800 p-1 flex-shrink-0">

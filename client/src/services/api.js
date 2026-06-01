@@ -64,13 +64,20 @@ api.interceptors.response.use(
             }
         }
 
-        // ── 402 Payment Required — Subscription expired past 7-day grace ──
+        // ── 403 subscription_required — account is READ-ONLY (trial/plan lapsed) ──
+        // A write was attempted on a lapsed account. We do NOT redirect or log out —
+        // the user keeps read-only access and the PaymentBanner shows the Subscribe
+        // CTA. We just normalize the message so per-call error toasts read cleanly.
+        if (status === 403 && error.response?.data?.error === 'subscription_required') {
+            error.response.data.message = error.response.data.message
+                || 'Your plan has ended. Subscribe from the Billing page to reactivate.';
+        }
+
+        // ── 402 Payment Required — legacy hard-block (retained for safety) ──
         if (status === 402 && error.response?.data?.error === 'payment_required') {
-            // Stash context so the PaymentRequired page can render dates
             try {
                 sessionStorage.setItem('payment_required_info', JSON.stringify(error.response.data));
             } catch { /* sessionStorage may be unavailable */ }
-            // Only redirect if we're not already on the blocked screen / login
             const path = window.location.pathname;
             if (path !== '/payment-required' && path !== '/login') {
                 window.location.replace('/payment-required');

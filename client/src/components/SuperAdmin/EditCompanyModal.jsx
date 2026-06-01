@@ -1,21 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { WORKSPACE_MODULES } from '../../constants/modules';
 
-// Modules a tenant workspace can have. `chatbot` was previously listed here
-// by mistake — it's actually a sub-permission (planFeatures.aiChatbot) gated
-// under the WhatsApp module, not a top-level module.
-const AVAILABLE_MODULES = [
-    { id: 'leads',       name: 'Leads',         icon: 'fa-address-book' },
-    { id: 'whatsapp',    name: 'WhatsApp',      icon: 'fa-whatsapp', isBrand: true },
-    { id: 'email',       name: 'Email',         icon: 'fa-envelope' },
-    { id: 'automations', name: 'Automations',   icon: 'fa-bolt' },
-    { id: 'team',        name: 'Team',          icon: 'fa-users' },
-    { id: 'reports',     name: 'Reports',       icon: 'fa-chart-pie' },
-    { id: 'api',         name: 'API Access',    icon: 'fa-code' },
-    { id: 'whitelabel',  name: 'White-Label',   icon: 'fa-palette' },
-    { id: 'settings',    name: 'Settings',      icon: 'fa-gear' }
-];
+// Modules a tenant workspace can have — single source of truth (no API/White-Label;
+// those are not manager-level offerings). `chatbot` is a sub-permission
+// (planFeatures.aiChatbot) under WhatsApp, not a top-level module.
+const AVAILABLE_MODULES = WORKSPACE_MODULES;
 
 // Sub-permissions appear only when their parent module is active.
 const SUB_PERMISSIONS = [
@@ -24,7 +15,6 @@ const SUB_PERMISSIONS = [
     { key: 'emailAutomation',    label: 'Email Automation',    parentModule: 'email',    icon: 'fa-envelopes-bulk' },
     { key: 'campaigns',          label: 'Bulk Campaigns',      parentModule: 'email',    icon: 'fa-bullhorn' },
     { key: 'metaSync',           label: 'Meta Lead Ads Sync',  parentModule: 'leads',    icon: 'fa-meta' },
-    { key: 'webhooks',           label: 'Webhooks',            parentModule: 'api',      icon: 'fa-plug' },
     { key: 'advancedAnalytics',  label: 'Advanced Analytics',  parentModule: 'reports',  icon: 'fa-chart-line' }
 ];
 

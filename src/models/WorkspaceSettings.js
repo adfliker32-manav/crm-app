@@ -17,13 +17,31 @@ const workspaceSettingsSchema = new mongoose.Schema({
     },
     subscriptionStatus: {
         type: String,
-        enum: ['pending', 'trial', 'active', 'free_limited', 'expired'],
-        default: 'pending'  
+        enum: ['pending', 'trial', 'active', 'free_limited', 'expired', 'grace', 'pending_auth'],
+        default: 'pending'
     },
     billingType: {
         type: String,
-        enum: ['trial', 'paid_by_agency', 'paid_direct'],
+        enum: ['trial', 'paid_by_agency', 'paid_direct', 'autodebit_cashfree'],
         default: 'trial'
+    },
+
+    // Cashfree autodebit linkage (set when manager subscribes to a tier).
+    // Source-of-truth for plan state stays on this doc (planExpiryDate,
+    // subscriptionStatus, activeModules); these fields are pointers + flag.
+    currentPlanCode: {
+        type: String,
+        default: null,
+        index: true
+    },
+    subscriptionId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Subscription',
+        default: null
+    },
+    autoDebitEnabled: {
+        type: Boolean,
+        default: false
     },
     subscriptionDurationMonths: {
         type: Number,

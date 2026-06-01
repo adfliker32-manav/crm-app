@@ -41,6 +41,16 @@ const buildBaseUserResponse = (user) => ({
     isOnboarded: user.isOnboarded
 });
 
+// Billable tenant whose paid/trial window has elapsed → account is read-only.
+// agencies + superadmin are lifetime-free and never lapse.
+const isAccessLapsed = (user, workspace) => {
+    const billable = user.role === 'manager' || user.role === 'agent';
+    if (!billable) return false;
+    const expiry = workspace?.planExpiryDate;
+    if (!expiry) return false;
+    return Date.now() > new Date(expiry).getTime();
+};
+
 const buildLoginUserResponse = (user, workspace) => ({
     ...buildBaseUserResponse(user),
     is_active: user.is_active,
@@ -48,6 +58,9 @@ const buildLoginUserResponse = (user, workspace) => ({
     status: user.status,
     activeModules: workspace?.activeModules || [],
     planFeatures: workspace?.planFeatures || {},
+    subscriptionStatus: workspace?.subscriptionStatus || null,
+    planExpiryDate: workspace?.planExpiryDate || null,
+    accessLocked: isAccessLapsed(user, workspace),
     termsAccepted: !!user.termsAcceptedAt
 });
 
@@ -289,10 +302,12 @@ exports.createAgent = async (req, res) => {
 
         const managerId = getRequestUserId(req.user);
         const workspace = await WorkspaceSettings.findOne({ userId: managerId }).select('agentLimit');
-        const currentAgentCount = await User.countDocuments({ parentId: managerId, role: 'agent' });
-        const limit = workspace?.agentLimit || 5;
+        // A limit of 0 means UNLIMITED (higher tiers may set it). Use ?? so a
+        // genuine 0 is preserved (not coerced to the default 5 by ||), then skip
+        // the cap entirely when the resolved limit is 0.
+        const limit = workspace?.agentLimit ?? 5;
 
-        if (currentAgentCount >= limit) {
+        if (limit > 0 && currentAgentCount >= limit) {
             return res.status(403).json({
                 message: `Upgrade required. You have reached your current plan limit of ${limit} agents.`
             });
@@ -406,6 +421,15 @@ exports.updateAgent = async (req, res) => {
 
         const updatedAgent = await User.findByIdAndUpdate(id, updateData, { new: true }).select('-password');
 
+        // Evict the agent's permission cache immediately so the next request
+        // picks up the new permissions from DB instead of the stale cache.
+        if (updateData.permissions) {
+            try {
+                const { clearAgentPermCache } = require('../middleware/authMiddleware');
+                clearAgentPermCache(id);
+            } catch { /* cache module optional */ }
+        }
+
         res.json({
             success: true,
             message: 'Agent updated successfully',
@@ -507,20 +531,21 @@ exports.getPaymentStatus = async (req, res) => {
         if (!expiry) {
             return res.json({ success: true, hasExpiry: false });
         }
-        const GRACE_DAYS = 7;
         const expiryTime = new Date(expiry).getTime();
-        const graceEnd = expiryTime + GRACE_DAYS * 24 * 60 * 60 * 1000;
         const now = Date.now();
         const day = 24 * 60 * 60 * 1000;
+        const lapsed = now > expiryTime; // past expiry → account is read-only
 
         res.json({
             success: true,
             hasExpiry: true,
             expiry,
-            graceEndsAt: new Date(graceEnd).toISOString(),
             daysUntilExpiry: Math.ceil((expiryTime - now) / day),
-            daysUntilGraceEnd: Math.ceil((graceEnd - now) / day),
-            inGrace: now > expiryTime && now <= graceEnd,
+            // `lapsed` (a.k.a. accessLocked) drives the read-only banner; the
+            // warning window drives the "expires soon" amber banner.
+            lapsed,
+            accessLocked: lapsed,
+            subscriptionStatus: req.workspace?.subscriptionStatus || null,
             warningWindow: now > (expiryTime - 5 * day) && now <= expiryTime,
             currency: 'INR'
         });

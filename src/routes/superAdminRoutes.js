@@ -134,4 +134,29 @@ router.get('/finance/expenses',     authMiddleware, requireSuperAdmin, listExpen
 router.post('/finance/expenses',    authMiddleware, requireSuperAdmin, recordExpense);
 router.delete('/finance/expenses/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deleteExpense);
 
+// 🏢 AGENCY FINANCE — independent agency client & payment management
+const {
+    getSummary:      agencySummary,
+    listClients:     agencyListClients,
+    createClient:    agencyCreateClient,
+    updateClient:    agencyUpdateClient,
+    deleteClient:    agencyDeleteClient,
+    listPayments:    agencyListPayments,
+    createPayment:   agencyCreatePayment,
+    updatePayment:   agencyUpdatePayment,
+    deletePayment:   agencyDeletePayment,
+} = require('../controllers/agencyFinanceController');
+
+router.get('/agency-finance/summary',              authMiddleware, requireSuperAdmin, agencySummary);
+
+router.get('/agency-finance/clients',              authMiddleware, requireSuperAdmin, agencyListClients);
+router.post('/agency-finance/clients',             authMiddleware, requireSuperAdmin, agencyCreateClient);
+router.put('/agency-finance/clients/:id',          validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyUpdateClient);
+router.delete('/agency-finance/clients/:id',       validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyDeleteClient);
+
+router.get('/agency-finance/payments',             authMiddleware, requireSuperAdmin, agencyListPayments);
+router.post('/agency-finance/payments',            authMiddleware, requireSuperAdmin, agencyCreatePayment);
+router.put('/agency-finance/payments/:id',         validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyUpdatePayment);
+router.delete('/agency-finance/payments/:id',      validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyDeletePayment);
+
 module.exports = router;

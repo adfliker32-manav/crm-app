@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const { getSequences, createSequence, updateSequence, deleteSequence, getEnrollments } = require('../controllers/sequenceController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
 const validateObjectId = require('../middleware/validateObjectId');
 
 router.use(authMiddleware);
+router.use(requireFeature('emailAutomation'));
 router.use(checkPermission('manageTeam'));
 
 // Static routes BEFORE dynamic /:id to prevent shadowing

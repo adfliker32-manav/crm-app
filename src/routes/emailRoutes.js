@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const emailController = require('../controllers/emailController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
 const { meterUsage } = require('../middleware/usageMeter');
 const { emailSendLimiter, emailTestLimiter } = require('../middleware/emailRateLimiter');
@@ -33,8 +33,8 @@ const { trackOpen, trackClick } = require('../controllers/emailTrackingControlle
 router.get('/track/open/:logId', trackOpen);
 router.get('/track/click/:logId', trackClick);
 
-// F2: Bulk campaign send
-router.post('/campaign', authMiddleware, requireModule('email'), emailSendLimiter, emailController.sendBulkCampaign);
+// F2: Bulk campaign send — requires both the email module and the campaigns feature flag
+router.post('/campaign', authMiddleware, requireModule('email'), requireFeature('campaigns'), emailSendLimiter, emailController.sendBulkCampaign);
 
 // F3: Email drafts
 router.get('/drafts', authMiddleware, requireModule('email'), emailController.getDrafts);

@@ -67,6 +67,11 @@ const LeadSchema = new mongoose.Schema({
     lastFollowUpDate: {
         type: Date
     },
+    // Scheduled template to auto-send on nextFollowUpDate
+    followUpTemplateType: { type: String, enum: ['whatsapp', 'email'], default: null },
+    followUpTemplateName: { type: String, default: null },
+    followUpTemplateSent: { type: Boolean, default: false },
+
     // Follow-up History (completed follow-ups)
     followUpHistory: [{
         note: { type: String, required: true },

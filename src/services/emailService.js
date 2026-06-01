@@ -153,14 +153,17 @@ const sendEmail = async (options) => {
         throw new Error("Emergency: Email sending is temporarily disabled platform-wide.");
     }
 
-    const { to, subject, text, html, from, attachments, userId, cc, bcc } = options;
+    const { to, subject, text, html, from, attachments, userId, cc, bcc, transactional } = options;
 
     if (!to || !subject || (!text && !html)) {
         throw new Error('Missing required email fields: to, subject, and text/html are required');
     }
 
-    // FIX B3: Check suppression list before sending
-    if (await isEmailSuppressed(to)) {
+    // FIX B3: Check suppression list before sending.
+    // Transactional emails (payment receipts, failure alerts, security) bypass
+    // the marketing suppression list — a customer who unsubscribed from marketing
+    // must still receive billing/account-critical notices.
+    if (!transactional && await isEmailSuppressed(to)) {
         console.log(`🚫 Email to ${to} blocked — address is on suppression list (unsubscribed/bounced).`);
         throw new Error(`Email to ${to} is blocked: address has been unsubscribed or bounced.`);
     }
@@ -191,21 +194,31 @@ const sendEmail = async (options) => {
     const signatureHtml = userCredentials?.signature ? `<br><br>${userCredentials.signature}` : '';
     const signatureText = userCredentials?.signature ? `\n\n${userCredentials.signature.replace(/<[^>]*>/g, '')}` : '';
 
-    // FIX B1: Unsubscribe link must point to the BACKEND API, not the frontend
-    // Sign the link with HMAC so an attacker cannot suppress arbitrary recipients
-    // by hitting the endpoint with someone else's address.
-    const backendUrl = process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
-    const { buildUnsubscribeToken } = require('../controllers/emailUnsubscribeController');
-    const unsubscribeToken = buildUnsubscribeToken(to);
-    const unsubscribeLink = `${backendUrl}/api/email/unsubscribe?email=${encodeURIComponent(to)}&token=${unsubscribeToken}`;
+    // FIX B1: Unsubscribe link must point to the BACKEND API, not the frontend.
+    // Transactional emails skip the unsubscribe footer + List-Unsubscribe headers
+    // entirely — there's nothing to unsubscribe from for a payment receipt.
+    let unsubscribeHtml = '';
+    let unsubscribeText = '';
+    let unsubscribeHeaders = {};
+    if (!transactional) {
+        const backendUrl = process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
+        const { buildUnsubscribeToken } = require('../controllers/emailUnsubscribeController');
+        const unsubscribeToken = buildUnsubscribeToken(to);
+        const unsubscribeLink = `${backendUrl}/api/email/unsubscribe?email=${encodeURIComponent(to)}&token=${unsubscribeToken}`;
 
-    // FIX B4: CAN-SPAM requires physical postal address
-    const businessAddress = userCredentials?.businessAddress || process.env.BUSINESS_ADDRESS || '';
-    const addressHtml = businessAddress ? `<br><span style="font-size:11px;color:#999;">${businessAddress}</span>` : '';
-    const addressText = businessAddress ? `\n${businessAddress}` : '';
+        // FIX B4: CAN-SPAM requires physical postal address
+        const businessAddress = userCredentials?.businessAddress || process.env.BUSINESS_ADDRESS || '';
+        const addressHtml = businessAddress ? `<br><span style="font-size:11px;color:#999;">${businessAddress}</span>` : '';
+        const addressText = businessAddress ? `\n${businessAddress}` : '';
 
-    const unsubscribeHtml = `<br><br><div style="border-top:1px solid #eee;padding-top:10px;margin-top:20px;font-size:12px;color:#777;text-align:center;">This email was sent to ${to}. If you no longer wish to receive these emails, you can <a href="${unsubscribeLink}" style="color:#0056b3;text-decoration:none;">unsubscribe</a> at any time.${addressHtml}</div>`;
-    const unsubscribeText = `\n\n---\nThis email was sent to ${to}. To unsubscribe, visit: ${unsubscribeLink}${addressText}`;
+        unsubscribeHtml = `<br><br><div style="border-top:1px solid #eee;padding-top:10px;margin-top:20px;font-size:12px;color:#777;text-align:center;">This email was sent to ${to}. If you no longer wish to receive these emails, you can <a href="${unsubscribeLink}" style="color:#0056b3;text-decoration:none;">unsubscribe</a> at any time.${addressHtml}</div>`;
+        unsubscribeText = `\n\n---\nThis email was sent to ${to}. To unsubscribe, visit: ${unsubscribeLink}${addressText}`;
+        unsubscribeHeaders = {
+            // FIX B2: RFC 8058 / Gmail 2024 Sender Guidelines compliance
+            'List-Unsubscribe': `<${unsubscribeLink}>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+        };
+    }
 
     const mailOptions = {
         from: `"${fromName}" <${fromEmail}>`,
@@ -214,11 +227,7 @@ const sendEmail = async (options) => {
         text: (text || html?.replace(/<[^>]*>/g, '')) + signatureText + unsubscribeText,
         html: (html || text) + signatureHtml + unsubscribeHtml,
         attachments: attachments || [],
-        // FIX B2: RFC 8058 / Gmail 2024 Sender Guidelines compliance
-        headers: {
-            'List-Unsubscribe': `<${unsubscribeLink}>`,
-            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
-        }
+        headers: unsubscribeHeaders
     };
 
     // CC/BCC support

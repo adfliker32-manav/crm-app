@@ -1,17 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { WORKSPACE_MODULES } from '../../constants/modules';
 
-const ALL_MODULES = [
-    { id: 'leads',       name: 'Leads',         icon: 'fa-address-book' },
-    { id: 'whatsapp',    name: 'WhatsApp',      icon: 'fa-whatsapp', isBrand: true },
-    { id: 'email',       name: 'Email',         icon: 'fa-envelope' },
-    { id: 'automations', name: 'Automations',   icon: 'fa-bolt' },
-    { id: 'team',        name: 'Team',          icon: 'fa-users' },
-    { id: 'reports',     name: 'Reports',       icon: 'fa-chart-pie' },
-    { id: 'api',         name: 'API',           icon: 'fa-code' },
-    { id: 'whitelabel',  name: 'White-Label',   icon: 'fa-palette' },
-    { id: 'settings',    name: 'Settings',      icon: 'fa-gear' }
-];
+// Single source of truth — no API/White-Label (not manager-level offerings).
+const ALL_MODULES = WORKSPACE_MODULES;
 
 const SUB_PERMISSIONS = [
     { key: 'aiChatbot',          label: 'AI Chatbot',         parentModule: 'whatsapp', icon: 'fa-robot' },
@@ -19,7 +11,6 @@ const SUB_PERMISSIONS = [
     { key: 'emailAutomation',    label: 'Email Automation',   parentModule: 'email',    icon: 'fa-envelopes-bulk' },
     { key: 'campaigns',          label: 'Bulk Campaigns',     parentModule: 'email',    icon: 'fa-bullhorn' },
     { key: 'metaSync',           label: 'Meta Lead Ads Sync', parentModule: 'leads',    icon: 'fa-meta' },
-    { key: 'webhooks',           label: 'Webhooks',           parentModule: 'api',      icon: 'fa-plug' },
     { key: 'advancedAnalytics',  label: 'Advanced Analytics', parentModule: 'reports',  icon: 'fa-chart-line' }
 ];
 

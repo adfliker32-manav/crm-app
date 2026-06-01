@@ -36,7 +36,12 @@ const {
 
 const COMPANY_ROLE_FILTER = { $in: ['manager', 'agency'] };
 const DEFAULT_AGENT_LIMIT = 5;
-const DEFAULT_ACTIVE_MODULES = ['leads', 'team', 'reports', 'settings'];
+// Trial accounts get the FULL module set so they can evaluate everything during
+// the 14-day window. When the trial lapses the account goes read-only (see
+// authMiddleware); when they subscribe, the chosen plan's modules take over.
+// NOTE: these are real workspace MODULES only. chatbot/campaigns/webhooks are
+// planFeatures flags (enabled separately), not modules — kept out of this list.
+const DEFAULT_ACTIVE_MODULES = ['leads', 'team', 'reports', 'settings', 'whatsapp', 'email', 'automations'];
 const TRIAL_DURATION_MS = 14 * 24 * 60 * 60 * 1000;
 
 const findCompanyById = (id) => User.findOne({ _id: id, role: COMPANY_ROLE_FILTER });
@@ -767,6 +772,14 @@ const updateCompanyAgent = async (req, res) => {
 
         const updatedAgent = await User.findByIdAndUpdate(agentId, updateData, { new: true })
             .select('-password');
+
+        // Evict agent permission cache so revocation takes effect immediately.
+        if (updateData.password !== undefined || updateData.permissions !== undefined) {
+            try {
+                const { clearAgentPermCache } = require('../middleware/authMiddleware');
+                clearAgentPermCache(agentId);
+            } catch { /* cache module optional */ }
+        }
 
         res.json({
             success: true,
@@ -1822,13 +1835,20 @@ const getRejectedAccounts = async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
-        const enriched = await Promise.all(accounts.map(async (acc) => {
+        const parentIds = [...new Set(accounts.filter(a => a.parentId).map(a => a.parentId.toString()))];
+        const agencies = parentIds.length > 0
+            ? await User.find({ _id: { $in: parentIds } }).select('companyName name').lean()
+            : [];
+        const agencyMap = {};
+        agencies.forEach(a => { agencyMap[a._id.toString()] = a; });
+
+        const enriched = accounts.map(acc => {
             if (acc.parentId) {
-                const agency = await User.findById(acc.parentId).select('companyName name').lean();
+                const agency = agencyMap[acc.parentId.toString()];
                 acc.agencyName = agency?.companyName || agency?.name;
             }
             return acc;
-        }));
+        });
 
         res.json({ success: true, accounts: enriched, total: enriched.length });
     } catch (error) {
@@ -1948,7 +1968,7 @@ const approveAccount = async (req, res) => {
                 {
                     $setOnInsert: {
                         userId: id,
-                        activeModules: ['leads', 'team', 'reports', 'settings'],
+                        activeModules: DEFAULT_ACTIVE_MODULES,
                         agentLimit: 5
                     }
                 },

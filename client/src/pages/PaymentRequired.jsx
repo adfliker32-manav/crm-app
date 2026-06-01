@@ -54,18 +54,24 @@ const PaymentRequired = () => {
                         <ul className="space-y-1.5 ml-1">
                             <li className="flex items-start gap-2">
                                 <i className="fa-solid fa-circle-check text-emerald-500 mt-1 text-xs" />
-                                Contact your account administrator
+                                Resubscribe online via Cashfree autodebit (instant)
                             </li>
                             <li className="flex items-start gap-2">
                                 <i className="fa-solid fa-circle-check text-emerald-500 mt-1 text-xs" />
-                                Settle the outstanding bill
+                                Or contact your administrator to record a manual payment
                             </li>
                             <li className="flex items-start gap-2">
                                 <i className="fa-solid fa-circle-check text-emerald-500 mt-1 text-xs" />
-                                Access is restored instantly once payment is recorded
+                                Your data is preserved — only access is paused
                             </li>
                         </ul>
                     </div>
+
+                    <button onClick={() => { sessionStorage.removeItem('payment_required_info'); navigate('/plans'); }}
+                        className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-md shadow-blue-500/30">
+                        <i className="fa-solid fa-credit-card" />
+                        Pay now &amp; restore access
+                    </button>
 
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600 flex items-start gap-2">
                         <i className="fa-solid fa-circle-info text-slate-400 mt-0.5" />

@@ -264,9 +264,11 @@ const getLeadById = async (req, res) => {
         const ownerId = req.tenantId;
 
         // 🚦 LEAD LIMIT CHECK — uses req.workspace from auth middleware cache (no extra DB query)
+        // A limit of 0 (or null) means UNLIMITED — higher tiers (e.g. Enterprise)
+        // set leadLimit:0 for unlimited, so we must NOT treat 0 as a hard cap.
         const leadLimit = req.workspace?.planFeatures?.leadLimit;
 
-        if (leadLimit != null) {
+        if (leadLimit != null && leadLimit > 0) {
             const leadCount = await Lead.countDocuments({ userId: ownerId });
             if (leadCount >= leadLimit) {
                 return res.status(403).json({
@@ -417,6 +419,18 @@ const updateLead = async (req, res) => {
 
         const updates = { ...req.body };
         applyNextFollowUpDateUpdate(lead, updates);
+
+        // Handle follow-up template fields alongside nextFollowUpDate
+        if (hasOwn(req.body, 'followUpTemplateName') || hasOwn(req.body, 'followUpTemplateType')) {
+            if (lead.nextFollowUpDate) {
+                lead.followUpTemplateType = req.body.followUpTemplateType || null;
+                lead.followUpTemplateName = req.body.followUpTemplateName || null;
+                lead.followUpTemplateSent = false;
+            }
+        }
+        delete updates.followUpTemplateType;
+        delete updates.followUpTemplateName;
+        delete updates.followUpTemplateSent;
 
         const oldStatus = lead.status;
         const nextStatus = updates.status;
@@ -789,9 +803,9 @@ const syncLeads = async (req, res) => {
             });
         }
 
-        // 🚦 LEAD LIMIT CHECK
+        // 🚦 LEAD LIMIT CHECK — 0 (or null) means UNLIMITED (see create-lead note above)
         const leadLimit = workspace?.planFeatures?.leadLimit;
-        if (leadLimit != null) {
+        if (leadLimit != null && leadLimit > 0) {
             const currentLeadCount = await Lead.countDocuments({ userId: userId });
             if (currentLeadCount + parsed.data.length > leadLimit) {
                 return res.status(403).json({
@@ -1140,7 +1154,7 @@ const updateFollowUpDate = async (req, res) => {
 // ==========================================
 const completeFollowUp = async (req, res) => {
     try {
-        const { leadId, note, nextFollowUpDate, markedAsDeadLead } = req.body;
+        const { leadId, note, nextFollowUpDate, markedAsDeadLead, followUpTemplateType, followUpTemplateName } = req.body;
 
         // Validation: Note is required
         if (!note || !note.trim()) {
@@ -1196,7 +1210,10 @@ const completeFollowUp = async (req, res) => {
         if (markedAsDeadLead) {
             // Mark as Dead Lead stage - ensure the stage exists
             lead.status = 'Dead Lead';
-            lead.nextFollowUpDate = null; // Clear next follow-up date
+            lead.nextFollowUpDate = null;
+            lead.followUpTemplateType = null;
+            lead.followUpTemplateName = null;
+            lead.followUpTemplateSent = false;
 
             // Optionally create "Dead Lead" stage if it doesn't exist
             const deadLeadStage = await Stage.findOne({ name: 'Dead Lead', userId: ownerId });
@@ -1210,6 +1227,9 @@ const completeFollowUp = async (req, res) => {
         } else if (nextFollowUpDate) {
             // Set next follow-up date
             lead.nextFollowUpDate = new Date(nextFollowUpDate);
+            lead.followUpTemplateType = followUpTemplateType || null;
+            lead.followUpTemplateName = followUpTemplateName || null;
+            lead.followUpTemplateSent = false;
         }
 
         await lead.save();

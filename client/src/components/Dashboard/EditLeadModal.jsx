@@ -9,6 +9,13 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
+    // Template scheduling state
+    const [sendTemplate, setSendTemplate] = useState(false);
+    const [templateType, setTemplateType] = useState('whatsapp');
+    const [selectedTemplate, setSelectedTemplate] = useState('');
+    const [templates, setTemplates] = useState([]);
+    const [loadingTemplates, setLoadingTemplates] = useState(false);
+
     useEffect(() => {
         if (isOpen && lead) {
             setFormData({
@@ -19,11 +26,42 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
                 nextFollowUpDate: lead.nextFollowUpDate ? new Date(lead.nextFollowUpDate).toISOString().split('T')[0] : ''
             });
             setSelectedTags(lead.tags || []);
+            setSendTemplate(false);
+            setTemplateType('whatsapp');
+            setSelectedTemplate('');
+            setTemplates([]);
 
             // Populate the custom fields layout and prefill with existing lead data
             fetchCustomFields(lead.customData || {});
         }
     }, [isOpen, lead]);
+
+    // Fetch templates when user enables scheduling or switches type
+    useEffect(() => {
+        if (!sendTemplate || !formData.nextFollowUpDate) return;
+
+        const fetchTemplates = async () => {
+            setLoadingTemplates(true);
+            setSelectedTemplate('');
+            try {
+                if (templateType === 'whatsapp') {
+                    const res = await api.get('/whatsapp/templates?status=APPROVED');
+                    const list = res.data?.templates || res.data?.data || [];
+                    setTemplates(Array.isArray(list) ? list.filter(t => t.status === 'APPROVED') : []);
+                } else {
+                    const res = await api.get('/email-templates');
+                    const list = Array.isArray(res.data) ? res.data : (res.data?.templates || []);
+                    setTemplates(list);
+                }
+            } catch {
+                setTemplates([]);
+            } finally {
+                setLoadingTemplates(false);
+            }
+        };
+
+        fetchTemplates();
+    }, [sendTemplate, templateType]);
 
     const fetchCustomFields = async (existingData) => {
         try {
@@ -64,7 +102,13 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
         }
 
         try {
-            const payload = { ...formData, customData, tags: selectedTags };
+            const payload = {
+                ...formData,
+                customData,
+                tags: selectedTags,
+                followUpTemplateType: (sendTemplate && formData.nextFollowUpDate) ? templateType : null,
+                followUpTemplateName: (sendTemplate && formData.nextFollowUpDate && selectedTemplate) ? selectedTemplate : null,
+            };
             await api.put(`/leads/${lead._id}`, payload);
             onSuccess();
             onClose();
@@ -224,6 +268,69 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
                             onChange={handleChange}
                             className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         />
+
+                        {/* Auto-send template on follow-up day */}
+                        {formData.nextFollowUpDate && (
+                            <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg p-3">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={sendTemplate}
+                                        onChange={(e) => setSendTemplate(e.target.checked)}
+                                        className="w-4 h-4 text-blue-600 rounded"
+                                    />
+                                    <span className="text-sm font-medium text-blue-800">
+                                        <i className="fa-solid fa-paper-plane mr-1"></i>
+                                        Auto-send a message on this date
+                                    </span>
+                                </label>
+
+                                {sendTemplate && (
+                                    <div className="mt-3 space-y-2">
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setTemplateType('whatsapp')}
+                                                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-medium border transition ${templateType === 'whatsapp' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300 hover:border-green-400'}`}
+                                            >
+                                                <i className="fa-brands fa-whatsapp mr-1"></i> WhatsApp
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setTemplateType('email')}
+                                                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-medium border transition ${templateType === 'email' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}
+                                            >
+                                                <i className="fa-solid fa-envelope mr-1"></i> Email
+                                            </button>
+                                        </div>
+
+                                        {loadingTemplates ? (
+                                            <p className="text-xs text-gray-500 flex items-center gap-1">
+                                                <i className="fa-solid fa-spinner fa-spin"></i> Loading templates...
+                                            </p>
+                                        ) : (
+                                            <select
+                                                value={selectedTemplate}
+                                                onChange={(e) => setSelectedTemplate(e.target.value)}
+                                                className="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                            >
+                                                <option value="">— Select template —</option>
+                                                {templates.map(t => (
+                                                    <option key={t._id || t.name} value={templateType === 'whatsapp' ? t.name : t._id}>
+                                                        {t.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        )}
+                                        {templates.length === 0 && !loadingTemplates && (
+                                            <p className="text-xs text-amber-600">
+                                                No {templateType === 'whatsapp' ? 'approved WhatsApp' : 'email'} templates found.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {/* Tags */}

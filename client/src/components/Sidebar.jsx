@@ -191,6 +191,16 @@ const Sidebar = () => {
                     <NavItem collapsed={collapsed} to="/appointments" icon="fa-solid fa-calendar-check" label="Appointments" />
                 )}
 
+                {/* Billing — managers only. Agencies are lifetime-free, agents don't manage billing. */}
+                {user?.role === 'manager' && (
+                    <>
+                        {!collapsed && (
+                            <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Account</p>
+                        )}
+                        <NavItem collapsed={collapsed} to="/billing" icon="fa-solid fa-credit-card" label="Billing" />
+                    </>
+                )}
+
             </nav>
 
             {/* PROFILE */}

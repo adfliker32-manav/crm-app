@@ -10,6 +10,13 @@ const FollowUpActionModal = ({ isOpen, onClose, lead, onSuccess }) => {
     const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState({});
 
+    // Template scheduling state
+    const [sendTemplate, setSendTemplate] = useState(false);
+    const [templateType, setTemplateType] = useState('whatsapp');
+    const [selectedTemplate, setSelectedTemplate] = useState('');
+    const [templates, setTemplates] = useState([]);
+    const [loadingTemplates, setLoadingTemplates] = useState(false);
+
     // Reset form when modal opens/closes or lead changes
     useEffect(() => {
         if (isOpen && lead) {
@@ -17,8 +24,39 @@ const FollowUpActionModal = ({ isOpen, onClose, lead, onSuccess }) => {
             setNextAction('nextDate');
             setNextFollowUpDate('');
             setErrors({});
+            setSendTemplate(false);
+            setTemplateType('whatsapp');
+            setSelectedTemplate('');
+            setTemplates([]);
         }
     }, [isOpen, lead]);
+
+    // Fetch templates when user enables scheduling or switches type
+    useEffect(() => {
+        if (!sendTemplate || nextAction !== 'nextDate') return;
+
+        const fetchTemplates = async () => {
+            setLoadingTemplates(true);
+            setSelectedTemplate('');
+            try {
+                if (templateType === 'whatsapp') {
+                    const res = await api.get('/whatsapp/templates?status=APPROVED');
+                    const list = res.data?.templates || res.data?.data || [];
+                    setTemplates(Array.isArray(list) ? list.filter(t => t.status === 'APPROVED') : []);
+                } else {
+                    const res = await api.get('/email-templates');
+                    const list = Array.isArray(res.data) ? res.data : (res.data?.templates || []);
+                    setTemplates(list);
+                }
+            } catch {
+                setTemplates([]);
+            } finally {
+                setLoadingTemplates(false);
+            }
+        };
+
+        fetchTemplates();
+    }, [sendTemplate, templateType, nextAction]);
 
     const validate = () => {
         const newErrors = {};
@@ -29,6 +67,10 @@ const FollowUpActionModal = ({ isOpen, onClose, lead, onSuccess }) => {
 
         if (nextAction === 'nextDate' && !nextFollowUpDate) {
             newErrors.action = 'Please select next follow-up date or mark as dead lead';
+        }
+
+        if (nextAction === 'nextDate' && sendTemplate && !selectedTemplate) {
+            newErrors.template = 'Please select a template or uncheck the option';
         }
 
         setErrors(newErrors);
@@ -47,7 +89,9 @@ const FollowUpActionModal = ({ isOpen, onClose, lead, onSuccess }) => {
                 leadId: lead._id,
                 note: note.trim(),
                 nextFollowUpDate: nextAction === 'nextDate' ? nextFollowUpDate : null,
-                markedAsDeadLead: nextAction === 'deadLead'
+                markedAsDeadLead: nextAction === 'deadLead',
+                followUpTemplateType: (nextAction === 'nextDate' && sendTemplate) ? templateType : null,
+                followUpTemplateName: (nextAction === 'nextDate' && sendTemplate) ? selectedTemplate : null,
             };
 
             await api.post('/leads/complete-followup', payload);
@@ -130,22 +174,92 @@ const FollowUpActionModal = ({ isOpen, onClose, lead, onSuccess }) => {
 
                     {/* Next Follow-up Date (conditional) */}
                     {nextAction === 'nextDate' && (
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                                Next Follow-up Date
-                            </label>
-                            <input
-                                type="date"
-                                value={nextFollowUpDate}
-                                onChange={(e) => setNextFollowUpDate(e.target.value)}
-                                min={new Date().toISOString().split('T')[0]}
-                                className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm ${errors.action ? 'border-red-500' : 'border-gray-300'
-                                    }`}
-                            />
-                            {errors.action && (
-                                <p className="text-red-500 text-xs mt-1">{errors.action}</p>
+                        <>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    Next Follow-up Date
+                                </label>
+                                <input
+                                    type="date"
+                                    value={nextFollowUpDate}
+                                    onChange={(e) => setNextFollowUpDate(e.target.value)}
+                                    min={new Date().toISOString().split('T')[0]}
+                                    className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm ${errors.action ? 'border-red-500' : 'border-gray-300'
+                                        }`}
+                                />
+                                {errors.action && (
+                                    <p className="text-red-500 text-xs mt-1">{errors.action}</p>
+                                )}
+                            </div>
+
+                            {/* Auto-send template on follow-up day */}
+                            {nextFollowUpDate && (
+                                <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={sendTemplate}
+                                            onChange={(e) => setSendTemplate(e.target.checked)}
+                                            className="w-4 h-4 text-blue-600 rounded"
+                                        />
+                                        <span className="text-sm font-medium text-blue-800">
+                                            <i className="fa-solid fa-paper-plane mr-1"></i>
+                                            Auto-send a message on {new Date(nextFollowUpDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                        </span>
+                                    </label>
+
+                                    {sendTemplate && (
+                                        <div className="mt-3 space-y-3">
+                                            {/* Type toggle */}
+                                            <div className="flex gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setTemplateType('whatsapp')}
+                                                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-medium border transition ${templateType === 'whatsapp' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300 hover:border-green-400'}`}
+                                                >
+                                                    <i className="fa-brands fa-whatsapp mr-1"></i> WhatsApp
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setTemplateType('email')}
+                                                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-medium border transition ${templateType === 'email' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}
+                                                >
+                                                    <i className="fa-solid fa-envelope mr-1"></i> Email
+                                                </button>
+                                            </div>
+
+                                            {/* Template dropdown */}
+                                            {loadingTemplates ? (
+                                                <p className="text-xs text-gray-500 flex items-center gap-1">
+                                                    <i className="fa-solid fa-spinner fa-spin"></i> Loading templates...
+                                                </p>
+                                            ) : (
+                                                <select
+                                                    value={selectedTemplate}
+                                                    onChange={(e) => setSelectedTemplate(e.target.value)}
+                                                    className={`w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none ${errors.template ? 'border-red-500' : 'border-gray-300'}`}
+                                                >
+                                                    <option value="">— Select template —</option>
+                                                    {templates.map(t => (
+                                                        <option key={t._id || t.name} value={templateType === 'whatsapp' ? t.name : t._id}>
+                                                            {t.name}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            )}
+                                            {templates.length === 0 && !loadingTemplates && (
+                                                <p className="text-xs text-amber-600">
+                                                    No {templateType === 'whatsapp' ? 'approved WhatsApp' : 'email'} templates found.
+                                                </p>
+                                            )}
+                                            {errors.template && (
+                                                <p className="text-red-500 text-xs">{errors.template}</p>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
                             )}
-                        </div>
+                        </>
                     )}
 
                     {/* Follow-up History (if available) */}
