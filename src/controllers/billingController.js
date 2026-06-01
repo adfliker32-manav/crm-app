@@ -5,6 +5,8 @@ const Payment = require('../models/Payment');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const subscriptionService = require('../services/subscriptionService');
 const cashfreeService = require('../services/cashfreeService');
+const { validateCode: validateCouponCode } = require('./couponController');
+const Coupon = require('../models/Coupon');
 
 // ─── GET /api/billing/plans ────────────────────────────────────────────────
 // Public — pricing page reads this.
@@ -30,13 +32,15 @@ const getMySubscription = async (req, res) => {
             return res.status(403).json({ message: 'Billing is managed by the account owner.' });
         }
         const clientId = req.tenantId;
-        const [sub, ws, invoices] = await Promise.all([
+        const Lead = require('../models/Lead');
+        const [sub, ws, invoices, leadsUsed] = await Promise.all([
             Subscription.findOne({ clientId }).lean(),
             WorkspaceSettings.findOne({ userId: clientId }).lean(),
             Payment.find({ clientId, gateway: 'cashfree' })
                 .sort({ paymentDate: -1 })
                 .limit(10)
-                .lean()
+                .lean(),
+            Lead.countDocuments({ userId: clientId })
         ]);
         let plan = null;
         if (ws?.currentPlanCode) {
@@ -55,6 +59,7 @@ const getMySubscription = async (req, res) => {
             } : null,
             plan,
             invoices,
+            leadsUsed,
             cashfreeConfigured: cashfreeService.isConfigured(),
             cashfreeMode: cashfreeService.mode()
         });
@@ -73,21 +78,62 @@ const guardBillable = (req, res) => {
 };
 
 // ─── POST /api/billing/me/subscribe ────────────────────────────────────────
-// Body: { planCode, cycle? }. Returns { authLink } — frontend redirects there.
+// Body: { planCode, cycle?, couponCode? }
 const subscribe = async (req, res) => {
     try {
         if (!guardBillable(req, res)) return;
-        const { planCode, cycle } = req.body;
+        const { planCode, cycle, couponCode } = req.body;
         if (!planCode) return res.status(400).json({ message: 'planCode is required' });
 
+        // Resolve coupon discount (discount type only — trial_extension is not valid here)
+        let amountOverride = null;
+        let appliedCoupon  = null;
+        if (couponCode) {
+            try {
+                const coupon = await validateCouponCode(couponCode, planCode);
+                if (coupon.type === 'discount') {
+                    appliedCoupon = coupon;
+                }
+            } catch (e) {
+                return res.status(400).json({ message: e.message });
+            }
+        }
+
+        if (appliedCoupon) {
+            const plan = await Plan.findOne({ code: planCode.toLowerCase(), isActive: true });
+            if (plan) {
+                const baseAmount = (cycle || 'monthly') === 'yearly'
+                    ? (plan.yearlyPrice || plan.monthlyPrice * 12)
+                    : plan.monthlyPrice;
+                if (appliedCoupon.discountType === 'percentage') {
+                    amountOverride = Math.round(baseAmount * (1 - appliedCoupon.discountValue / 100));
+                } else {
+                    amountOverride = Math.max(0, baseAmount - appliedCoupon.discountValue);
+                }
+            }
+        }
+
         const { subscription, sessionId } = await subscriptionService.initiateSubscription(
-            req.tenantId, planCode, cycle || 'monthly'
+            req.tenantId, planCode, cycle || 'monthly', amountOverride
         );
+
+        // Record coupon usage after subscription created successfully
+        if (appliedCoupon) {
+            await Subscription.findByIdAndUpdate(subscription._id, {
+                $set: {
+                    couponCode: appliedCoupon.code,
+                    originalAmount: subscription.amount !== amountOverride ? subscription.amount : null
+                }
+            });
+            await Coupon.findByIdAndUpdate(appliedCoupon._id, { $inc: { usedCount: 1 } });
+        }
+
         res.json({
             success: true,
             subscriptionId: subscription._id,
             subscriptionSessionId: sessionId,
-            mode: cashfreeService.mode()
+            mode: cashfreeService.mode(),
+            ...(appliedCoupon ? { couponApplied: true, discountedAmount: amountOverride } : {})
         });
     } catch (err) {
         console.error('subscribe error:', err);
@@ -102,12 +148,42 @@ const subscribe = async (req, res) => {
 const changePlan = async (req, res) => {
     try {
         if (!guardBillable(req, res)) return;
-        const { planCode, cycle } = req.body;
+        const { planCode, cycle, couponCode } = req.body;
         if (!planCode) return res.status(400).json({ message: 'planCode is required' });
 
+        let amountOverride = null;
+        let appliedCoupon  = null;
+        if (couponCode) {
+            try {
+                const coupon = await validateCouponCode(couponCode, planCode);
+                if (coupon.type === 'discount') appliedCoupon = coupon;
+            } catch (e) {
+                return res.status(400).json({ message: e.message });
+            }
+        }
+        if (appliedCoupon) {
+            const plan = await Plan.findOne({ code: planCode.toLowerCase(), isActive: true });
+            if (plan) {
+                const base = (cycle || 'monthly') === 'yearly'
+                    ? (plan.yearlyPrice || plan.monthlyPrice * 12)
+                    : plan.monthlyPrice;
+                amountOverride = appliedCoupon.discountType === 'percentage'
+                    ? Math.round(base * (1 - appliedCoupon.discountValue / 100))
+                    : Math.max(0, base - appliedCoupon.discountValue);
+            }
+        }
+
         const { subscription, sessionId } = await subscriptionService.changePlan(
-            req.tenantId, planCode, cycle || 'monthly'
+            req.tenantId, planCode, cycle || 'monthly', amountOverride
         );
+
+        if (appliedCoupon) {
+            await Subscription.findByIdAndUpdate(subscription._id, {
+                $set: { couponCode: appliedCoupon.code, originalAmount: subscription.amount !== amountOverride ? subscription.amount : null }
+            });
+            await Coupon.findByIdAndUpdate(appliedCoupon._id, { $inc: { usedCount: 1 } });
+        }
+
         res.json({
             success: true,
             subscriptionId: subscription._id,
@@ -250,6 +326,7 @@ const listAllPlans = async (req, res) => {
 const upsertPlan = async (req, res) => {
     try {
         const { code, name, description, monthlyPrice, yearlyPrice,
+            discountPercentage,
             activeModules, planFeatures, isActive, isCustom, sortOrder } = req.body;
         if (!code || !name || monthlyPrice === undefined) {
             return res.status(400).json({ message: 'code, name, monthlyPrice are required' });
@@ -262,6 +339,7 @@ const upsertPlan = async (req, res) => {
                     name, description: description || '',
                     monthlyPrice: Number(monthlyPrice),
                     yearlyPrice: Number(yearlyPrice || 0),
+                    discountPercentage: Math.min(100, Math.max(0, Number(discountPercentage || 0))),
                     activeModules: activeModules || ['leads', 'team', 'reports'],
                     planFeatures: planFeatures || {},
                     isActive: isActive !== false,

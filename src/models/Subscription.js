@@ -72,6 +72,10 @@ const subscriptionSchema = new mongoose.Schema({
     nextChargeAt:       { type: Date, default: null },
     lastChargeAt:       { type: Date, default: null },
 
+    // Coupon applied at checkout (discount type only — trial_extension applied separately).
+    couponCode:     { type: String, default: null },
+    originalAmount: { type: Number, default: null }, // plan price before discount; null = no coupon used
+
     // Bumped on each SUBSCRIPTION_PAYMENT_FAILED; reset on success.
     failedAttempts: { type: Number, default: 0 },
 

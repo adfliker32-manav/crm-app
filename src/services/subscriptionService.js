@@ -58,7 +58,8 @@ const applyPlanToWorkspace = async (clientId, plan) => {
 // Returns { subscription, authLink }. Called from POST /api/billing/me/subscribe.
 // Idempotent for the same (clientId, planCode) — if a pending_auth sub already
 // exists with the same plan, returns its authLink so the customer can resume.
-const initiateSubscription = async (clientId, planCode, cycle = 'monthly') => {
+// amountOverride: optional — pass a discounted price when a coupon is applied.
+const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amountOverride = null) => {
     const client = await User.findById(clientId);
     if (!client) throw new Error('Client not found');
     if (client.role !== 'manager') throw new Error('Only managers can subscribe via autodebit');
@@ -68,7 +69,8 @@ const initiateSubscription = async (clientId, planCode, cycle = 'monthly') => {
     if (!plan) throw new Error(`Plan "${planCode}" not found or inactive`);
     if (plan.isCustom) throw new Error('Custom plans are not self-serve — SuperAdmin must provision them');
 
-    const amount = cycle === 'yearly' ? (plan.yearlyPrice || plan.monthlyPrice * 12) : plan.monthlyPrice;
+    const baseAmount = cycle === 'yearly' ? (plan.yearlyPrice || plan.monthlyPrice * 12) : plan.monthlyPrice;
+    const amount = amountOverride !== null ? amountOverride : baseAmount;
     if (!amount || amount <= 0) throw new Error('Plan amount is not set');
 
     // Reuse an existing pending sub if one is open for this client.
@@ -441,12 +443,12 @@ const enforceDowngrade = async (clientId) => {
 // Cancels the current Cashfree sub, creates a new one at the new tier price,
 // returns a fresh authLink. The new mandate must be re-authorized by the
 // customer. Modules update on first successful charge (applyChargeSuccess).
-const changePlan = async (clientId, newPlanCode, cycle = 'monthly') => {
+const changePlan = async (clientId, newPlanCode, cycle = 'monthly', amountOverride = null) => {
     const sub = await Subscription.findOne({ clientId });
     if (sub?.cashfreeSubscriptionId && sub.status !== 'cancelled') {
         try { await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId); } catch (e) { /* best-effort */ }
     }
-    return initiateSubscription(clientId, newPlanCode, cycle);
+    return initiateSubscription(clientId, newPlanCode, cycle, amountOverride);
 };
 
 module.exports = {

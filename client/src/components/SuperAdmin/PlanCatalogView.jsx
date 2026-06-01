@@ -18,6 +18,7 @@ const KNOWN_FEATURE_BOOLEANS = [
 const emptyPlan = () => ({
     code: '', name: '', description: '',
     monthlyPrice: 0, yearlyPrice: 0,
+    discountPercentage: 0,
     activeModules: ['leads', 'team', 'reports'],
     planFeatures: { leadLimit: 100, agentLimit: 3 },
     isActive: true, isCustom: false, sortOrder: 0
@@ -115,6 +116,7 @@ const PlanCatalogView = () => {
                                 <th className="px-4 py-3">Name</th>
                                 <th className="px-4 py-3">Monthly</th>
                                 <th className="px-4 py-3">Yearly</th>
+                                <th className="px-4 py-3">Discount</th>
                                 <th className="px-4 py-3">Modules</th>
                                 <th className="px-4 py-3">Status</th>
                                 <th className="px-4 py-3 text-right">Actions</th>
@@ -127,6 +129,11 @@ const PlanCatalogView = () => {
                                     <td className="px-4 py-3 font-bold text-slate-900">{p.name}{p.isCustom && <span className="ml-2 text-xs bg-slate-200 px-1.5 py-0.5 rounded">CUSTOM</span>}</td>
                                     <td className="px-4 py-3">₹{p.monthlyPrice?.toLocaleString('en-IN') || 0}</td>
                                     <td className="px-4 py-3">{p.yearlyPrice ? `₹${p.yearlyPrice.toLocaleString('en-IN')}` : '—'}</td>
+                                    <td className="px-4 py-3">
+                                        {p.discountPercentage > 0
+                                            ? <span className="bg-rose-100 text-rose-600 text-xs font-bold px-2 py-0.5 rounded-full">{p.discountPercentage}% off</span>
+                                            : <span className="text-slate-400 text-xs">—</span>}
+                                    </td>
                                     <td className="px-4 py-3 text-xs text-slate-600">{(p.activeModules || []).join(', ')}</td>
                                     <td className="px-4 py-3">
                                         <span className={`text-xs font-bold uppercase px-2 py-1 rounded ${p.isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
@@ -192,7 +199,7 @@ const PlanCatalogView = () => {
                                     rows="2" />
                             </div>
 
-                            <div className="grid grid-cols-3 gap-4">
+                            <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Monthly ₹</label>
                                     <input type="number" min="0"
@@ -206,6 +213,14 @@ const PlanCatalogView = () => {
                                         value={editing.yearlyPrice}
                                         onChange={(e) => setEditing({ ...editing, yearlyPrice: Number(e.target.value) })}
                                         className="w-full border border-slate-300 rounded-lg px-3 py-2 mt-1" />
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Discount % (0 = no sale)</label>
+                                    <input type="number" min="0" max="100"
+                                        value={editing.discountPercentage ?? 0}
+                                        onChange={(e) => setEditing({ ...editing, discountPercentage: Number(e.target.value) })}
+                                        className="w-full border border-slate-300 rounded-lg px-3 py-2 mt-1" />
+                                    <p className="text-xs text-slate-400 mt-0.5">Shown as strikethrough on pricing page</p>
                                 </div>
                                 <div>
                                     <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Sort order</label>

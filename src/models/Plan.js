@@ -53,6 +53,10 @@ const planSchema = new mongoose.Schema({
 
     // 'custom' is a sentinel tier — price/features set per-tenant by superadmin,
     // not by this catalog. Hidden from the public /plans pricing page.
+    // 0 = no discount. When > 0 a "sale" badge is shown on the pricing page
+    // and the effective price = price * (1 - discountPercentage/100).
+    discountPercentage: { type: Number, default: 0, min: 0, max: 100 },
+
     isCustom:  { type: Boolean, default: false },
     isActive:  { type: Boolean, default: true },
     sortOrder: { type: Number,  default: 0 }

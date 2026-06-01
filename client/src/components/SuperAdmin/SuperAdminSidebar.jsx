@@ -48,6 +48,7 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
         { id: 'direct-clients',     icon: 'fa-user-tie',               label: 'Direct Clients',      color: 'text-emerald-600' },
         { id: 'finance',            icon: 'fa-sack-dollar',            label: 'Finance',             color: 'text-emerald-500 font-bold' },
         { id: 'plans',              icon: 'fa-layer-group',            label: 'Plan Catalog',        color: 'text-indigo-500 font-semibold' },
+        { id: 'coupons',            icon: 'fa-tag',                    label: 'Coupon Codes',        color: 'text-pink-500 font-semibold' },
         { id: 'support',            icon: 'fa-life-ring',              label: 'Support Inbox',       color: 'text-orange-500', badge: supportUnread },
         { id: 'system-health',      icon: 'fa-heartbeat',              label: 'System Health',       color: 'text-cyan-500'  },
         { id: 'audit-logs',         icon: 'fa-terminal',               label: 'Command Center',      color: 'text-rose-500'  },

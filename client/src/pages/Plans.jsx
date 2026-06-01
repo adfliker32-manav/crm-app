@@ -1,22 +1,37 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import { openSubscriptionCheckout } from '../services/cashfree';
 
-// Public pricing/tier picker. Customer clicks a tier → backend creates a
-// Cashfree subscription mandate → we redirect to Cashfree hosted auth.
+const fmt = (n) => (n ?? 0).toLocaleString('en-IN');
+
+const FEATURE_LABELS = {
+    whatsappAutomation: 'WhatsApp automation',
+    emailAutomation:    'Email automation',
+    metaSync:           'Meta Ads sync',
+    agentCreation:      'Team agents',
+    campaigns:          'Campaigns',
+    advancedAnalytics:  'Advanced analytics',
+    aiChatbot:          'AI chatbot',
+    webhooks:           'Webhooks',
+};
+
 const Plans = () => {
-    const [plans, setPlans] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [cycle, setCycle] = useState('monthly');
+    const [plans, setPlans]           = useState([]);
+    const [loading, setLoading]       = useState(true);
+    const [cycle, setCycle]           = useState('monthly');
     const [submittingCode, setSubmittingCode] = useState(null);
-    // Existing-subscription awareness so a current subscriber goes through the
-    // dedicated change-plan path (cancels old mandate, creates new) instead of
-    // the first-time subscribe path. Drives the "Current plan" badge too.
     const [currentPlanCode, setCurrentPlanCode] = useState(null);
     const [hasSubscription, setHasSubscription] = useState(false);
+
+    // Coupon state
+    const [couponInput, setCouponInput]   = useState('');
+    const [couponBusy, setCouponBusy]     = useState(false);
+    const [couponResult, setCouponResult] = useState(null); // { type, discountType, discountValue, extensionDays }
+    const [couponError, setCouponError]   = useState('');
+
     const { user } = useAuth();
     const { showError, showSuccess } = useNotification();
     const navigate = useNavigate();
@@ -27,41 +42,78 @@ const Plans = () => {
             .catch(() => showError('Failed to load plans'))
             .finally(() => setLoading(false));
 
-        // Only managers have a subscription; fetch quietly (failure is harmless
-        // for the public pricing view / non-managers).
         if (user?.role === 'manager') {
             api.get('/billing/me/subscription')
                 .then(res => {
-                    const ws = res.data?.workspace;
+                    setCurrentPlanCode(res.data?.workspace?.currentPlanCode || null);
                     const sub = res.data?.subscription;
-                    setCurrentPlanCode(ws?.currentPlanCode || null);
                     setHasSubscription(['active', 'grace', 'pending_auth'].includes(sub?.status));
                 })
-                .catch(() => { /* no existing subscription — first-time subscribe */ });
+                .catch(() => {});
         }
     }, [user]);
+
+    const validateCoupon = async () => {
+        if (!couponInput.trim()) return;
+        setCouponBusy(true);
+        setCouponError('');
+        setCouponResult(null);
+        try {
+            const res = await api.post('/billing/me/validate-coupon', { code: couponInput.trim() });
+            setCouponResult(res.data);
+        } catch (err) {
+            setCouponError(err.response?.data?.message || 'Invalid coupon code');
+        } finally {
+            setCouponBusy(false);
+        }
+    };
+
+    const clearCoupon = () => {
+        setCouponInput('');
+        setCouponResult(null);
+        setCouponError('');
+    };
+
+    // Compute effective price for a plan + current coupon
+    const effectivePrice = useCallback((plan) => {
+        const base = cycle === 'yearly'
+            ? (plan.yearlyPrice || plan.monthlyPrice * 12)
+            : plan.monthlyPrice;
+
+        // Plan-level discount first
+        let price = plan.discountPercentage > 0
+            ? Math.round(base * (1 - plan.discountPercentage / 100))
+            : base;
+
+        // Then coupon discount (only if discount type coupon)
+        if (couponResult?.type === 'discount') {
+            if (couponResult.discountType === 'percentage') {
+                price = Math.round(price * (1 - couponResult.discountValue / 100));
+            } else {
+                price = Math.max(0, price - couponResult.discountValue);
+            }
+        }
+        return { base, price, hasDiscount: price < base };
+    }, [cycle, couponResult]);
 
     const handleSubscribe = async (planCode) => {
         if (!user) { navigate('/login'); return; }
         if (user.role !== 'manager') {
-            showError('Only direct managers can subscribe via autodebit.');
+            showError('Only account owners can subscribe via autodebit.');
             return;
         }
         setSubmittingCode(planCode);
         try {
-            // Existing subscriber switching tiers → change-plan; new → subscribe.
             const endpoint = hasSubscription ? '/billing/me/change-plan' : '/billing/me/subscribe';
-            const res = await api.post(endpoint, { planCode, cycle });
+            const body = { planCode, cycle };
+            if (couponResult?.type === 'discount') body.couponCode = couponInput.trim();
+
+            const res = await api.post(endpoint, body);
             const sessionId = res.data?.subscriptionSessionId;
             if (sessionId) {
-                showSuccess(hasSubscription
-                    ? 'Opening secure authorization to switch your plan…'
-                    : 'Opening secure payment authorization…');
-                // Hands off to Cashfree's hosted mandate page; on completion it
-                // returns to /billing?cf_return=1 where we poll the real status.
                 await openSubscriptionCheckout({ sessionId, mode: res.data?.mode || 'sandbox', redirectTarget: '_self' });
             } else {
-                showError('Could not start the payment authorization. Please try again.');
+                showError('Could not start payment authorization. Please try again.');
             }
         } catch (err) {
             showError(err.response?.data?.message || err.message || 'Could not start subscription');
@@ -71,106 +123,201 @@ const Plans = () => {
     };
 
     if (loading) {
-        return <div className="min-h-screen flex items-center justify-center bg-slate-100">
-            <i className="fa-solid fa-spinner fa-spin text-3xl text-slate-500" />
-        </div>;
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-50">
+                <div className="w-8 h-8 border-2 border-slate-300 border-t-slate-700 rounded-full animate-spin" />
+            </div>
+        );
     }
 
-    return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 py-12 px-4">
-            <div className="max-w-6xl mx-auto">
-                <div className="text-center mb-10">
-                    <h1 className="text-4xl font-black text-slate-900">Choose your plan</h1>
-                    <p className="text-slate-600 mt-2">Pay monthly or yearly. Cancel anytime. Mandate auto-renews.</p>
+    const yearlySaving = plans.some(p => p.yearlyPrice && p.yearlyPrice < p.monthlyPrice * 12);
 
-                    <div className="inline-flex bg-white rounded-full shadow-sm border border-slate-200 mt-6 p-1">
-                        <button
-                            onClick={() => setCycle('monthly')}
-                            className={`px-4 py-1.5 rounded-full text-sm font-semibold transition
-                                ${cycle === 'monthly' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}>
+    return (
+        <div className="min-h-screen bg-slate-50 py-14 px-4">
+            <div className="max-w-5xl mx-auto">
+
+                {/* Back */}
+                {user && (
+                    <button onClick={() => navigate('/billing')}
+                        className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-8 transition">
+                        <i className="fa-solid fa-arrow-left text-xs" /> Back to billing
+                    </button>
+                )}
+
+                {/* Header */}
+                <div className="text-center mb-10">
+                    <h1 className="text-4xl font-bold text-slate-900 tracking-tight">Simple, transparent pricing</h1>
+                    <p className="text-slate-500 mt-2 text-base">Start free, scale as you grow. No hidden fees.</p>
+
+                    {/* Billing cycle toggle */}
+                    <div className="inline-flex items-center bg-white border border-slate-200 rounded-xl mt-6 p-1 shadow-sm">
+                        <button onClick={() => setCycle('monthly')}
+                            className={`px-5 py-1.5 rounded-lg text-sm font-semibold transition ${cycle === 'monthly' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>
                             Monthly
                         </button>
-                        <button
-                            onClick={() => setCycle('yearly')}
-                            className={`px-4 py-1.5 rounded-full text-sm font-semibold transition
-                                ${cycle === 'yearly' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}>
-                            Yearly <span className="text-emerald-600 text-xs">(save ~17%)</span>
+                        <button onClick={() => setCycle('yearly')}
+                            className={`px-5 py-1.5 rounded-lg text-sm font-semibold transition flex items-center gap-1.5 ${cycle === 'yearly' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>
+                            Yearly
+                            {yearlySaving && (
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${cycle === 'yearly' ? 'bg-emerald-500 text-white' : 'bg-emerald-100 text-emerald-700'}`}>
+                                    SAVE
+                                </span>
+                            )}
                         </button>
                     </div>
                 </div>
 
-                <div className="grid md:grid-cols-3 gap-6">
+                {/* Coupon input */}
+                {user?.role === 'manager' && (
+                    <div className="max-w-md mx-auto mb-8">
+                        {!couponResult ? (
+                            <div className="flex gap-2">
+                                <input
+                                    value={couponInput}
+                                    onChange={e => { setCouponInput(e.target.value.toUpperCase()); setCouponError(''); }}
+                                    onKeyDown={e => e.key === 'Enter' && validateCoupon()}
+                                    placeholder="Have a coupon code?"
+                                    className={`flex-1 bg-white border rounded-lg px-3.5 py-2 text-sm font-mono uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-slate-300 transition ${couponError ? 'border-rose-400 focus:ring-rose-200' : 'border-slate-300'}`}
+                                />
+                                <button onClick={validateCoupon} disabled={couponBusy || !couponInput.trim()}
+                                    className="bg-slate-900 hover:bg-black text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-40 transition">
+                                    {couponBusy ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> : 'Apply'}
+                                </button>
+                            </div>
+                        ) : (
+                            <div className={`flex items-center justify-between px-4 py-2.5 rounded-lg border text-sm font-medium
+                                ${couponResult.type === 'discount' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-blue-50 border-blue-200 text-blue-800'}`}>
+                                <div className="flex items-center gap-2">
+                                    <i className="fa-solid fa-tag" />
+                                    <span className="font-bold font-mono">{couponInput}</span>
+                                    {couponResult.type === 'discount' ? (
+                                        <span>—&nbsp;
+                                            {couponResult.discountType === 'percentage'
+                                                ? `${couponResult.discountValue}% off`
+                                                : `₹${fmt(couponResult.discountValue)} off`}
+                                        </span>
+                                    ) : (
+                                        <span>— +{couponResult.extensionDays} days extension</span>
+                                    )}
+                                </div>
+                                <button onClick={clearCoupon} className="ml-3 opacity-60 hover:opacity-100 transition">
+                                    <i className="fa-solid fa-times" />
+                                </button>
+                            </div>
+                        )}
+                        {couponError && <p className="text-xs text-rose-600 mt-1.5 pl-1">{couponError}</p>}
+                        {couponResult?.type === 'trial_extension' && (
+                            <p className="text-xs text-blue-700 mt-1.5 pl-1">
+                                This coupon extends your plan — apply it from the Billing page, not here.
+                            </p>
+                        )}
+                    </div>
+                )}
+
+                {/* Plan cards */}
+                <div className="grid md:grid-cols-3 gap-5">
                     {plans.map((p, idx) => {
-                        const price = cycle === 'yearly' ? (p.yearlyPrice || p.monthlyPrice * 12) : p.monthlyPrice;
-                        const isHighlighted = idx === 1; // middle tier visually featured
-                        const isCurrent = currentPlanCode === p.code;
+                        const { base, price, hasDiscount } = effectivePrice(p);
+                        const isCurrent     = currentPlanCode === p.code;
+                        const isPopular     = idx === 1;
+                        const isSubmitting  = submittingCode === p.code;
+                        const planDiscount  = p.discountPercentage > 0;
+
                         return (
                             <div key={p.code}
-                                className={`bg-white rounded-2xl p-6 shadow-sm border-2 transition
-                                    ${isCurrent ? 'border-emerald-500 shadow-lg' : isHighlighted ? 'border-blue-500 shadow-lg scale-[1.02]' : 'border-slate-200'}`}>
-                                {isCurrent ? (
-                                    <div className="inline-block bg-emerald-500 text-white text-xs font-bold px-3 py-1 rounded-full mb-3">
-                                        CURRENT PLAN
-                                    </div>
-                                ) : isHighlighted && (
-                                    <div className="inline-block bg-blue-500 text-white text-xs font-bold px-3 py-1 rounded-full mb-3">
-                                        MOST POPULAR
-                                    </div>
-                                )}
-                                <h3 className="text-2xl font-black text-slate-900">{p.name}</h3>
-                                <p className="text-sm text-slate-500 mt-1 min-h-[40px]">{p.description}</p>
+                                className={`relative bg-white rounded-2xl p-6 flex flex-col border-2 transition
+                                    ${isCurrent ? 'border-emerald-500 shadow-md' : isPopular ? 'border-slate-900 shadow-lg' : 'border-transparent shadow-sm hover:shadow-md'}`}>
 
-                                <div className="mt-5 mb-5">
-                                    <span className="text-4xl font-black text-slate-900">₹{price?.toLocaleString('en-IN')}</span>
-                                    <span className="text-slate-500 text-sm">/{cycle === 'yearly' ? 'year' : 'month'}</span>
+                                {/* Badge */}
+                                {isCurrent ? (
+                                    <span className="absolute -top-3 left-5 bg-emerald-500 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wide">
+                                        Current plan
+                                    </span>
+                                ) : isPopular ? (
+                                    <span className="absolute -top-3 left-5 bg-slate-900 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wide">
+                                        Most popular
+                                    </span>
+                                ) : null}
+
+                                {/* Plan name */}
+                                <div className="flex items-center justify-between mb-4">
+                                    <h3 className="text-lg font-bold text-slate-900">{p.name}</h3>
+                                    {planDiscount && (
+                                        <span className="bg-rose-100 text-rose-600 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">
+                                            {p.discountPercentage}% off
+                                        </span>
+                                    )}
                                 </div>
 
-                                <ul className="space-y-2 text-sm text-slate-700 mb-6">
-                                    {(p.activeModules || []).map(m => (
-                                        <li key={m} className="flex items-center gap-2">
-                                            <i className="fa-solid fa-check text-emerald-500 text-xs" />
-                                            <span className="capitalize">{m.replace('_', ' ')}</span>
-                                        </li>
-                                    ))}
-                                    {p.planFeatures?.leadLimit !== undefined && (
-                                        <li className="flex items-center gap-2">
-                                            <i className="fa-solid fa-check text-emerald-500 text-xs" />
-                                            {p.planFeatures.leadLimit === 0 ? 'Unlimited leads' : `${p.planFeatures.leadLimit.toLocaleString()} leads`}
-                                        </li>
+                                {/* Price */}
+                                <div className="mb-1">
+                                    {hasDiscount && (
+                                        <span className="text-sm text-slate-400 line-through block">
+                                            ₹{fmt(base)}{cycle === 'yearly' ? '/yr' : '/mo'}
+                                        </span>
                                     )}
-                                    {p.planFeatures?.agentLimit !== undefined && (
-                                        <li className="flex items-center gap-2">
-                                            <i className="fa-solid fa-check text-emerald-500 text-xs" />
-                                            {p.planFeatures.agentLimit} team seats
-                                        </li>
-                                    )}
-                                </ul>
+                                    <div className="flex items-end gap-1">
+                                        <span className="text-3xl font-bold text-slate-900">₹{fmt(price)}</span>
+                                        <span className="text-sm text-slate-500 mb-1">/{cycle === 'yearly' ? 'year' : 'month'}</span>
+                                    </div>
+                                </div>
 
+                                <p className="text-xs text-slate-500 mb-5 min-h-[32px]">{p.description}</p>
+
+                                {/* CTA */}
                                 <button
-                                    disabled={submittingCode === p.code || isCurrent}
+                                    disabled={isSubmitting || isCurrent || (couponResult?.type === 'trial_extension')}
                                     onClick={() => handleSubscribe(p.code)}
-                                    className={`w-full py-2.5 rounded-xl font-bold transition
+                                    className={`w-full py-2.5 rounded-xl font-semibold text-sm transition mb-6
                                         ${isCurrent
                                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default'
-                                            : isHighlighted
-                                                ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                                                : 'bg-slate-900 hover:bg-black text-white'}
-                                        disabled:opacity-60`}>
-                                    {submittingCode === p.code
-                                        ? <><i className="fa-solid fa-spinner fa-spin mr-2" />Starting…</>
-                                        : isCurrent
-                                            ? <><i className="fa-solid fa-check mr-2" />Current plan</>
-                                            : hasSubscription
-                                                ? 'Switch to this plan'
-                                                : 'Subscribe'}
+                                            : isPopular
+                                                ? 'bg-slate-900 hover:bg-black text-white'
+                                                : 'bg-slate-100 hover:bg-slate-200 text-slate-800'}
+                                        disabled:opacity-50`}>
+                                    {isSubmitting
+                                        ? <><span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin inline-block mr-2" />Starting…</>
+                                        : isCurrent ? 'Current plan'
+                                        : hasSubscription ? 'Switch plan'
+                                        : 'Get started'}
                                 </button>
+
+                                {/* Features */}
+                                <div className="space-y-2.5 flex-1">
+                                    {(p.activeModules || []).map(m => (
+                                        <div key={m} className="flex items-center gap-2 text-sm text-slate-700">
+                                            <i className="fa-solid fa-check text-emerald-500 text-[11px] w-3" />
+                                            <span className="capitalize">{m.replace(/_/g, ' ')}</span>
+                                        </div>
+                                    ))}
+                                    {Object.entries(FEATURE_LABELS).map(([key, label]) =>
+                                        p.planFeatures?.[key] ? (
+                                            <div key={key} className="flex items-center gap-2 text-sm text-slate-700">
+                                                <i className="fa-solid fa-check text-emerald-500 text-[11px] w-3" />
+                                                <span>{label}</span>
+                                            </div>
+                                        ) : null
+                                    )}
+                                    {p.planFeatures?.leadLimit !== undefined && (
+                                        <div className="flex items-center gap-2 text-sm text-slate-700">
+                                            <i className="fa-solid fa-check text-emerald-500 text-[11px] w-3" />
+                                            {p.planFeatures.leadLimit === 0 ? 'Unlimited leads' : `${fmt(p.planFeatures.leadLimit)} leads`}
+                                        </div>
+                                    )}
+                                    {p.planFeatures?.agentLimit !== undefined && (
+                                        <div className="flex items-center gap-2 text-sm text-slate-700">
+                                            <i className="fa-solid fa-check text-emerald-500 text-[11px] w-3" />
+                                            {p.planFeatures.agentLimit} team seats
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         );
                     })}
                 </div>
 
-                <p className="text-center text-xs text-slate-500 mt-8">
-                    Secure payments by Cashfree. Mandate can be cancelled anytime from the Billing page.
+                <p className="text-center text-xs text-slate-400 mt-10">
+                    Secure payments powered by Cashfree Payments India. Cancel anytime from the Billing page.
                 </p>
             </div>
         </div>
