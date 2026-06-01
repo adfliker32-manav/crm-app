@@ -117,7 +117,14 @@ const validateCoupon = async (req, res) => {
         if (!code) return res.status(400).json({ message: 'code is required' });
 
         const coupon = await validateCode(code, planCode);
-        const resp = { success: true, type: coupon.type, description: coupon.description };
+        const resp = {
+            success: true,
+            type: coupon.type,
+            description: coupon.description,
+            // Expose plan restriction so the pricing page can scope the discount badge
+            // to applicable plans only (empty = applies to all).
+            applicablePlanCodes: coupon.applicablePlanCodes || []
+        };
         if (coupon.type === 'discount') {
             resp.discountType  = coupon.discountType;
             resp.discountValue = coupon.discountValue;
@@ -138,10 +145,11 @@ const applyCoupon = async (req, res) => {
         if (req.user?.role !== 'manager') {
             return res.status(403).json({ message: 'Billing access is manager-only' });
         }
-        const { code } = req.body;
+        const { code, planCode } = req.body;
         if (!code) return res.status(400).json({ message: 'code is required' });
 
-        const coupon = await validateCode(code);
+        // Pass planCode so plan-restricted coupons are checked against the tenant's current plan
+        const coupon = await validateCode(code, planCode || null);
 
         if (coupon.type !== 'trial_extension') {
             return res.status(400).json({
@@ -151,6 +159,20 @@ const applyCoupon = async (req, res) => {
 
         const ws = await WorkspaceSettings.findOne({ userId: req.tenantId });
         if (!ws) return res.status(404).json({ message: 'Workspace not found' });
+
+        // Atomic conditional increment: claim the slot before writing the workspace
+        // update, so concurrent requests for a maxUses=1 coupon can't both succeed.
+        const claimed = await Coupon.findOneAndUpdate(
+            {
+                _id: coupon._id,
+                isActive: true,
+                $or: [{ maxUses: 0 }, { $expr: { $lt: ['$usedCount', '$maxUses'] } }]
+            },
+            { $inc: { usedCount: 1 } }
+        );
+        if (!claimed) {
+            return res.status(400).json({ message: 'This coupon has reached its usage limit' });
+        }
 
         const now  = new Date();
         const base = ws.planExpiryDate && new Date(ws.planExpiryDate) > now
@@ -162,7 +184,6 @@ const applyCoupon = async (req, res) => {
             { userId: req.tenantId },
             { $set: { planExpiryDate: newExpiry, subscriptionStatus: 'active' } }
         );
-        await Coupon.findByIdAndUpdate(coupon._id, { $inc: { usedCount: 1 } });
 
         res.json({ success: true, extensionDays: coupon.extensionDays, newExpiryDate: newExpiry });
     } catch (err) {

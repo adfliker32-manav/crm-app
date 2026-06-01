@@ -71,12 +71,15 @@ const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amoun
 
     const baseAmount = cycle === 'yearly' ? (plan.yearlyPrice || plan.monthlyPrice * 12) : plan.monthlyPrice;
     const amount = amountOverride !== null ? amountOverride : baseAmount;
-    if (!amount || amount <= 0) throw new Error('Plan amount is not set');
+    // Use == null (not !amount) so a valid amountOverride of 0 is not rejected.
+    if (amount == null || amount < 0) throw new Error('Plan amount is not set');
 
     // Reuse an existing pending sub if one is open for this client.
     let sub = await Subscription.findOne({ clientId });
 
-    if (sub && sub.status === 'pending_auth' && sub.planCode === plan.code && sub.billingCycle === cycle && sub.cashfreeSessionId) {
+    // Skip reuse when a coupon is applied — the stored session carries the old
+    // (full-price) mandate amount and must not be handed back discounted.
+    if (!amountOverride && sub && sub.status === 'pending_auth' && sub.planCode === plan.code && sub.billingCycle === cycle && sub.cashfreeSessionId) {
         return { subscription: sub, sessionId: sub.cashfreeSessionId };
     }
 

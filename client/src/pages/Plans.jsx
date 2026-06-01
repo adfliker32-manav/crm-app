@@ -74,6 +74,14 @@ const Plans = () => {
         setCouponError('');
     };
 
+    // Returns true if the active coupon applies to this specific plan code.
+    // An empty applicablePlanCodes = applies to all plans.
+    const couponAppliesToPlan = useCallback((planCode) => {
+        if (!couponResult || couponResult.type !== 'discount') return false;
+        const restricted = couponResult.applicablePlanCodes || [];
+        return restricted.length === 0 || restricted.includes(planCode.toLowerCase());
+    }, [couponResult]);
+
     // Compute effective price for a plan + current coupon
     const effectivePrice = useCallback((plan) => {
         const base = cycle === 'yearly'
@@ -85,8 +93,8 @@ const Plans = () => {
             ? Math.round(base * (1 - plan.discountPercentage / 100))
             : base;
 
-        // Then coupon discount (only if discount type coupon)
-        if (couponResult?.type === 'discount') {
+        // Coupon discount — only applied to plans the coupon is valid for
+        if (couponResult?.type === 'discount' && couponAppliesToPlan(plan.code)) {
             if (couponResult.discountType === 'percentage') {
                 price = Math.round(price * (1 - couponResult.discountValue / 100));
             } else {
@@ -94,7 +102,7 @@ const Plans = () => {
             }
         }
         return { base, price, hasDiscount: price < base };
-    }, [cycle, couponResult]);
+    }, [cycle, couponResult, couponAppliesToPlan]);
 
     const handleSubscribe = async (planCode) => {
         if (!user) { navigate('/login'); return; }
@@ -106,7 +114,10 @@ const Plans = () => {
         try {
             const endpoint = hasSubscription ? '/billing/me/change-plan' : '/billing/me/subscribe';
             const body = { planCode, cycle };
-            if (couponResult?.type === 'discount') body.couponCode = couponInput.trim();
+            // Only send couponCode when the coupon is actually valid for this plan
+            if (couponResult?.type === 'discount' && couponAppliesToPlan(planCode)) {
+                body.couponCode = couponInput.trim();
+            }
 
             const res = await api.post(endpoint, body);
             const sessionId = res.data?.subscriptionSessionId;
@@ -264,23 +275,30 @@ const Plans = () => {
 
                                 <p className="text-xs text-slate-500 mb-5 min-h-[32px]">{p.description}</p>
 
-                                {/* CTA */}
-                                <button
-                                    disabled={isSubmitting || isCurrent || (couponResult?.type === 'trial_extension')}
-                                    onClick={() => handleSubscribe(p.code)}
-                                    className={`w-full py-2.5 rounded-xl font-semibold text-sm transition mb-6
-                                        ${isCurrent
-                                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default'
-                                            : isPopular
-                                                ? 'bg-slate-900 hover:bg-black text-white'
-                                                : 'bg-slate-100 hover:bg-slate-200 text-slate-800'}
-                                        disabled:opacity-50`}>
-                                    {isSubmitting
-                                        ? <><span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin inline-block mr-2" />Starting…</>
-                                        : isCurrent ? 'Current plan'
-                                        : hasSubscription ? 'Switch plan'
-                                        : 'Get started'}
-                                </button>
+                                {/* CTA — trial_extension coupons redirect to Billing page instead of locking everything */}
+                                {couponResult?.type === 'trial_extension' ? (
+                                    <button onClick={() => navigate('/billing')}
+                                        className="w-full py-2.5 rounded-xl font-semibold text-sm transition mb-6 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200">
+                                        Apply coupon on Billing page
+                                    </button>
+                                ) : (
+                                    <button
+                                        disabled={isSubmitting || isCurrent}
+                                        onClick={() => handleSubscribe(p.code)}
+                                        className={`w-full py-2.5 rounded-xl font-semibold text-sm transition mb-6
+                                            ${isCurrent
+                                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default'
+                                                : isPopular
+                                                    ? 'bg-slate-900 hover:bg-black text-white'
+                                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-800'}
+                                            disabled:opacity-50`}>
+                                        {isSubmitting
+                                            ? <><span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin inline-block mr-2" />Starting…</>
+                                            : isCurrent ? 'Current plan'
+                                            : hasSubscription ? 'Switch plan'
+                                            : 'Get started'}
+                                    </button>
+                                )}
 
                                 {/* Features */}
                                 <div className="space-y-2.5 flex-1">

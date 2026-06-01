@@ -118,7 +118,11 @@ const Billing = () => {
         if (!couponCode.trim()) return;
         setCouponBusy(true);
         try {
-            const res = await api.post('/billing/me/apply-coupon', { code: couponCode.trim() });
+            // Pass current planCode so plan-restricted coupons are checked server-side
+            const res = await api.post('/billing/me/apply-coupon', {
+                code: couponCode.trim(),
+                planCode: ws?.currentPlanCode || undefined
+            });
             showSuccess(`Coupon applied! Plan extended by ${res.data.extensionDays} days.`);
             setCouponCode('');
             load();

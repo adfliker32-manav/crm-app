@@ -99,17 +99,16 @@ const subscribe = async (req, res) => {
             }
         }
 
+        let couponBaseAmount = null; // plan price before discount, for audit
         if (appliedCoupon) {
             const plan = await Plan.findOne({ code: planCode.toLowerCase(), isActive: true });
             if (plan) {
-                const baseAmount = (cycle || 'monthly') === 'yearly'
+                couponBaseAmount = (cycle || 'monthly') === 'yearly'
                     ? (plan.yearlyPrice || plan.monthlyPrice * 12)
                     : plan.monthlyPrice;
-                if (appliedCoupon.discountType === 'percentage') {
-                    amountOverride = Math.round(baseAmount * (1 - appliedCoupon.discountValue / 100));
-                } else {
-                    amountOverride = Math.max(0, baseAmount - appliedCoupon.discountValue);
-                }
+                amountOverride = appliedCoupon.discountType === 'percentage'
+                    ? Math.round(couponBaseAmount * (1 - appliedCoupon.discountValue / 100))
+                    : Math.max(0, couponBaseAmount - appliedCoupon.discountValue);
             }
         }
 
@@ -122,7 +121,7 @@ const subscribe = async (req, res) => {
             await Subscription.findByIdAndUpdate(subscription._id, {
                 $set: {
                     couponCode: appliedCoupon.code,
-                    originalAmount: subscription.amount !== amountOverride ? subscription.amount : null
+                    originalAmount: couponBaseAmount  // plan price BEFORE discount
                 }
             });
             await Coupon.findByIdAndUpdate(appliedCoupon._id, { $inc: { usedCount: 1 } });
@@ -161,15 +160,16 @@ const changePlan = async (req, res) => {
                 return res.status(400).json({ message: e.message });
             }
         }
+        let couponBaseAmount = null;
         if (appliedCoupon) {
             const plan = await Plan.findOne({ code: planCode.toLowerCase(), isActive: true });
             if (plan) {
-                const base = (cycle || 'monthly') === 'yearly'
+                couponBaseAmount = (cycle || 'monthly') === 'yearly'
                     ? (plan.yearlyPrice || plan.monthlyPrice * 12)
                     : plan.monthlyPrice;
                 amountOverride = appliedCoupon.discountType === 'percentage'
-                    ? Math.round(base * (1 - appliedCoupon.discountValue / 100))
-                    : Math.max(0, base - appliedCoupon.discountValue);
+                    ? Math.round(couponBaseAmount * (1 - appliedCoupon.discountValue / 100))
+                    : Math.max(0, couponBaseAmount - appliedCoupon.discountValue);
             }
         }
 
@@ -179,7 +179,7 @@ const changePlan = async (req, res) => {
 
         if (appliedCoupon) {
             await Subscription.findByIdAndUpdate(subscription._id, {
-                $set: { couponCode: appliedCoupon.code, originalAmount: subscription.amount !== amountOverride ? subscription.amount : null }
+                $set: { couponCode: appliedCoupon.code, originalAmount: couponBaseAmount }
             });
             await Coupon.findByIdAndUpdate(appliedCoupon._id, { $inc: { usedCount: 1 } });
         }
