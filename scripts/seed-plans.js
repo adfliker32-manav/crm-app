@@ -77,17 +77,7 @@ const TIERS = [
             agentLimit:         50
         }
     },
-    {
-        code: 'custom',
-        name: 'Custom',
-        description: 'Bespoke plan set by SuperAdmin per tenant. Hidden from public pricing.',
-        monthlyPrice: 0,
-        yearlyPrice: 0,
-        sortOrder: 99,
-        isCustom: true,
-        activeModules: ['leads', 'team', 'reports'],
-        planFeatures: {}
-    }
+
 ];
 
 const seedPlans = async () => {
