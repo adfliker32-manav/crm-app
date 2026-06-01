@@ -20,10 +20,13 @@ const WhatsAppManagement = () => {
     const hasModule = (moduleName) => {
         if (['superadmin', 'agency'].includes(user?.role)) return true;
         if (moduleName === 'chatbot') {
-            // Flows are part of the WhatsApp module; aiChatbot is an optional add-on
-            return user?.planFeatures?.aiChatbot
-                || (user?.activeModules && user.activeModules.includes('chatbot'))
-                || (user?.activeModules && user.activeModules.includes('whatsapp'));
+            // Chatbot is a WhatsApp-dependent paid add-on: it needs the aiChatbot
+            // feature AND the WhatsApp module (or an explicit 'chatbot' module entry).
+            // Mirrors requireModule('chatbot') on the server, so the tab never shows
+            // for a plan that would be 403'd the moment it tries to save a flow.
+            const mods = user?.activeModules || [];
+            return mods.includes('chatbot')
+                || (user?.planFeatures?.aiChatbot && mods.includes('whatsapp'));
         }
         return user?.activeModules ? user.activeModules.includes(moduleName) : true;
     };

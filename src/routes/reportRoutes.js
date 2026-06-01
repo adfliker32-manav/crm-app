@@ -2,11 +2,15 @@ const express = require('express');
 const router = express.Router();
 const reportsController = require('../controllers/reportsController');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const requireModule = require('../middleware/moduleMiddleware');
 const checkPermission = require('../middleware/checkPermission');
 const validateObjectId = require('../middleware/validateObjectId');
 
 // All routes require authentication
 router.use(authMiddleware);
+// Plan-gated by the 'reports' module (so a tier without Reports can't reach these
+// APIs directly even if the nav is hidden). 'viewReports' is the per-agent RBAC.
+router.use(requireModule('reports'));
 router.use(checkPermission('viewReports'));
 
 // 1. Conversion Report

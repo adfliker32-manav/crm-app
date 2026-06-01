@@ -353,7 +353,7 @@ const updateCompany = async (req, res) => {
         // Sub-permissions: only honor known keys to prevent arbitrary writes
         const SUB_PERMISSION_KEYS = [
             'aiChatbot', 'whatsappAutomation', 'emailAutomation', 'metaSync',
-            'campaigns', 'advancedAnalytics', 'webhooks', 'agentCreation'
+            'campaigns', 'advancedAnalytics'
         ];
         if (planFeatures && typeof planFeatures === 'object') {
             for (const key of SUB_PERMISSION_KEYS) {
@@ -369,6 +369,12 @@ const updateCompany = async (req, res) => {
                 { $set: updateFields },
                 { upsert: true }
             );
+            // Bust the tenant's cached workspace so module/feature changes take effect
+            // on the very next request instead of waiting out the 5-min tenantCache TTL.
+            try {
+                const { clearTenantCache } = require('../middleware/authMiddleware');
+                clearTenantCache(id);
+            } catch { /* cache module optional */ }
         }
 
         const workspace = await WorkspaceSettings.findOne({ userId: id }).lean();
@@ -1943,7 +1949,7 @@ const approveAccount = async (req, res) => {
         // Sub-permissions: only honor known keys
         const SUB_PERMISSION_KEYS = [
             'aiChatbot', 'whatsappAutomation', 'emailAutomation', 'metaSync',
-            'campaigns', 'advancedAnalytics', 'webhooks', 'agentCreation'
+            'campaigns', 'advancedAnalytics'
         ];
         if (planFeatures && typeof planFeatures === 'object') {
             for (const key of SUB_PERMISSION_KEYS) {

@@ -10,9 +10,12 @@ import { WORKSPACE_MODULE_IDS } from '../../constants/modules';
 // chatbot/campaigns/webhooks are feature flags, configured below — not modules.
 const KNOWN_MODULES = WORKSPACE_MODULE_IDS;
 
+// Only flags that are actually ENFORCED somewhere. 'agentCreation' (agents are
+// capped by agentLimit, not this boolean) and 'webhooks' (no feature behind it)
+// were removed — they were inert toggles that misled the plan author.
 const KNOWN_FEATURE_BOOLEANS = [
-    'whatsappAutomation', 'emailAutomation', 'metaSync', 'agentCreation',
-    'campaigns', 'advancedAnalytics', 'aiChatbot', 'webhooks'
+    'whatsappAutomation', 'emailAutomation', 'metaSync',
+    'campaigns', 'advancedAnalytics', 'aiChatbot'
 ];
 
 const emptyPlan = () => ({

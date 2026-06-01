@@ -141,8 +141,12 @@ if (!process.env.FRONTEND_URL) {
 // Oversizing wastes RAM and can hit Atlas connection limits.
 // DO NOT increase blindly — monitor active connections via Atlas metrics before changing.
 mongoose.connect(MONGO_URI, {
-  maxPoolSize: 50,  // Right-sized for ~20 clients (was 250 — wasted ~200MB RAM)
-  minPoolSize: 5,   // Keep 5 alive for cold-start prevention (was 20 — held too many idle)
+  // Sized for 100+ tenants on a single instance. Node is single-threaded, so the
+  // pool mainly absorbs concurrent I/O waits (not CPU) — 150 gives ample headroom
+  // while staying well under the Atlas tier connection cap (e.g. M10 ≈ 1500).
+  // Override via env without a redeploy; watch Atlas "active connections" when tuning.
+  maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 150,
+  minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 10,  // warm connections to avoid cold-start latency
   serverSelectionTimeoutMS: 15000, // Wait 15s instead of 30s before failing if DB is unreachable
   socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
 })
@@ -404,10 +408,13 @@ app.use('/api/agency', agencyRoutes);
 app.use('/api/billing', billingRoutes);
 
 // 2. Leads System
-app.use('/api/leads', authMiddleware, leadRoutes);
-app.use('/api/stages', authMiddleware, stageRoutes);
-app.use('/api/custom-fields', authMiddleware, customFieldRoutes);
-app.use('/api/tags', authMiddleware, require('./src/routes/tagRoutes'));
+// Plan-gated by the 'leads' module (covers leads + their pipeline config: stages,
+// custom fields, tags). Mirrors the email/whatsapp/automations gates so a tier
+// without Leads can't reach these APIs directly even if the nav is hidden.
+app.use('/api/leads', authMiddleware, requireModule('leads'), leadRoutes);
+app.use('/api/stages', authMiddleware, requireModule('leads'), stageRoutes);
+app.use('/api/custom-fields', authMiddleware, requireModule('leads'), customFieldRoutes);
+app.use('/api/tags', authMiddleware, requireModule('leads'), require('./src/routes/tagRoutes'));
 app.use('/api/tasks', authMiddleware, taskRoutes);
 // Plan-gated by the 'automations' module (drip Sequences are part of Automations,
 // not a separate module). Mirrors the email/whatsapp/chatbot gates so a Basic-tier
@@ -576,9 +583,20 @@ server.listen(PORT, () => {
 
 // ⚠️ PRODUCTION: Graceful shutdown — cleanly close connections when server is stopped.
 // Without this, Render restarts can leave orphaned DB connections and interrupted Agenda jobs.
-const gracefulShutdown = async (signal) => {
+let isShuttingDown = false;
+const gracefulShutdown = async (signal, exitCode = 0) => {
+  if (isShuttingDown) return;   // ignore repeat signals / errors raised during shutdown
+  isShuttingDown = true;
   console.log(`\n⚠️ ${signal} received. Starting graceful shutdown...`);
-  
+
+  // Watchdog: if cleanup hangs (e.g. a stuck socket), force-exit so the platform
+  // can restart a fresh process instead of leaving a half-dead one running.
+  const watchdog = setTimeout(() => {
+    console.error('⏱️  Graceful shutdown timed out after 10s — forcing exit.');
+    process.exit(exitCode);
+  }, 10000);
+  watchdog.unref();
+
   // 1. Stop accepting new requests
   server.close(() => {
     console.log('✅ HTTP server closed');
@@ -625,7 +643,7 @@ const gracefulShutdown = async (signal) => {
   }
 
   console.log('👋 Graceful shutdown complete');
-  process.exit(0);
+  process.exit(exitCode);
 };
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
@@ -641,10 +659,8 @@ process.on('unhandledRejection', (reason, promise) => {
 
 process.on('uncaughtException', (error) => {
   console.error('💥 UNCAUGHT EXCEPTION:', error);
-  // For truly fatal errors, log and exit gracefully
-  if (error.message?.includes('ENOMEM') || error.message?.includes('out of memory')) {
-    console.error('🔥 Fatal memory error — shutting down...');
-    process.exit(1);
-  }
-  // For non-fatal exceptions, keep running
+  // After an uncaught exception the process is in an undefined state — continuing to
+  // serve risks corrupt data and hard-to-debug behaviour. Shut down cleanly and exit
+  // non-zero so the platform (Render) restarts a fresh process.
+  gracefulShutdown('uncaughtException', 1);
 });

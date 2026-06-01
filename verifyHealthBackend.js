@@ -1,3 +1,4 @@
+require('dotenv').config();
 const mongoose = require('mongoose');
 const os = require('os');
 
@@ -10,7 +11,12 @@ const telemetryService = {
 
 async function testHealth() {
     try {
-        await mongoose.connect('mongodb+srv://adfliker32_db_user:ZI6MC0UABVQ4XH8l@cluster0.jxpsfb0.mongodb.net/crm?retryWrites=true&w=majority&appName=Cluster0');
+        const MONGO_URI = process.env.MONGO_URI;
+        if (!MONGO_URI) {
+            console.error('❌ MONGO_URI is not set. Add it to your .env before running this script.');
+            process.exit(1);
+        }
+        await mongoose.connect(MONGO_URI);
         
         const health = {};
 

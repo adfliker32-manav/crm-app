@@ -22,7 +22,6 @@ const SUB_PERMISSIONS = [
     { key: 'emailAutomation',   label: 'Email Automation',    desc: 'Trigger emails from automation rules',              parentModule: 'email',    icon: 'fa-envelopes-bulk' },
     { key: 'campaigns',         label: 'Bulk Campaigns',      desc: 'Send broadcasts to large audiences',                parentModule: 'email',    icon: 'fa-bullhorn' },
     { key: 'metaSync',          label: 'Meta Lead Ads Sync',  desc: 'Auto-import leads from Facebook/Instagram ads',     parentModule: 'leads',    icon: 'fa-meta' },
-    { key: 'webhooks',          label: 'Webhooks',            desc: 'Outbound webhook events for integrations',          parentModule: 'api',      icon: 'fa-plug' },
     { key: 'advancedAnalytics', label: 'Advanced Analytics',  desc: 'Cohort, funnel, and revenue dashboards',            parentModule: 'reports',  icon: 'fa-chart-line' }
 ];
 
@@ -74,7 +73,6 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
             emailAutomation: false,
             campaigns: false,
             metaSync: false,
-            webhooks: false,
             advancedAnalytics: false
         }
     });
@@ -96,7 +94,7 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                 leadLimit: 100, agentLimit: 2,
                 planFeatures: {
                     aiChatbot: false, whatsappAutomation: false, emailAutomation: false,
-                    campaigns: false, metaSync: false, webhooks: false, advancedAnalytics: false
+                    campaigns: false, metaSync: false, advancedAnalytics: false
                 }
             });
         }

@@ -25,11 +25,16 @@ const requireModule = (moduleName) => {
             // Check if moduleName exists in the tenant's allowed features array
             let hasAccess = activeModules.includes(moduleName);
 
-            // Chatbot flows are part of the WhatsApp module; aiChatbot is an optional add-on
+            // Chatbot is a WhatsApp-dependent PAID add-on: it needs the explicit
+            // aiChatbot plan feature AND a connected WhatsApp module to run on.
+            // (An explicit 'chatbot' entry in activeModules also grants it, for any
+            // plan that lists it directly.) Previously `|| hasWhatsApp` leaked chatbot
+            // to every plan that merely had WhatsApp, which made the aiChatbot upsell
+            // meaningless (e.g. a Basic/WhatsApp-only plan would get chatbot for free).
             if (moduleName === 'chatbot') {
                 const hasPlanFeature = req.workspace?.planFeatures?.aiChatbot;
-                const hasWhatsApp = activeModules.includes('whatsapp');
-                hasAccess = hasAccess || hasPlanFeature || hasWhatsApp;
+                const hasWhatsApp    = activeModules.includes('whatsapp');
+                hasAccess = hasAccess || (hasPlanFeature && hasWhatsApp);
             }
 
             if (!hasAccess) {
