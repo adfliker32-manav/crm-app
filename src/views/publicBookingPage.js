@@ -315,10 +315,19 @@ const renderPublicBookingPage = (slug) => {
             });
           }
 
+          // Recompute the submit button's disabled state without a full re-render,
+          // so typing in the details fields re-enables it immediately.
+          const refreshSubmitDisabled = () => {
+            const btn = document.getElementById('submitBtn');
+            if (!btn) return;
+            const rq = sortedQuestions.filter(q => q.required).every(q => String(state.customAnswers[q.id] || '').trim() !== '');
+            btn.disabled = !(state.service && state.date && state.time && state.name.trim() && state.phone.trim() && rq && !state.submitting);
+          };
+
           const nameEl = document.getElementById('nameInput');
-          if (nameEl) nameEl.addEventListener('input', () => { state.name = nameEl.value || ''; });
+          if (nameEl) nameEl.addEventListener('input', () => { state.name = nameEl.value || ''; refreshSubmitDisabled(); });
           const phoneEl = document.getElementById('phoneInput');
-          if (phoneEl) phoneEl.addEventListener('input', () => { state.phone = phoneEl.value || ''; });
+          if (phoneEl) phoneEl.addEventListener('input', () => { state.phone = phoneEl.value || ''; refreshSubmitDisabled(); });
           const emailEl = document.getElementById('emailInput');
           if (emailEl) emailEl.addEventListener('input', () => { state.email = emailEl.value || ''; });
           const notesEl = document.getElementById('notesInput');
@@ -329,11 +338,7 @@ const renderPublicBookingPage = (slug) => {
             const evt = el.tagName === 'SELECT' ? 'change' : 'input';
             el.addEventListener(evt, () => {
               state.customAnswers[qid] = el.value || '';
-              const submitEl2 = document.getElementById('submitBtn');
-              if (submitEl2) {
-                const rq = sortedQuestions.filter(q => q.required).every(q => String(state.customAnswers[q.id] || '').trim() !== '');
-                submitEl2.disabled = !(state.service && state.date && state.time && state.name.trim() && state.phone.trim() && rq && !state.submitting);
-              }
+              refreshSubmitDisabled();
             });
           });
 
