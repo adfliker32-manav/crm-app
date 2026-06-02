@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+// Theme: CRM blue (matches sidebar + WhatsApp inbox)
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import DOMPurify from 'dompurify';
@@ -168,8 +169,8 @@ const EmailInbox = () => {
         return (
             <div className="flex flex-col items-center justify-center h-full bg-slate-50/50">
                 <div className="relative">
-                    <div className="w-12 h-12 border-4 border-indigo-100 rounded-full animate-spin"></div>
-                    <div className="w-12 h-12 border-4 border-transparent border-t-indigo-600 rounded-full animate-spin absolute top-0 left-0"></div>
+                    <div className="w-12 h-12 border-4 border-blue-100 rounded-full animate-spin"></div>
+                    <div className="w-12 h-12 border-4 border-transparent border-t-blue-600 rounded-full animate-spin absolute top-0 left-0"></div>
                 </div>
                 <p className="text-slate-500 font-semibold text-xs mt-4 tracking-wide">Loading premium inbox...</p>
             </div>
@@ -183,19 +184,19 @@ const EmailInbox = () => {
                 {/* Sidebar Header */}
                 <div className="px-5 py-4 bg-white flex items-center justify-between border-b border-slate-100">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-gradient-to-tr from-indigo-500 via-indigo-600 to-violet-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-500/25">
+                        <div className="w-10 h-10 bg-gradient-to-tr from-blue-500 via-blue-600 to-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-500/25">
                             <i className="fa-solid fa-envelope text-base"></i>
                         </div>
                         <div>
                             <span className="font-bold text-slate-800 text-[15px] tracking-tight">Email Inbox</span>
                             {totalUnread > 0 && (
-                                <span className="ml-2 bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm shadow-indigo-600/20">{totalUnread}</span>
+                                <span className="ml-2 bg-blue-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm shadow-blue-600/20">{totalUnread}</span>
                             )}
                         </div>
                     </div>
                     <button
                         onClick={() => { setShowNewChatModal(true); setComposeEmail(''); setComposeSubject(''); setComposeMessage(''); setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); }}
-                        className="w-10 h-10 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-600 flex items-center justify-center transition-all duration-200 active:scale-95 shadow-sm border border-indigo-100/50"
+                        className="w-10 h-10 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-all duration-200 active:scale-95 shadow-sm border border-blue-100/50"
                         title="Compose Email"
                     >
                         <i className="fa-solid fa-pen-to-square text-[14px]"></i>
@@ -211,7 +212,7 @@ const EmailInbox = () => {
                             placeholder="Search emails or contacts..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2.5 bg-slate-50/50 border border-slate-200/80 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 rounded-xl text-xs transition duration-200 outline-none placeholder:text-slate-400 text-slate-700 font-medium"
+                            className="w-full pl-10 pr-4 py-2.5 bg-slate-50/50 border border-slate-200/80 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl text-xs transition duration-200 outline-none placeholder:text-slate-400 text-slate-700 font-medium"
                         />
                     </div>
                 </div>
@@ -227,11 +228,11 @@ const EmailInbox = () => {
                             key={tab.id}
                             onClick={() => setFilter(tab.id)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition duration-200 active:scale-95 flex items-center ${filter === tab.id
-                                ? 'bg-indigo-650 bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                                ? 'bg-blue-600 text-white shadow-md shadow-blue-600/10'
                                 : 'bg-slate-50 text-slate-500 hover:bg-slate-100/80 border border-transparent'}`}
                         >
                             {tab.label}
-                            {tab.count > 0 && <span className={`ml-1.5 text-[9px] px-1.5 py-0.5 rounded-full font-black ${filter === tab.id ? 'bg-white text-indigo-600' : 'bg-indigo-600 text-white'}`}>{tab.count}</span>}
+                            {tab.count > 0 && <span className={`ml-1.5 text-[9px] px-1.5 py-0.5 rounded-full font-black ${filter === tab.id ? 'bg-white text-blue-600' : 'bg-blue-600 text-white'}`}>{tab.count}</span>}
                         </button>
                     ))}
                 </div>
@@ -243,12 +244,12 @@ const EmailInbox = () => {
                             key={chat._id}
                             onClick={() => handleSelectChat(chat)}
                             className={`p-3.5 rounded-xl cursor-pointer transition-all duration-300 border flex flex-col gap-1.5 ${selectedChat?._id === chat._id
-                                ? 'bg-white border-indigo-200/80 shadow-md shadow-indigo-500/5 ring-1 ring-indigo-500/5 -translate-y-0.5'
+                                ? 'bg-white border-blue-200/80 shadow-md shadow-blue-500/5 ring-1 ring-blue-500/5 -translate-y-0.5'
                                 : 'bg-white/60 hover:bg-white border-slate-100 hover:shadow-sm hover:-translate-y-0.5'}`}
                         >
                             <div className="flex gap-3">
                                 <div className="flex-shrink-0">
-                                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-[14px] shadow-sm ${chat.unreadCount > 0 ? 'bg-gradient-to-br from-indigo-500 to-indigo-600' : 'bg-slate-200 text-slate-500'}`}>
+                                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-[14px] shadow-sm ${chat.unreadCount > 0 ? 'bg-gradient-to-br from-blue-500 to-blue-600' : 'bg-slate-200 text-slate-500'}`}>
                                         {(chat.displayName || chat.email).charAt(0).toUpperCase()}
                                     </div>
                                 </div>
@@ -257,7 +258,7 @@ const EmailInbox = () => {
                                         <h3 className={`text-xs truncate w-[70%] ${chat.unreadCount > 0 ? 'font-bold text-slate-900' : 'font-semibold text-slate-700'}`}>
                                             {chat.displayName || chat.email.split('@')[0]}
                                         </h3>
-                                        <span className={`text-[10px] flex-shrink-0 ${chat.unreadCount > 0 ? 'text-indigo-600 font-bold' : 'text-slate-400 font-medium'}`}>
+                                        <span className={`text-[10px] flex-shrink-0 ${chat.unreadCount > 0 ? 'text-blue-600 font-bold' : 'text-slate-400 font-medium'}`}>
                                             {formatTime(chat.lastMessageAt)}
                                         </span>
                                     </div>
@@ -269,7 +270,7 @@ const EmailInbox = () => {
                                             {chat.lastMessage || 'No messages'}
                                         </p>
                                         {chat.unreadCount > 0 && (
-                                            <span className="bg-indigo-600 text-white text-[9.5px] font-black min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center flex-shrink-0 ml-2 shadow-sm shadow-indigo-600/10">
+                                            <span className="bg-blue-600 text-white text-[9.5px] font-black min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center flex-shrink-0 ml-2 shadow-sm shadow-blue-600/10">
                                                 {chat.unreadCount}
                                             </span>
                                         )}
@@ -298,7 +299,7 @@ const EmailInbox = () => {
                             {/* Chat Header */}
                             <div className="h-[72px] px-6 bg-white border-b border-slate-100 flex items-center justify-between flex-shrink-0 shadow-sm z-10">
                                 <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 bg-gradient-to-tr from-indigo-500 via-indigo-600 to-violet-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-sm flex-shrink-0">
+                                    <div className="w-10 h-10 bg-gradient-to-tr from-blue-500 via-blue-600 to-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-sm flex-shrink-0">
                                         {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
                                     </div>
                                     <div>
@@ -315,7 +316,7 @@ const EmailInbox = () => {
                                     <button
                                         onClick={() => setShowContactPanel(v => !v)}
                                         className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm transition-all duration-200 active:scale-95 border
-                                            ${showContactPanel ? 'bg-indigo-50 text-indigo-600 border-indigo-100/50' : 'hover:bg-slate-50 text-slate-400 border-transparent bg-transparent'}`}
+                                            ${showContactPanel ? 'bg-blue-50 text-blue-600 border-blue-100/50' : 'hover:bg-slate-50 text-slate-400 border-transparent bg-transparent'}`}
                                         title="Contact Info"
                                     >
                                         <i className="fa-solid fa-circle-info"></i>
@@ -355,10 +356,10 @@ const EmailInbox = () => {
                                                         </div>
                                                     )}
                                                     <div className={`max-w-[75%] rounded-2xl overflow-hidden shadow-sm border flex flex-col
-                                                        ${isOut ? 'bg-gradient-to-br from-indigo-600 via-indigo-650 to-indigo-700 border-indigo-700 text-white rounded-tr-none' : 'bg-white border-slate-100 text-slate-800 rounded-tl-none'}`}>
+                                                        ${isOut ? 'bg-gradient-to-br from-blue-600 via-blue-700 to-blue-700 border-blue-700 text-white rounded-tr-none' : 'bg-white border-slate-100 text-slate-800 rounded-tl-none'}`}>
                                                         {/* Subject strip */}
                                                         <div className={`px-6 py-2.5 border-b text-[9.5px] font-black uppercase tracking-widest truncate
-                                                            ${isOut ? 'border-white/10 text-indigo-200' : 'border-slate-50 text-slate-400'}`}>
+                                                            ${isOut ? 'border-white/10 text-blue-200' : 'border-slate-50 text-slate-400'}`}>
                                                             {msg.subject || '(No Subject)'}
                                                         </div>
                                                         {/* Body */}
@@ -376,10 +377,10 @@ const EmailInbox = () => {
                                                         )}
                                                         {/* Timestamp */}
                                                         <div className={`px-6 pb-2.5 flex items-center justify-end gap-2 text-[9px] font-bold tracking-wide
-                                                            ${isOut ? 'text-indigo-200' : 'text-slate-400'}`}>
+                                                            ${isOut ? 'text-blue-200' : 'text-slate-400'}`}>
                                                             <span>{formatTime(msg.timestamp)}</span>
                                                             {isOut && (
-                                                                <i className={`fa-solid text-[9.5px] ${msg.status === 'failed' ? 'fa-circle-exclamation text-rose-300' : 'fa-check-double text-indigo-300'}`}></i>
+                                                                <i className={`fa-solid text-[9.5px] ${msg.status === 'failed' ? 'fa-circle-exclamation text-rose-300' : 'fa-check-double text-blue-300'}`}></i>
                                                             )}
                                                         </div>
                                                     </div>
@@ -398,10 +399,10 @@ const EmailInbox = () => {
                                         value={newSubject}
                                         onChange={(e) => setNewSubject(e.target.value)}
                                         placeholder="Subject line..."
-                                        className="w-full text-xs font-bold text-slate-600 px-4 py-2.5 mb-3 bg-slate-50/50 border border-slate-200/80 rounded-xl focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition duration-200 outline-none"
+                                        className="w-full text-xs font-bold text-slate-600 px-4 py-2.5 mb-3 bg-slate-50/50 border border-slate-200/80 rounded-xl focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition duration-200 outline-none"
                                         disabled={sending}
                                     />
-                                    <div className="flex items-end gap-3 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 focus-within:border-indigo-500 focus-within:ring-4 focus-within:ring-indigo-500/10 focus-within:bg-white transition-all duration-200">
+                                    <div className="flex items-end gap-3 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:bg-white transition-all duration-200">
                                         <textarea
                                             value={newMessage}
                                             onChange={(e) => setNewMessage(e.target.value)}
@@ -417,7 +418,7 @@ const EmailInbox = () => {
                                             type="submit"
                                             disabled={!newMessage.trim() || sending}
                                             className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all duration-200 active:scale-95
-                                                bg-indigo-600 hover:bg-indigo-700 text-white shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
+                                                bg-blue-600 hover:bg-blue-700 text-white shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
                                         >
                                             {sending ? <i className="fa-solid fa-spinner fa-spin text-xs"></i> : <i className="fa-solid fa-paper-plane text-[13px]"></i>}
                                         </button>
@@ -440,7 +441,7 @@ const EmailInbox = () => {
 
                                 {/* Avatar + name */}
                                 <div className="flex flex-col items-center gap-2 py-8 px-5 border-b border-slate-50 bg-slate-50/20">
-                                    <div className="w-16 h-16 bg-gradient-to-tr from-indigo-500 via-indigo-650 to-violet-600 rounded-2xl flex items-center justify-center text-white font-bold text-2xl shadow-md shadow-indigo-500/10">
+                                    <div className="w-16 h-16 bg-gradient-to-tr from-blue-500 via-blue-700 to-blue-600 rounded-2xl flex items-center justify-center text-white font-bold text-2xl shadow-md shadow-blue-500/10">
                                         {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
                                     </div>
                                     <p className="text-sm font-bold text-slate-800 text-center leading-tight mt-3">
@@ -448,7 +449,7 @@ const EmailInbox = () => {
                                     </p>
                                     <p className="text-[11px] text-slate-400 font-semibold text-center break-all">{selectedChat.email}</p>
                                     {selectedChat.leadId?.status && (
-                                        <span className="mt-3 text-[9.5px] font-black uppercase tracking-widest px-3 py-1 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100/50 shadow-sm">
+                                        <span className="mt-3 text-[9.5px] font-black uppercase tracking-widest px-3 py-1 rounded-full bg-blue-50 text-blue-600 border border-blue-100/50 shadow-sm">
                                             {selectedChat.leadId.status}
                                         </span>
                                     )}
@@ -488,7 +489,7 @@ const EmailInbox = () => {
                             onClick={() => { setShowNewChatModal(true); setComposeEmail(''); setComposeSubject(''); setComposeMessage(''); setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); }}
                             className="w-24 h-24 bg-white rounded-[24px] shadow-lg shadow-slate-100 flex items-center justify-center cursor-pointer hover:shadow-xl hover:scale-105 active:scale-95 border border-slate-100 transition-all duration-300"
                         >
-                            <i className="fa-solid fa-envelope-open-text text-3xl text-indigo-500"></i>
+                            <i className="fa-solid fa-envelope-open-text text-3xl text-blue-500"></i>
                         </div>
                         <div>
                             <h2 className="text-base font-black text-slate-800 mb-1">Select a conversation</h2>
@@ -496,7 +497,7 @@ const EmailInbox = () => {
                         </div>
                         <button
                             onClick={() => { setShowNewChatModal(true); setComposeEmail(''); setComposeSubject(''); setComposeMessage(''); setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); }}
-                            className="flex items-center gap-2 px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition duration-200 shadow-md shadow-indigo-100 active:scale-95"
+                            className="flex items-center gap-2 px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition duration-200 shadow-md shadow-blue-100 active:scale-95"
                         >
                             <i className="fa-solid fa-pen-to-square"></i> Compose New Email
                         </button>
@@ -508,7 +509,7 @@ const EmailInbox = () => {
             {showNewChatModal && (
                 <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-fade-in-up">
-                        <div className="px-6 py-4 bg-gradient-to-r from-indigo-600 to-indigo-700 flex justify-between items-center">
+                        <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 flex justify-between items-center">
                             <h3 className="font-bold text-white text-sm flex items-center gap-2">
                                 <i className="fa-solid fa-pen-to-square"></i> Compose New Email
                             </h3>
@@ -526,7 +527,7 @@ const EmailInbox = () => {
                                         value={composeEmail}
                                         onChange={(e) => setComposeEmail(e.target.value)}
                                         placeholder="lead@example.com"
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-bold text-slate-700"
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-bold text-slate-700"
                                     />
                                 </div>
                                 <div>
@@ -535,7 +536,7 @@ const EmailInbox = () => {
                                         type="datetime-local"
                                         value={composeSchedule}
                                         onChange={(e) => setComposeSchedule(e.target.value)}
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
                                     />
                                 </div>
                             </div>
@@ -547,7 +548,7 @@ const EmailInbox = () => {
                                         value={composeCc}
                                         onChange={(e) => setComposeCc(e.target.value)}
                                         placeholder="comma separated emails"
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
                                     />
                                 </div>
                                 <div>
@@ -557,7 +558,7 @@ const EmailInbox = () => {
                                         value={composeBcc}
                                         onChange={(e) => setComposeBcc(e.target.value)}
                                         placeholder="comma separated emails"
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
                                     />
                                 </div>
                             </div>
@@ -569,7 +570,7 @@ const EmailInbox = () => {
                                     value={composeSubject}
                                     onChange={(e) => setComposeSubject(e.target.value)}
                                     placeholder="Enter subject..."
-                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-bold text-slate-700"
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-bold text-slate-700"
                                 />
                             </div>
                             <div>
@@ -579,14 +580,14 @@ const EmailInbox = () => {
                                     value={composeMessage}
                                     onChange={(e) => setComposeMessage(e.target.value)}
                                     placeholder="Write your email here..."
-                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 rounded-xl transition-all duration-200 outline-none min-h-[150px] resize-y text-xs font-medium text-slate-700 leading-relaxed"
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none min-h-[150px] resize-y text-xs font-medium text-slate-700 leading-relaxed"
                                 ></textarea>
                             </div>
                             <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
                                 <button type="button" onClick={() => setShowNewChatModal(false)} className="px-5 py-2.5 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition">
                                     Cancel
                                 </button>
-                                <button type="submit" disabled={sending} className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition shadow-md shadow-indigo-100 flex items-center gap-2 text-xs">
+                                <button type="submit" disabled={sending} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition shadow-md shadow-blue-100 flex items-center gap-2 text-xs">
                                     {sending ? <><i className="fa-solid fa-spinner fa-spin"></i> Sending...</> : <><i className="fa-solid fa-paper-plane"></i> Send Email</>}
                                 </button>
                             </div>

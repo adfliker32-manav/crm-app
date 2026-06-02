@@ -15,9 +15,9 @@ const TemplateCard = ({ template, onView, onEdit, onDelete }) => {
     const trigger = TRIGGER_META[template.triggerType] || TRIGGER_META.manual;
 
     return (
-        <div className="group bg-white rounded-2xl border border-slate-200 hover:border-indigo-200 hover:shadow-lg transition-all duration-200 flex flex-col overflow-hidden">
+        <div className="group bg-white rounded-2xl border border-slate-200 hover:border-blue-200 hover:shadow-lg transition-all duration-200 flex flex-col overflow-hidden">
             {/* Card Header Strip */}
-            <div className={`h-1.5 w-full ${template.isActive ? 'bg-gradient-to-r from-indigo-500 to-blue-400' : 'bg-slate-200'}`} />
+            <div className={`h-1.5 w-full ${template.isActive ? 'bg-gradient-to-r from-blue-500 to-blue-400' : 'bg-slate-200'}`} />
 
             <div className="p-5 flex-1 flex flex-col gap-3">
                 {/* Title + badges */}
@@ -40,7 +40,7 @@ const TemplateCard = ({ template, onView, onEdit, onDelete }) => {
                         {trigger.label}
                     </span>
                     {template.isAutomated && (
-                        <span className="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-600">
+                        <span className="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-blue-50 text-blue-600">
                             <i className="fa-solid fa-robot text-[10px]"></i>
                             Auto
                         </span>
@@ -58,7 +58,7 @@ const TemplateCard = ({ template, onView, onEdit, onDelete }) => {
             <div className="px-5 pb-4 flex gap-2">
                 <button
                     onClick={() => onView(template)}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-600 transition-all duration-150"
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-600 transition-all duration-150"
                 >
                     <i className="fa-solid fa-eye"></i> View
                 </button>
@@ -156,7 +156,7 @@ const EmailTemplates = () => {
 
     if (loading) return (
         <div className="flex flex-col items-center justify-center h-64 gap-3">
-            <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
             <p className="text-sm text-slate-500 font-medium">Loading templates...</p>
         </div>
     );
@@ -173,7 +173,7 @@ const EmailTemplates = () => {
                         placeholder="Search templates..."
                         value={search}
                         onChange={e => setSearch(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-100 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 border rounded-xl text-sm transition outline-none"
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-100 border-transparent focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 border rounded-xl text-sm transition outline-none"
                     />
                 </div>
 
@@ -191,7 +191,7 @@ const EmailTemplates = () => {
                             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${filterTab === tab.id ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                         >
                             {tab.label}
-                            <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${filterTab === tab.id ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200 text-slate-500'}`}>
+                            <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${filterTab === tab.id ? 'bg-blue-100 text-blue-600' : 'bg-slate-200 text-slate-500'}`}>
                                 {counts[tab.id]}
                             </span>
                         </button>
@@ -201,7 +201,7 @@ const EmailTemplates = () => {
                 {/* New Template */}
                 <button
                     onClick={handleCreateClick}
-                    className="flex-shrink-0 flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-md shadow-indigo-200 hover:shadow-indigo-300"
+                    className="flex-shrink-0 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-md shadow-blue-200 hover:shadow-blue-300"
                 >
                     <i className="fa-solid fa-plus"></i> New Template
                 </button>
@@ -224,7 +224,7 @@ const EmailTemplates = () => {
                     {!search && filterTab === 'all' && (
                         <button
                             onClick={handleCreateClick}
-                            className="mt-2 flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-md"
+                            className="mt-2 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-md"
                         >
                             <i className="fa-solid fa-plus"></i> Create First Template
                         </button>

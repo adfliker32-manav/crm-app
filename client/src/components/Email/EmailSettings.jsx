@@ -14,7 +14,7 @@ const Field = ({ label, hint, required, children }) => (
     </div>
 );
 
-const inputCls = "w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 focus:bg-white transition-all";
+const inputCls = "w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 focus:bg-white transition-all";
 
 const EmailSettings = () => {
     const { showSuccess, showError, showInfo } = useNotification();
@@ -116,7 +116,7 @@ const EmailSettings = () => {
 
     if (loading) return (
         <div className="flex flex-col items-center justify-center h-64 gap-3">
-            <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
             <p className="text-sm text-slate-500 font-medium">Loading configuration...</p>
         </div>
     );
@@ -182,10 +182,10 @@ const EmailSettings = () => {
                                     key={opt.value}
                                     type="button"
                                     onClick={() => setConfig(p => ({ ...p, emailServiceType: opt.value }))}
-                                    className={`flex items-center gap-3 p-4 rounded-xl border-2 text-left transition-all ${config.emailServiceType === opt.value ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200 hover:border-slate-300 bg-white'}`}
+                                    className={`flex items-center gap-3 p-4 rounded-xl border-2 text-left transition-all ${config.emailServiceType === opt.value ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-slate-300 bg-white'}`}
                                 >
-                                    <i className={`fa-brands ${opt.icon} text-xl ${config.emailServiceType === opt.value ? 'text-indigo-500' : opt.color}`}></i>
-                                    <span className={`text-sm font-semibold ${config.emailServiceType === opt.value ? 'text-indigo-700' : 'text-slate-700'}`}>{opt.label}</span>
+                                    <i className={`fa-brands ${opt.icon} text-xl ${config.emailServiceType === opt.value ? 'text-blue-500' : opt.color}`}></i>
+                                    <span className={`text-sm font-semibold ${config.emailServiceType === opt.value ? 'text-blue-700' : 'text-slate-700'}`}>{opt.label}</span>
                                 </button>
                             ))}
                         </div>
@@ -273,7 +273,7 @@ const EmailSettings = () => {
                         )}
                         <div className="flex gap-3 ml-auto">
                             <button type="submit" disabled={saving}
-                                className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition shadow-md shadow-indigo-200">
+                                className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition shadow-md shadow-blue-200">
                                 {saving ? <><i className="fa-solid fa-spinner fa-spin"></i> Saving...</> : <><i className="fa-solid fa-floppy-disk"></i> Save Configuration</>}
                             </button>
                         </div>

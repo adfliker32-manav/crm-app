@@ -56,10 +56,10 @@ const EmailManagement = () => {
     return (
         <div className="min-h-screen bg-slate-50/50 font-sans animate-fade-in-up">
             {/* ═══ Page Header ═══ */}
-            <div className="px-8 pt-8 pb-0">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+            <div className="px-8 pt-6 pb-0">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
                     <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-200 flex-shrink-0">
+                        <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-200 flex-shrink-0">
                             <i className="fa-solid fa-envelope text-white text-lg"></i>
                         </div>
                         <div>
@@ -84,20 +84,20 @@ const EmailManagement = () => {
 
                 {/* ═══ Stats Bar (only on inbox/templates tabs) ═══ */}
                 {showStats && (
-                    <div className="flex items-center gap-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-6 divide-x divide-slate-100">
-                        <div className="flex-1 px-6 py-4">
-                            <MiniStat value={stats.today?.sent ?? 0} label="Sent today" color="text-indigo-600" />
+                    <div className="flex items-center gap-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-4 divide-x divide-slate-100">
+                        <div className="flex-1 px-6 py-3">
+                            <MiniStat value={stats.today?.sent ?? 0} label="Sent today" color="text-blue-600" />
                         </div>
-                        <div className="flex-1 px-6 py-4">
+                        <div className="flex-1 px-6 py-3">
                             <MiniStat value={stats.today?.failed ?? 0} label="Failed today" color={stats.today?.failed > 0 ? 'text-rose-500' : 'text-slate-400'} />
                         </div>
-                        <div className="flex-1 px-6 py-4">
-                            <MiniStat value={stats.today?.automated?.sent ?? 0} label="Auto-triggered" color="text-violet-600" />
+                        <div className="flex-1 px-6 py-3">
+                            <MiniStat value={stats.today?.automated?.sent ?? 0} label="Auto-triggered" color="text-blue-600" />
                         </div>
-                        <div className="flex-1 px-6 py-4">
+                        <div className="flex-1 px-6 py-3">
                             <MiniStat value={stats.thisMonth?.sent ?? 0} label="This month" color="text-blue-600" />
                         </div>
-                        <div className="px-6 py-4 flex flex-col items-center justify-center min-w-[130px]">
+                        <div className="px-6 py-3 flex flex-col items-center justify-center min-w-[130px]">
                             <p className="text-[10px] text-slate-300 font-semibold uppercase tracking-wider">Last update</p>
                             <p className="text-xs text-slate-400 font-semibold mt-1">
                                 {lastFetched
@@ -116,7 +116,7 @@ const EmailManagement = () => {
                             onClick={() => setActiveTab(tab.id)}
                             className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-all -mb-px
                                 ${activeTab === tab.id
-                                    ? 'border-indigo-500 text-indigo-600'
+                                    ? 'border-blue-500 text-blue-600'
                                     : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}`}
                         >
                             <i className={`fa-solid ${tab.icon} text-[13px]`}></i>
@@ -129,7 +129,7 @@ const EmailManagement = () => {
             {/* ═══ Content ═══ */}
             <div
                 className="mx-8 mb-8 bg-white border border-slate-200 border-t-0 rounded-b-2xl shadow-sm overflow-hidden"
-                style={{ height: 'calc(100vh - ' + (showStats ? '310px' : '200px') + ')' }}
+                style={{ height: 'calc(100vh - ' + (showStats ? '262px' : '172px') + ')' }}
             >
                 <div className={`h-full ${activeTab === 'inbox' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
                     {activeTab === 'inbox'     && <EmailInbox />}
