@@ -34,7 +34,7 @@ const KpiCard = ({ label, value, sub, icon, color, bg, bar, barColor }) => (
         {bar !== undefined && (
             <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
                 <div
-                    className={`h-full rounded-full transition-all duration-700 ${barColor || 'bg-indigo-400'}`}
+                    className={`h-full rounded-full transition-all duration-700 ${barColor || 'bg-blue-400'}`}
                     style={{ width: `${Math.min(bar, 100)}%` }}
                 />
             </div>
@@ -55,7 +55,7 @@ const EmailAnalytics = () => {
 
     if (loading) return (
         <div className="flex flex-col items-center justify-center h-64 gap-3">
-            <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
             <p className="text-sm text-slate-500 font-medium">Loading analytics...</p>
         </div>
     );
@@ -77,10 +77,10 @@ const EmailAnalytics = () => {
         : 100;
     const replyRate = totalSent > 0 ? ((totalReceived / totalSent) * 100).toFixed(1) : 0;
 
-    const labels = stats.chartData?.map(d => {
-        const d2 = new Date(d.date);
-        return d2.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-    }) || [];
+    // Backend already returns `date` as a display label (e.g. "Mon, Jun 2").
+    // Re-parsing it with new Date() mis-read it as year 2001 and produced the
+    // wrong weekday, so use the label as-is.
+    const labels = stats.chartData?.map(d => d.date) || [];
 
     const volumeChartData = {
         labels,
@@ -88,13 +88,13 @@ const EmailAnalytics = () => {
             {
                 label: 'Sent',
                 data: stats.chartData?.map(d => d.sent) || [],
-                borderColor: 'rgb(99, 102, 241)',
-                backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                borderColor: 'rgb(59, 130, 246)',
+                backgroundColor: 'rgba(59, 130, 246, 0.08)',
                 fill: true,
                 tension: 0.4,
                 borderWidth: 2.5,
                 pointRadius: 4,
-                pointBackgroundColor: 'rgb(99, 102, 241)',
+                pointBackgroundColor: 'rgb(59, 130, 246)',
                 pointBorderColor: '#fff',
                 pointBorderWidth: 2
             },
@@ -191,8 +191,8 @@ const EmailAnalytics = () => {
                     value={totalSent.toLocaleString()}
                     sub="all time"
                     icon="fa-paper-plane"
-                    color="text-indigo-600"
-                    bg="bg-indigo-50"
+                    color="text-blue-600"
+                    bg="bg-blue-50"
                 />
                 <KpiCard
                     label="Replies Received"
@@ -241,7 +241,7 @@ const EmailAnalytics = () => {
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 flex flex-col">
                     <div className="flex items-center justify-between mb-5">
                         <h3 className="text-base font-bold text-slate-800">Recent Activity</h3>
-                        <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md uppercase tracking-wider">Latest 5</span>
+                        <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-md uppercase tracking-wider">Latest 5</span>
                     </div>
                     <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-1">
                         {stats.recentActivity?.length > 0 ? stats.recentActivity.map(log => (
@@ -272,10 +272,10 @@ const EmailAnalytics = () => {
 
             {/* This Month summary */}
             <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gradient-to-br from-indigo-500 to-indigo-700 rounded-2xl p-5 text-white">
-                    <p className="text-indigo-200 text-xs font-semibold uppercase tracking-wider mb-2">This Month — Sent</p>
+                <div className="bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl p-5 text-white">
+                    <p className="text-blue-200 text-xs font-semibold uppercase tracking-wider mb-2">This Month — Sent</p>
                     <p className="text-4xl font-bold">{(stats.thisMonth?.sent || 0).toLocaleString()}</p>
-                    <p className="text-indigo-200 text-sm mt-2">
+                    <p className="text-blue-200 text-sm mt-2">
                         {(stats.thisMonth?.failed || 0)} failed · {(stats.thisMonth?.automated?.sent || 0)} automated
                     </p>
                 </div>

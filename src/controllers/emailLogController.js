@@ -72,15 +72,21 @@ exports.getAnalytics = async (req, res) => {
             .populate('leadId', 'name email')
             .lean();
 
-        // Helper function
+        // Helper function.
+        // today/thisMonth group by { status, isAutomated }, so a single status is
+        // spread across multiple groups (automated + manual). Sum every matching
+        // group instead of taking the first, otherwise totals are undercounted.
+        // allTime groups by status only, where _id is the status string.
         const getCount = (data, status, isAutomated = null) => {
-            const match = data.find(item => {
-                if (isAutomated !== null) {
-                    return item._id.status === status && item._id.isAutomated === isAutomated;
-                }
-                return item._id === status || item._id.status === status;
-            });
-            return match ? match.count : 0;
+            return data
+                .filter(item => {
+                    const itemStatus = (item._id && item._id.status !== undefined) ? item._id.status : item._id;
+                    if (isAutomated !== null) {
+                        return itemStatus === status && item._id.isAutomated === isAutomated;
+                    }
+                    return itemStatus === status;
+                })
+                .reduce((sum, item) => sum + item.count, 0);
         };
 
         const todayData = results[0]?.today || [];
