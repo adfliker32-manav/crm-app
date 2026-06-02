@@ -514,16 +514,23 @@ const getPages = async (req, res) => {
         // the account connected fine, but no Page was actually shared with the app.
         let diagnostic = null;
         if (pages.length === 0) {
-            if (grantedPermissions && !grantedPermissions.includes('pages_show_list')) {
+            const granted = Array.isArray(grantedPermissions) ? grantedPermissions : [];
+            if (grantedPermissions && !granted.includes('pages_show_list')) {
                 diagnostic = {
                     reason: 'missing_pages_permission',
                     message: 'Page access was not granted. Click "Log out", reconnect, and keep all permissions enabled in the Facebook dialog.'
                 };
-            } else {
-                // pages_show_list is granted (or unknown) but no page came back → none was selected
+            } else if (grantedPermissions && !granted.includes('business_management')) {
+                // pages_show_list is granted yet nothing is listed. The Page is almost always owned by a
+                // Meta Business Portfolio, which /me/accounts cannot see — that path needs business_management.
                 diagnostic = {
-                    reason: 'no_pages_selected',
-                    message: 'You are connected, but no Facebook Page was shared with the app. Click "Log out", reconnect, and make sure you select your Business and tick your Page in the Facebook permissions dialog.'
+                    reason: 'pages_in_business_portfolio',
+                    message: 'You are connected, but no Page could be listed. This usually means your Page is managed inside a Meta Business Portfolio. Make sure you are a direct admin of the Page (Page settings → Page roles), then reconnect. If it still does not appear, contact support to enable Business-managed Pages.'
+                };
+            } else {
+                diagnostic = {
+                    reason: 'no_pages_found',
+                    message: 'You are connected, but no Facebook Page is associated with this account. Log in with the account that manages your Page and make sure your Page is opted in during the Facebook login step.'
                 };
             }
         }
