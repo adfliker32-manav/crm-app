@@ -23,10 +23,10 @@ const resolveVariable = (mappingObj, varNum, data) => {
         : (mappingObj?.[varNum.toString()] || '');
 
     switch (mapType) {
-        case 'lead.name': return data.leadName || '';
+        case 'lead.name': return data.leadName || 'Customer';
         case 'lead.phone': return data.leadPhone || '';
         case 'lead.email': return data.leadEmail || '';
-        case 'lead.status': return data.stageName || '';
+        case 'lead.status': return data.stageName || 'New';
         case 'company.name': return data.companyName || '';
         case 'user.name': return data.userName || '';
         case 'custom':
@@ -42,6 +42,17 @@ const resolveVariable = (mappingObj, varNum, data) => {
             if (varNum === 4) return data.userName || 'Representative';
             return '';
     }
+};
+
+/**
+ * Sanitize a resolved value into a Meta-safe template parameter.
+ * Meta rejects the whole template send if any body/header parameter is empty
+ * or contains newlines, tabs, or more than 4 consecutive spaces. Collapse all
+ * whitespace runs to a single space and never return an empty string.
+ */
+const sanitizeParam = (value) => {
+    const text = (value == null ? '' : String(value)).replace(/\s+/g, ' ').trim();
+    return text.length ? text : '-';
 };
 
 /**
@@ -62,7 +73,7 @@ const buildMetaComponents = (dbComponents, variableMapping, data) => {
                 const parameters = [];
                 const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
                 for (const n of nums) {
-                    parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
+                    parameters.push({ type: 'text', text: sanitizeParam(resolveVariable(variableMapping, n, data)) });
                 }
                 metaComponents.push({ type: 'body', parameters });
             }
@@ -75,7 +86,7 @@ const buildMetaComponents = (dbComponents, variableMapping, data) => {
                     const parameters = [];
                     const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
                     for (const n of nums) {
-                        parameters.push({ type: 'text', text: resolveVariable(variableMapping, n, data) });
+                        parameters.push({ type: 'text', text: sanitizeParam(resolveVariable(variableMapping, n, data)) });
                     }
                     metaComponents.push({ type: 'header', parameters });
                 }

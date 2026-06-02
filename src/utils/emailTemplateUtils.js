@@ -9,7 +9,10 @@
 const replaceVariables = (template, data) => {
     if (!template) return '';
 
-    // Build a lowercase-keyed lookup that merges built-ins with caller-supplied data
+    // Build a lowercase-keyed lookup that merges built-ins with caller-supplied data.
+    // Friendly aliases ({{name}}, {{email}}, {{phone}}, {{company}}) are included so the
+    // editor's example placeholder ("Hello {{name}}") resolves in both manual and
+    // automated sends — otherwise those tokens were left literal in the email.
     const lookup = {
         leadname:    data.leadName    || '',
         leademail:   data.leadEmail   || '',
@@ -17,6 +20,10 @@ const replaceVariables = (template, data) => {
         companyname: data.companyName || '',
         username:    data.userName    || '',
         stagename:   data.stageName   || '',
+        name:        data.leadName    || '',
+        email:       data.leadEmail   || '',
+        phone:       data.leadPhone   || '',
+        company:     data.companyName || '',
         date:        new Date().toLocaleDateString(),
         time:        new Date().toLocaleTimeString(),
     };
