@@ -392,7 +392,7 @@ const EmailInbox = () => {
                             </div>
 
                             {/* Compose Bar */}
-                            <div className="bg-white border-t border-slate-100 p-6 flex-shrink-0 shadow-inner">
+                            <div className="bg-white border-t border-slate-100 px-6 py-4 flex-shrink-0 shadow-inner">
                                 <form onSubmit={handleSendMessage}>
                                     <input
                                         type="text"
