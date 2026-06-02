@@ -408,13 +408,16 @@ const getPages = async (req, res) => {
 
         console.log(`\n========== 🔍 META getPages DEBUG — tenant ${ownerId} ==========`);
 
-        // 0. Inspect granted permissions so we know what's possible
+        // 0. Inspect granted permissions so we know what's possible.
+        //    Kept in outer scope so we can explain an empty result to the user below.
+        let grantedPermissions = null; // null = couldn't be read
         try {
             const permRes = await axios.get(`${META_GRAPH_URL}/me/permissions`, {
                 params: { access_token: token }, timeout: META_API_TIMEOUT
             });
             const granted = (permRes.data.data || []).filter(p => p.status === 'granted').map(p => p.permission);
             const declined = (permRes.data.data || []).filter(p => p.status !== 'granted').map(p => `${p.permission}(${p.status})`);
+            grantedPermissions = granted;
             console.log(`   ✓ Granted permissions: ${granted.join(', ') || '(none)'}`);
             if (declined.length) console.log(`   ✗ Declined/expired:    ${declined.join(', ')}`);
             if (!granted.includes('business_management')) {
@@ -506,7 +509,26 @@ const getPages = async (req, res) => {
         }
         console.log(`========== END getPages DEBUG ==========\n`);
 
-        res.json({ success: true, pages });
+        // When the list is empty, tell the user *why* instead of leaving the dropdown blank.
+        // This is the common "works for the app admin, blank for everyone else" case:
+        // the account connected fine, but no Page was actually shared with the app.
+        let diagnostic = null;
+        if (pages.length === 0) {
+            if (grantedPermissions && !grantedPermissions.includes('pages_show_list')) {
+                diagnostic = {
+                    reason: 'missing_pages_permission',
+                    message: 'Page access was not granted. Click "Log out", reconnect, and keep all permissions enabled in the Facebook dialog.'
+                };
+            } else {
+                // pages_show_list is granted (or unknown) but no page came back → none was selected
+                diagnostic = {
+                    reason: 'no_pages_selected',
+                    message: 'You are connected, but no Facebook Page was shared with the app. Click "Log out", reconnect, and make sure you select your Business and tick your Page in the Facebook permissions dialog.'
+                };
+            }
+        }
+
+        res.json({ success: true, pages, diagnostic });
     } catch (error) {
         console.error('❌ Meta getPages Error:', error.response?.data || error.message);
         res.status(500).json({ success: false, message: 'Failed to fetch pages' });

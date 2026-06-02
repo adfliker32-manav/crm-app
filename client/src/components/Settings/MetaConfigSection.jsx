@@ -19,6 +19,7 @@ const MetaConfigSection = () => {
         connectedUserPicture: null
     });
     const [pages, setPages] = useState([]);
+    const [pagesDiagnostic, setPagesDiagnostic] = useState(null);
     const [forms, setForms] = useState([]);
     const [selectedPage, setSelectedPage] = useState(null);
     const [selectedForm, setSelectedForm] = useState(null);
@@ -120,6 +121,7 @@ const MetaConfigSection = () => {
             setLoadingPages(true);
             const res = await api.get('/meta/pages');
             setPages(res.data.pages || []);
+            setPagesDiagnostic(res.data.diagnostic || null);
         } catch (error) {
             console.error('Failed to load pages:', error);
             showError(error.response?.data?.message || 'Failed to load Facebook pages');
@@ -256,6 +258,7 @@ const MetaConfigSection = () => {
                 connectedUserPicture: null
             });
             setPages([]);
+            setPagesDiagnostic(null);
             setForms([]);
             setSelectedPage(null);
             setSelectedForm(null);
@@ -557,6 +560,17 @@ const MetaConfigSection = () => {
                                     </div>
                                 )}
                             </div>
+
+                            {/* Explain an empty dropdown instead of leaving the user guessing */}
+                            {!loadingPages && pages.length === 0 && pagesDiagnostic && (
+                                <div className="mt-3 flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                                    <i className="fa-solid fa-circle-info text-amber-500 mt-0.5"></i>
+                                    <div className="text-sm text-amber-700">
+                                        <p className="font-semibold">No Facebook Page found</p>
+                                        <p className="mt-0.5">{pagesDiagnostic.message}</p>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* Form Selector */}
