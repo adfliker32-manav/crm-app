@@ -42,6 +42,7 @@ const couponSchema = new mongoose.Schema({
     isActive: { type: Boolean, default: true, index: true }
 }, { timestamps: true });
 
-couponSchema.index({ code: 1 });
+// Note: { code: 1 } index is already created by `unique: true` on the field definition above.
+// Do NOT add couponSchema.index({ code: 1 }) here — that causes a duplicate index warning.
 
 module.exports = mongoose.model('Coupon', couponSchema);
