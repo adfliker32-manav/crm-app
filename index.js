@@ -71,17 +71,25 @@ const allowedOrigins = [
   'http://localhost:3000'
 ].filter(Boolean);
 
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, Postman, webhooks)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.some(allowed => origin.startsWith(allowed))) {
-      return callback(null, true);
-    }
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true
-}));
+// Apply CORS middleware only to API, Webhook, and Uploads endpoints.
+// Standard page navigations or redirects (like Cashfree POSTing back to /billing)
+// should not be blocked by CORS origin checks.
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/webhook/') || req.path.startsWith('/uploads')) {
+    return cors({
+      origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, curl, Postman, webhooks)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.some(allowed => origin.startsWith(allowed))) {
+          return callback(null, true);
+        }
+        callback(new Error('Not allowed by CORS'));
+      },
+      credentials: true
+    })(req, res, next);
+  }
+  next();
+});
 
 // Request logger (only in development to avoid log pollution in production)
 if (process.env.NODE_ENV !== 'production') {
@@ -519,8 +527,11 @@ app.get('/book/:slug', (req, res) => {
 // 6. CATCH-ALL HANDLER FOR REACT SPA
 // Must be AFTER all API routes - serves React app for client-side routing
 app.use((req, res, next) => {
-  // Only handle GET requests that aren't for API endpoints
-  if (req.method === 'GET' && !req.path.startsWith('/api/') && !req.path.startsWith('/webhook/')) {
+  const isFrontendRoute = !req.path.startsWith('/api/') && !req.path.startsWith('/webhook/');
+  // Cashfree redirects back to the return URL (e.g. /billing) via POST
+  const isCashfreeReturn = req.method === 'POST' && req.path.startsWith('/billing');
+
+  if (isFrontendRoute && (req.method === 'GET' || isCashfreeReturn)) {
     const indexPath = path.join(__dirname, 'client/dist/index.html');
     res.sendFile(indexPath, (err) => {
       if (err) {
