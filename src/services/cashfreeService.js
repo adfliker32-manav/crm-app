@@ -140,7 +140,23 @@ const getSubscription = (subId) => cfRequest('GET', `/subscriptions/${subId}`);
 // replay any SUCCESS charge whose webhook we missed (entitlement repair).
 const getSubscriptionPayments = (subId) => cfRequest('GET', `/subscriptions/${subId}/payments`);
 
-const cancelSubscription = (subId) => cfRequest('POST', `/subscriptions/${subId}/cancel`, {});
+const cancelSubscription = async (subId) => {
+    try {
+        return await cfRequest('POST', `/subscriptions/${subId}/cancel`, {});
+    } catch (err) {
+        // If Cashfree returns a 4xx error (like 404 Subscription Not Found, or 400 Already Cancelled),
+        // it means the subscription is already not billing/not active on Cashfree, which is safe to ignore.
+        const status = err.status || err.response?.status;
+        if (status && status >= 400 && status < 500) {
+            console.warn(`⚠️ Cashfree subscription cancel returned ${status} (ignored):`, err.message);
+            return { success: true, alreadyCancelled: true, message: err.message };
+        }
+        // For server errors (5xx) or network timeouts/errors, we must not ignore it
+        // because the subscription might still be active on Cashfree and continue to charge the customer.
+        console.error('❌ Critical error cancelling Cashfree subscription:', err.message);
+        throw err;
+    }
+};
 
 // Manually trigger a charge attempt. Used by SuperAdmin "retry now" button
 // after a payment failure. Cashfree will auto-debit per its retry policy

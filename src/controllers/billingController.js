@@ -250,8 +250,7 @@ const cancel = async (req, res) => {
         if (!sub) return res.status(404).json({ message: 'No active subscription' });
 
         if (sub.cashfreeSubscriptionId) {
-            try { await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId); }
-            catch (e) { /* still allow local cancel even if Cashfree call fails */ }
+            await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId);
         }
         await subscriptionService.applyCancellation(req.tenantId, null, req.body?.reason || 'Customer initiated');
         res.json({ success: true, message: 'Subscription cancelled. Access continues until current period end.' });

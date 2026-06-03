@@ -85,7 +85,7 @@ const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amoun
 
     // Cancel any stale Cashfree sub from a previous attempt before starting fresh.
     if (sub && sub.cashfreeSubscriptionId && ['pending_auth', 'active', 'grace'].includes(sub.status)) {
-        try { await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId); } catch (e) { /* best effort */ }
+        await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId);
     }
 
     const ourSubId = `adf_${clientId.toString().slice(-8)}_${crypto.randomBytes(4).toString('hex')}`;
@@ -452,7 +452,7 @@ const enforceDowngrade = async (clientId) => {
 const changePlan = async (clientId, newPlanCode, cycle = 'monthly', amountOverride = null) => {
     const sub = await Subscription.findOne({ clientId });
     if (sub?.cashfreeSubscriptionId && sub.status !== 'cancelled') {
-        try { await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId); } catch (e) { /* best-effort */ }
+        await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId);
     }
     return initiateSubscription(clientId, newPlanCode, cycle, amountOverride);
 };
