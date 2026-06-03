@@ -11,7 +11,8 @@ const EmergencyControlsView = () => {
     const [settings, setSettings] = useState({
         DISABLE_WHATSAPP: false,
         DISABLE_EMAILS: false,
-        DISABLE_AUTOMATIONS: false
+        DISABLE_AUTOMATIONS: false,
+        DISABLE_PAYMENTS: false
     });
     const [loading, setLoading] = useState(true);
 
@@ -28,7 +29,8 @@ const EmergencyControlsView = () => {
                 setSettings({
                     DISABLE_WHATSAPP: !!res.data.settings.DISABLE_WHATSAPP,
                     DISABLE_EMAILS: !!res.data.settings.DISABLE_EMAILS,
-                    DISABLE_AUTOMATIONS: !!res.data.settings.DISABLE_AUTOMATIONS
+                    DISABLE_AUTOMATIONS: !!res.data.settings.DISABLE_AUTOMATIONS,
+                    DISABLE_PAYMENTS: !!res.data.settings.DISABLE_PAYMENTS
                 });
             }
         } catch (error) {
@@ -50,6 +52,8 @@ const EmergencyControlsView = () => {
             warningMessage = newValue ? "This will instantly STOP all outgoing Emails across the entire platform." : "This will allow Emails to flow normally again.";
         } else if (key === 'DISABLE_AUTOMATIONS') {
             warningMessage = newValue ? "This will instantly HALT all background rules and background jobs for all tenants." : "This will resume Automation processing.";
+        } else if (key === 'DISABLE_PAYMENTS') {
+            warningMessage = newValue ? "This will instantly FREEZE all new subscription setups, plan upgrades, and plan downgrades for all users. Existing subscriptions will continue until their next renewal attempt." : "This will resume normal payment and subscription actions.";
         }
 
         const confirmed = await showDanger(
@@ -102,7 +106,7 @@ const EmergencyControlsView = () => {
             </div>
 
             {/* Switches Container */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 
                 {/* 1. WhatsApp Kill Switch */}
                 <div className={`p-6 rounded-2xl shadow-lg border transition-all ${settings.DISABLE_WHATSAPP ? 'bg-amber-50 border-amber-300' : 'bg-white border-slate-200'}`}>
@@ -118,11 +122,11 @@ const EmergencyControlsView = () => {
                         </div>
                     </div>
                     <h3 className="text-xl font-bold text-slate-800 mb-2">WhatsApp Kill Switch</h3>
-                    <p className="text-sm text-slate-500 mb-4">
+                    <p className="text-sm text-slate-500 mb-4 font-normal">
                          {settings.DISABLE_WHATSAPP ? 
                             <span className="text-amber-700 font-bold">Currently Blocked.</span> : 
                             "Normal operations."} 
-                         Use this if Meta bans a webhook or there is a platform-wide WhatsApp malfunction causing spam.
+                         Use this if Meta bans a webhook or there is a WhatsApp malfunction causing spam.
                     </p>
                 </div>
 
@@ -140,7 +144,7 @@ const EmergencyControlsView = () => {
                         </div>
                     </div>
                     <h3 className="text-xl font-bold text-slate-800 mb-2">Email Kill Switch</h3>
-                    <p className="text-sm text-slate-500 mb-4">
+                    <p className="text-sm text-slate-500 mb-4 font-normal">
                         {settings.DISABLE_EMAILS ? 
                             <span className="text-amber-700 font-bold">Currently Blocked.</span> : 
                             "Normal operations."} 
@@ -162,11 +166,33 @@ const EmergencyControlsView = () => {
                         </div>
                     </div>
                     <h3 className="text-xl font-bold text-slate-800 mb-2">Automation Kill Switch</h3>
-                    <p className="text-sm text-slate-500 mb-4">
+                    <p className="text-sm text-slate-500 mb-4 font-normal">
                         {settings.DISABLE_AUTOMATIONS ? 
                             <span className="text-amber-700 font-bold">Currently Blocked.</span> : 
                             "Normal operations."} 
                         Pauses the evaluation of all tenant rules and halts the Agenda background queue permanently until released.
+                    </p>
+                </div>
+
+                {/* 4. Payment Kill Switch */}
+                <div className={`p-6 rounded-2xl shadow-lg border transition-all ${settings.DISABLE_PAYMENTS ? 'bg-amber-50 border-amber-300' : 'bg-white border-slate-200'}`}>
+                    <div className="flex justify-between items-start mb-4">
+                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white shadow-md ${settings.DISABLE_PAYMENTS ? 'bg-amber-500' : 'bg-rose-500'}`}>
+                            <i className="fa-solid fa-credit-card text-2xl"></i>
+                        </div>
+                        <div 
+                            onClick={() => handleToggle('DISABLE_PAYMENTS')}
+                            className={`w-14 h-8 flex items-center rounded-full p-1 cursor-pointer transition-colors ${settings.DISABLE_PAYMENTS ? 'bg-amber-500' : 'bg-slate-300'}`}
+                        >
+                            <div className={`bg-white w-6 h-6 rounded-full shadow-md transform transition-transform ${settings.DISABLE_PAYMENTS ? 'translate-x-6' : 'translate-x-0'}`}></div>
+                        </div>
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-800 mb-2">Payment Kill Switch</h3>
+                    <p className="text-sm text-slate-500 mb-4 font-normal">
+                        {settings.DISABLE_PAYMENTS ? 
+                            <span className="text-amber-700 font-bold">Currently Blocked.</span> : 
+                            "Normal operations."} 
+                        Pauses checkout processes, preventing subscription activations, plan upgrades, and downgrades when active.
                     </p>
                 </div>
 

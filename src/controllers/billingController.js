@@ -7,6 +7,7 @@ const subscriptionService = require('../services/subscriptionService');
 const cashfreeService = require('../services/cashfreeService');
 const { validateCode: validateCouponCode } = require('./couponController');
 const Coupon = require('../models/Coupon');
+const { isFeatureDisabled } = require('../utils/systemConfig');
 
 // ─── GET /api/billing/plans ────────────────────────────────────────────────
 // Public — pricing page reads this.
@@ -15,7 +16,8 @@ const listPlans = async (req, res) => {
         const plans = await Plan.find({ isActive: true, isCustom: false })
             .sort({ sortOrder: 1, monthlyPrice: 1 })
             .lean();
-        res.json({ success: true, plans });
+        const paymentsDisabled = await isFeatureDisabled('DISABLE_PAYMENTS');
+        res.json({ success: true, plans, paymentsDisabled });
     } catch (err) {
         console.error('listPlans error:', err);
         res.status(500).json({ message: 'Failed to load plans' });
@@ -152,6 +154,9 @@ const releaseCouponClaim = (couponId) =>
 const subscribe = async (req, res) => {
     try {
         if (!guardBillable(req, res)) return;
+        if (await isFeatureDisabled('DISABLE_PAYMENTS')) {
+            return res.status(503).json({ message: 'New subscriptions are temporarily paused for maintenance. Please try again later.' });
+        }
         const { planCode, cycle, couponCode } = req.body;
         if (!planCode) return res.status(400).json({ message: 'planCode is required' });
 
@@ -203,6 +208,9 @@ const subscribe = async (req, res) => {
 const changePlan = async (req, res) => {
     try {
         if (!guardBillable(req, res)) return;
+        if (await isFeatureDisabled('DISABLE_PAYMENTS')) {
+            return res.status(503).json({ message: 'Plan changes are temporarily paused for maintenance. Please try again later.' });
+        }
         const { planCode, cycle, couponCode } = req.body;
         if (!planCode) return res.status(400).json({ message: 'planCode is required' });
 

@@ -25,6 +25,7 @@ const Plans = () => {
     const [submittingCode, setSubmittingCode] = useState(null);
     const [currentPlanCode, setCurrentPlanCode] = useState(null);
     const [hasSubscription, setHasSubscription] = useState(false);
+    const [paymentsDisabled, setPaymentsDisabled] = useState(false);
 
     // Coupon state
     const [couponInput, setCouponInput]   = useState('');
@@ -38,7 +39,10 @@ const Plans = () => {
 
     useEffect(() => {
         api.get('/billing/plans')
-            .then(res => setPlans(res.data?.plans || []))
+            .then(res => {
+                setPlans(res.data?.plans || []);
+                setPaymentsDisabled(!!res.data?.paymentsDisabled);
+            })
             .catch(() => showError('Failed to load plans'))
             .finally(() => setLoading(false));
 
@@ -178,6 +182,21 @@ const Plans = () => {
                     </button>
                 )}
 
+                {/* Payments Disabled Warning Banner */}
+                {paymentsDisabled && (
+                    <div className="mb-8 flex items-start gap-3.5 bg-amber-50 border border-amber-200 text-amber-800 p-5 rounded-2xl shadow-sm">
+                        <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600 shrink-0">
+                            <i className="fa-solid fa-triangle-exclamation text-lg animate-pulse"></i>
+                        </div>
+                        <div>
+                            <h4 className="font-bold text-amber-900 text-sm">Payment Gateway Under Maintenance</h4>
+                            <p className="text-xs text-amber-700 mt-1">
+                                We are currently running scheduled maintenance on our billing systems. Subscribing, upgrading, or changing plans is temporarily paused. Please check back later.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
                 {/* Header */}
                 <div className="text-center mb-10">
                     <h1 className="text-4xl font-bold text-slate-900 tracking-tight">Simple, transparent pricing</h1>
@@ -306,7 +325,7 @@ const Plans = () => {
                                     </button>
                                 ) : (
                                     <button
-                                        disabled={isSubmitting || isCurrent}
+                                        disabled={isSubmitting || isCurrent || paymentsDisabled}
                                         onClick={() => handleSubscribe(p.code)}
                                         className={`w-full py-2.5 rounded-xl font-semibold text-sm transition mb-6
                                             ${isCurrent
@@ -318,6 +337,7 @@ const Plans = () => {
                                         {isSubmitting
                                             ? <><span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin inline-block mr-2" />Starting…</>
                                             : isCurrent ? 'Current plan'
+                                            : paymentsDisabled ? 'Billing paused'
                                             : hasSubscription ? 'Switch plan'
                                             : 'Get started'}
                                     </button>
