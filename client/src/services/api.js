@@ -85,10 +85,16 @@ api.interceptors.response.use(
         }
 
         // ── 502/503/504 — Server temporarily unavailable (Render deploy/restart) ──
+        // IMPORTANT: Only replace the message when the server sent NO message of its own.
+        // Application-level 503s (e.g. "Cashfree credentials not configured") already
+        // carry a real message that must NOT be overwritten with the generic restart text.
+        // True proxy-level 502/503/504 from Render's load balancer have no response body.
         if (status === 502 || status === 503 || status === 504) {
-            error.response.data = {
-                message: 'Server is temporarily unavailable. It may be restarting — please try again in 30 seconds.'
-            };
+            if (!error.response.data?.message) {
+                error.response.data = {
+                    message: 'Server is temporarily unavailable. It may be restarting — please try again in 30 seconds.'
+                };
+            }
         }
 
         // ── 429 Too Many Requests — Rate limit hit ──
