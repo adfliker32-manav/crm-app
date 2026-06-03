@@ -141,6 +141,29 @@ const Plans = () => {
         );
     }
 
+    // Agents can't subscribe — only managers (account owners) can.
+    // Show a friendly message instead of a broken plan grid.
+    if (user && user.role === 'agent') {
+        return (
+            <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+                <div className="bg-white border border-slate-200 rounded-2xl p-10 max-w-md text-center shadow-sm">
+                    <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
+                        <i className="fa-solid fa-crown text-amber-500 text-xl" />
+                    </div>
+                    <h2 className="text-lg font-bold text-slate-900 mb-2">Billing managed by account owner</h2>
+                    <p className="text-sm text-slate-500">
+                        Only the account owner (manager) can view plans or manage subscriptions.
+                        Please contact your account administrator.
+                    </p>
+                    <button onClick={() => navigate('/dashboard')}
+                        className="mt-6 bg-slate-900 hover:bg-black text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition">
+                        Go to Dashboard
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     const yearlySaving = plans.some(p => p.yearlyPrice && p.yearlyPrice < p.monthlyPrice * 12);
 
     return (

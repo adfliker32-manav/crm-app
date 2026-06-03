@@ -110,7 +110,10 @@ const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amoun
         amount,
         cycle,
         returnUrl: process.env.CASHFREE_RETURN_URL || `${process.env.FRONTEND_URL}/billing?cf_return=1`,
-        notifyUrl: `${process.env.SERVER_URL || process.env.FRONTEND_URL}/api/billing/cashfree/webhook`
+        // BACKEND_URL must be a stable public HTTPS URL that Cashfree can POST webhooks to.
+        // In a monorepo (API + frontend on same domain), BACKEND_URL === FRONTEND_URL.
+        // Never use localhost or a dev tunnel here in production — Cashfree cannot reach them.
+        notifyUrl: `${process.env.BACKEND_URL || process.env.SERVER_URL || process.env.FRONTEND_URL}/api/billing/cashfree/webhook`
     });
 
     // The 2025-01-01 Subscriptions API returns a subscription_session_id (consumed
