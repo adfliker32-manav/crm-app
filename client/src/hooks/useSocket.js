@@ -42,7 +42,7 @@ const useSocket = () => {
             const url = getSocketUrl();
             socketInstance = io(url, {
                 auth: { token },
-                transports: ['polling', 'websocket'], // Default order: polling first, then upgrade
+                transports: ['websocket'], // Force WebSocket to avoid 400 Bad Request (polling sticky session issues in cloud hosting)
                 reconnection: true,
                 reconnectionAttempts: Infinity,
                 reconnectionDelay: 1000,
