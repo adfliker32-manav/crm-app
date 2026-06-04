@@ -406,7 +406,7 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
         // Single workspace query covering both planFeatures and customFieldDefinitions
         const workspace = await WorkspaceSettings.findOne({ userId }).select('planFeatures customFieldDefinitions defaultCountryCode').lean();
         const leadLimit = workspace?.planFeatures?.leadLimit;
-        if (leadLimit != null) {
+        if (leadLimit != null && leadLimit > 0) {
             const currentCount = await Lead.countDocuments({ userId });
             if (currentCount >= leadLimit) {
                 console.warn(`⚠️ Lead limit reached for tenant ${userId} (${currentCount}/${leadLimit}). Meta lead dropped.`);
