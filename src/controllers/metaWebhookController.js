@@ -461,7 +461,28 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
 
         const customFieldDefs = workspace?.customFieldDefinitions || [];
 
+        // Keys already saved as core Lead model fields — exclude from customData to avoid redundancy
+        const CORE_FIELD_KEYS = new Set([
+            'full_name', 'name', 'first_name', 'last_name',
+            'phone_number', 'phone', 'mobile_number', 'whatsapp_number', 'whatsapp',
+            'mobile', 'contact_number', 'contact', 'phone_no', 'mobile_no',
+            'email',
+            'city', 'state', 'state_province', 'zip_code', 'postal_code', 'zipcode', 'pincode',
+            'gender', 'date_of_birth', 'dob', 'birthday',
+            'company_name', 'company'
+        ]);
+
+        // Step 1: Auto-save ALL raw Meta fields into customData (minus core fields)
         const customData = {};
+        if (leadDetails.rawFields) {
+            for (const [key, value] of Object.entries(leadDetails.rawFields)) {
+                if (value && !CORE_FIELD_KEYS.has(key)) {
+                    customData[key] = value;
+                }
+            }
+        }
+
+        // Step 2: Overlay any workspace customFieldDefinition mappings on top
         if (leadDetails.rawFields) {
             customFieldDefs.forEach(field => {
                 const value = leadDetails.rawFields[field.label?.toLowerCase()] || leadDetails.rawFields[field.key?.toLowerCase()];
