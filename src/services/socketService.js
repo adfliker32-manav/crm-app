@@ -43,7 +43,10 @@ const initSocket = (httpServer) => {
     // ── JWT Authentication Middleware ──
     io.use((socket, next) => {
         const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+        console.log(`🔌 [Socket.IO] Connection attempt from socket ${socket.id}. Token present: ${!!token}`);
+        
         if (!token) {
+            console.warn(`❌ [Socket.IO] Authentication failed: No token provided for socket ${socket.id}`);
             return next(new Error('Authentication required'));
         }
 
@@ -52,8 +55,10 @@ const initSocket = (httpServer) => {
             const decoded = jwt.verify(cleanToken, process.env.JWT_SECRET);
             socket.userId = decoded.userId || decoded.id;
             socket.userRole = decoded.role;
+            console.log(`✅ [Socket.IO] Authentication successful for user: ${socket.userId}`);
             next();
         } catch (err) {
+            console.warn(`❌ [Socket.IO] Authentication failed for socket ${socket.id}: ${err.message}`);
             return next(new Error('Invalid or expired token'));
         }
     });
