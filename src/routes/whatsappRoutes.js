@@ -26,6 +26,7 @@ router.post('/send', authMiddleware, requireModule('whatsapp'), meterUsage('what
 const whatsappConfigController = require('../controllers/whatsappConfigController');
 router.get('/config', authMiddleware, requireModule('whatsapp'), whatsappConfigController.getWhatsAppConfig);
 router.post('/connect-manual', authMiddleware, requireModule('whatsapp'), whatsappConfigController.connectWhatsAppManual);
+router.post('/connect-embedded', authMiddleware, requireModule('whatsapp'), whatsappConfigController.connectWhatsAppEmbedded);
 router.post('/disconnect', authMiddleware, requireModule('whatsapp'), whatsappConfigController.disconnectWhatsApp);
 router.get('/test-connection', authMiddleware, requireModule('whatsapp'), whatsappConfigController.testWhatsAppConnection);
 

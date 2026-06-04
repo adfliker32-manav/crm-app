@@ -14,8 +14,15 @@ const WhatsAppSettings = () => {
     // Connection state
     const [config, setConfig] = useState({
         wabaId: '', waPhoneNumberId: '',
-        displayPhone: '', verifiedName: '', isConfigured: false
+        displayPhone: '', verifiedName: '', isConfigured: false,
+        metaAppId: '', waEmbeddedConfigId: '', embeddedSignupConnected: false
     });
+
+    const [embeddedData, setEmbeddedData] = useState({
+        wabaId: '', phoneNumberId: '', code: '',
+        receivedMessage: false, receivedCode: false
+    });
+    const [setupMode, setSetupMode] = useState('meta');
 
     // Automations state
     const [settings, setSettings] = useState({
@@ -63,7 +70,10 @@ const WhatsAppSettings = () => {
                 waPhoneNumberId: cfgRes.data.waPhoneNumberId || '',
                 displayPhone:    cfgRes.data.displayPhone || '',
                 verifiedName:    cfgRes.data.verifiedName || '',
-                isConfigured:    cfgRes.data.isConfigured || false
+                isConfigured:    cfgRes.data.isConfigured || false,
+                metaAppId:       cfgRes.data.metaAppId || '',
+                waEmbeddedConfigId: cfgRes.data.waEmbeddedConfigId || '',
+                embeddedSignupConnected: cfgRes.data.embeddedSignupConnected || false
             });
 
             if (settingsRes?.data?.settings) {
@@ -77,6 +87,170 @@ const WhatsAppSettings = () => {
         } finally {
             setLoading(false);
         }
+    };
+
+    // Dynamic Facebook SDK Setup
+    useEffect(() => {
+        if (!config.metaAppId) return;
+
+        const id = 'facebook-jssdk';
+        if (document.getElementById(id)) {
+            if (window.FB) {
+                window.FB.init({
+                    appId: config.metaAppId,
+                    cookie: true,
+                    xfbml: true,
+                    version: 'v21.0'
+                });
+            }
+            return;
+        }
+
+        window.fbAsyncInit = function() {
+            window.FB.init({
+                appId: config.metaAppId,
+                cookie: true,
+                xfbml: true,
+                version: 'v21.0'
+            });
+        };
+
+        const fjs = document.getElementsByTagName('script')[0];
+        const js = document.createElement('script');
+        js.id = id;
+        js.src = "https://connect.facebook.net/en_US/sdk.js";
+        if (fjs && fjs.parentNode) {
+            fjs.parentNode.insertBefore(js, fjs);
+        } else {
+            document.head.appendChild(js);
+        }
+    }, [config.metaAppId]);
+
+    // Message Listener for FB/Meta popup events
+    useEffect(() => {
+        const handleFBMessage = (event) => {
+            if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') {
+                return;
+            }
+
+            try {
+                let parsedData;
+                if (typeof event.data === 'string') {
+                    parsedData = JSON.parse(event.data);
+                } else {
+                    parsedData = event.data;
+                }
+
+                if (parsedData.type === 'WA_EMBEDDED_SIGNUP') {
+                    if (parsedData.event === 'FINISH' || parsedData.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING') {
+                        const { waba_id, phone_number_id } = parsedData.data || {};
+                        if (waba_id && phone_number_id) {
+                            console.log('Received WA_EMBEDDED_SIGNUP finish event:', parsedData);
+                            setEmbeddedData(prev => ({
+                                ...prev,
+                                wabaId: waba_id,
+                                phoneNumberId: phone_number_id,
+                                receivedMessage: true
+                            }));
+                        }
+                    } else if (parsedData.event === 'CANCEL') {
+                        showError('WhatsApp Signup cancelled by user.');
+                        setConnecting(false);
+                    }
+                }
+            } catch (err) {
+                // Non-JSON or unrelated messages
+            }
+        };
+
+        window.addEventListener('message', handleFBMessage);
+        return () => {
+            window.removeEventListener('message', handleFBMessage);
+        };
+    }, []);
+
+    // Combine code and message payloads
+    useEffect(() => {
+        if (embeddedData.receivedMessage && embeddedData.receivedCode) {
+            handleConnectEmbedded(embeddedData.wabaId, embeddedData.phoneNumberId, embeddedData.code);
+        }
+    }, [embeddedData.receivedMessage, embeddedData.receivedCode]);
+
+    const handleConnectEmbedded = async (wabaId, phoneNumberId, code) => {
+        setConnecting(true);
+        setConnectionError('');
+        try {
+            const res = await api.post('/whatsapp/connect-embedded', { wabaId, phoneNumberId, code });
+            if (res.data.success) {
+                showSuccess(`WhatsApp connected via Meta! Phone: ${res.data.displayPhone}`);
+                setTestResult(null);
+                await fetchData();
+                if (!res.data.webhookSubscribed) {
+                    setTestResult({
+                        success: false,
+                        message: 'Connected, but WABA webhook subscription failed',
+                        results: {
+                            credentials: { ok: true, displayPhone: res.data.displayPhone, verifiedName: res.data.verifiedName },
+                            webhookSubscription: {
+                                ok: false,
+                                error: res.data.webhookSubscriptionError || 'Subscription failed. Callback URL might need setup in Meta Dashboard.'
+                            }
+                        }
+                    });
+                }
+            }
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Failed to complete WhatsApp onboarding';
+            showError(msg);
+            setConnectionError(msg);
+        } finally {
+            setConnecting(false);
+            setEmbeddedData({ wabaId: '', phoneNumberId: '', code: '', receivedMessage: false, receivedCode: false });
+        }
+    };
+
+    const launchEmbeddedSignup = () => {
+        if (!window.FB) {
+            showError('Facebook SDK not loaded yet. Please wait a moment or refresh.');
+            return;
+        }
+        if (!config.waEmbeddedConfigId) {
+            showError('WhatsApp Embedded Configuration ID (WA_EMBEDDED_CONFIG_ID) is missing.');
+            return;
+        }
+
+        setConnecting(true);
+        setConnectionError('');
+        setEmbeddedData({ wabaId: '', phoneNumberId: '', code: '', receivedMessage: false, receivedCode: false });
+
+        window.FB.login(
+            (response) => {
+                if (response.authResponse && response.authResponse.code) {
+                    const authCode = response.authResponse.code;
+                    console.log('Received FB.login code:', authCode);
+                    setEmbeddedData(prev => ({
+                        ...prev,
+                        code: authCode,
+                        receivedCode: true
+                    }));
+                } else {
+                    showError('Failed to get authorization code from Meta.');
+                    setConnecting(false);
+                }
+            },
+            {
+                config_id: config.waEmbeddedConfigId,
+                response_type: 'code',
+                override_default_response_type: true,
+                extras: {
+                    setup: {},
+                    version: 'v4',
+                    featureType: 'whatsapp_business_app_onboarding',
+                    sessionInfoVersion: '3',
+                    coex: true
+                }
+            }
+        );
     };
 
     const handleConnect = async (e) => {
@@ -233,7 +407,12 @@ const WhatsAppSettings = () => {
                                 <i className="fa-brands fa-whatsapp text-emerald-600 text-xl"></i>
                             </div>
                             <div className="flex-1 min-w-0">
-                                <p className="font-bold text-emerald-800 text-sm">WhatsApp Connected</p>
+                                <div className="flex items-center gap-2">
+                                    <p className="font-bold text-emerald-800 text-sm">WhatsApp Connected</p>
+                                    <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded shadow-sm ${config.embeddedSignupConnected ? 'bg-indigo-100 text-indigo-700 border border-indigo-200' : 'bg-amber-100 text-amber-700 border border-amber-200'}`}>
+                                        {config.embeddedSignupConnected ? 'Meta Login' : 'Manual API'}
+                                    </span>
+                                </div>
                                 <p className="text-xs text-emerald-600 mt-0.5">
                                     {config.verifiedName && <span className="font-semibold">{config.verifiedName} · </span>}
                                     {config.displayPhone || `Phone ID: ${config.waPhoneNumberId}`}
@@ -310,72 +489,131 @@ const WhatsAppSettings = () => {
                         </div>
                     )}
 
-                    {/* Credential Form */}
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                        <div className="flex items-center gap-3 mb-5 pb-4 border-b border-slate-100">
-                            <div className="w-10 h-10 bg-green-50 rounded-lg flex items-center justify-center">
-                                <i className="fa-brands fa-whatsapp text-[#00a884] text-xl"></i>
-                            </div>
-                            <div>
-                                <h3 className="text-base font-bold text-slate-800">
-                                    {config.isConfigured ? 'Update Credentials' : 'Connect WhatsApp'}
-                                </h3>
-                                <p className="text-xs text-slate-500">Enter your WhatsApp Business Account details</p>
-                            </div>
-                        </div>
-
-                        <form onSubmit={handleConnect} className="space-y-4">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-600 mb-1">WABA ID <span className="text-red-500">*</span></label>
-                                    <input
-                                        type="text"
-                                        value={form.wabaId}
-                                        onChange={e => { setConnectionError(''); setForm(p => ({ ...p, wabaId: e.target.value.trim() })); }}
-                                        placeholder="WhatsApp Business Account ID"
-                                        className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none"
-                                        required
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-600 mb-1">Phone Number ID <span className="text-red-500">*</span></label>
-                                    <input
-                                        type="text"
-                                        value={form.phoneNumberId}
-                                        onChange={e => { setConnectionError(''); setForm(p => ({ ...p, phoneNumberId: e.target.value.trim() })); }}
-                                        placeholder="WhatsApp Phone Number ID"
-                                        className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none"
-                                        required
-                                    />
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-600 mb-1">Access Token <span className="text-red-500">*</span></label>
-                                <input
-                                    type="text"
-                                    value={form.accessToken}
-                                    onChange={e => { setConnectionError(''); setForm(p => ({ ...p, accessToken: e.target.value.trim() })); }}
-                                    placeholder="Permanent System User Access Token"
-                                    className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono"
-                                    required
-                                />
-                                <p className="text-[10px] text-slate-400 mt-1">Use a permanent System User token from your Meta Business Manager to avoid expiry.</p>
-                            </div>
-
+                    {/* Setup Mode Toggle when not configured */}
+                    {!config.isConfigured && (
+                        <div className="bg-slate-100 p-1.5 rounded-xl flex max-w-md shadow-inner">
                             <button
-                                type="submit"
+                                type="button"
+                                onClick={() => setSetupMode('meta')}
+                                className={`flex-1 py-2.5 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${setupMode === 'meta' ? 'bg-white text-slate-800 shadow-sm border border-slate-200/50' : 'text-slate-500 hover:text-slate-800'}`}
+                            >
+                                <i className="fa-brands fa-facebook text-blue-600 text-sm"></i>
+                                Meta Login (Recommended)
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setSetupMode('manual')}
+                                className={`flex-1 py-2.5 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${setupMode === 'manual' ? 'bg-white text-slate-800 shadow-sm border border-slate-200/50' : 'text-slate-500 hover:text-slate-800'}`}
+                            >
+                                <i className="fa-solid fa-gears text-slate-500 text-sm"></i>
+                                Manual API Setup
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Meta Login Card option */}
+                    {!config.isConfigured && setupMode === 'meta' && (
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
+                            <div className="flex items-center gap-3 pb-4 border-b border-slate-100">
+                                <div className="w-10 h-10 bg-green-50 rounded-lg flex items-center justify-center">
+                                    <i className="fa-brands fa-whatsapp text-[#00a884] text-xl"></i>
+                                </div>
+                                <div>
+                                    <h3 className="text-base font-bold text-slate-800">Connect with Meta Login</h3>
+                                    <p className="text-xs text-slate-500">Quick embedded signup with mobile app coexistence</p>
+                                </div>
+                            </div>
+                            <div className="text-xs text-slate-500 space-y-2">
+                                <p className="font-semibold text-slate-700">Benefits of Meta Login Onboarding:</p>
+                                <ul className="list-disc pl-5 space-y-1.5">
+                                    <li>Keep using your mobile WhatsApp Business App seamlessly.</li>
+                                    <li>Automated webhook registration and routing (no manual URLs needed).</li>
+                                    <li>Mirrors chat history and broadcasts between API and mobile app.</li>
+                                </ul>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={launchEmbeddedSignup}
                                 disabled={connecting}
-                                className="w-full py-3 bg-[#00a884] hover:bg-[#008f6f] text-white rounded-xl font-bold text-sm transition shadow-sm disabled:opacity-60 flex items-center justify-center gap-2"
+                                className="w-full py-3.5 bg-[#00a884] hover:bg-[#008f6f] text-white rounded-xl font-bold text-sm transition shadow-sm disabled:opacity-60 flex items-center justify-center gap-2"
                             >
                                 {connecting ? (
-                                    <><i className="fa-solid fa-spinner fa-spin"></i> Connecting…</>
+                                    <><i className="fa-solid fa-spinner fa-spin"></i> Connecting via Meta...</>
                                 ) : (
-                                    <><i className="fa-brands fa-whatsapp text-lg"></i> {config.isConfigured ? 'Update Connection' : 'Connect WhatsApp'}</>
+                                    <><i className="fa-brands fa-facebook text-lg"></i> Continue with Meta Login</>
                                 )}
                             </button>
-                        </form>
-                    </div>
+                        </div>
+                    )}
+
+                    {/* Credential Form (Visible if configured or setupMode === 'manual') */}
+                    {(config.isConfigured || setupMode === 'manual') && (
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                            <div className="flex items-center gap-3 mb-5 pb-4 border-b border-slate-100">
+                                <div className="w-10 h-10 bg-green-50 rounded-lg flex items-center justify-center">
+                                    <i className="fa-brands fa-whatsapp text-[#00a884] text-xl"></i>
+                                </div>
+                                <div>
+                                    <h3 className="text-base font-bold text-slate-800">
+                                        {config.isConfigured ? 'Update Credentials' : 'Connect WhatsApp Manually'}
+                                    </h3>
+                                    <p className="text-xs text-slate-500">Enter your WhatsApp Business Account details</p>
+                                </div>
+                            </div>
+
+                            <form onSubmit={handleConnect} className="space-y-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 mb-1">WABA ID <span className="text-red-500">*</span></label>
+                                        <input
+                                            type="text"
+                                            value={form.wabaId}
+                                            onChange={e => { setConnectionError(''); setForm(p => ({ ...p, wabaId: e.target.value.trim() })); }}
+                                            placeholder="WhatsApp Business Account ID"
+                                            className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none"
+                                            required
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 mb-1">Phone Number ID <span className="text-red-500">*</span></label>
+                                        <input
+                                            type="text"
+                                            value={form.phoneNumberId}
+                                            onChange={e => { setConnectionError(''); setForm(p => ({ ...p, phoneNumberId: e.target.value.trim() })); }}
+                                            placeholder="WhatsApp Phone Number ID"
+                                            className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none"
+                                            required
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 mb-1">Access Token <span className="text-red-500">*</span></label>
+                                    <input
+                                        type="text"
+                                        value={form.accessToken}
+                                        onChange={e => { setConnectionError(''); setForm(p => ({ ...p, accessToken: e.target.value.trim() })); }}
+                                        placeholder="Permanent System User Access Token"
+                                        className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-[#00a884]/30 outline-none font-mono"
+                                        required
+                                    />
+                                    <p className="text-[10px] text-slate-400 mt-1">Use a permanent System User token from your Meta Business Manager to avoid expiry.</p>
+                                </div>
+
+                                <button
+                                    type="submit"
+                                    disabled={connecting}
+                                    className="w-full py-3 bg-[#00a884] hover:bg-[#008f6f] text-white rounded-xl font-bold text-sm transition shadow-sm disabled:opacity-60 flex items-center justify-center gap-2"
+                                >
+                                    {connecting ? (
+                                        <><i className="fa-solid fa-spinner fa-spin"></i> Connecting…</>
+                                    ) : (
+                                        <><i className="fa-brands fa-whatsapp text-lg"></i> {config.isConfigured ? 'Update Connection' : 'Connect WhatsApp'}</>
+                                    )}
+                                </button>
+                            </form>
+                        </div>
+                    )}
 
                     {/* Where to find credentials + webhook setup */}
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">

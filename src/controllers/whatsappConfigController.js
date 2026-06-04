@@ -139,10 +139,15 @@ exports.getWhatsAppConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('whatsapp.waPhoneNumberId whatsapp.wabaId whatsapp.displayPhone whatsapp.verifiedName whatsapp.waAppId');
+            .select('whatsapp.waPhoneNumberId whatsapp.wabaId whatsapp.displayPhone whatsapp.verifiedName whatsapp.waAppId whatsapp.embeddedSignupConnected');
 
         if (!config) {
-            return res.json({ waPhoneNumberId: '', isConfigured: false });
+            return res.json({
+                waPhoneNumberId: '',
+                isConfigured: false,
+                metaAppId: process.env.META_APP_ID || '',
+                waEmbeddedConfigId: process.env.WA_EMBEDDED_CONFIG_ID || ''
+            });
         }
 
         const wa = config.whatsapp || {};
@@ -152,7 +157,10 @@ exports.getWhatsAppConfig = async (req, res) => {
             displayPhone:    wa.displayPhone || '',
             verifiedName:    wa.verifiedName || '',
             waAppId:         wa.waAppId || '',
-            isConfigured:    !!(wa.waPhoneNumberId && wa.wabaId)
+            embeddedSignupConnected: wa.embeddedSignupConnected || false,
+            isConfigured:    !!(wa.waPhoneNumberId && wa.wabaId),
+            metaAppId:       process.env.META_APP_ID || '',
+            waEmbeddedConfigId: process.env.WA_EMBEDDED_CONFIG_ID || ''
         });
     } catch (error) {
         console.error('Error fetching WhatsApp config:', error);
@@ -337,4 +345,133 @@ exports.refreshTokenForOwner = async (ownerId) => {
     );
 
     return { tokenExpiresAt: newExpiry };
+};
+
+// Connect WhatsApp via Meta Embedded Signup (exchanges code for system user token)
+exports.connectWhatsAppEmbedded = async (req, res) => {
+    try {
+        const canAccessSettings = ['superadmin', 'manager'].includes(req.user.role) || req.user.permissions?.accessSettings === true;
+        if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify WhatsApp settings' });
+
+        const { wabaId, phoneNumberId, code } = req.body;
+        if (!wabaId || !phoneNumberId || !code) {
+            return res.status(400).json({ success: false, message: 'WABA ID, Phone Number ID, and authorization code are all required.' });
+        }
+
+        const numericOnly = /^\d+$/;
+        if (!numericOnly.test(wabaId) || !numericOnly.test(phoneNumberId)) {
+            return res.status(400).json({ success: false, message: 'WABA ID and Phone Number ID must be numeric.' });
+        }
+
+        const appId = process.env.META_APP_ID;
+        const appSecret = process.env.META_APP_SECRET;
+
+        if (!appId || !appSecret) {
+            return res.status(400).json({ success: false, message: 'Meta App ID or Meta App Secret is not configured in CRM server environment (.env).' });
+        }
+
+        const GRAPH = 'https://graph.facebook.com/v25.0';
+
+        // Exchange authorization code for business access token
+        let accessToken = null;
+        try {
+            const tokenRes = await axios.get(`${GRAPH}/oauth/access_token`, {
+                params: {
+                    client_id: appId,
+                    client_secret: appSecret,
+                    code: code
+                },
+                timeout: 10000
+            });
+            accessToken = tokenRes.data.access_token;
+        } catch (err) {
+            const metaErr = err.response?.data?.error?.message;
+            return res.status(400).json({ success: false, message: metaErr ? `Meta (Token Exchange): ${metaErr}` : 'Failed to exchange authorization code for access token.' });
+        }
+
+        if (!accessToken) {
+            return res.status(400).json({ success: false, message: 'Exchange did not return an access token.' });
+        }
+
+        // Verify credentials and get phone display info
+        let displayPhone = null, verifiedName = null;
+        try {
+            const phoneRes = await axios.get(`${GRAPH}/${phoneNumberId}`, {
+                params: { fields: 'display_phone_number,verified_name', access_token: accessToken },
+                timeout: 10000
+            });
+            displayPhone = phoneRes.data.display_phone_number;
+            verifiedName = phoneRes.data.verified_name;
+        } catch (err) {
+            const metaErr = err.response?.data?.error?.message;
+            return res.status(400).json({ success: false, message: metaErr ? `Meta (Phone Verification): ${metaErr}` : 'Could not fetch details for Phone Number ID.' });
+        }
+
+        const ownerId = req.tenantId;
+        const encryptedToken = encryptToken(accessToken);
+        if (!encryptedToken) {
+            return res.status(500).json({ success: false, message: 'Failed to encrypt access token.' });
+        }
+
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: ownerId },
+            {
+                $set: {
+                    'whatsapp.wabaId':                wabaId,
+                    'whatsapp.waPhoneNumberId':       phoneNumberId,
+                    'whatsapp.waAccessToken':         encryptedToken,
+                    'whatsapp.displayPhone':          displayPhone,
+                    'whatsapp.verifiedName':          verifiedName,
+                    'whatsapp.embeddedSignupConnected': true,
+                    'whatsapp.tokenExpiresAt':        null,
+                    'whatsapp.tokenRefreshedAt':      new Date(),
+                    'whatsapp.waAppId':               appId
+                },
+                $unset: {
+                    'whatsapp.waAppSecret':           '' // Unset the secret on the tenant side, use server-wide env instead
+                }
+            },
+            { upsert: true }
+        );
+
+        try {
+            const detectedCode = extractCountryCodeFromDisplayPhone(displayPhone);
+            if (detectedCode) {
+                await WorkspaceSettings.findOneAndUpdate(
+                    { userId: ownerId },
+                    { $set: { defaultCountryCode: detectedCode } },
+                    { upsert: true }
+                );
+            }
+        } catch (e) { /* non-fatal */ }
+
+        // Subscribe the WABA to receive webhook events (incoming messages)
+        let webhookSubscribed = false;
+        let webhookSubscriptionError = null;
+        try {
+            await axios.post(`${GRAPH}/${wabaId}/subscribed_apps`, null, {
+                params: { access_token: accessToken },
+                timeout: 10000
+            });
+            webhookSubscribed = true;
+            console.log(`✅ Webhook subscription registered for WABA ${wabaId}`);
+        } catch (subErr) {
+            webhookSubscriptionError = subErr.response?.data?.error?.message || subErr.message;
+            console.warn(`⚠️ Webhook subscription failed for WABA ${wabaId}:`, webhookSubscriptionError);
+        }
+
+        console.log(`✅ WhatsApp embedded connect for tenant ${ownerId}: WABA ${wabaId}, Phone ${phoneNumberId}`);
+        res.json({
+            success: true,
+            message: 'WhatsApp connected successfully via Meta!',
+            wabaId, phoneNumberId, displayPhone, verifiedName,
+            webhookSubscribed,
+            webhookSubscriptionError
+        });
+
+    } catch (error) {
+        console.error('❌ WhatsApp embedded connect error:', error.response?.data || error.message);
+        const metaMsg = error.response?.data?.error?.message;
+        res.status(500).json({ success: false, message: metaMsg ? `Meta: ${metaMsg}` : 'Failed to connect WhatsApp via Meta. Please try again.' });
+    }
 };
