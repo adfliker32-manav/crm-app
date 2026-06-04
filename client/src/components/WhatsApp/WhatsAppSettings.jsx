@@ -100,7 +100,7 @@ const WhatsAppSettings = () => {
                     appId: config.metaAppId,
                     cookie: true,
                     xfbml: true,
-                    version: 'v21.0'
+                    version: 'v25.0'
                 });
             }
             return;
@@ -111,7 +111,7 @@ const WhatsAppSettings = () => {
                 appId: config.metaAppId,
                 cookie: true,
                 xfbml: true,
-                version: 'v21.0'
+                version: 'v25.0'
             });
         };
 
