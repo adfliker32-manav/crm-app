@@ -106,3 +106,27 @@ sequenceDiagram
 1. **Secure Exchange**: The backend receives the short-lived authorization code. It calls `https://graph.facebook.com/v25.0/oauth/access_token` alongside the secure `META_APP_SECRET` to trade it for a permanent customer-scoped System User Token.
 2. **Validation & Storage**: The backend makes a Graph API request to fetch the display phone number and name. It encrypts the token using the server's master `ENCRYPTION_KEY` and updates the `IntegrationConfig` collection, storing `embeddedSignupConnected = true` to demarcate the Meta Login path from the manual pathway.
 3. **Automatic Webhook Subscription**: The backend registers the client WABA to the app: `POST /v25.0/<wabaId>/subscribed_apps`. This triggers Meta to start routing incoming messaging events to your callback URL: `https://app.adfliker.com/webhook/whatsapp`.
+
+---
+
+## 4. Troubleshooting: App Review & Roles ("Partner app lacks required advanced permissions" error)
+
+If you see the following error inside the Meta Login popup:
+> **"Partner app lacks required advanced WhatsApp Business management and messaging permissions for onboarding. Request these permissions through the app review process."**
+
+This happens because the Meta App is in Development Mode (or has only Standard/Basic Access permissions) and the Facebook user account performing the onboarding has not been added to your Meta App's developer team list.
+
+### How to resolve for Development/Testing (Immediate Fix)
+1. Go to [developers.facebook.com](https://developers.facebook.com) and select your App.
+2. In the left sidebar, navigate to **App Roles > Roles**.
+3. Click **Add Developers** or **Add Testers**.
+4. Enter the Facebook Name, Profile URL, or Facebook ID of the account you are logging into in the popup.
+5. Log into that Facebook account, go to [developers.facebook.com/requests](https://developers.facebook.com/requests), and **Accept** the pending Developer/Tester invitation.
+6. Refresh the CRM settings page and retry the Meta Login button. The onboarding popup will now complete successfully.
+
+### How to resolve for Production (Before public launch)
+To onboard external clients whose Facebook accounts are not in your developer team list, you must request **Advanced Access** from Meta:
+1. In the Meta App Dashboard, go to **App Review > Permissions and Features**.
+2. Locate `whatsapp_business_management` and click **Request Advanced Access**.
+3. Locate `whatsapp_business_messaging` and click **Request Advanced Access**.
+4. Submit a brief screen recording showcasing how your CRM WhatsApp feature operates. Once Meta reviews and approves it, any business user worldwide can onboard without the error.
