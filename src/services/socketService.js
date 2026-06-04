@@ -130,6 +130,11 @@ const initSocket = (httpServer) => {
         });
     });
 
+    // ── Log Engine Connection Errors (Diagnostic) ──
+    io.engine.on("connection_error", (err) => {
+        console.warn(`⚠️ [Socket.IO] Engine connection error: code=${err.code}, message="${err.message}", req=${err.req?.method} ${err.req?.url}`);
+    });
+
     console.log('✅ Socket.IO initialized — real-time messaging ready');
     return io;
 };
