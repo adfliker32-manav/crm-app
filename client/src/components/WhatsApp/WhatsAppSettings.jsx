@@ -129,9 +129,12 @@ const WhatsAppSettings = () => {
     // Message Listener for FB/Meta popup events
     useEffect(() => {
         const handleFBMessage = (event) => {
-            if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') {
+            const isFacebookOrigin = /^https:\/\/(?:[a-zA-Z0-9-]+\.)*facebook\.(?:com|net)$/.test(event.origin);
+            if (!isFacebookOrigin) {
                 return;
             }
+
+            console.log('📬 Received postMessage from Facebook origin:', event.origin, event.data);
 
             try {
                 let parsedData;
@@ -145,7 +148,7 @@ const WhatsAppSettings = () => {
                     if (parsedData.event === 'FINISH' || parsedData.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING') {
                         const { waba_id, phone_number_id } = parsedData.data || {};
                         if (waba_id && phone_number_id) {
-                            console.log('Received WA_EMBEDDED_SIGNUP finish event:', parsedData);
+                            console.log('✅ Received WA_EMBEDDED_SIGNUP finish event:', parsedData);
                             setEmbeddedData(prev => ({
                                 ...prev,
                                 wabaId: waba_id,
@@ -172,6 +175,11 @@ const WhatsAppSettings = () => {
     // Combine code and message payloads
     useEffect(() => {
         if (embeddedData.receivedMessage && embeddedData.receivedCode) {
+            console.log('🔄 Triggering connection backend call with:', {
+                wabaId: embeddedData.wabaId,
+                phoneNumberId: embeddedData.phoneNumberId,
+                code: '***'
+            });
             handleConnectEmbedded(embeddedData.wabaId, embeddedData.phoneNumberId, embeddedData.code);
         }
     }, [embeddedData.receivedMessage, embeddedData.receivedCode]);
