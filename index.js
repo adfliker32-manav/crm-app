@@ -59,6 +59,7 @@ app.use(express.json({
 // Without this, the app is vulnerable to clickjacking, MIME sniffing, and protocol downgrade attacks.
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow serving static assets cross-origin
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }, // Allow Meta Login popup communication
   contentSecurityPolicy: false // Disable CSP to avoid breaking inline scripts in React
 }));
 

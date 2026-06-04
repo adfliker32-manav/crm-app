@@ -233,15 +233,17 @@ const WhatsAppSettings = () => {
 
         window.FB.login(
             (response) => {
+                console.log('🔑 FB.login response received:', response);
                 if (response.authResponse && response.authResponse.code) {
                     const authCode = response.authResponse.code;
-                    console.log('Received FB.login code:', authCode);
+                    console.log('✅ Received FB.login code:', authCode);
                     setEmbeddedData(prev => ({
                         ...prev,
                         code: authCode,
                         receivedCode: true
                     }));
                 } else {
+                    console.warn('⚠️ FB.login failed or was cancelled. response.authResponse:', response.authResponse);
                     showError('Failed to get authorization code from Meta.');
                     setConnecting(false);
                 }
