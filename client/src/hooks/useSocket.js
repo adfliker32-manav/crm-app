@@ -42,7 +42,7 @@ const useSocket = () => {
             const url = getSocketUrl();
             socketInstance = io(url, {
                 auth: { token },
-                transports: ['websocket'], // Force WebSocket to avoid 400 Bad Request (polling sticky session issues in cloud hosting)
+                transports: ['polling', 'websocket'], // Allow polling as fallback if websocket transport is blocked
                 reconnection: true,
                 reconnectionAttempts: Infinity,
                 reconnectionDelay: 1000,
