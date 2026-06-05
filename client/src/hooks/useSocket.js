@@ -42,7 +42,7 @@ const useSocket = () => {
             const url = getSocketUrl();
             socketInstance = io(url, {
                 auth: { token },
-                transports: ['polling', 'websocket'], // Polling connects first (catch-all fixed), then auto-upgrades to WS
+                transports: ['websocket', 'polling'], // WS first (avoids sticky session problem); polling fallback
                 reconnection: true,
                 reconnectionAttempts: Infinity,
                 reconnectionDelay: 1000,

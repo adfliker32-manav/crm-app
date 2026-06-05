@@ -25,19 +25,31 @@ const initSocket = (httpServer) => {
 
     io = new Server(httpServer, {
         cors: {
-            origin: (origin, callback) => {
-                if (!origin) return callback(null, true);
-                if (allowedOrigins.some(allowed => origin.startsWith(allowed))) {
-                    return callback(null, true);
-                }
-                callback(new Error('Not allowed by CORS'));
-            },
+            origin: allowedOrigins,
             methods: ['GET', 'POST'],
             credentials: true
         },
+        // ── Reverse Proxy Compatibility (Cloudflare → Render → Node) ──
+        // Cloudflare can corrupt compressed WebSocket frames; disable compression
+        perMessageDeflate: false,
+        // Don't use cookies for session tracking — reverse proxies may strip them
+        // between the GET handshake and POST data, causing UNKNOWN_SID (400)
+        cookie: false,
+        // Express 5 compatibility — prevent trailing slash redirect on /socket.io
+        addTrailingSlash: false,
+        // Allow both transports; prefer websocket (persistent conn = no sticky sessions needed)
+        transports: ['websocket', 'polling'],
+        // Increase timeouts for Cloudflare proxy latency
         pingTimeout: 60000,
         pingInterval: 25000,
-        transports: ['websocket', 'polling']
+        // Allow Engine.IO v3 clients as fallback
+        allowEIO3: true,
+        // Increase buffer size for large payloads
+        maxHttpBufferSize: 1e6,
+        // Connection state recovery — reconnecting clients reuse their session
+        connectionStateRecovery: {
+            maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+        }
     });
 
     // ── JWT Authentication Middleware ──
