@@ -42,7 +42,7 @@ const useSocket = () => {
             const url = getSocketUrl();
             socketInstance = io(url, {
                 auth: { token },
-                transports: ['websocket', 'polling'], // WebSocket first; polling fallback if WS is blocked
+                transports: ['polling', 'websocket'], // Polling connects first (catch-all fixed), then auto-upgrades to WS
                 reconnection: true,
                 reconnectionAttempts: Infinity,
                 reconnectionDelay: 1000,
