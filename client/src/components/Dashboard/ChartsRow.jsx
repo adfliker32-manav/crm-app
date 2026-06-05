@@ -10,6 +10,7 @@ import {
     Legend,
     ArcElement,
     BarElement,
+    Filler,
 } from 'chart.js';
 import { Line, Doughnut, Bar } from 'react-chartjs-2';
 
@@ -22,7 +23,8 @@ ChartJS.register(
     Tooltip,
     Legend,
     ArcElement,
-    BarElement
+    BarElement,
+    Filler
 );
 
 const ChartsRow = ({ leadSourceData, leadsOverTimeData, stageDistributionData }) => {
