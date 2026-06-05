@@ -76,7 +76,7 @@ const allowedOrigins = [
 // Standard page navigations or redirects (like Cashfree POSTing back to /billing)
 // should not be blocked by CORS origin checks.
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api/') || req.path.startsWith('/webhook/') || req.path.startsWith('/uploads')) {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/webhook/') || req.path.startsWith('/uploads') || req.path.startsWith('/socket.io')) {
     return cors({
       origin: (origin, callback) => {
         // Allow requests with no origin (mobile apps, curl, Postman, webhooks)
@@ -528,7 +528,7 @@ app.get('/book/:slug', (req, res) => {
 // 6. CATCH-ALL HANDLER FOR REACT SPA
 // Must be AFTER all API routes - serves React app for client-side routing
 app.use((req, res, next) => {
-  const isFrontendRoute = !req.path.startsWith('/api/') && !req.path.startsWith('/webhook/');
+  const isFrontendRoute = !req.path.startsWith('/api/') && !req.path.startsWith('/webhook/') && !req.path.startsWith('/socket.io');
   // Cashfree redirects back to the return URL (e.g. /billing) via POST
   const isCashfreeReturn = req.method === 'POST' && req.path.startsWith('/billing');
 

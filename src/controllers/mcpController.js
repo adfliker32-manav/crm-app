@@ -256,6 +256,22 @@ const TOOLS = [
         }
     },
 
+    // ── WhatsApp Stats ────────────────────────────────────────────────────────
+    {
+        name: 'get_whatsapp_message_stats',
+        description: 'Returns WhatsApp message statistics for a given time period. Includes total messages received (inbound) and sent (outbound), broken down by today, this week, this month, or all time. Use this when the user asks how many WhatsApp messages were received, sent, or both.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                period: {
+                    type: 'string',
+                    enum: ['today', 'week', 'month', 'all'],
+                    description: 'Time window for the stats. Default: today'
+                }
+            }
+        }
+    },
+
     // ── WhatsApp ──────────────────────────────────────────────────────────────
     {
         name: 'send_whatsapp_message',
@@ -722,6 +738,59 @@ const toolHandlers = {
                 count: s.count,
                 percentage: total > 0 ? `${((s.count / total) * 100).toFixed(1)}%` : '0%'
             }))
+        };
+    },
+
+    // ── WhatsApp Message Stats ────────────────────────────────────────────────
+
+    async get_whatsapp_message_stats(args, tenantId) {
+        const p = args.period || 'today';
+        const range = periodRange(p);
+
+        const matchBase = { userId: tenantId };
+        if (range) {
+            matchBase.timestamp = { $gte: range.start, $lte: range.end };
+        }
+
+        const agg = await WhatsAppMessage.aggregate([
+            { $match: matchBase },
+            {
+                $group: {
+                    _id: null,
+                    total:    { $sum: 1 },
+                    received: { $sum: { $cond: [{ $eq: ['$direction', 'inbound'] }, 1, 0] } },
+                    sent:     { $sum: { $cond: [{ $eq: ['$direction', 'outbound'] }, 1, 0] } },
+                    automated:{ $sum: { $cond: ['$isAutomated', 1, 0] } },
+                    failed:   { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
+                    read:     { $sum: { $cond: [{ $eq: ['$status', 'read'] }, 1, 0] } },
+                    delivered:{ $sum: { $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0] } }
+                }
+            }
+        ]);
+
+        const s = agg[0] || { total: 0, received: 0, sent: 0, automated: 0, failed: 0, read: 0, delivered: 0 };
+
+        // Human-readable period label
+        const periodLabel = {
+            today: 'today',
+            week:  'in the last 7 days',
+            month: 'in the last 30 days',
+            all:   'all time'
+        }[p] || p;
+
+        return {
+            period: p,
+            periodLabel,
+            summary: `You received ${s.received} WhatsApp message(s) ${periodLabel}. You sent ${s.sent} message(s) ${periodLabel}.`,
+            totalMessages: s.total,
+            received: s.received,
+            sent: s.sent,
+            automated: s.automated,
+            delivered: s.delivered,
+            read: s.read,
+            failed: s.failed,
+            readRate: s.sent > 0 ? `${((s.read / s.sent) * 100).toFixed(1)}%` : '0%',
+            deliveryRate: s.sent > 0 ? `${((s.delivered / s.sent) * 100).toFixed(1)}%` : '0%'
         };
     },
 
