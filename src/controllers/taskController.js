@@ -128,9 +128,9 @@ const updateTaskStatus = async (req, res) => {
 
         if (!task) return res.status(404).json({ message: "Task not found" });
 
-        // Log to Lead History if completed
-        if (status === 'Completed') {
-            await Lead.findByIdAndUpdate(task.leadId._id, {
+        // Log to Lead History if completed and lead exists
+        if (status === 'Completed' && task.leadId) {
+            await Lead.findByIdAndUpdate(task.leadId._id || task.leadId, {
                 $push: {
                     history: {
                         $each: [{
