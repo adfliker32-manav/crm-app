@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Lead = require('../models/Lead');
 const Task = require('../models/Task');
+const Appointment = require('../models/Appointment');
 
 // ==========================================
 // UNIFIED DASHBOARD SUMMARY
@@ -108,7 +109,7 @@ const getDashboardSummary = async (req, res) => {
         });
 
         // ---- RUN ALL QUERIES IN PARALLEL ----
-        const [leadResults, todayTasks, overdueTaskCount] = await Promise.all([
+        const [leadResults, todayTasks, overdueTaskCount, todayAppointments] = await Promise.all([
             // 1. Single aggregation for ALL lead analytics
             Lead.aggregate([
                 { $match: leadQuery },
@@ -128,7 +129,12 @@ const getDashboardSummary = async (req, res) => {
                 userId: ownerId,
                 status: 'Pending',
                 dueDate: { $lt: today }
-            })
+            }),
+            // 4. Today's appointments (for dashboard widget)
+            Appointment.find({
+                userId: ownerId,
+                appointmentDate: { $gte: today, $lt: tomorrow }
+            }).select('status').lean()
         ]);
 
         // ---- SHAPE THE RESPONSE ----
@@ -155,6 +161,9 @@ const getDashboardSummary = async (req, res) => {
             ? ((basic.wonLeads / basic.totalLeads) * 100).toFixed(1)
             : 0;
 
+        const todayAppointmentsCount = todayAppointments ? todayAppointments.length : 0;
+        const todayAppointmentsDueCount = todayAppointments ? todayAppointments.filter(a => a.status === 'Pending').length : 0;
+
         res.json({
             // Analytics stats
             totalLeads: basic.totalLeads,
@@ -172,7 +181,10 @@ const getDashboardSummary = async (req, res) => {
             // Tasks due today + overdue counts
             todayTasks: todayTasks || [],
             tasksToday: (todayTasks || []).length,
-            tasksOverdue: overdueTaskCount || 0
+            tasksOverdue: overdueTaskCount || 0,
+            // Today's appointments stats
+            todayAppointmentsCount,
+            todayAppointmentsDueCount
         });
     } catch (err) {
         console.error("Dashboard Summary Error:", err);

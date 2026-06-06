@@ -1,5 +1,6 @@
 /* eslint-disable no-unused-vars */
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import { useNotification } from '../context/NotificationContext';
 import useSocket from '../hooks/useSocket';
@@ -29,13 +30,13 @@ function toDateStr(d) {
 
 // ─── Appointments List Tab ───────────────────────────────────────────────────
 
-function AppointmentsList() {
+function AppointmentsList({ initialDateFilter }) {
     const { showSuccess, showError } = useNotification();
     const { socket } = useSocket();
     const [appointments, setAppointments] = useState([]);
     const [loading, setLoading]           = useState(true);
     const [statusFilter, setStatusFilter] = useState('all');
-    const [dateFilter, setDateFilter]     = useState('upcoming');
+    const [dateFilter, setDateFilter]     = useState(initialDateFilter || 'upcoming');
     const [search, setSearch]             = useState('');
     const [selectedAppt, setSelectedAppt] = useState(null);
     const [updatingId, setUpdatingId]     = useState(null);
@@ -67,6 +68,12 @@ function AppointmentsList() {
     }, [statusFilter, dateFilter, search]);
 
     useEffect(() => { fetchAppointments(); }, [fetchAppointments]);
+
+    useEffect(() => {
+        if (initialDateFilter) {
+            setDateFilter(initialDateFilter);
+        }
+    }, [initialDateFilter]);
 
     const updateStatus = async (apptId, newStatus) => {
         setUpdatingId(apptId);
@@ -1314,6 +1321,8 @@ function CField({ label, icon, children, className = '' }) {
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function Appointments() {
+    const [searchParams] = useSearchParams();
+    const dateParam = searchParams.get('date');
     const [activeTab, setActiveTab] = useState('bookings');
     const [stats, setStats]         = useState(null);
 
@@ -1358,7 +1367,7 @@ export default function Appointments() {
             </div>
 
             <div className="flex-1 overflow-hidden p-6">
-                {activeTab === 'bookings'  && <AppointmentsList />}
+                {activeTab === 'bookings'  && <AppointmentsList initialDateFilter={dateParam} />}
                 {activeTab === 'calendar'  && <CalendarTab />}
                 {activeTab === 'customize' && <BookingPageCustomizer />}
             </div>

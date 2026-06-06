@@ -1,6 +1,6 @@
 import React from 'react';
 
-const StatCard = ({ title, value, icon, subtext, trend, trendUp, gradient }) => {
+const StatCard = ({ title, value, icon, subtext, trend, trendUp, gradient, subtextClass, subtextDotClass }) => {
     // If gradient is provided, use the old colored style for backward compatibility
     if (gradient) {
         return (
@@ -42,8 +42,8 @@ const StatCard = ({ title, value, icon, subtext, trend, trendUp, gradient }) => 
                     <p className="text-sm font-medium text-slate-500 mb-1.5">{title}</p>
                     <p className="text-4xl font-bold bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent tracking-tight">{value}</p>
                     {subtext && (
-                        <p className="text-xs text-slate-400 mt-3 flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+                        <p className={`text-xs mt-3 flex items-center gap-1.5 ${subtextClass || 'text-slate-400'}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${subtextDotClass || 'bg-blue-400'}`}></span>
                             {subtext}
                         </p>
                     )}

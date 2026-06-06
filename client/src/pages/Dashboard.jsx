@@ -164,7 +164,7 @@ const Dashboard = () => {
                 </div>
 
                 {/* Primary KPI Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
                     <StatCard
                         title="Total Leads"
                         value={stats?.totalLeads?.toLocaleString() || 0}
@@ -183,6 +183,16 @@ const Dashboard = () => {
                         icon="fa-bullseye"
                         subtext="Won / Total"
                     />
+                    <div onClick={() => navigate('/appointments?date=today')} className="cursor-pointer">
+                        <StatCard
+                            title="Today's Appointments"
+                            value={stats?.todayAppointmentsCount || 0}
+                            icon="fa-calendar-check"
+                            subtext={stats?.todayAppointmentsDueCount > 0 ? `${stats.todayAppointmentsDueCount} due` : '0 due'}
+                            subtextClass={stats?.todayAppointmentsDueCount > 0 ? 'text-rose-600 font-semibold' : 'text-slate-400'}
+                            subtextDotClass={stats?.todayAppointmentsDueCount > 0 ? 'bg-rose-500' : 'bg-slate-400'}
+                        />
+                    </div>
                     <div onClick={() => setIsFollowUpModalOpen(true)} className="cursor-pointer">
                         <StatCard
                             title="Follow-ups Due"
