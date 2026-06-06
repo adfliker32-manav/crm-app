@@ -109,7 +109,7 @@ const getDashboardSummary = async (req, res) => {
         });
 
         // ---- RUN ALL QUERIES IN PARALLEL ----
-        const [leadResults, todayTasks, overdueTaskCount, todayAppointments, totalPendingTaskCount] = await Promise.all([
+        const [leadResults, todayTasks, overdueTaskCount, todayAppointments, totalPendingTaskCount, upcomingTaskCount] = await Promise.all([
             // 1. Single aggregation for ALL lead analytics
             Lead.aggregate([
                 { $match: leadQuery },
@@ -139,6 +139,12 @@ const getDashboardSummary = async (req, res) => {
             Task.countDocuments({
                 userId: ownerId,
                 status: 'Pending'
+            }),
+            // 6. Upcoming task count (next 7 days)
+            Task.countDocuments({
+                userId: ownerId,
+                status: 'Pending',
+                dueDate: { $gte: tomorrow, $lt: nextWeek }
             })
         ]);
 
@@ -188,6 +194,7 @@ const getDashboardSummary = async (req, res) => {
             tasksToday: (todayTasks || []).length,
             tasksOverdue: overdueTaskCount || 0,
             tasksTotalPending: totalPendingTaskCount || 0,
+            tasksUpcoming: upcomingTaskCount || 0,
             // Today's appointments stats
             todayAppointmentsCount,
             todayAppointmentsDueCount

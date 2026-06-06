@@ -203,10 +203,10 @@ const Dashboard = () => {
                     </div>
                     <div onClick={() => setIsTaskModalOpen(true)} className="cursor-pointer">
                         <StatCard
-                            title="Pending Tasks"
-                            value={stats?.tasksTotalPending || 0}
+                            title="Tasks Today"
+                            value={stats?.tasksToday || todayTasks.length || 0}
                             icon="fa-list-check"
-                            subtext={`${stats?.tasksToday || 0} due today · ${stats?.tasksOverdue || 0} overdue`}
+                            subtext={stats?.tasksOverdue > 0 ? `${stats.tasksOverdue} overdue · click to view` : 'Click to view'}
                         />
                     </div>
                 </div>
@@ -222,7 +222,7 @@ const Dashboard = () => {
                             </div>
                             <div>
                                 <p className="text-sm font-semibold text-rose-600">Overdue</p>
-                                <p className="text-3xl font-bold text-rose-700">{stats?.followUpOverdue || 0}</p>
+                                <p className="text-3xl font-bold text-rose-700">{(stats?.followUpOverdue || 0) + (stats?.tasksOverdue || 0)}</p>
                             </div>
                         </div>
                     </div>
@@ -236,7 +236,7 @@ const Dashboard = () => {
                             </div>
                             <div>
                                 <p className="text-sm font-semibold text-amber-600">Upcoming (7 days)</p>
-                                <p className="text-3xl font-bold text-amber-700">{stats?.followUpUpcoming || 0}</p>
+                                <p className="text-3xl font-bold text-amber-700">{(stats?.followUpUpcoming || 0) + (stats?.tasksUpcoming || 0)}</p>
                             </div>
                         </div>
                     </div>
@@ -250,7 +250,7 @@ const Dashboard = () => {
                             </div>
                             <div>
                                 <p className="text-sm font-semibold text-blue-600">Total Scheduled</p>
-                                <p className="text-3xl font-bold text-blue-700">{stats?.followUpTotal || 0}</p>
+                                <p className="text-3xl font-bold text-blue-700">{(stats?.followUpTotal || 0) + (stats?.tasksTotalPending || 0)}</p>
                             </div>
                         </div>
                     </div>
