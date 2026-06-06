@@ -32,6 +32,13 @@ const getTasks = async (req, res) => {
             today.setHours(0, 0, 0, 0);
             query.dueDate = { $lt: today };
             query.status = 'Pending';
+        } else if (dateFilter === 'upcoming') {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const tomorrow = new Date(today);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            query.dueDate = { $gte: tomorrow };
+            query.status = 'Pending';
         }
 
         const tasks = await Task.find(query)

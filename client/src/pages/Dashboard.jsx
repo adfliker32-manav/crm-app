@@ -203,10 +203,10 @@ const Dashboard = () => {
                     </div>
                     <div onClick={() => setIsTaskModalOpen(true)} className="cursor-pointer">
                         <StatCard
-                            title="Tasks Today"
-                            value={stats?.tasksToday || todayTasks.length || 0}
+                            title="Pending Tasks"
+                            value={stats?.tasksTotalPending || 0}
                             icon="fa-list-check"
-                            subtext={stats?.tasksOverdue > 0 ? `${stats.tasksOverdue} overdue · click to view` : 'Click to view'}
+                            subtext={`${stats?.tasksToday || 0} due today · ${stats?.tasksOverdue || 0} overdue`}
                         />
                     </div>
                 </div>

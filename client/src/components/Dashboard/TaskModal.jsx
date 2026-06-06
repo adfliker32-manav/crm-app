@@ -7,6 +7,7 @@ const TaskModal = ({ isOpen, onClose, onSuccess, onLeadClick }) => {
     const [activeTab, setActiveTab] = useState('today');
     const [todayTasks, setTodayTasks] = useState([]);
     const [overdueTasks, setOverdueTasks] = useState([]);
+    const [upcomingTasks, setUpcomingTasks] = useState([]);
     const [completedTasks, setCompletedTasks] = useState([]);
     const [loading, setLoading] = useState(false);
     const [completingId, setCompletingId] = useState(null);
@@ -22,13 +23,15 @@ const TaskModal = ({ isOpen, onClose, onSuccess, onLeadClick }) => {
         try {
             // "Completed Today" = tasks with dueDate today and status Completed
             // (We don't store a completedAt field, so this is the closest meaningful query)
-            const [todayRes, overdueRes, completedRes] = await Promise.all([
+            const [todayRes, overdueRes, upcomingRes, completedRes] = await Promise.all([
                 api.get('/tasks?status=Pending&dateFilter=today'),
                 api.get('/tasks?dateFilter=overdue'),
+                api.get('/tasks?status=Pending&dateFilter=upcoming'),
                 api.get('/tasks?status=Completed&dateFilter=today')
             ]);
             setTodayTasks(todayRes.data || []);
             setOverdueTasks(overdueRes.data || []);
+            setUpcomingTasks(upcomingRes.data || []);
             setCompletedTasks(completedRes.data || []);
         } catch (err) {
             console.error("Error fetching tasks", err);
@@ -67,7 +70,9 @@ const TaskModal = ({ isOpen, onClose, onSuccess, onLeadClick }) => {
         ? todayTasks
         : activeTab === 'overdue'
             ? overdueTasks
-            : completedTasks;
+            : activeTab === 'upcoming'
+                ? upcomingTasks
+                : completedTasks;
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 animate-fade-in-up p-4">
@@ -93,6 +98,16 @@ const TaskModal = ({ isOpen, onClose, onSuccess, onLeadClick }) => {
                     >
                         <i className="fa-solid fa-clock mr-2"></i>
                         Due Today ({todayTasks.length})
+                    </button>
+                    <button
+                        className={`flex-1 py-2 text-sm font-medium transition ${activeTab === 'upcoming'
+                            ? 'border-b-2 border-blue-500 text-gray-800'
+                            : 'text-gray-500 hover:text-gray-700'
+                            }`}
+                        onClick={() => setActiveTab('upcoming')}
+                    >
+                        <i className="fa-solid fa-calendar mr-2"></i>
+                        Upcoming ({upcomingTasks.length})
                     </button>
                     <button
                         className={`flex-1 py-2 text-sm font-medium transition ${activeTab === 'overdue'
@@ -128,6 +143,7 @@ const TaskModal = ({ isOpen, onClose, onSuccess, onLeadClick }) => {
                             <i className="fa-regular fa-clipboard text-5xl mb-3"></i>
                             <p className="text-lg font-medium">
                                 {activeTab === 'today' && 'No tasks due today!'}
+                                {activeTab === 'upcoming' && 'No upcoming tasks scheduled.'}
                                 {activeTab === 'overdue' && 'No overdue tasks. Great job!'}
                                 {activeTab === 'completed' && 'No tasks completed yet today'}
                             </p>
@@ -155,12 +171,15 @@ const TaskModal = ({ isOpen, onClose, onSuccess, onLeadClick }) => {
 const TaskCard = ({ task, variant, onComplete, onOpenLead, completing }) => {
     const isCompleted = variant === 'completed';
     const isOverdue = variant === 'overdue';
+    const isUpcoming = variant === 'upcoming';
 
     const bgCls = isCompleted
         ? 'bg-emerald-50 border-emerald-200'
         : isOverdue
             ? 'bg-rose-50 border-rose-200'
-            : 'bg-orange-50 border-orange-200';
+            : isUpcoming
+                ? 'bg-blue-50 border-blue-200'
+                : 'bg-orange-50 border-orange-200';
 
     const dueDate = task.dueDate ? new Date(task.dueDate) : null;
 
@@ -191,7 +210,7 @@ const TaskCard = ({ task, variant, onComplete, onOpenLead, completing }) => {
                         </button>
                     )}
                     {dueDate && (
-                        <p className={`text-xs font-medium mt-1 ${isOverdue ? 'text-rose-600' : isCompleted ? 'text-emerald-600' : 'text-orange-600'}`}>
+                        <p className={`text-xs font-medium mt-1 ${isOverdue ? 'text-rose-600' : isCompleted ? 'text-emerald-600' : isUpcoming ? 'text-blue-600' : 'text-orange-600'}`}>
                             <i className="fa-solid fa-calendar mr-1"></i>
                             {isCompleted ? 'Completed: ' : 'Due: '}
                             {dueDate.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
