@@ -7,10 +7,13 @@ function normalizePhone(phone) {
     let normalized = phone.toString().replace(/[\s\-\.\(\)]/g, '');
     // Remove leading +91 or 91 (India) or leading 0
     normalized = normalized.replace(/^(\+91|91|0)/, '');
+    // Strip any remaining non-digit characters (like letters)
+    normalized = normalized.replace(/\D/g, '');
     // Must have at least 7 digits to be valid
     if (normalized.length < 7) return null;
     return normalized;
 }
+
 
 // Find duplicate leads for a given user by phone OR email
 async function findDuplicates(userId, phone, email, excludeId = null) {

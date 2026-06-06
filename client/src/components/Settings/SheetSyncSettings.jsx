@@ -274,6 +274,10 @@ const SheetSyncSettings = () => {
 
     const getAppsScript = useCallback(() => {
         if (!webhookUrl) return '';
+        const nameField = fieldMapping.name || 'Name';
+        const phoneField = fieldMapping.phone || 'Phone';
+        const emailField = fieldMapping.email || 'Email';
+
         return `// CRM Auto-Push Script
 // Extensions → Apps Script → Paste → Save
 
@@ -294,7 +298,14 @@ function onEdit(e) {
     }
   });
   
-  if (Object.keys(row).length === 0) return;
+  // Only send if Name is filled AND either Phone or Email is filled
+  // (Prevents incomplete 'Unknown' leads when typing row-by-row)
+  const nameVal = row["${nameField}"];
+  const phoneVal = row["${phoneField}"];
+  const emailVal = row["${emailField}"];
+  
+  if (!nameVal || nameVal.trim() === '') return;
+  if ((!phoneVal || phoneVal.trim() === '') && (!emailVal || emailVal.trim() === '')) return;
   
   try {
     UrlFetchApp.fetch(CRM_WEBHOOK_URL, {
@@ -310,7 +321,7 @@ function onEdit(e) {
 
 // After pasting: Triggers (⏰) → Add Trigger → onEdit → From spreadsheet → On edit
 `;
-    }, [webhookUrl]);
+    }, [webhookUrl, fieldMapping]);
 
     const handleCopy = () => {
         navigator.clipboard.writeText(getAppsScript());
