@@ -24,8 +24,8 @@ const receiveSheetPush = async (req, res) => {
     try {
         // 1. Validate user & config (single query — reused for fieldMapping below)
         const config = await IntegrationConfig.findOne({ userId })
-            .select('googleSheet')
-            .lean();
+            .select('googleSheet');
+
 
         if (!config || !config.googleSheet?.syncEnabled) {
             return res.status(403).json({ success: false, message: 'Sheet sync not enabled for this user' });

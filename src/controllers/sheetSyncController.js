@@ -63,8 +63,7 @@ const getSheetSyncConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('googleSheet')
-            .lean();
+            .select('googleSheet');
 
         const gs = config?.googleSheet || {};
 
