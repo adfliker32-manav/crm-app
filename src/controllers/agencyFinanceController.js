@@ -332,8 +332,9 @@ exports.updatePayment = async (req, res) => {
         if (payment.status === 'received' && prevPayment?.status !== 'received') {
             const client = await AgencyClient.findById(payment.agencyClientId).lean();
             if (client) {
+                const callerUserId = req.user.userId || req.user.id;
                 const { sendPaymentReceipt } = require('../services/agencyBillingQueue');
-                sendPaymentReceipt(payment.toObject(), client).catch(err =>
+                sendPaymentReceipt(payment.toObject(), client, callerUserId).catch(err =>
                     console.error('[updatePayment] Receipt send failed silently:', err.message)
                 );
             }
@@ -377,34 +378,10 @@ exports.sendBillManually = async (req, res) => {
         const client = await AgencyClient.findById(payment.agencyClientId).lean();
         if (!client) return res.status(404).json({ success: false, message: 'Client not found.' });
 
-        const User = require('../models/User');
-        const IntegrationConfig = require('../models/IntegrationConfig');
-        let superAdminId = null;
-
-        try {
-            const activeConfigs = await IntegrationConfig.find({
-                $or: [
-                    { 'email.emailUser': { $exists: true, $ne: null, $ne: 'null', $ne: '' } },
-                    { 'whatsapp.accessToken': { $exists: true, $ne: null, $ne: '' } }
-                ]
-            }).select('userId').lean();
-
-            if (activeConfigs.length > 0) {
-                const userIds = activeConfigs.map(c => c.userId);
-                const admin = await User.findOne({ _id: { $in: userIds }, role: 'superadmin' }).select('_id').lean();
-                if (admin) {
-                    superAdminId = admin._id;
-                }
-            }
-        } catch (err) {
-            console.error('⚠️ [sendBillManually] Error resolving active superadmin:', err.message);
-        }
-
-        if (!superAdminId) {
-            const superAdmin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
-            if (!superAdmin) return res.status(500).json({ success: false, message: 'Super Admin account not found.' });
-            superAdminId = superAdmin._id;
-        }
+        // Use the logged-in superadmin's credentials directly.
+        // The route is protected by requireSuperAdmin, so req.user IS the superadmin
+        // who configured email/whatsapp in the Communication module.
+        const superAdminId = req.user.userId || req.user.id;
 
         // ── Send Email ────────────────────────────────────────────────────────────
         if (client.email) {

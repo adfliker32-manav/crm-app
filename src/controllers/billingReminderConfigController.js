@@ -8,38 +8,8 @@ const BillingReminderConfig = require('../models/BillingReminderConfig');
 const WhatsAppTemplate       = require('../models/WhatsAppTemplate');
 const User                   = require('../models/User');
 
-// ─── Helper: get Super Admin userId ──────────────────────────────────────────
-let _cachedId = null;
-const getSuperAdminId = async () => {
-    if (_cachedId) return _cachedId;
-
-    try {
-        const IntegrationConfig = require('../models/IntegrationConfig');
-        // Find configurations that actually have email or whatsapp integration configured
-        const activeConfigs = await IntegrationConfig.find({
-            $or: [
-                { 'email.emailUser': { $exists: true, $nin: [null, 'null', ''] } },
-                { 'whatsapp.accessToken': { $exists: true, $nin: [null, ''] } }
-            ]
-        }).select('userId').lean();
-
-        if (activeConfigs.length > 0) {
-            const userIds = activeConfigs.map(c => c.userId);
-            const admin = await User.findOne({ _id: { $in: userIds }, role: 'superadmin' }).select('_id').lean();
-            if (admin) {
-                _cachedId = admin._id.toString();
-                return _cachedId;
-            }
-        }
-    } catch (err) {
-        console.error('⚠️ [billingReminderConfigController] Error resolving active superadmin:', err.message);
-    }
-
-    // Fallback to first superadmin
-    const admin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
-    if (admin) _cachedId = admin._id.toString();
-    return _cachedId;
-};
+// Note: getSuperAdminId helper removed — all endpoints in this controller
+// are behind requireSuperAdmin middleware, so req.user.userId IS the superadmin.
 
 // ─── GET /api/superadmin/billing-reminder-config ──────────────────────────────
 // Returns the current config (with defaults if never saved).
@@ -109,10 +79,7 @@ const saveConfig = async (req, res) => {
 // so the frontend can populate the 4 dropdowns.
 const getAvailableTemplates = async (req, res) => {
     try {
-        const superAdminId = await getSuperAdminId();
-        if (!superAdminId) {
-            return res.status(404).json({ success: false, message: 'Super Admin not found' });
-        }
+        const superAdminId = req.user.userId || req.user.id;
 
         const templates = await WhatsAppTemplate.find({
             userId: superAdminId,

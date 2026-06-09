@@ -23,27 +23,46 @@ const { sendWhatsAppTemplateMessage } = require('./whatsappService');
 let sharedAgenda = null;
 
 // ─── Super Admin Lookup ────────────────────────────────────────────────────────
-// Finds the platform Super Admin user. Results are cached in module scope since
-// the Super Admin's _id never changes at runtime.
+// Finds the platform Super Admin user who has EMAIL credentials configured.
+// Priority: superadmin with email > superadmin with any integration > any superadmin.
+// Results are cached in module scope since the Super Admin's _id rarely changes.
 let _cachedSuperAdminId = null;
 const getSuperAdminId = async () => {
     if (_cachedSuperAdminId) return _cachedSuperAdminId;
 
     try {
         const IntegrationConfig = require('../models/IntegrationConfig');
-        // Find configurations that actually have email or whatsapp integration configured
-        const activeConfigs = await IntegrationConfig.find({
+
+        // Priority 1: Find a superadmin who specifically has EMAIL configured
+        const emailConfigs = await IntegrationConfig.find({
+            'email.emailUser': { $exists: true, $nin: [null, 'null', ''] },
+            'email.emailPassword': { $exists: true, $nin: [null, ''] }
+        }).select('userId').lean();
+
+        if (emailConfigs.length > 0) {
+            const userIds = emailConfigs.map(c => c.userId);
+            const admin = await User.findOne({ _id: { $in: userIds }, role: 'superadmin' }).select('_id').lean();
+            if (admin) {
+                _cachedSuperAdminId = admin._id.toString();
+                console.log(`✅ [agencyBillingQueue] Resolved superadmin with EMAIL config: ${_cachedSuperAdminId}`);
+                return _cachedSuperAdminId;
+            }
+        }
+
+        // Priority 2: Any superadmin with any integration (email or whatsapp)
+        const anyConfigs = await IntegrationConfig.find({
             $or: [
                 { 'email.emailUser': { $exists: true, $nin: [null, 'null', ''] } },
                 { 'whatsapp.accessToken': { $exists: true, $nin: [null, ''] } }
             ]
         }).select('userId').lean();
 
-        if (activeConfigs.length > 0) {
-            const userIds = activeConfigs.map(c => c.userId);
+        if (anyConfigs.length > 0) {
+            const userIds = anyConfigs.map(c => c.userId);
             const admin = await User.findOne({ _id: { $in: userIds }, role: 'superadmin' }).select('_id').lean();
             if (admin) {
                 _cachedSuperAdminId = admin._id.toString();
+                console.warn(`⚠️ [agencyBillingQueue] No superadmin with EMAIL found, using one with other integration: ${_cachedSuperAdminId}`);
                 return _cachedSuperAdminId;
             }
         }
@@ -53,7 +72,10 @@ const getSuperAdminId = async () => {
 
     // Fallback to first superadmin
     const admin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
-    if (admin) _cachedSuperAdminId = admin._id.toString();
+    if (admin) {
+        _cachedSuperAdminId = admin._id.toString();
+        console.warn(`⚠️ [agencyBillingQueue] Fallback: using first superadmin: ${_cachedSuperAdminId}`);
+    }
     return _cachedSuperAdminId;
 };
 
@@ -415,8 +437,10 @@ const buildReceiptEmail = (payment, client) => {
 };
 
 // ─── sendPaymentReceipt — called from agencyFinanceController when payment confirmed ──
-const sendPaymentReceipt = async (payment, client) => {
-    const superAdminId = await getSuperAdminId();
+// callerUserId: optional — when called from a controller, pass req.user.userId to
+// guarantee the logged-in user's email credentials are used instead of a DB lookup.
+const sendPaymentReceipt = async (payment, client, callerUserId = null) => {
+    const superAdminId = callerUserId || await getSuperAdminId();
     if (!superAdminId) {
         console.warn('⚠️ [Receipt] Super Admin not found — cannot send receipt.');
         return;
