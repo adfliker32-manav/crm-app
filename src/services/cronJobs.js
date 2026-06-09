@@ -690,6 +690,7 @@ const runAgencyClientBillingSweep = async () => {
     try {
         const AgencyClient = require('../models/AgencyClient');
         const AgencyPayment = require('../models/AgencyPayment');
+        const GlobalSetting = require('../models/GlobalSetting');
         const { scheduleAgencyBillFollowups } = require('./agencyBillingQueue');
 
         const now = new Date();
@@ -703,27 +704,66 @@ const runAgencyClientBillingSweep = async () => {
             return test.getMonth() !== date.getMonth();
         };
 
-        const query = { status: 'active' };
-        if (isLastDayOfMonth(now)) {
-            query.billingDay = { $gte: currentDay };
-        } else {
-            query.billingDay = currentDay;
-        }
+        const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-        const clients = await AgencyClient.find(query).lean();
+        // Fetch agency branding for invoice snapshots
+        const brandingKeys = ['agency_name', 'agency_address', 'agency_gst', 'agency_logo_url'];
+        const settings = await GlobalSetting.find({ key: { $in: brandingKeys } }).lean();
+        const brandingMap = {};
+        settings.forEach(s => { brandingMap[s.key] = s.value || ''; });
+        const branding = {
+            agencyName:    brandingMap.agency_name    || '',
+            agencyAddress: brandingMap.agency_address || '',
+            agencyGst:     brandingMap.agency_gst     || '',
+            agencyLogo:    brandingMap.agency_logo_url || ''
+        };
+
+        // Fetch all active clients to evaluate their billing schedule
+        const clients = await AgencyClient.find({ status: 'active' }).lean();
         if (!clients.length) return;
 
-        console.log(`[BillingSweep] Found ${clients.length} active client(s) due for billing today.`);
+        console.log(`[BillingSweep] Checking ${clients.length} active client(s) for billing.`);
 
         for (const client of clients) {
             try {
-                const exists = await AgencyPayment.exists({
-                    agencyClientId: client._id,
-                    billingMonth: month,
-                    billingYear: year
-                });
+                let shouldBill = false;
 
-                if (exists) continue;
+                if (client.billingStartDate) {
+                    const startDate = new Date(client.billingStartDate);
+                    const startDateMidnight = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+
+                    if (todayMidnight >= startDateMidnight) {
+                        if (!client.lastBilledDate) {
+                            shouldBill = true;
+                        } else {
+                            const lastBilled = new Date(client.lastBilledDate);
+                            const lastBilledMidnight = new Date(lastBilled.getFullYear(), lastBilled.getMonth(), lastBilled.getDate());
+                            const diffTime = todayMidnight.getTime() - lastBilledMidnight.getTime();
+                            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                            if (diffDays >= 30) {
+                                shouldBill = true;
+                            }
+                        }
+                    }
+                } else {
+                    // Legacy logic: bill based on calendar billingDay
+                    const dayMatchesLegacy = isLastDayOfMonth(now)
+                        ? (client.billingDay >= currentDay)
+                        : (client.billingDay === currentDay);
+
+                    if (dayMatchesLegacy) {
+                        const exists = await AgencyPayment.exists({
+                            agencyClientId: client._id,
+                            billingMonth: month,
+                            billingYear: year
+                        });
+                        if (!exists) {
+                            shouldBill = true;
+                        }
+                    }
+                }
+
+                if (!shouldBill) continue;
 
                 // Generate unique Invoice Number
                 const count = await AgencyPayment.countDocuments({ billingYear: year, billingMonth: month });
@@ -746,8 +786,18 @@ const runAgencyClientBillingSweep = async () => {
                     invoiceNumber,
                     billingAddressSnapshot: client.billingAddress || '',
                     gstNumberSnapshot:      client.gstNumber     || '',
+                    agencyNameSnapshot:     branding.agencyName,
+                    agencyAddressSnapshot:  branding.agencyAddress,
+                    agencyGstSnapshot:      branding.agencyGst,
+                    agencyLogoSnapshot:     branding.agencyLogo,
                     recordedBy: null
                 });
+
+                // Update lastBilledDate on the client model
+                await AgencyClient.updateOne(
+                    { _id: client._id },
+                    { $set: { lastBilledDate: now } }
+                );
 
                 const jobIds = await scheduleAgencyBillFollowups(payment);
                 payment.followUpJobs = jobIds;

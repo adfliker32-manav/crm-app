@@ -19,7 +19,11 @@ const agencyClientSchema = new mongoose.Schema({
     // Billing fields for automated invoice generation
     billingAddress: { type: String, default: '' },       // Client's billing address for invoice
     gstNumber:      { type: String, default: '' },       // Optional GST/Tax ID for invoice compliance
-    billingDay:     { type: Number, default: 1, min: 1, max: 28 } // Day of month for auto-bill generation
+    billingDay:     { type: Number, default: 1, min: 1, max: 28 }, // Day of month for auto-bill generation (legacy, used if billingStartDate is not set)
+
+    // Start-date-based 30-day billing cycle (preferred over billingDay when set)
+    billingStartDate: { type: Date, default: null },     // When the 30-day billing cycle begins
+    lastBilledDate:   { type: Date, default: null }      // When the last auto-bill was generated
 }, { timestamps: true });
 
 agencyClientSchema.index({ status: 1 });

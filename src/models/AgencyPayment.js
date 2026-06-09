@@ -35,6 +35,12 @@ const agencyPaymentSchema = new mongoose.Schema({
     gstNumberSnapshot:      { type: String, default: '' },           // Client GST locked at billing time
     followUpJobs:           { type: [String], default: [] },         // Agenda job IDs for easy cancellation
 
+    // Agency branding snapshot — "From" side of the invoice, locked at creation
+    agencyNameSnapshot:     { type: String, default: '' },           // Agency/company name from GlobalSetting
+    agencyAddressSnapshot:  { type: String, default: '' },           // Agency address from GlobalSetting
+    agencyGstSnapshot:      { type: String, default: '' },           // Agency GST from GlobalSetting
+    agencyLogoSnapshot:     { type: String, default: '' },           // Agency logo URL from GlobalSetting
+
     recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
 }, { timestamps: true });
 

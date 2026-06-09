@@ -68,7 +68,7 @@ const ClientModal = ({ isOpen, onClose, onSuccess, initial }) => {
         name: '', email: '', phone: '', company: '',
         serviceType: 'other', monthlyFee: '',
         requirements: '', startDate: '', status: 'active', notes: '',
-        billingAddress: '', gstNumber: '', billingDay: 1
+        billingAddress: '', gstNumber: '', billingDay: 1, billingStartDate: ''
     });
 
     useEffect(() => {
@@ -86,12 +86,13 @@ const ClientModal = ({ isOpen, onClose, onSuccess, initial }) => {
                 notes: initial.notes || '',
                 billingAddress: initial.billingAddress || '',
                 gstNumber: initial.gstNumber || '',
-                billingDay: initial.billingDay || 1
+                billingDay: initial.billingDay || 1,
+                billingStartDate: initial.billingStartDate ? initial.billingStartDate.slice(0, 10) : ''
             } : {
                 name: '', email: '', phone: '', company: '',
                 serviceType: 'other', monthlyFee: '',
                 requirements: '', startDate: '', status: 'active', notes: '',
-                billingAddress: '', gstNumber: '', billingDay: 1
+                billingAddress: '', gstNumber: '', billingDay: 1, billingStartDate: ''
             });
         }
     }, [isOpen, initial]);
@@ -199,13 +200,19 @@ const ClientModal = ({ isOpen, onClose, onSuccess, initial }) => {
                                 placeholder="e.g. 27AAPFU0939F1ZV" />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-slate-600 mb-1">
-                                Auto-billing Day
-                                <span className="ml-1 text-slate-400 font-normal">(1–28 of month)</span>
+                            <label className="block text-xs font-bold text-slate-600 mb-1">Billing Start Date</label>
+                            <input type="date" value={form.billingStartDate} onChange={e => set('billingStartDate', e.target.value)}
+                                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                            <p className="text-[10px] text-slate-400 mt-1">Generates every 30 days starting on this date</p>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1">
+                                Legacy Auto-billing Day
+                                <span className="ml-1 text-slate-400 font-normal">(1–28)</span>
                             </label>
                             <input type="number" min="1" max="28" value={form.billingDay} onChange={e => set('billingDay', Number(e.target.value))}
-                                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-                            <p className="text-[10px] text-slate-400 mt-1">Bill auto-generated on this day every month</p>
+                                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50 text-slate-500" />
+                            <p className="text-[10px] text-slate-400 mt-1">Only used if Billing Start Date is not set</p>
                         </div>
                         <div className="col-span-2">
                             <label className="block text-xs font-bold text-slate-600 mb-1">Notes</label>
@@ -638,7 +645,16 @@ const ClientsTab = ({ clients, loading, onAdd, onEdit, onDelete }) => {
                                 {c.phone && <div className="flex items-center gap-2"><i className="fa-solid fa-phone w-3.5 text-slate-300" /><span>{c.phone}</span></div>}
                                 {c.billingAddress && <div className="flex items-start gap-2"><i className="fa-solid fa-location-dot w-3.5 text-slate-300 mt-0.5" /><span className="line-clamp-1">{c.billingAddress}</span></div>}
                                 {c.gstNumber && <div className="flex items-center gap-2"><i className="fa-solid fa-file-invoice w-3.5 text-slate-300" /><span className="font-mono">{c.gstNumber}</span></div>}
-                                <div className="flex items-center gap-2"><i className="fa-solid fa-calendar-day w-3.5 text-slate-300" /><span>Auto-bills on day <strong>{c.billingDay || 1}</strong> each month</span></div>
+                                <div className="flex items-center gap-2">
+                                    <i className="fa-solid fa-calendar-day w-3.5 text-slate-300" />
+                                    <span>
+                                        {c.billingStartDate ? (
+                                            <>Auto-bills every 30 days starting <strong>{fmtDate(c.billingStartDate)}</strong></>
+                                        ) : (
+                                            <>Auto-bills on day <strong>{c.billingDay || 1}</strong> each month</>
+                                        )}
+                                    </span>
+                                </div>
                             </div>
                             {/* Card footer */}
                             <div className="flex items-center justify-between pt-3 border-t border-slate-100">
@@ -690,8 +706,16 @@ const ClientsTab = ({ clients, loading, onAdd, onEdit, onDelete }) => {
                                     <p className="text-sm font-black text-slate-800">{fmtINR(selected.monthlyFee)}</p>
                                 </div>
                                 <div className="bg-slate-50 rounded-xl p-3 text-center">
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Bill Day</p>
-                                    <p className="text-sm font-black text-slate-800">{selected.billingDay || 1}<span className="text-[10px] font-normal text-slate-400"> of mo</span></p>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">
+                                        {selected.billingStartDate ? 'Billing Cycle' : 'Bill Day'}
+                                    </p>
+                                    <p className="text-sm font-black text-slate-800">
+                                        {selected.billingStartDate ? (
+                                            <>30-Day</>
+                                        ) : (
+                                            <>{selected.billingDay || 1}<span className="text-[10px] font-normal text-slate-400"> of mo</span></>
+                                        )}
+                                    </p>
                                 </div>
                             </div>
 
@@ -783,14 +807,28 @@ const ClientsTab = ({ clients, loading, onAdd, onEdit, onDelete }) => {
                             )}
 
                             {/* Start date */}
-                            {selected.startDate && (
-                                <div className="flex items-center gap-3 pt-3 border-t border-slate-100">
-                                    <i className="fa-solid fa-calendar-check text-slate-300" />
-                                    <p className="text-xs text-slate-500">
-                                        Client since <strong className="text-slate-700">
-                                            {new Date(selected.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
-                                        </strong>
-                                    </p>
+                            {(selected.startDate || selected.billingStartDate) && (
+                                <div className="pt-3 border-t border-slate-100 space-y-2">
+                                    {selected.startDate && (
+                                        <div className="flex items-center gap-3">
+                                            <i className="fa-solid fa-calendar-check text-slate-300 w-4" />
+                                            <p className="text-xs text-slate-500">
+                                                Client since <strong className="text-slate-700">
+                                                    {new Date(selected.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+                                                </strong>
+                                            </p>
+                                        </div>
+                                    )}
+                                    {selected.billingStartDate && (
+                                        <div className="flex items-center gap-3">
+                                            <i className="fa-solid fa-calendar-days text-slate-300 w-4" />
+                                            <p className="text-xs text-slate-500">
+                                                Billing cycle starts on <strong className="text-slate-700">
+                                                    {new Date(selected.billingStartDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+                                                </strong>
+                                            </p>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -816,7 +854,7 @@ const ClientsTab = ({ clients, loading, onAdd, onEdit, onDelete }) => {
 // Uses the browser's native print dialog to generate a PDF invoice.
 // No external library required — works offline, produces clean output.
 
-const printInvoice = (payment, logoUrl = '') => {
+const printInvoice = (payment, globalBranding = null) => {
     const MONTHS_FULL = [
         'January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'
@@ -842,6 +880,11 @@ const printInvoice = (payment, logoUrl = '') => {
     const statusColor = payment.status === 'received' ? '#10b981' : payment.status === 'partial' ? '#3b82f6' : '#f59e0b';
     const statusLabel = payment.status === 'received' ? 'PAID ✓ VERIFIED' : payment.status === 'partial' ? 'PARTIAL PAID' : 'OUTSTANDING';
     const isVerified  = payment.status === 'received';
+
+    const agencyName = payment.agencyNameSnapshot || globalBranding?.agencyName || 'AGENCY';
+    const agencyAddress = payment.agencyAddressSnapshot || globalBranding?.agencyAddress || '';
+    const agencyGst = payment.agencyGstSnapshot || globalBranding?.agencyGst || '';
+    const agencyLogo = payment.agencyLogoSnapshot || globalBranding?.agencyLogo || '';
 
     const html = `<!DOCTYPE html>
 <html lang="en">
@@ -889,7 +932,7 @@ const printInvoice = (payment, logoUrl = '') => {
   </div>` : ''}
   <div class="header">
     <div class="logo-area">
-      ${logoUrl ? `<img src="${logoUrl}" alt="Logo" />` : '<div class="brand">AGENCY</div>'}
+      ${agencyLogo ? `<img src="${agencyLogo}" alt="Logo" />` : `<div class="brand">${agencyName}</div>`}
     </div>
     <div class="invoice-badge">
       <h1>INVOICE</h1>
@@ -900,28 +943,27 @@ const printInvoice = (payment, logoUrl = '') => {
 
   <hr class="divider" />
 
-    <div class="parties">
+  <div class="parties">
+    <div class="party-box">
+      <h3>From</h3>
+      <h2>${agencyName}</h2>
+      ${agencyAddress ? `<p style="white-space:pre-line; margin-top: 4px;">${agencyAddress.replace(/\n/g, '<br/>')}</p>` : ''}
+      ${agencyGst ? `<p style="margin-top: 4px;">GST: <strong>${agencyGst}</strong></p>` : ''}
+    </div>
     <div class="party-box">
       <h3>Billed To</h3>
       <h2>${payment.clientName || '—'}</h2>
       ${payment.clientCompany ? `<p>${payment.clientCompany}</p>` : ''}
-      ${payment.billingAddressSnapshot ? `<p style="white-space:pre-line">${payment.billingAddressSnapshot.replace(/\n/g, '<br/>')}</p>` : '<p style="color:#94a3b8;font-style:italic">No billing address on file</p>'}
-      ${payment.gstNumberSnapshot ? `<p>GST: <strong>${payment.gstNumberSnapshot}</strong></p>` : ''}
-    </div>
-    <div class="party-box" style="text-align:right">
-      <h3>Invoice Details</h3>
-      <p><strong>Invoice Date:</strong> ${fmtD(invoiceDate)}</p>
-      <p><strong>Due Date:</strong> ${fmtD(payment.dueDate)}</p>
-      <p><strong>Billing Period:</strong> ${period}</p>
-      <p><strong>Service:</strong> ${serviceLabel}</p>
+      ${payment.billingAddressSnapshot ? `<p style="white-space:pre-line; margin-top: 4px;">${payment.billingAddressSnapshot.replace(/\n/g, '<br/>')}</p>` : '<p style="color:#94a3b8;font-style:italic; margin-top: 4px;">No billing address on file</p>'}
+      ${payment.gstNumberSnapshot ? `<p style="margin-top: 4px;">GST: <strong>${payment.gstNumberSnapshot}</strong></p>` : ''}
     </div>
   </div>
 
   <div class="meta-grid">
     <div class="meta-item"><label>Invoice #</label><span>${payment.invoiceNumber || '—'}</span></div>
-    <div class="meta-item"><label>Billing Period</label><span>${period}</span></div>
+    <div class="meta-item"><label>Invoice Date</label><span>${fmtD(invoiceDate)}</span></div>
+    <div class="meta-item"><label>Due Date</label><span>${fmtD(payment.dueDate)}</span></div>
     <div class="meta-item"><label>Payment Status</label><span style="color:${statusColor};font-weight:700">${statusLabel}</span></div>
-    ${isVerified && payment.receivedDate ? `<div class="meta-item"><label>Payment Date</label><span>${fmtD(payment.receivedDate)}</span></div>` : ''}
   </div>
 
   <table>
@@ -1239,9 +1281,23 @@ const AgencyFinanceView = () => {
     };
 
     // ── Invoice PDF Download ───────────────────────────────────────────────────────────
-    const [logoUrl, setLogoUrl] = useState(
-        () => localStorage.getItem('agencyInvoiceLogo') || ''
-    );
+    // ── Agency Global Branding ─────────────────────────────────────────────────────────
+    const [globalBranding, setGlobalBranding] = useState(null);
+    const fetchGlobalBranding = useCallback(async () => {
+        try {
+            const res = await api.get('/superadmin/agency-finance/branding');
+            if (res.data?.success) {
+                setGlobalBranding(res.data.branding);
+            }
+        } catch (err) {
+            console.error('[AgencyFinance] Failed to fetch branding:', err);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchGlobalBranding();
+    }, [fetchGlobalBranding]);
+
     const [downloading, setDownloading] = useState(null);
     const handleDownloadInvoice = async (p) => {
         // Always fetch fresh data from DB — stale React state may have empty
@@ -1250,10 +1306,10 @@ const AgencyFinanceView = () => {
         try {
             const res = await api.get(`/superadmin/agency-finance/payments/${p._id}`);
             const freshPayment = res.data?.payment || p;
-            printInvoice(freshPayment, logoUrl);
+            printInvoice(freshPayment, globalBranding);
         } catch {
             // Fallback to cached data if API call fails
-            printInvoice(p, logoUrl);
+            printInvoice(p, globalBranding);
         } finally {
             setDownloading(null);
         }
@@ -1365,18 +1421,13 @@ const AgencyFinanceView = () => {
             {/* Logo config banner */}
             {tab === 'payments' && (
                 <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-                    <i className="fa-solid fa-image text-slate-400 flex-shrink-0" />
+                    <i className="fa-solid fa-circle-info text-indigo-500 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-slate-600">Invoice Logo URL</p>
-                        <p className="text-[11px] text-slate-400">Paste a public image URL (your logo) to embed it in downloaded invoices</p>
+                        <p className="text-xs font-bold text-slate-600">Centralized Invoice Branding</p>
+                        <p className="text-[11px] text-slate-400">
+                            Your agency's logo, address, and GST number are loaded directly from the database's global settings keys (<code>agency_name</code>, <code>agency_address</code>, <code>agency_gst</code>, <code>agency_logo_url</code>) to ensure consistent formatting across all invoices.
+                        </p>
                     </div>
-                    <input
-                        type="url"
-                        value={logoUrl}
-                        onChange={e => { setLogoUrl(e.target.value); localStorage.setItem('agencyInvoiceLogo', e.target.value); }}
-                        placeholder="https://yoursite.com/logo.png"
-                        className="w-64 flex-shrink-0 border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                    />
                 </div>
             )}
 

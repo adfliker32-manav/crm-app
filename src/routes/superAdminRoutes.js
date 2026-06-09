@@ -147,9 +147,11 @@ const {
     updatePayment: agencyUpdatePayment,
     deletePayment: agencyDeletePayment,
     sendBillManually: agencySendBillManually,
+    getAgencyBranding: agencyGetBranding,
 } = require('../controllers/agencyFinanceController');
 
 router.get('/agency-finance/summary', authMiddleware, requireSuperAdmin, agencySummary);
+router.get('/agency-finance/branding', authMiddleware, requireSuperAdmin, agencyGetBranding);
 
 router.get('/agency-finance/clients', authMiddleware, requireSuperAdmin, agencyListClients);
 router.post('/agency-finance/clients', authMiddleware, requireSuperAdmin, agencyCreateClient);

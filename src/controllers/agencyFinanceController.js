@@ -1,5 +1,22 @@
 const AgencyClient = require('../models/AgencyClient');
 const AgencyPayment = require('../models/AgencyPayment');
+const GlobalSetting = require('../models/GlobalSetting');
+
+// ─── AGENCY BRANDING HELPER ────────────────────────────────────────────────────
+// Fetches agency branding from GlobalSetting collection.
+// Keys: agency_name, agency_address, agency_gst, agency_logo_url
+const fetchAgencyBranding = async () => {
+    const keys = ['agency_name', 'agency_address', 'agency_gst', 'agency_logo_url'];
+    const settings = await GlobalSetting.find({ key: { $in: keys } }).lean();
+    const map = {};
+    settings.forEach(s => { map[s.key] = s.value || ''; });
+    return {
+        agencyName:    map.agency_name    || '',
+        agencyAddress: map.agency_address || '',
+        agencyGst:     map.agency_gst     || '',
+        agencyLogo:    map.agency_logo_url || ''
+    };
+};
 
 // ─── CLIENTS ───────────────────────────────────────────────────────────────────
 
@@ -21,7 +38,7 @@ exports.createClient = async (req, res) => {
         const {
             name, email, phone, company, serviceType, monthlyFee,
             requirements, startDate, status, notes,
-            billingAddress, gstNumber, billingDay
+            billingAddress, gstNumber, billingDay, billingStartDate
         } = req.body;
         if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Client name is required.' });
         if (monthlyFee == null || isNaN(monthlyFee)) return res.status(400).json({ success: false, message: 'Monthly fee is required.' });
@@ -29,9 +46,10 @@ exports.createClient = async (req, res) => {
         const client = await AgencyClient.create({
             name: name.trim(), email, phone, company, serviceType,
             monthlyFee: Number(monthlyFee), requirements, startDate, status, notes,
-            billingAddress: billingAddress || '',
-            gstNumber:      gstNumber      || '',
-            billingDay:     billingDay     ? Number(billingDay) : 1
+            billingAddress:   billingAddress   || '',
+            gstNumber:        gstNumber        || '',
+            billingDay:       billingDay       ? Number(billingDay) : 1,
+            billingStartDate: billingStartDate || null
         });
         res.status(201).json({ success: true, client, message: 'Client added.' });
     } catch (err) {
@@ -211,6 +229,9 @@ exports.createPayment = async (req, res) => {
             resolvedDueDate = d;
         }
 
+        // Fetch agency branding for invoice "From" block
+        const branding = await fetchAgencyBranding();
+
         const payment = await AgencyPayment.create({
             agencyClientId,
             clientName:        client.name,
@@ -227,6 +248,10 @@ exports.createPayment = async (req, res) => {
             invoiceNumber,
             billingAddressSnapshot: client.billingAddress || '',
             gstNumberSnapshot:      client.gstNumber      || '',
+            agencyNameSnapshot:     branding.agencyName,
+            agencyAddressSnapshot:  branding.agencyAddress,
+            agencyGstSnapshot:      branding.agencyGst,
+            agencyLogoSnapshot:     branding.agencyLogo,
             recordedBy: req.user?._id || null
         });
 
@@ -549,6 +574,20 @@ exports.getSummary = async (req, res) => {
         });
     } catch (err) {
         console.error('[AgencyFinance] getSummary:', err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// ─── AGENCY BRANDING ─────────────────────────────────────────────────────────
+// GET /superadmin/agency-finance/branding
+// Returns current agency branding from GlobalSetting for invoice preview/download.
+
+exports.getAgencyBranding = async (req, res) => {
+    try {
+        const branding = await fetchAgencyBranding();
+        res.json({ success: true, branding });
+    } catch (err) {
+        console.error('[AgencyFinance] getAgencyBranding:', err);
         res.status(500).json({ success: false, message: 'Server error' });
     }
 };
