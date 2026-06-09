@@ -12,8 +12,32 @@ const User                   = require('../models/User');
 let _cachedId = null;
 const getSuperAdminId = async () => {
     if (_cachedId) return _cachedId;
+
+    try {
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        // Find configurations that actually have email or whatsapp integration configured
+        const activeConfigs = await IntegrationConfig.find({
+            $or: [
+                { 'email.emailUser': { $exists: true, $ne: null, $ne: 'null', $ne: '' } },
+                { 'whatsapp.accessToken': { $exists: true, $ne: null, $ne: '' } }
+            ]
+        }).select('userId').lean();
+
+        if (activeConfigs.length > 0) {
+            const userIds = activeConfigs.map(c => c.userId);
+            const admin = await User.findOne({ _id: { $in: userIds }, role: 'superadmin' }).select('_id').lean();
+            if (admin) {
+                _cachedId = admin._id.toString();
+                return _cachedId;
+            }
+        }
+    } catch (err) {
+        console.error('⚠️ [billingReminderConfigController] Error resolving active superadmin:', err.message);
+    }
+
+    // Fallback to first superadmin
     const admin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
-    if (admin) _cachedId = admin._id;
+    if (admin) _cachedId = admin._id.toString();
     return _cachedId;
 };
 
