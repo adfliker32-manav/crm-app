@@ -79,16 +79,64 @@ const getSuperAdminId = async () => {
     return _cachedSuperAdminId;
 };
 
-// ─── Email Builder ─────────────────────────────────────────────────────────────
-const buildBillingEmail = (payment, client, dayType) => {
-    const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const monthName   = MONTH_NAMES[(payment.billingMonth || 1) - 1];
-    const year        = payment.billingYear;
-    const amount      = `₹${Number(payment.amount || 0).toLocaleString('en-IN')}`;
-    const invoice     = payment.invoiceNumber || `INV-${year}-${String(payment.billingMonth).padStart(2,'0')}`;
-    const dueDate     = payment.dueDate
-        ? new Date(payment.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-        : `${monthName} ${year}`;
+// ─── Shared Email Helpers ──────────────────────────────────────────────────────
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtINR      = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
+const fmtDateEmail = (d) => d
+    ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    : '';
+
+// Fetch company branding from GlobalSetting (cached per-call; these are tiny reads).
+const _fetchBrandingForEmail = async () => {
+    const GlobalSetting = require('../models/GlobalSetting');
+    const keys = ['company_name', 'company_address', 'company_gst', 'company_logo'];
+    const rows = await GlobalSetting.find({ key: { $in: keys } }).lean();
+    const map = {};
+    rows.forEach(r => { map[r.key] = r.value || ''; });
+    return {
+        name:    map.company_name    || '',
+        address: map.company_address || '',
+        gst:     map.company_gst     || '',
+        logo:    map.company_logo    || ''
+    };
+};
+
+// Shared email shell — keeps both invoice & receipt visually consistent.
+const _emailShell = (branding, headerBg, headerIcon, headerTitle, headerSubtitle, bodyHtml) => `
+<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;background:#f8fafc;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0;">
+  <!-- Header -->
+  <div style="background:${headerBg};padding:32px 40px;text-align:center;">
+    ${branding.logo ? `<img src="${branding.logo}" alt="${branding.name}" style="max-height:48px;margin-bottom:14px;border-radius:6px;" />` : ''}
+    ${branding.name && !branding.logo ? `<div style="color:rgba(255,255,255,0.9);font-size:13px;font-weight:600;letter-spacing:0.04em;margin-bottom:10px;text-transform:uppercase;">${branding.name}</div>` : ''}
+    <div style="font-size:36px;margin-bottom:8px;">${headerIcon}</div>
+    <h1 style="color:#fff;margin:0;font-size:22px;font-weight:700;">${headerTitle}</h1>
+    ${headerSubtitle ? `<p style="color:rgba(255,255,255,0.85);margin:6px 0 0;font-size:14px;">${headerSubtitle}</p>` : ''}
+  </div>
+  <!-- Body -->
+  <div style="padding:32px 40px;background:#fff;">
+    ${bodyHtml}
+  </div>
+  <!-- From Block -->
+  ${(branding.name || branding.address || branding.gst) ? `
+  <div style="padding:20px 40px;background:#f1f5f9;border-top:1px solid #e2e8f0;">
+    <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">From</div>
+    ${branding.name ? `<div style="font-size:14px;font-weight:700;color:#334155;">${branding.name}</div>` : ''}
+    ${branding.address ? `<div style="font-size:12px;color:#64748b;margin-top:2px;white-space:pre-line;">${branding.address}</div>` : ''}
+    ${branding.gst ? `<div style="font-size:12px;color:#64748b;margin-top:4px;">GSTIN: <strong>${branding.gst}</strong></div>` : ''}
+  </div>` : ''}
+  <!-- Footer -->
+  <div style="padding:16px 40px;text-align:center;font-size:11px;color:#94a3b8;background:#f8fafc;border-top:1px solid #e2e8f0;">
+    This is an automated notification${branding.name ? ` from ${branding.name}` : ''}. Please do not reply directly to this email.
+  </div>
+</div>`;
+
+// ─── Invoice / Due Email Builder ──────────────────────────────────────────────
+const buildBillingEmail = (payment, client, dayType, branding = {}) => {
+    const monthName = MONTH_NAMES[(payment.billingMonth || 1) - 1];
+    const year      = payment.billingYear;
+    const amount    = fmtINR(payment.amount);
+    const invoice   = payment.invoiceNumber || `INV-${year}-${String(payment.billingMonth).padStart(2,'0')}`;
+    const dueDate   = payment.dueDate ? fmtDateEmail(payment.dueDate) : `${monthName} ${year}`;
 
     const subjectMap = {
         day0:  `Invoice ${invoice} — ${monthName} ${year} | Amount Due: ${amount}`,
@@ -97,47 +145,122 @@ const buildBillingEmail = (payment, client, dayType) => {
         day10: `Final Reminder: Invoice ${invoice} | ${amount} — Please Respond`
     };
 
-    const bodyIntroMap = {
+    const introMap = {
         day0:  `Please find your invoice for <strong>${monthName} ${year}</strong> below.`,
         day5:  `This is a friendly reminder that your invoice for <strong>${monthName} ${year}</strong> is still pending.`,
         day7:  `This is a second reminder — your invoice for <strong>${monthName} ${year}</strong> is still awaiting payment.`,
-        day10: `This is your final notice. Your invoice for <strong>${monthName} ${year}</strong> remains unpaid.`
+        day10: `This is your <strong>final notice</strong>. Your invoice for <strong>${monthName} ${year}</strong> remains unpaid.`
     };
 
-    const subject = subjectMap[dayType] || subjectMap.day0;
-    const intro   = bodyIntroMap[dayType] || bodyIntroMap.day0;
+    const headerIcon = dayType === 'day0' ? '📄' : dayType === 'day10' ? '🔔' : '⏰';
+    const headerTitle = dayType === 'day0' ? 'New Invoice' : dayType === 'day10' ? 'Final Reminder' : 'Payment Reminder';
+    const headerBg = dayType === 'day10'
+        ? 'linear-gradient(135deg,#7f1d1d,#dc2626)'
+        : 'linear-gradient(135deg,#1e3a5f,#0f62fe)';
 
-    const html = `
-<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f9fafb;border-radius:12px;overflow:hidden;">
-  <div style="background:linear-gradient(135deg,#1e3a5f,#0f62fe);padding:32px 40px;text-align:center;">
-    <h1 style="color:#fff;margin:0;font-size:22px;font-weight:700;">
-      ${dayType === 'day0' ? '📄 New Invoice' : dayType === 'day10' ? '🔔 Final Reminder' : '⏰ Payment Reminder'}
-    </h1>
-  </div>
-  <div style="padding:32px 40px;background:#fff;">
-    <p style="color:#374151;font-size:15px;">Dear <strong>${client.name}</strong>,</p>
-    <p style="color:#374151;font-size:14px;">${intro}</p>
-    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:20px;margin:20px 0;">
-      <table style="width:100%;font-size:14px;color:#1e3a5f;">
-        <tr><td style="padding:5px 0;color:#6b7280;">Invoice No.</td><td style="text-align:right;font-weight:700;">${invoice}</td></tr>
-        <tr><td style="padding:5px 0;color:#6b7280;">Period</td><td style="text-align:right;">${monthName} ${year}</td></tr>
-        <tr><td style="padding:5px 0;color:#6b7280;">Due Date</td><td style="text-align:right;">${dueDate}</td></tr>
-        ${payment.billingAddressSnapshot ? `<tr><td style="padding:5px 0;color:#6b7280;">Bill To</td><td style="text-align:right;">${payment.billingAddressSnapshot}</td></tr>` : ''}
-        ${payment.gstNumberSnapshot ? `<tr><td style="padding:5px 0;color:#6b7280;">GST No.</td><td style="text-align:right;">${payment.gstNumberSnapshot}</td></tr>` : ''}
+    const bodyHtml = `
+    <p style="color:#374151;font-size:15px;margin:0 0 4px;">Dear <strong>${client.name}</strong>,</p>
+    <p style="color:#374151;font-size:14px;margin:0 0 20px;">${introMap[dayType] || introMap.day0}</p>
+
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:24px;margin:0 0 20px;">
+      <table style="width:100%;font-size:14px;color:#1e3a5f;border-collapse:collapse;">
+        <tr style="border-bottom:1px solid #bae6fd;">
+          <td style="padding:8px 0;color:#6b7280;">Invoice No.</td>
+          <td style="text-align:right;font-weight:700;">${invoice}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #bae6fd;">
+          <td style="padding:8px 0;color:#6b7280;">Billing Period</td>
+          <td style="text-align:right;">${monthName} ${year}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #bae6fd;">
+          <td style="padding:8px 0;color:#6b7280;">Due Date</td>
+          <td style="text-align:right;">${dueDate}</td>
+        </tr>
+        ${payment.billingAddressSnapshot ? `<tr style="border-bottom:1px solid #bae6fd;"><td style="padding:8px 0;color:#6b7280;">Billed To</td><td style="text-align:right;">${payment.billingAddressSnapshot}</td></tr>` : ''}
+        ${payment.gstNumberSnapshot ? `<tr style="border-bottom:1px solid #bae6fd;"><td style="padding:8px 0;color:#6b7280;">Client GST</td><td style="text-align:right;">${payment.gstNumberSnapshot}</td></tr>` : ''}
       </table>
-      <div style="border-top:2px solid #0f62fe;margin-top:12px;padding-top:12px;display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:16px;color:#1e3a5f;font-weight:700;">Total Due</span>
-        <span style="font-size:24px;color:#0f62fe;font-weight:800;">${amount}</span>
+      <div style="border-top:2px solid #0f62fe;margin-top:14px;padding-top:14px;text-align:center;">
+        <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">Total Amount Due</div>
+        <div style="font-size:28px;color:#0f62fe;font-weight:800;">${amount}</div>
       </div>
     </div>
-    <p style="color:#374151;font-size:13px;">Please process this payment and confirm. Contact us if you have any questions.</p>
-  </div>
-  <div style="background:#f9fafb;padding:20px 40px;text-align:center;font-size:12px;color:#9ca3af;">
-    This is an automated billing notification.
-  </div>
-</div>`;
 
+    <p style="color:#374151;font-size:13px;margin:0;">
+      Please process this payment at your earliest convenience. If you have any questions or need assistance, feel free to contact us.
+    </p>`;
+
+    const html = _emailShell(branding, headerBg, headerIcon, headerTitle, '', bodyHtml);
     const text = `Invoice ${invoice} | ${monthName} ${year} | Amount: ${amount} | Due: ${dueDate}`;
+
+    return { subject: subjectMap[dayType] || subjectMap.day0, html, text };
+};
+
+// ─── Payment Receipt / Confirmation Email Builder ─────────────────────────────
+const buildReceiptEmail = (payment, client, branding = {}) => {
+    const monthName = MONTH_NAMES[(payment.billingMonth || 1) - 1];
+    const year      = payment.billingYear;
+    const amount    = fmtINR(payment.amount);
+    const invoice   = payment.invoiceNumber || `INV-${year}-${String(payment.billingMonth).padStart(2,'0')}`;
+    const paidOn    = payment.receivedDate
+        ? fmtDateEmail(payment.receivedDate)
+        : fmtDateEmail(new Date());
+
+    const subject = `✅ Payment Confirmed — Thank You! | ${invoice}`;
+
+    const bodyHtml = `
+    <p style="color:#374151;font-size:15px;margin:0 0 4px;">Dear <strong>${client.name}</strong>,</p>
+    <p style="color:#374151;font-size:14px;margin:0 0 6px;">
+      Thank you for your prompt payment! 🙏 We have successfully received and verified your payment for
+      <strong>${monthName} ${year}</strong>.
+    </p>
+    <p style="color:#374151;font-size:14px;margin:0 0 20px;">
+      Your account is in good standing. Here is your payment receipt for your records:
+    </p>
+
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:24px;margin:0 0 20px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <span style="font-size:20px;">🧾</span>
+        <span style="font-size:16px;font-weight:700;color:#065f46;">Payment Receipt</span>
+      </div>
+      <table style="width:100%;font-size:14px;color:#1e3a5f;border-collapse:collapse;">
+        <tr style="border-bottom:1px solid #d1fae5;">
+          <td style="padding:8px 0;color:#6b7280;">Receipt / Invoice No.</td>
+          <td style="text-align:right;font-weight:700;">${invoice}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #d1fae5;">
+          <td style="padding:8px 0;color:#6b7280;">Billing Period</td>
+          <td style="text-align:right;">${monthName} ${year}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #d1fae5;">
+          <td style="padding:8px 0;color:#6b7280;">Payment Date</td>
+          <td style="text-align:right;">${paidOn}</td>
+        </tr>
+        ${payment.billingAddressSnapshot ? `<tr style="border-bottom:1px solid #d1fae5;"><td style="padding:8px 0;color:#6b7280;">Billed To</td><td style="text-align:right;">${payment.billingAddressSnapshot.replace(/\n/g, ', ')}</td></tr>` : ''}
+        ${payment.gstNumberSnapshot ? `<tr style="border-bottom:1px solid #d1fae5;"><td style="padding:8px 0;color:#6b7280;">Client GST</td><td style="text-align:right;">${payment.gstNumberSnapshot}</td></tr>` : ''}
+      </table>
+      <div style="border-top:2px solid #10b981;margin-top:14px;padding-top:14px;text-align:center;">
+        <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">Amount Paid</div>
+        <div style="font-size:28px;color:#10b981;font-weight:800;">${amount}</div>
+      </div>
+      <div style="background:#10b981;color:#fff;text-align:center;padding:10px 0;border-radius:8px;margin-top:16px;font-weight:700;font-size:14px;letter-spacing:0.05em;">
+        ✅ PAYMENT VERIFIED & CONFIRMED
+      </div>
+    </div>
+
+    <p style="color:#374151;font-size:13px;margin:0;">
+      Thank you for being a valued client! Please keep this receipt for your records.
+      If you have any questions, feel free to reach out to us anytime.
+    </p>`;
+
+    const html = _emailShell(
+        branding,
+        'linear-gradient(135deg,#064e3b,#10b981)',
+        '✅',
+        'Payment Received — Thank You!',
+        'Your payment has been confirmed and verified.',
+        bodyHtml
+    );
+    const text = `Payment Confirmed ✅ | Invoice: ${invoice} | Period: ${monthName} ${year} | Amount: ${amount} | Paid on: ${paidOn}`;
 
     return { subject, html, text };
 };
@@ -201,7 +324,9 @@ const processFollowUp = async (job, dayType) => {
     // ── Send Email (if enabled in config) ────────────────────────────────────
     if (config?.sendEmail !== false && client.email) {
         try {
-            const { subject, html, text } = buildBillingEmail(payment, client, dayType);
+            let branding = {};
+            try { branding = await _fetchBrandingForEmail(); } catch (e) { /* fallback to empty */ }
+            const { subject, html, text } = buildBillingEmail(payment, client, dayType, branding);
             await sendEmail({
                 to:            client.email,
                 subject,
@@ -353,89 +478,6 @@ const cancelAgencyBillFollowups = async (payment) => {
     }
 };
 
-// ─── Payment Receipt Builder ───────────────────────────────────────────────────
-// Called when a payment is marked received/confirmed.
-// Sends a professional "Payment Confirmed ✅" receipt email + WhatsApp notification.
-const buildReceiptEmail = (payment, client) => {
-    const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const monthName   = MONTH_NAMES[(payment.billingMonth || 1) - 1];
-    const year        = payment.billingYear;
-    const amount      = `₹${Number(payment.amount || 0).toLocaleString('en-IN')}`;
-    const invoice     = payment.invoiceNumber || `INV-${year}-${String(payment.billingMonth).padStart(2,'0')}`;
-    const paidOn      = payment.receivedDate
-        ? new Date(payment.receivedDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-        : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-
-    const subject = `✅ Payment Confirmed — ${invoice} | ${monthName} ${year}`;
-
-    const html = `
-<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f9fafb;border-radius:12px;overflow:hidden;">
-  <div style="background:linear-gradient(135deg,#064e3b,#10b981);padding:32px 40px;text-align:center;">
-    <div style="width:64px;height:64px;background:rgba(255,255,255,0.2);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;">
-      <span style="font-size:32px;">✅</span>
-    </div>
-    <h1 style="color:#fff;margin:0;font-size:22px;font-weight:700;">Payment Received!</h1>
-    <p style="color:#d1fae5;margin:6px 0 0;font-size:14px;">Your payment has been confirmed and verified.</p>
-  </div>
-  <div style="padding:32px 40px;background:#fff;">
-    <p style="color:#374151;font-size:15px;">Dear <strong>${client.name}</strong>,</p>
-    <p style="color:#374151;font-size:14px;">
-      Thank you! We have successfully received and verified your payment for
-      <strong>${monthName} ${year}</strong>. Please find your receipt details below.
-    </p>
-
-    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:24px;margin:20px 0;">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
-        <span style="font-size:20px;">🧾</span>
-        <span style="font-size:16px;font-weight:700;color:#065f46;">Payment Receipt</span>
-      </div>
-      <table style="width:100%;font-size:14px;color:#1e3a5f;border-collapse:collapse;">
-        <tr style="border-bottom:1px solid #d1fae5;">
-          <td style="padding:8px 0;color:#6b7280;">Receipt / Invoice No.</td>
-          <td style="text-align:right;font-weight:700;">${invoice}</td>
-        </tr>
-        <tr style="border-bottom:1px solid #d1fae5;">
-          <td style="padding:8px 0;color:#6b7280;">Billing Period</td>
-          <td style="text-align:right;">${monthName} ${year}</td>
-        </tr>
-        <tr style="border-bottom:1px solid #d1fae5;">
-          <td style="padding:8px 0;color:#6b7280;">Payment Date</td>
-          <td style="text-align:right;">${paidOn}</td>
-        </tr>
-        ${payment.billingAddressSnapshot ? `
-        <tr style="border-bottom:1px solid #d1fae5;">
-          <td style="padding:8px 0;color:#6b7280;">Billed To</td>
-          <td style="text-align:right;">${payment.billingAddressSnapshot.replace(/\n/g, ', ')}</td>
-        </tr>` : ''}
-        ${payment.gstNumberSnapshot ? `
-        <tr style="border-bottom:1px solid #d1fae5;">
-          <td style="padding:8px 0;color:#6b7280;">GST No.</td>
-          <td style="text-align:right;">${payment.gstNumberSnapshot}</td>
-        </tr>` : ''}
-        <tr>
-          <td style="padding:12px 0 0;font-size:15px;font-weight:700;color:#065f46;">Amount Paid</td>
-          <td style="text-align:right;font-size:22px;font-weight:800;color:#10b981;">${amount}</td>
-        </tr>
-      </table>
-      <div style="background:#10b981;color:#fff;text-align:center;padding:10px 0;border-radius:8px;margin-top:16px;font-weight:700;font-size:14px;letter-spacing:0.05em;">
-        ✅ PAYMENT VERIFIED & CONFIRMED
-      </div>
-    </div>
-
-    <p style="color:#374151;font-size:13px;">
-      Please keep this receipt for your records. If you have any questions, feel free to reach out.
-    </p>
-  </div>
-  <div style="background:#f9fafb;padding:20px 40px;text-align:center;font-size:12px;color:#9ca3af;">
-    This is an automated payment confirmation. Thank you for your business!
-  </div>
-</div>`;
-
-    const text = `Payment Confirmed ✅ | Invoice: ${invoice} | Period: ${monthName} ${year} | Amount: ${amount} | Paid on: ${paidOn}`;
-
-    return { subject, html, text };
-};
-
 // ─── sendPaymentReceipt — called from agencyFinanceController when payment confirmed ──
 // callerUserId: optional — when called from a controller, pass req.user.userId to
 // guarantee the logged-in user's email credentials are used instead of a DB lookup.
@@ -446,10 +488,14 @@ const sendPaymentReceipt = async (payment, client, callerUserId = null) => {
         return;
     }
 
+    // Fetch company branding for the email template
+    let branding = {};
+    try { branding = await _fetchBrandingForEmail(); } catch (e) { /* fallback to empty */ }
+
     // ── Email Receipt ────────────────────────────────────────────────────────────
     if (client.email) {
         try {
-            const { subject, html, text } = buildReceiptEmail(payment, client);
+            const { subject, html, text } = buildReceiptEmail(payment, client, branding);
             await sendEmail({
                 to:            client.email,
                 subject,
@@ -493,5 +539,6 @@ module.exports = {
     scheduleAgencyBillFollowups,
     cancelAgencyBillFollowups,
     buildBillingEmail,      // exported for manual send-bill endpoint
-    sendPaymentReceipt      // exported for payment confirmation receipt
+    sendPaymentReceipt,     // exported for payment confirmation receipt
+    _fetchBrandingForEmail  // exported so manual send-bill can pass branding
 };

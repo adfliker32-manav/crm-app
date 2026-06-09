@@ -4,17 +4,17 @@ const GlobalSetting = require('../models/GlobalSetting');
 
 // ─── AGENCY BRANDING HELPER ────────────────────────────────────────────────────
 // Fetches agency branding from GlobalSetting collection.
-// Keys: agency_name, agency_address, agency_gst, agency_logo_url
+// Unified keys: company_name, company_address, company_gst, company_logo
 const fetchAgencyBranding = async () => {
-    const keys = ['agency_name', 'agency_address', 'agency_gst', 'agency_logo_url'];
+    const keys = ['company_name', 'company_address', 'company_gst', 'company_logo'];
     const settings = await GlobalSetting.find({ key: { $in: keys } }).lean();
     const map = {};
     settings.forEach(s => { map[s.key] = s.value || ''; });
     return {
-        agencyName:    map.agency_name    || '',
-        agencyAddress: map.agency_address || '',
-        agencyGst:     map.agency_gst     || '',
-        agencyLogo:    map.agency_logo_url || ''
+        agencyName:    map.company_name    || '',
+        agencyAddress: map.company_address || '',
+        agencyGst:     map.company_gst     || '',
+        agencyLogo:    map.company_logo    || ''
     };
 };
 
@@ -386,8 +386,10 @@ exports.sendBillManually = async (req, res) => {
         // ── Send Email ────────────────────────────────────────────────────────────
         if (client.email) {
             try {
-                const { buildBillingEmail } = require('../services/agencyBillingQueue');
-                const { subject, html, text } = buildBillingEmail(payment, client, 'day0');
+                const { buildBillingEmail, _fetchBrandingForEmail } = require('../services/agencyBillingQueue');
+                let branding = {};
+                try { branding = await _fetchBrandingForEmail(); } catch (e) { /* fallback */ }
+                const { subject, html, text } = buildBillingEmail(payment, client, 'day0', branding);
                 const { sendEmail } = require('../services/emailService');
                 await sendEmail({
                     to:            client.email,

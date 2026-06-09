@@ -1425,7 +1425,7 @@ const AgencyFinanceView = () => {
                     <div className="flex-1 min-w-0">
                         <p className="text-xs font-bold text-slate-600">Centralized Invoice Branding</p>
                         <p className="text-[11px] text-slate-400">
-                            Your agency's logo, address, and GST number are loaded directly from the database's global settings keys (<code>agency_name</code>, <code>agency_address</code>, <code>agency_gst</code>, <code>agency_logo_url</code>) to ensure consistent formatting across all invoices.
+                            Your company logo, name, address, and GST are loaded from <strong>Global Settings → Company Branding</strong> (<code>company_name</code>, <code>company_address</code>, <code>company_gst</code>, <code>company_logo</code>) to ensure consistent formatting across all invoices and billing emails.
                         </p>
                     </div>
                 </div>

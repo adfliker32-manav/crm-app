@@ -5,8 +5,10 @@ const GlobalSettingsView = () => {
     const [settings, setSettings] = useState({
         app_name: '',
         support_email: '',
+        company_name: '',
         company_address: '',
         company_gst: '',
+        company_logo: '',
         maintenance_mode: false,
         trial_days_default: 14,
         whatsappSync: true,
@@ -133,16 +135,45 @@ const GlobalSettingsView = () => {
                     </div>
                 </div>
 
-                {/* Company Invoice Details Card */}
+                {/* Company Invoice / Branding Card */}
                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
                     <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2">
-                        <i className="fa-solid fa-file-invoice text-emerald-500"></i> Company Invoice Details
+                        <i className="fa-solid fa-file-invoice text-emerald-500"></i> Company Branding & Invoice Details
                     </h2>
                     <p className="text-sm text-slate-500 mb-4">
-                        These details appear as <strong>"Billed By"</strong> on every customer invoice. Set your registered company address and GST number.
+                        These details appear as <strong>"Billed By"</strong> on every customer invoice and billing email. Set your company name, logo, address, and GST number.
                     </p>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* Company Name */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Company Name</label>
+                            <input
+                                type="text"
+                                name="company_name"
+                                value={settings.company_name || ''}
+                                onChange={handleChange}
+                                placeholder="e.g. Adfliker Technologies Pvt. Ltd."
+                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition"
+                            />
+                            <p className="text-xs text-slate-400 mt-1">Displayed in email headers and invoice "From" block.</p>
+                        </div>
+
+                        {/* Company GST */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Company GST Number</label>
+                            <input
+                                type="text"
+                                name="company_gst"
+                                value={settings.company_gst || ''}
+                                onChange={handleChange}
+                                placeholder="e.g. 06AAAAA0000A1Z5"
+                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition font-mono uppercase"
+                            />
+                            <p className="text-xs text-slate-400 mt-1">Appears on the invoice under your company name.</p>
+                        </div>
+
+                        {/* Company Address - full width */}
                         <div className="md:col-span-2">
                             <label className="block text-sm font-medium text-slate-700 mb-1">Company Address</label>
                             <textarea
@@ -156,25 +187,91 @@ const GlobalSettingsView = () => {
                             <p className="text-xs text-slate-400 mt-1">Full registered address. Use line breaks for multi-line formatting on the invoice.</p>
                         </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Company GST Number</label>
-                            <input
-                                type="text"
-                                name="company_gst"
-                                value={settings.company_gst || ''}
-                                onChange={handleChange}
-                                placeholder="e.g. 06AAAAA0000A1Z5"
-                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition font-mono uppercase"
-                            />
-                            <p className="text-xs text-slate-400 mt-1">Appears on the invoice under your company name.</p>
+                        {/* Company Logo Upload - full width */}
+                        <div className="md:col-span-2">
+                            <label className="block text-sm font-medium text-slate-700 mb-2">Company Logo</label>
+                            <div className="flex items-start gap-6">
+                                {/* Preview */}
+                                <div className="flex-shrink-0">
+                                    {settings.company_logo ? (
+                                        <div className="relative group">
+                                            <div className="w-28 h-28 rounded-xl border-2 border-emerald-200 bg-white flex items-center justify-center overflow-hidden shadow-sm">
+                                                <img src={settings.company_logo} alt="Company Logo" className="max-w-full max-h-full object-contain p-2" />
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setSettings(prev => ({ ...prev, company_logo: '' }))}
+                                                className="absolute -top-2 -right-2 bg-red-500 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs hover:bg-red-600 transition shadow-md opacity-0 group-hover:opacity-100"
+                                                title="Remove logo"
+                                            >
+                                                <i className="fa-solid fa-times"></i>
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="w-28 h-28 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center text-slate-400">
+                                            <i className="fa-solid fa-image text-2xl mb-1"></i>
+                                            <span className="text-xs">No logo</span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Upload Zone */}
+                                <div className="flex-1">
+                                    <label
+                                        htmlFor="logo-upload"
+                                        className="cursor-pointer block border-2 border-dashed border-slate-300 rounded-xl p-5 text-center hover:border-emerald-400 hover:bg-emerald-50/30 transition"
+                                        onDragOver={(e) => e.preventDefault()}
+                                        onDrop={(e) => {
+                                            e.preventDefault();
+                                            const file = e.dataTransfer?.files?.[0];
+                                            if (file && file.type.startsWith('image/')) {
+                                                if (file.size > 500 * 1024) {
+                                                    setMessage({ type: 'error', text: 'Logo file must be under 500KB.' });
+                                                    return;
+                                                }
+                                                const reader = new FileReader();
+                                                reader.onload = (ev) => setSettings(prev => ({ ...prev, company_logo: ev.target.result }));
+                                                reader.readAsDataURL(file);
+                                            }
+                                        }}
+                                    >
+                                        <i className="fa-solid fa-cloud-arrow-up text-emerald-500 text-xl mb-2"></i>
+                                        <p className="text-sm text-slate-600">
+                                            <span className="font-semibold text-emerald-600">Click to upload</span> or drag & drop
+                                        </p>
+                                        <p className="text-xs text-slate-400 mt-1">PNG, JPG, SVG — Max 500KB</p>
+                                    </label>
+                                    <input
+                                        id="logo-upload"
+                                        type="file"
+                                        accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                                        className="hidden"
+                                        onChange={(e) => {
+                                            const file = e.target.files?.[0];
+                                            if (!file) return;
+                                            if (file.size > 500 * 1024) {
+                                                setMessage({ type: 'error', text: 'Logo file must be under 500KB.' });
+                                                return;
+                                            }
+                                            const reader = new FileReader();
+                                            reader.onload = (ev) => setSettings(prev => ({ ...prev, company_logo: ev.target.result }));
+                                            reader.readAsDataURL(file);
+                                            e.target.value = ''; // reset so same file can be re-selected
+                                        }}
+                                    />
+                                    <p className="text-xs text-slate-400 mt-2">
+                                        This logo appears in billing emails and invoice headers. Use a transparent-background logo for best results.
+                                    </p>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
-                    {!settings.company_address && (
+                    {!settings.company_name && !settings.company_address && (
                         <div className="mt-4 flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
                             <i className="fa-solid fa-triangle-exclamation text-amber-500 mt-0.5"></i>
                             <p className="text-sm text-amber-700">
-                                <strong>Not set yet.</strong> Every invoice will show the default fallback address until you fill this in.
+                                <strong>Not set yet.</strong> Every invoice and billing email will show empty branding until you fill in at least the company name and address.
                             </p>
                         </div>
                     )}

@@ -706,16 +706,16 @@ const runAgencyClientBillingSweep = async () => {
 
         const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-        // Fetch agency branding for invoice snapshots
-        const brandingKeys = ['agency_name', 'agency_address', 'agency_gst', 'agency_logo_url'];
+        // Fetch agency branding for invoice snapshots (unified company_* keys from Global Settings)
+        const brandingKeys = ['company_name', 'company_address', 'company_gst', 'company_logo'];
         const settings = await GlobalSetting.find({ key: { $in: brandingKeys } }).lean();
         const brandingMap = {};
         settings.forEach(s => { brandingMap[s.key] = s.value || ''; });
         const branding = {
-            agencyName:    brandingMap.agency_name    || '',
-            agencyAddress: brandingMap.agency_address || '',
-            agencyGst:     brandingMap.agency_gst     || '',
-            agencyLogo:    brandingMap.agency_logo_url || ''
+            agencyName:    brandingMap.company_name    || '',
+            agencyAddress: brandingMap.company_address || '',
+            agencyGst:     brandingMap.company_gst     || '',
+            agencyLogo:    brandingMap.company_logo    || ''
         };
 
         // Fetch all active clients to evaluate their billing schedule
