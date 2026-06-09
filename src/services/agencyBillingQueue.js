@@ -34,8 +34,8 @@ const getSuperAdminId = async () => {
         // Find configurations that actually have email or whatsapp integration configured
         const activeConfigs = await IntegrationConfig.find({
             $or: [
-                { 'email.emailUser': { $exists: true, $ne: null, $ne: 'null', $ne: '' } },
-                { 'whatsapp.accessToken': { $exists: true, $ne: null, $ne: '' } }
+                { 'email.emailUser': { $exists: true, $nin: [null, 'null', ''] } },
+                { 'whatsapp.accessToken': { $exists: true, $nin: [null, ''] } }
             ]
         }).select('userId').lean();
 

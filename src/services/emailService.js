@@ -30,7 +30,11 @@ const clearTransporterCache = (userId) => {
  * Get or create a Nodemailer transporter (with cache).
  */
 const getTransporter = (userCredentials = null, userId = null) => {
-    const cacheKey = userId || 'env-default';
+    // Cache key must distinguish: real user credentials vs env-fallback.
+    // If userId was provided but credential lookup returned null, key falls
+    // back to 'env-default' so we don't poison the userId cache slot with
+    // env credentials (which would shadow real creds once the user fixes them).
+    const cacheKey = (userId && userCredentials) ? userId : 'env-default';
 
     // Check cache first
     if (transporterCache.has(cacheKey)) {
@@ -185,10 +189,12 @@ const sendEmail = async (options) => {
         userCredentials = await getUserEmailCredentials(userId);
         if (userCredentials) {
             fromName = userCredentials.fromName;
+        } else {
+            console.warn(`⚠️ [EmailService] userId ${userId} provided but no credentials found in IntegrationConfig — falling back to env vars.`);
         }
     }
 
-    console.log(`[EmailService] Sending email to ${to} using userId: ${userId || 'default-env'}. Credentials resolved: ${userCredentials ? 'YES' : 'NO'}. SMTP User: ${userCredentials ? userCredentials.email : 'env-default'}`);
+    console.log(`[EmailService] Sending email to ${to} using userId: ${userId || 'default-env'}. Credentials resolved: ${userCredentials ? 'YES' : 'NO'}. SMTP User: ${userCredentials ? userCredentials.email : (process.env.EMAIL_USER || process.env.GMAIL_USER || 'NONE')}`);
 
     const transporter = getTransporter(userCredentials, userId);
     if (!transporter) {
