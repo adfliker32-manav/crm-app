@@ -390,6 +390,25 @@ const Billing = () => {
                 </div>
             )}
 
+            {/* Billing address prompt — nudge when address is empty and subscription is active/grace */}
+            {(isActive || isGrace) && !billingAddress && (
+                <div className="flex items-center justify-between bg-amber-50 border border-amber-200 p-4 rounded-xl gap-4">
+                    <div className="flex items-start gap-2">
+                        <i className="fa-solid fa-file-invoice text-amber-500 mt-0.5 flex-shrink-0" />
+                        <div>
+                            <p className="font-semibold text-amber-900 text-sm">Billing address missing</p>
+                            <p className="text-xs text-amber-700 mt-0.5">Add your company address and GST number so they appear on your subscription invoices.</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => document.getElementById('billing-details-section')?.scrollIntoView({ behavior: 'smooth' })}
+                        className="flex-shrink-0 bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                    >
+                        Add now
+                    </button>
+                </div>
+            )}
+
             {/* Status alerts */}
             {isPendingAuth && (
                 <div className="flex items-center justify-between bg-blue-50 border border-blue-200 p-4 rounded-xl gap-4">
@@ -542,7 +561,7 @@ const Billing = () => {
             </div>
 
             {/* Billing details */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5">
+            <div id="billing-details-section" className="bg-white border border-slate-200 rounded-2xl p-5">
                 <p className="text-sm font-semibold text-slate-900 mb-1">Billing details</p>
                 <p className="text-xs text-slate-500 mb-4">Set your GST number and billing address to appear on your subscription invoices.</p>
                 

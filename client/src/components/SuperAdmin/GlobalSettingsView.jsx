@@ -5,6 +5,8 @@ const GlobalSettingsView = () => {
     const [settings, setSettings] = useState({
         app_name: '',
         support_email: '',
+        company_address: '',
+        company_gst: '',
         maintenance_mode: false,
         trial_days_default: 14,
         whatsappSync: true,
@@ -129,6 +131,53 @@ const GlobalSettingsView = () => {
                             <p className="text-xs text-slate-500 mt-1">Applied to new company signups automatically.</p>
                         </div>
                     </div>
+                </div>
+
+                {/* Company Invoice Details Card */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                    <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2">
+                        <i className="fa-solid fa-file-invoice text-emerald-500"></i> Company Invoice Details
+                    </h2>
+                    <p className="text-sm text-slate-500 mb-4">
+                        These details appear as <strong>"Billed By"</strong> on every customer invoice. Set your registered company address and GST number.
+                    </p>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="md:col-span-2">
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Company Address</label>
+                            <textarea
+                                name="company_address"
+                                value={settings.company_address || ''}
+                                onChange={handleChange}
+                                placeholder={'e.g. Adfliker Technologies Pvt. Ltd.\n123 Business Park, Sector 18\nGurugram, Haryana 122001, India'}
+                                rows={3}
+                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition"
+                            />
+                            <p className="text-xs text-slate-400 mt-1">Full registered address. Use line breaks for multi-line formatting on the invoice.</p>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Company GST Number</label>
+                            <input
+                                type="text"
+                                name="company_gst"
+                                value={settings.company_gst || ''}
+                                onChange={handleChange}
+                                placeholder="e.g. 06AAAAA0000A1Z5"
+                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition font-mono uppercase"
+                            />
+                            <p className="text-xs text-slate-400 mt-1">Appears on the invoice under your company name.</p>
+                        </div>
+                    </div>
+
+                    {!settings.company_address && (
+                        <div className="mt-4 flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                            <i className="fa-solid fa-triangle-exclamation text-amber-500 mt-0.5"></i>
+                            <p className="text-sm text-amber-700">
+                                <strong>Not set yet.</strong> Every invoice will show the default fallback address until you fill this in.
+                            </p>
+                        </div>
+                    )}
                 </div>
 
                 {/* System Control Card */}
