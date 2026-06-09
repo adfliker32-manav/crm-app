@@ -4,7 +4,7 @@ const Plan = require('../models/Plan');
 const Subscription = require('../models/Subscription');
 const Payment = require('../models/Payment');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
-const cashfreeService = require('./cashfreeService');
+const razorpayService = require('./razorpayService');
 const billingEmailService = require('./billingEmailService');
 const auditLogger = require('./auditLogger');
 
@@ -38,13 +38,10 @@ const applyPlanToWorkspace = async (clientId, plan) => {
         activeModules: plan.activeModules || ['leads', 'team', 'reports'],
         planFeatures: {
             ...(plan.planFeatures || {}),
-            // Surface limits at top-level too for legacy code paths that read
-            // workspace.planFeatures.leadLimit directly (kept in sync).
-            leadLimit: plan.planFeatures?.leadLimit ?? 100,
+            leadLimit:  plan.planFeatures?.leadLimit  ?? 100,
             agentLimit: plan.planFeatures?.agentLimit ?? 3
         },
         subscriptionPlan: plan.name,
-        // Hard agentLimit mirror (separate top-level field on WorkspaceSettings)
         agentLimit: plan.planFeatures?.agentLimit ?? 5
     };
     return WorkspaceSettings.findOneAndUpdate(
@@ -55,10 +52,19 @@ const applyPlanToWorkspace = async (clientId, plan) => {
 };
 
 // ─── Start subscribe flow ──────────────────────────────────────────────────
-// Returns { subscription, authLink }. Called from POST /api/billing/me/subscribe.
-// Idempotent for the same (clientId, planCode) — if a pending_auth sub already
-// exists with the same plan, returns its authLink so the customer can resume.
-// amountOverride: optional — pass a discounted price when a coupon is applied.
+// Returns { subscription, razorpaySubscriptionId, keyId }.
+// Called from POST /api/billing/me/subscribe and /me/change-plan.
+//
+// Trial handling:
+//   If the tenant currently has an active trial (subscriptionStatus='trial' and
+//   planExpiryDate is in the future), we compute the remaining trial days and
+//   pass trialDays to Razorpay so the first charge is deferred until the trial
+//   ends. This means: mandate captured now → ₹0 charged today → first real
+//   charge on trial expiry date. The customer gets a seamless transition.
+//
+// Plan ID resolution:
+//   Razorpay Plan IDs (plan_XXXXXXX) are stored in the Plan MongoDB document
+//   (razorpayMonthlyPlanId / razorpayYearlyPlanId). NEVER hardcoded in code.
 const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amountOverride = null) => {
     const client = await User.findById(clientId);
     if (!client) throw new Error('Client not found');
@@ -69,79 +75,98 @@ const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amoun
     if (!plan) throw new Error(`Plan "${planCode}" not found or inactive`);
     if (plan.isCustom) throw new Error('Custom plans are not self-serve — SuperAdmin must provision them');
 
-    const baseAmount = cycle === 'yearly' ? (plan.yearlyPrice || plan.monthlyPrice * 12) : plan.monthlyPrice;
+    // ── Resolve Razorpay Plan ID from DB (never hardcoded) ──────────────────
+    const razorpayPlanId = cycle === 'yearly'
+        ? plan.razorpayYearlyPlanId
+        : plan.razorpayMonthlyPlanId;
+
+    if (!razorpayPlanId) {
+        const e = new Error(
+            `Razorpay plan ID not configured for "${plan.name}" (${cycle}). ` +
+            'SuperAdmin must set the razorpayMonthlyPlanId / razorpayYearlyPlanId on this plan.'
+        );
+        e.code = 'RAZORPAY_PLAN_NOT_CONFIGURED';
+        throw e;
+    }
+
+    const baseAmount = cycle === 'yearly'
+        ? (plan.yearlyPrice || plan.monthlyPrice * 12)
+        : plan.monthlyPrice;
     const amount = amountOverride !== null ? amountOverride : baseAmount;
-    // Use == null (not !amount) so a valid amountOverride of 0 is not rejected.
     if (amount == null || amount < 0) throw new Error('Plan amount is not set');
+
+    // ── Trial detection ────────────────────────────────────────────────────
+    // If the tenant is currently on a trial with days remaining, defer the
+    // first Razorpay charge until the trial expires (seamless transition).
+    let trialDays = 0;
+    const ws = await WorkspaceSettings.findOne({ userId: clientId }).select('subscriptionStatus planExpiryDate').lean();
+    if (ws?.subscriptionStatus === 'trial' && ws?.planExpiryDate) {
+        const trialMs = new Date(ws.planExpiryDate).getTime() - Date.now();
+        if (trialMs > 0) {
+            trialDays = Math.ceil(trialMs / 86400000); // days remaining in trial
+        }
+    }
 
     // Reuse an existing pending sub if one is open for this client.
     let sub = await Subscription.findOne({ clientId });
 
-    // Skip reuse when a coupon is applied — the stored session carries the old
-    // (full-price) mandate amount and must not be handed back discounted.
-    if (!amountOverride && sub && sub.status === 'pending_auth' && sub.planCode === plan.code && sub.billingCycle === cycle && sub.cashfreeSessionId) {
-        return { subscription: sub, sessionId: sub.cashfreeSessionId };
+    // Skip reuse when a coupon is applied (old session carries full-price mandate).
+    if (!amountOverride && sub && sub.status === 'pending_auth'
+        && sub.planCode === plan.code
+        && sub.billingCycle === cycle
+        && sub.razorpaySubscriptionId) {
+        return {
+            subscription: sub,
+            razorpaySubscriptionId: sub.razorpaySubscriptionId,
+            keyId: process.env.RAZORPAY_KEY_ID
+        };
     }
 
-    // Cancel any stale Cashfree sub from a previous attempt before starting fresh.
-    if (sub && sub.cashfreeSubscriptionId && ['pending_auth', 'active', 'grace'].includes(sub.status)) {
-        await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId);
+    // Cancel any stale Razorpay sub from a previous attempt before starting fresh.
+    if (sub && sub.razorpaySubscriptionId && ['pending_auth', 'active', 'grace'].includes(sub.status)) {
+        await razorpayService.cancelSubscription(sub.razorpaySubscriptionId, false);
     }
 
-    const ourSubId = `adf_${clientId.toString().slice(-8)}_${crypto.randomBytes(4).toString('hex')}`;
-
-    // Cashfree mandates require a real, dialable phone. Reject up-front with a
-    // clear message rather than sending a placeholder that Cashfree silently
-    // rejects (or worse, anchors the mandate to a bogus number).
+    // Phone validation — Razorpay uses it for SMS notifications.
     const rawPhone = (client.phone || '').replace(/[^\d]/g, '');
-    const phone = rawPhone.length > 10 ? rawPhone.slice(-10) : rawPhone; // strip country code if present
+    const phone = rawPhone.length > 10 ? rawPhone.slice(-10) : rawPhone;
     if (phone.length !== 10) {
         const e = new Error('A valid 10-digit mobile number is required before subscribing. Please add your phone number in Settings.');
         e.code = 'PHONE_REQUIRED';
         throw e;
     }
 
-    const cfResp = await cashfreeService.createSubscription({
-        subscriptionId: ourSubId,
-        customerName: client.companyName || client.name || client.email,
+    const rzpResp = await razorpayService.createSubscription({
+        razorpayPlanId,
         customerEmail: client.email,
         customerPhone: phone,
-        planName: `${plan.name} (${cycle})`,
-        amount,
-        cycle,
-        returnUrl: process.env.CASHFREE_RETURN_URL || `${process.env.FRONTEND_URL}/billing?cf_return=1`,
-        // BACKEND_URL must be a stable public HTTPS URL that Cashfree can POST webhooks to.
-        // In a monorepo (API + frontend on same domain), BACKEND_URL === FRONTEND_URL.
-        // Never use localhost or a dev tunnel here in production — Cashfree cannot reach them.
-        notifyUrl: `${process.env.BACKEND_URL || process.env.SERVER_URL || process.env.FRONTEND_URL}/api/billing/cashfree/webhook`
+        customerName:  client.companyName || client.name || client.email,
+        trialDays
     });
 
-    // The 2025-01-01 Subscriptions API returns a subscription_session_id (consumed
-    // by the Cashfree JS SDK's subscriptionsCheckout on the frontend) — NOT a
-    // redirect link. cf_subscription_id is Cashfree's own id (kept for webhook
-    // matching). Verified against the live sandbox response.
-    const sessionId = cfResp.subscription_session_id || cfResp.data?.subscription_session_id || null;
-    const cfSubscriptionId = cfResp.cf_subscription_id || cfResp.data?.cf_subscription_id || null;
+    // rzpResp.id        = sub_XXXXXXX  (key for Razorpay Checkout on frontend)
+    // rzpResp.short_url = hosted Razorpay link (fallback if popup blocked)
+    const rzpSubId  = rzpResp.id        || null;
+    const shortUrl  = rzpResp.short_url || null;
 
-    if (!sessionId) {
-        const e = new Error('Cashfree did not return a subscription_session_id. Check API credentials/version.');
-        e.code = 'CASHFREE_NO_SESSION';
+    if (!rzpSubId) {
+        const e = new Error('Razorpay did not return a subscription id. Check API credentials.');
+        e.code = 'RAZORPAY_NO_SUB_ID';
         throw e;
     }
 
     const upsert = {
         clientId,
         planCode: plan.code,
-        cashfreeSubscriptionId: ourSubId,
-        cfSubscriptionId,
-        cashfreeSessionId: sessionId,
-        cashfreeCustomerId: cfResp.customer_details?.customer_email || client.email,
-        status: 'pending_auth',
+        razorpaySubscriptionId: rzpSubId,
+        razorpayPlanId,
+        authLink: shortUrl,
+        status:   'pending_auth',
         amount,
         currency: 'INR',
         billingCycle: cycle,
         failedAttempts: 0,
-        rawCashfreePayload: cfResp
+        rawRazorpayPayload: rzpResp
     };
 
     sub = await Subscription.findOneAndUpdate(
@@ -150,34 +175,33 @@ const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amoun
         { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    // Pre-mark workspace state so the UI shows "Awaiting mandate authorization"
+    // Pre-mark workspace so the UI shows "Awaiting mandate authorization".
     await WorkspaceSettings.findOneAndUpdate(
         { userId: clientId },
         {
             $set: {
                 subscriptionStatus: 'pending_auth',
-                billingType: 'autodebit_cashfree',
+                billingType:   'autodebit_razorpay',
                 subscriptionId: sub._id
             }
         },
         { upsert: true, setDefaultsOnInsert: true }
     );
 
-    return { subscription: sub, sessionId };
+    return {
+        subscription: sub,
+        razorpaySubscriptionId: rzpSubId,
+        keyId: process.env.RAZORPAY_KEY_ID
+    };
 };
 
 // ─── Charge succeeded ──────────────────────────────────────────────────────
-// Called on SUBSCRIPTION_PAYMENT_SUCCESS webhook. Creates a Payment ledger row
-// (so existing FinanceView shows the charge) and extends planExpiryDate using
-// the stacking rule.
+// Called on subscription.charged webhook. Creates a Payment ledger row and
+// extends planExpiryDate using the stacking rule.
 //
-// IDEMPOTENT: Cashfree delivers webhooks at-least-once and retries on any
-// non-2xx, so the same PAYMENT_SUCCESS can arrive multiple times. We make the
-// ledger insert the single dedup gate — if a Payment row for this charge
-// already exists (unique index on cashfreePaymentId), we treat the event as
-// already processed and return WITHOUT extending the plan again. This is the
-// fix for the double-extension bug where replays kept pushing planExpiryDate
-// forward a full cycle each time.
+// IDEMPOTENT: Razorpay delivers webhooks at-least-once. The ledger insert
+// is the single dedup gate — if a Payment row for this razorpayPaymentId
+// already exists (unique index), we treat the event as already processed.
 const applyChargeSuccess = async (clientId, payload) => {
     const sub = await Subscription.findOne({ clientId });
     if (!sub) throw new Error(`No Subscription doc for clientId=${clientId}`);
@@ -185,79 +209,72 @@ const applyChargeSuccess = async (clientId, payload) => {
     const plan = await Plan.findOne({ code: sub.planCode });
     if (!plan) throw new Error(`Plan "${sub.planCode}" not found`);
 
-    // Cashfree nests the charge details differently across API versions — probe
-    // the documented containers (payment / data.payment / data.subscription_payment).
-    const pay = payload?.payment
-        || payload?.data?.payment
-        || payload?.data?.subscription_payment
-        || payload?.subscription_payment
-        || {};
-    const cfAmount = pay.payment_amount || pay.amount || sub.amount;
-    const mandateMethod = pay.payment_method || pay.method || sub.mandateMethod || 'upi';
+    // Razorpay webhook shape for subscription.charged:
+    //   payload.payload.payment.entity  → payment details
+    //   payload.payload.subscription.entity.id → sub id
+    const paymentEntity = payload?.payload?.payment?.entity || {};
+    const rzpAmount     = paymentEntity.amount ? paymentEntity.amount / 100 : sub.amount; // paise → rupees
+    const method        = paymentEntity.method || 'upi'; // 'upi' | 'card' | 'emandate' | 'nach'
+    const rzpPaymentId  = paymentEntity.id || null; // pay_XXXXXXX
 
-    // Stable dedup key. Prefer Cashfree's cf_payment_id; if a payload ever lacks
-    // it, derive a deterministic key from (subscription_id + charge cycle / time)
-    // so replays of that same event are still caught and not double-counted.
-    const cfPaymentId = pay.cf_payment_id || pay.payment_id || payload?.cf_payment_id || null;
-    const chargeTime = pay.payment_time || pay.charge_time || payload?.event_time || '';
-    const dedupKey = cfPaymentId || `${sub.cashfreeSubscriptionId}:${chargeTime || sub.nextChargeAt?.toISOString() || ''}`;
+    // Dedup key: prefer Razorpay's pay_XXXXXXX; fallback to sub+time composite.
+    const chargeTime = paymentEntity.created_at
+        ? new Date(paymentEntity.created_at * 1000).toISOString()
+        : '';
+    const dedupKey = rzpPaymentId || `${sub.razorpaySubscriptionId}:${chargeTime}`;
 
-    const ws = await WorkspaceSettings.findOne({ userId: clientId });
+    const wsNow = await WorkspaceSettings.findOne({ userId: clientId });
     const now = new Date();
-    // Always stack from the existing planExpiryDate when it is in the future.
-    // This correctly handles both renewals AND the first charge after a manual
-    // payment extension — previously "first charge" always started from now,
-    // potentially shortening access that was already extended offline.
-    const activationStart = (ws?.planExpiryDate && new Date(ws.planExpiryDate) > now)
-        ? new Date(ws.planExpiryDate)
+    const activationStart = (wsNow?.planExpiryDate && new Date(wsNow.planExpiryDate) > now)
+        ? new Date(wsNow.planExpiryDate)
         : now;
     const newExpiry = addCycle(activationStart, sub.billingCycle);
-    const client = await User.findById(clientId).select('email name companyName').lean();
+    const client = await User.findById(clientId).select('email name companyName phone').lean();
 
-    // Attempt the ledger insert FIRST and let the unique index arbitrate. A
-    // duplicate-key error means this exact charge was already applied — bail out
-    // so we never extend the plan or copy modules twice for one payment.
+    // Attempt the ledger insert FIRST — let the unique index arbitrate.
     try {
         await Payment.create({
             clientId,
-            clientName: client?.companyName || client?.name || '',
+            clientName:  client?.companyName || client?.name || '',
             clientEmail: client?.email || '',
-            clientRole: 'manager',
-            amount: Number(cfAmount),
-            currency: 'INR',
+            clientRole:  'manager',
+            amount:      Number(rzpAmount),
+            currency:    'INR',
             paymentDate: now,
             durationMonths: sub.billingCycle === 'yearly' ? 12 : 1,
             activationStart,
-            activationEnd: newExpiry,
-            paymentMethod: `cashfree_${String(mandateMethod).toLowerCase().includes('card') ? 'card'
-                : String(mandateMethod).toLowerCase().includes('nach') ? 'enach'
-                : 'upi'}`,
-            gateway: 'cashfree',
-            cashfreeSubscriptionId: sub.cashfreeSubscriptionId,
-            cashfreePaymentId: dedupKey,
-            reference: cfPaymentId || dedupKey,
-            notes: 'Autodebit (Cashfree subscription charge)'
+            activationEnd:  newExpiry,
+            paymentMethod: `razorpay_${
+                String(method).toLowerCase().includes('card')      ? 'card'      :
+                String(method).toLowerCase().includes('emandate')  ? 'emandate'  :
+                String(method).toLowerCase().includes('nach')      ? 'nach'      :
+                'upi'
+            }`,
+            gateway: 'razorpay',
+            razorpaySubscriptionId: sub.razorpaySubscriptionId,
+            razorpayPaymentId:      dedupKey,
+            reference: rzpPaymentId || dedupKey,
+            notes: 'Autodebit (Razorpay subscription charge)'
         });
     } catch (err) {
         // E11000 = duplicate key → charge already processed → idempotent no-op.
         if (err && err.code === 11000) {
             console.log(`↩️  [Autodebit] Duplicate charge webhook ignored (dedupKey=${dedupKey})`);
-            return { subscription: sub, newExpiry: ws?.planExpiryDate, deduped: true };
+            return { subscription: sub, newExpiry: wsNow?.planExpiryDate, deduped: true };
         }
         throw err;
     }
 
-    // First time we've seen this charge — flip subscription + workspace to active
-    // and copy plan modules over (single chokepoint: applyPlanToWorkspace).
+    // First time we've seen this charge — flip subscription + workspace to active.
     sub.status = 'active';
     sub.failedAttempts = 0;
-    sub.lastChargeAt = new Date();
-    sub.currentPeriodStart = new Date();
+    sub.lastChargeAt = now;
+    sub.currentPeriodStart = now;
     sub.currentPeriodEnd = newExpiry;
     sub.nextChargeAt = newExpiry;
-    sub.mandateMethod = mandateMethod;
-    sub.authLink = null; // mandate is live; no need to re-show auth link
-    sub.rawCashfreePayload = payload;
+    sub.mandateMethod = method;
+    sub.authLink = null; // mandate is live
+    sub.rawRazorpayPayload = payload;
     await sub.save();
 
     await applyPlanToWorkspace(clientId, plan);
@@ -265,47 +282,66 @@ const applyChargeSuccess = async (clientId, payload) => {
         { userId: clientId },
         {
             $set: {
-                planExpiryDate: newExpiry,
+                planExpiryDate:    newExpiry,
                 subscriptionStatus: 'active',
-                lastPaymentDate: new Date(),
-                autoDebitEnabled: true,
-                subscriptionId: sub._id
+                lastPaymentDate:   now,
+                autoDebitEnabled:  true,
+                subscriptionId:    sub._id
             }
         }
     );
 
-    // actor:null → logged as a System event. (Passing a fake {id:'system'} would
-    // fail the ObjectId cast on AuditLog.actorId and silently drop the entry.)
     auditLogger.log({
         actor: null,
-        actorName: 'System (Cashfree)',
+        actorName: 'System (Razorpay)',
         actionCategory: 'BILLING',
-        action: 'CASHFREE_CHARGE_SUCCESS',
+        action: 'RAZORPAY_CHARGE_SUCCESS',
         targetType: 'User',
         targetId: clientId,
         targetName: client?.companyName || client?.email,
-        details: { amount: cfAmount, planCode: sub.planCode, newExpiry }
+        details: { amount: rzpAmount, planCode: sub.planCode, newExpiry }
     });
 
-    // Receipt email — fire-and-forget so a slow/failed SMTP never blocks the webhook.
+    // Receipt email — fire-and-forget.
     billingEmailService.sendPaymentSuccess(client, {
         planName: plan.name,
-        amount: cfAmount,
-        cycle: sub.billingCycle,
+        amount:   rzpAmount,
+        cycle:    sub.billingCycle,
         newExpiry
     }).catch(err => console.error('[BillingEmail] success email failed:', err.message));
+
+    // WhatsApp Receipt — fire-and-forget template message (if configured).
+    if (client?.phone) {
+        (async () => {
+            try {
+                const BillingReminderConfig = require('../models/BillingReminderConfig');
+                const config       = await BillingReminderConfig.findOne().lean();
+                const templateName = config?.receiptTemplateName;
+                const langCode     = config?.receiptLanguageCode || 'en';
+                if (templateName) {
+                    const { sendWhatsAppTemplateMessage } = require('./whatsappService');
+                    const admin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
+                    if (admin?._id) {
+                        await sendWhatsAppTemplateMessage(
+                            client.phone, templateName, langCode, [], admin._id,
+                            { isAutomated: true, triggerType: 'payment_receipt' }
+                        );
+                    }
+                }
+            } catch (err) {
+                console.error('❌ [BillingWA] WhatsApp receipt failed:', err.message);
+            }
+        })().catch(err => console.error('❌ [BillingWA] Background error:', err.message));
+    }
 
     return { subscription: sub, newExpiry };
 };
 
-// ─── Mandate authorized (ACTIVATED) ────────────────────────────────────────
-// Fires the instant the customer authorizes the mandate — BEFORE the first
-// charge settles. We grant access immediately so a resubscribing (read-only)
-// customer isn't stuck waiting for the first debit: apply the plan's modules,
-// flip to active, and set a SHORT provisional expiry (a couple of days). The
-// first SUBSCRIPTION_PAYMENT_SUCCESS then overwrites this with the real paid
-// period (see isFirstCharge in applyChargeSuccess) and records the ledger row.
-// If the first charge never lands, the provisional window lapses → read-only.
+// ─── Mandate authorized (subscription.activated) ───────────────────────────
+// Fires the instant the customer completes Razorpay Checkout — BEFORE the first
+// charge settles. We grant provisional access immediately so a re-subscribing
+// customer isn't gated waiting for the first debit. The first
+// subscription.charged webhook then overwrites this with the real paid period.
 const ACTIVATION_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
 const applyActivation = async (clientId) => {
     const sub = await Subscription.findOne({ clientId });
@@ -319,8 +355,6 @@ const applyActivation = async (clientId) => {
 
     if (plan) await applyPlanToWorkspace(clientId, plan);
 
-    // Provisional access window — but keep a longer existing expiry (e.g. the
-    // remaining free trial) if it is further out than the provisional grant.
     const ws = await WorkspaceSettings.findOne({ userId: clientId }).select('planExpiryDate').lean();
     const provisional = new Date(Date.now() + ACTIVATION_GRACE_MS);
     const existing = ws?.planExpiryDate ? new Date(ws.planExpiryDate) : null;
@@ -331,34 +365,38 @@ const applyActivation = async (clientId) => {
         {
             $set: {
                 subscriptionStatus: 'active',
-                autoDebitEnabled: true,
-                planExpiryDate: expiry,
-                subscriptionId: sub._id
+                autoDebitEnabled:   true,
+                planExpiryDate:     expiry,
+                subscriptionId:     sub._id
             }
         }
     );
     return sub;
 };
 
-// ─── Charge failed ─────────────────────────────────────────────────────────
-// Called on SUBSCRIPTION_PAYMENT_FAILED webhook. We bump the attempt counter.
-// If Cashfree has flagged the subscription as ON_HOLD (its terminal failure
-// state — happens after retries are exhausted), we move the tenant into the
-// 'grace' state so the UI shows a payment-overdue banner.
-const applyChargeFailure = async (clientId, payload) => {
+// ─── Charge failed / subscription halted ─────────────────────────────────────
+// Called on subscription.halted (Razorpay gave up after all retries) or
+// subscription.pending (single attempt failed, retries still pending).
+//
+// ── RECOVERY FLOW ──
+// When Razorpay halts a subscription the customer's card/UPI is no longer
+// valid. We must proactively contact them with a way to update their payment
+// method — otherwise they'll lose access silently and churn.
+//
+// Recovery actions (all fire-and-forget):
+//   1. Email  → billingEmailService.sendPaymentFailed()  (with "Update payment" CTA)
+//   2. WhatsApp → payment_failed template (if configured in BillingReminderConfig)
+//   3. In-app → subscriptionStatus='grace' causes the Billing page banner to render
+const applyChargeFailure = async (clientId, payload, isHalted = false) => {
     const sub = await Subscription.findOne({ clientId });
     if (!sub) return null;
 
     sub.failedAttempts = (sub.failedAttempts || 0) + 1;
-    sub.rawCashfreePayload = payload;
+    sub.rawRazorpayPayload = payload;
 
-    const cfStatus = (payload?.subscription?.subscription_status
-        || payload?.data?.subscription?.subscription_status
-        || payload?.data?.subscription_details?.subscription_status
-        || payload?.subscription_status
-        || '').toUpperCase();
-
-    const enteredGrace = cfStatus === 'ON_HOLD' || cfStatus === 'BANK_APPROVAL_PENDING' || sub.failedAttempts >= 3;
+    // subscription.halted = Razorpay has exhausted all retries → enter grace.
+    // subscription.pending = single attempt failed, retries still in progress.
+    const enteredGrace = isHalted || sub.failedAttempts >= 3;
     if (enteredGrace) {
         sub.status = 'grace';
         await WorkspaceSettings.findOneAndUpdate(
@@ -366,30 +404,66 @@ const applyChargeFailure = async (clientId, payload) => {
             { $set: { subscriptionStatus: 'grace' } }
         );
     }
-
     await sub.save();
 
-    // Notify the customer their charge failed (fire-and-forget). To avoid spamming
-    // an email on every Cashfree retry webhook, we only send on the FIRST failure
-    // (immediate heads-up) and when the subscription enters grace (final warning).
+    // ── Notify customer only on first failure and when entering grace ────────
+    // Avoids spamming on every Razorpay retry webhook while still giving
+    // immediate heads-up and a final warning with the payment update CTA.
     if (sub.failedAttempts === 1 || enteredGrace) {
-        const client = await User.findById(clientId).select('email name companyName').lean();
-        const plan = await Plan.findOne({ code: sub.planCode }).select('name').lean();
+        const client = await User.findById(clientId).select('email name companyName phone').lean();
+        const plan   = await Plan.findOne({ code: sub.planCode }).select('name').lean();
+
+        // 1. Email with "Update payment method" CTA
         billingEmailService.sendPaymentFailed(client, {
             planName: plan?.name,
             amount: sub.amount,
             inGrace: enteredGrace
         }).catch(err => console.error('[BillingEmail] failure email failed:', err.message));
+
+        // 2. WhatsApp notification (fire-and-forget)
+        if (client?.phone) {
+            (async () => {
+                try {
+                    const BillingReminderConfig = require('../models/BillingReminderConfig');
+                    const config       = await BillingReminderConfig.findOne().lean();
+                    const templateName = config?.paymentFailedTemplateName;
+                    const langCode     = config?.paymentFailedLanguageCode || 'en';
+                    if (templateName) {
+                        const { sendWhatsAppTemplateMessage } = require('./whatsappService');
+                        const admin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
+                        if (admin?._id) {
+                            await sendWhatsAppTemplateMessage(
+                                client.phone, templateName, langCode, [], admin._id,
+                                { isAutomated: true, triggerType: 'payment_failed' }
+                            );
+                            console.log(`💬 [BillingWA] Payment-failed WA sent to ${client.phone}`);
+                        }
+                    }
+                } catch (err) {
+                    console.error('❌ [BillingWA] Payment-failed WhatsApp failed:', err.message);
+                }
+            })().catch(err => console.error('❌ [BillingWA] Background error:', err.message));
+        }
+
+        auditLogger.log({
+            actor: null,
+            actorName: 'System (Razorpay)',
+            actionCategory: 'BILLING',
+            action: enteredGrace ? 'RAZORPAY_SUBSCRIPTION_HALTED' : 'RAZORPAY_CHARGE_FAILED',
+            targetType: 'User',
+            targetId: clientId,
+            targetName: client?.companyName || client?.email,
+            details: { failedAttempts: sub.failedAttempts, enteredGrace }
+        });
     }
 
     return sub;
 };
 
 // ─── Cancellation ──────────────────────────────────────────────────────────
-// Called on SUBSCRIPTION_CANCELLED webhook OR by /me/cancel route.
-// We do NOT downgrade modules immediately — the customer keeps the access
-// they already paid for through currentPeriodEnd; the daily sweep flips them
-// to expired when planExpiryDate + grace passes.
+// Called on subscription.cancelled webhook OR by /me/cancel route.
+// We do NOT downgrade modules immediately — the customer keeps access until
+// currentPeriodEnd; the daily sweep flips them expired when planExpiryDate passes.
 const applyCancellation = async (clientId, payload = null, reason = '') => {
     const sub = await Subscription.findOne({ clientId });
     if (!sub) return null;
@@ -397,30 +471,22 @@ const applyCancellation = async (clientId, payload = null, reason = '') => {
     sub.status = 'cancelled';
     sub.cancelledAt = new Date();
     if (reason) sub.cancelReason = reason;
-    if (payload) sub.rawCashfreePayload = payload;
+    if (payload) sub.rawRazorpayPayload = payload;
     await sub.save();
 
-    // Turn off the autodebit flag so the UI reflects the cancellation immediately.
-    // Keep planExpiryDate + subscriptionStatus alone — the customer keeps the
-    // access they already paid for until the period ends (the sweep flips them to
-    // expired/read-only once planExpiryDate passes).
     await WorkspaceSettings.findOneAndUpdate(
         { userId: clientId },
         { $set: { autoDebitEnabled: false } }
     );
-
     return sub;
 };
 
 // ─── Enforce downgrade (mark expired) ──────────────────────────────────────
-// Triggered by cron when planExpiryDate + grace has elapsed for a cancelled/
-// grace subscription. This is the "if payment not cut → downgrade" path.
-//
-// READ-ONLY MODEL: we do NOT strip activeModules here. The account is already
-// read-only via the planExpiryDate lapse check in authMiddleware (writes blocked,
-// reads allowed), so the user keeps SEEING every module — just inert — until they
-// pay. Stripping modules would hide them, contradicting "show all but disabled".
-// We only flip the subscription to expired + turn off autodebit for reporting.
+// Triggered by cron when planExpiryDate + grace has elapsed for a cancelled /
+// grace subscription. READ-ONLY MODEL: we do NOT strip activeModules here —
+// the account is already read-only via the planExpiryDate lapse check in
+// authMiddleware. Stripping modules would hide them, contradicting
+// "show all but disabled".
 const enforceDowngrade = async (clientId) => {
     const client = await User.findById(clientId).select('email companyName name').lean();
     await WorkspaceSettings.findOneAndUpdate(
@@ -428,11 +494,10 @@ const enforceDowngrade = async (clientId) => {
         {
             $set: {
                 subscriptionStatus: 'expired',
-                autoDebitEnabled: false
+                autoDebitEnabled:   false
             }
         }
     );
-
     auditLogger.log({
         actor: null,
         actorName: 'System (Autodebit sweep)',
@@ -445,14 +510,13 @@ const enforceDowngrade = async (clientId) => {
     });
 };
 
-// ─── Change plan (upgrade / downgrade) ─────────────────────────────────────
-// Cancels the current Cashfree sub, creates a new one at the new tier price,
-// returns a fresh authLink. The new mandate must be re-authorized by the
-// customer. Modules update on first successful charge (applyChargeSuccess).
+// ─── Change plan ────────────────────────────────────────────────────────────
+// Cancels the current Razorpay sub immediately, creates a new one at the new
+// tier. The new mandate must be re-authorized by the customer via Checkout.
 const changePlan = async (clientId, newPlanCode, cycle = 'monthly', amountOverride = null) => {
     const sub = await Subscription.findOne({ clientId });
-    if (sub?.cashfreeSubscriptionId && sub.status !== 'cancelled') {
-        await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId);
+    if (sub?.razorpaySubscriptionId && sub.status !== 'cancelled') {
+        await razorpayService.cancelSubscription(sub.razorpaySubscriptionId, false);
     }
     return initiateSubscription(clientId, newPlanCode, cycle, amountOverride);
 };

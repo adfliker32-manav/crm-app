@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
-import { openSubscriptionCheckout } from '../services/cashfree';
+import { openSubscriptionCheckout } from '../services/razorpay';
 
 const fmt = (n) => (n ?? 0).toLocaleString('en-IN');
 
@@ -118,20 +118,30 @@ const Plans = () => {
         try {
             const endpoint = hasSubscription ? '/billing/me/change-plan' : '/billing/me/subscribe';
             const body = { planCode, cycle };
-            // Only send couponCode when the coupon is actually valid for this plan
             if (couponResult?.type === 'discount' && couponAppliesToPlan(planCode)) {
                 body.couponCode = couponInput.trim();
             }
 
             const res = await api.post(endpoint, body);
-            const sessionId = res.data?.subscriptionSessionId;
-            if (sessionId) {
-                await openSubscriptionCheckout({ sessionId, mode: res.data?.mode || 'sandbox', redirectTarget: '_self' });
+            const rzpSubId = res.data?.razorpaySubscriptionId;
+            const keyId    = res.data?.keyId;
+
+            if (rzpSubId && keyId) {
+                // Open Razorpay popup inline — page does NOT reload
+                await openSubscriptionCheckout({
+                    razorpaySubscriptionId: rzpSubId,
+                    keyId,
+                    planName: plans.find(p => p.code === planCode)?.name || planCode,
+                    onSuccess: () => navigate('/billing'),
+                    onDismiss: () => navigate('/billing')
+                });
             } else {
                 showError('Could not start payment authorization. Please try again.');
             }
         } catch (err) {
-            showError(err.response?.data?.message || err.message || 'Could not start subscription');
+            if (!err.message?.includes('closed by user')) {
+                showError(err.response?.data?.message || err.message || 'Could not start subscription');
+            }
         } finally {
             setSubmittingCode(null);
         }
@@ -378,7 +388,7 @@ const Plans = () => {
                 </div>
 
                 <p className="text-center text-xs text-slate-400 mt-10">
-                    Secure payments powered by Cashfree Payments India. Cancel anytime from the Billing page.
+                    Secure payments powered by Razorpay. Cancel anytime from the Billing page.
                 </p>
             </div>
         </div>

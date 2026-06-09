@@ -22,11 +22,11 @@ const workspaceSettingsSchema = new mongoose.Schema({
     },
     billingType: {
         type: String,
-        enum: ['trial', 'paid_by_agency', 'paid_direct', 'autodebit_cashfree'],
+        enum: ['trial', 'paid_by_agency', 'paid_direct', 'autodebit_razorpay'],
         default: 'trial'
     },
 
-    // Cashfree autodebit linkage (set when manager subscribes to a tier).
+    // Razorpay autodebit linkage (set when manager subscribes to a tier).
     // Source-of-truth for plan state stays on this doc (planExpiryDate,
     // subscriptionStatus, activeModules); these fields are pointers + flag.
     currentPlanCode: {
@@ -58,6 +58,14 @@ const workspaceSettingsSchema = new mongoose.Schema({
     monthlyRevenue: {
         type: Number,
         default: 0
+    },
+    billingAddress: {
+        type: String,
+        default: ''
+    },
+    gstNumber: {
+        type: String,
+        default: ''
     },
 
     // 💰 AGENCY MARKUP CONFIG (For Resellers)

@@ -89,7 +89,7 @@ const recordPayment = async (req, res) => {
         // Build the workspace update. Status flips to 'active' so the lapse check
         // (and frontend banners) reflect the paid state — restoring full access
         // instantly for a previously read-only (lapsed) account.
-        // Exception: if the client has an open Cashfree mandate awaiting authorization
+        // Exception: if the client has an open Razorpay mandate awaiting authorization
         // (pending_auth), keep that status so the UI shows the correct pending state;
         // the expiry extension still takes effect immediately.
         const workspaceSet = {

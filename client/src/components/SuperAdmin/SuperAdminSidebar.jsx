@@ -14,7 +14,7 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
         const fetchUnread = () => {
             api.get('/support/admin/unread')
                 .then(r => setSupportUnread(r.data.unreadCount || 0))
-                .catch(() => {});
+                .catch(() => { });
         };
         fetchUnread();
         const interval = setInterval(fetchUnread, 60 * 1000);
@@ -25,7 +25,7 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
         if (!socket) return;
         const bump = () => setSupportUnread(c => c + 1);
         const recount = () => {
-            api.get('/support/admin/unread').then(r => setSupportUnread(r.data.unreadCount || 0)).catch(() => {});
+            api.get('/support/admin/unread').then(r => setSupportUnread(r.data.unreadCount || 0)).catch(() => { });
         };
         socket.on('support:newTicket', bump);
         socket.on('support:newMessage', recount);
@@ -42,20 +42,44 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
         if (activeView === 'support') setSupportUnread(0);
     }, [activeView]);
 
-    const menuItems = [
-        { id: 'dashboard',          icon: 'fa-chart-line',             label: 'Dashboard',           color: 'text-blue-600'  },
-        { id: 'approvals',          icon: 'fa-shield-check',           label: 'Account Approvals',   color: 'text-amber-600 font-semibold' },
-        { id: 'agencies',           icon: 'fa-network-wired',          label: 'Agencies',            color: 'text-purple-600' },
-        { id: 'direct-clients',     icon: 'fa-user-tie',               label: 'Direct Clients',      color: 'text-emerald-600' },
-        { id: 'finance',            icon: 'fa-sack-dollar',            label: 'Finance',             color: 'text-emerald-500 font-bold' },
-        { id: 'plans',              icon: 'fa-layer-group',            label: 'Plan Catalog',        color: 'text-indigo-500 font-semibold' },
-        { id: 'coupons',            icon: 'fa-tag',                    label: 'Coupon Codes',        color: 'text-pink-500 font-semibold' },
-        { id: 'support',            icon: 'fa-life-ring',              label: 'Support Inbox',       color: 'text-orange-500', badge: supportUnread },
-        { id: 'system-health',      icon: 'fa-heartbeat',              label: 'System Health',       color: 'text-cyan-500'  },
-        { id: 'audit-logs',         icon: 'fa-terminal',               label: 'Command Center',      color: 'text-rose-500'  },
-        { id: 'emergency-controls', icon: 'fa-triangle-exclamation',   label: 'Emergency Controls',  color: 'text-red-500 font-bold bg-red-900/20' },
-        { id: 'settings',           icon: 'fa-cog',                    label: 'Global Settings',     color: 'text-slate-600' },
+    const menuSections = [
+        {
+            label: null, // no label for the first group
+            items: [
+                { id: 'dashboard', icon: 'fa-chart-line', label: 'Dashboard', color: 'text-blue-600' },
+            ]
+        },
+        {
+            label: 'Business',
+            items: [
+                { id: 'approvals', icon: 'fa-shield-check', label: 'Account Approvals', color: 'text-amber-600 font-semibold' },
+                { id: 'agencies', icon: 'fa-network-wired', label: 'Agencies', color: 'text-purple-600' },
+                { id: 'direct-clients', icon: 'fa-user-tie', label: 'Direct Clients', color: 'text-emerald-600' },
+                { id: 'finance', icon: 'fa-sack-dollar', label: 'Billing & Finance', color: 'text-emerald-500 font-bold' },
+                { id: 'plans', icon: 'fa-layer-group', label: 'Plan Catalog', color: 'text-indigo-500 font-semibold' },
+                { id: 'coupons', icon: 'fa-tag', label: 'Coupon Codes', color: 'text-pink-500 font-semibold' },
+                { id: 'support', icon: 'fa-life-ring', label: 'Support Inbox', color: 'text-orange-500', badge: supportUnread },
+            ]
+        },
+        {
+            label: 'Communication',
+            items: [
+                { id: 'wa-inbox', icon: 'fa-brands fa-whatsapp', label: 'WhatsApp Inbox', color: 'text-green-400' },
+                { id: 'email-inbox', icon: 'fa-envelope', label: 'Email Inbox', color: 'text-blue-400' },
+                { id: 'comm-settings', icon: 'fa-satellite-dish', label: 'Communication Setup', color: 'text-violet-400' },
+            ]
+        },
+        {
+            label: 'System',
+            items: [
+                { id: 'system-health', icon: 'fa-heartbeat', label: 'System Health', color: 'text-cyan-500' },
+                { id: 'audit-logs', icon: 'fa-terminal', label: 'Command Center', color: 'text-rose-500' },
+                { id: 'emergency-controls', icon: 'fa-triangle-exclamation', label: 'Emergency Controls', color: 'text-red-500 font-bold bg-red-900/20' },
+                { id: 'settings', icon: 'fa-cog', label: 'Global Settings', color: 'text-slate-600' },
+            ]
+        }
     ];
+
 
 
     const handleLogout = () => {
@@ -80,29 +104,41 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
 
             {/* Navigation Menu — overflow-y so items scroll inside the sidebar
                 rather than spilling and clipping the Logout footer on short viewports */}
-            <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
-                {menuItems.map((item) => (
-                    <button
-                        key={item.id}
-                        onClick={() => setActiveView(item.id)}
-                        className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeView === item.id
-                            ? 'bg-white text-slate-900 shadow-lg transform scale-105'
-                            : 'text-slate-300 hover:bg-slate-700 hover:text-white'
-                            }`}
-                    >
-                        <i className={`fa-solid ${item.icon} ${activeView === item.id ? item.color : ''}`}></i>
-                        <span className="font-medium">{item.label}</span>
-                        {item.badge > 0 && (
-                            <span className="ml-auto bg-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
-                                {item.badge}
-                            </span>
+            <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+                {menuSections.map((section, sIdx) => (
+                    <div key={sIdx} className={sIdx > 0 ? 'mt-5' : ''}>
+                        {section.label && (
+                            <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold px-4 mb-2">
+                                {section.label}
+                            </p>
                         )}
-                        {activeView === item.id && !item.badge && (
-                            <i className="fa-solid fa-chevron-right ml-auto text-sm"></i>
-                        )}
-                    </button>
+                        <div className="space-y-1">
+                            {section.items.map((item) => (
+                                <button
+                                    key={item.id}
+                                    onClick={() => setActiveView(item.id)}
+                                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeView === item.id
+                                        ? 'bg-white text-slate-900 shadow-lg transform scale-105'
+                                        : 'text-slate-300 hover:bg-slate-700 hover:text-white'
+                                        }`}
+                                >
+                                    <i className={`${item.icon.includes(' ') ? item.icon : `fa-solid ${item.icon}`} ${activeView === item.id ? item.color : ''}`}></i>
+                                    <span className="font-medium">{item.label}</span>
+                                    {item.badge > 0 && (
+                                        <span className="ml-auto bg-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
+                                            {item.badge}
+                                        </span>
+                                    )}
+                                    {activeView === item.id && !item.badge && (
+                                        <i className="fa-solid fa-chevron-right ml-auto text-sm"></i>
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                 ))}
             </nav>
+
 
             {/* Footer Actions */}
             <div className="p-4 border-t border-slate-700 flex-shrink-0">

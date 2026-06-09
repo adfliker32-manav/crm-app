@@ -11,6 +11,7 @@ import RecordPaymentModal from './RecordPaymentModal';
 import RecordExpenseModal from './RecordExpenseModal';
 import AutodebitView from './AutodebitView';
 import AgencyFinanceView from './AgencyFinanceView';
+import BillingReminderSetup from './BillingReminderSetup';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend, Filler);
 
@@ -295,7 +296,7 @@ const PaymentsTab = ({ payments, loading, onDelete, onRecord }) => (
                                         <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-full font-bold">
                                             {p.paymentMethod}
                                         </span>
-                                        {p.gateway === 'cashfree' ? (
+                                        {p.gateway === 'razorpay' ? (
                                             <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-bold text-[9px] uppercase">
                                                 <i className="fa-solid fa-bolt mr-1" />Autodebit
                                             </span>
@@ -512,11 +513,12 @@ const FinanceView = () => {
     };
 
     const tabs = [
-        { id: 'overview',  label: 'Overview',  icon: 'fa-chart-pie',          color: 'text-indigo-600' },
-        { id: 'payments',  label: 'Payments',  icon: 'fa-indian-rupee-sign',  color: 'text-emerald-600' },
-        { id: 'autodebit', label: 'Autodebit', icon: 'fa-credit-card',        color: 'text-blue-600' },
-        { id: 'expenses',  label: 'Expenses',  icon: 'fa-receipt',            color: 'text-rose-600' },
-        { id: 'agency',    label: 'My Agency', icon: 'fa-briefcase',          color: 'text-violet-600' }
+        { id: 'overview',          label: 'Overview',          icon: 'fa-chart-pie',         color: 'text-indigo-600' },
+        { id: 'payments',          label: 'Payments',          icon: 'fa-indian-rupee-sign', color: 'text-emerald-600' },
+        { id: 'autodebit',         label: 'Autodebit',         icon: 'fa-credit-card',       color: 'text-blue-600' },
+        { id: 'expenses',          label: 'Expenses',          icon: 'fa-receipt',           color: 'text-rose-600' },
+        { id: 'agency',            label: 'My Agency',         icon: 'fa-briefcase',         color: 'text-violet-600' },
+        { id: 'billing-settings',  label: 'Billing Settings',  icon: 'fa-gear',              color: 'text-slate-600' },
     ];
 
     return (
@@ -524,10 +526,10 @@ const FinanceView = () => {
             {/* Header */}
             <div className="flex flex-col md:flex-row justify-between md:items-center gap-3">
                 <div>
-                    <h1 className="text-3xl font-black text-slate-900 tracking-tight">Finance Manager</h1>
-                    <p className="text-slate-500 mt-1">Track payments, expenses, and platform-wide profitability.</p>
+                    <h1 className="text-3xl font-black text-slate-900 tracking-tight">Billing &amp; Finance</h1>
+                    <p className="text-slate-500 mt-1">Payments, expenses, agency invoicing, and billing automation settings.</p>
                 </div>
-                {tab !== 'agency' && (
+                {tab !== 'agency' && tab !== 'billing-settings' && (
                     <div className="flex items-center gap-2">
                         <button onClick={() => { setPreselectedClient(null); setPayModalOpen(true); }}
                             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-2 shadow-md">
@@ -560,6 +562,8 @@ const FinanceView = () => {
             {/* Body */}
             {tab === 'agency' ? (
                 <AgencyFinanceView />
+            ) : tab === 'billing-settings' ? (
+                <BillingReminderSetup />
             ) : loading && tab === 'overview' ? (
                 <div className="flex items-center justify-center h-72">
                     <i className="fa-solid fa-spinner fa-spin text-4xl text-slate-400" />

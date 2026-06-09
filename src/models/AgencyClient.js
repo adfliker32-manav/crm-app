@@ -14,7 +14,12 @@ const agencyClientSchema = new mongoose.Schema({
     requirements: { type: String, default: '' },
     startDate:    { type: Date, default: Date.now },
     status:       { type: String, enum: ['active', 'inactive', 'on-hold'], default: 'active' },
-    notes:        { type: String, default: '' }
+    notes:        { type: String, default: '' },
+
+    // Billing fields for automated invoice generation
+    billingAddress: { type: String, default: '' },       // Client's billing address for invoice
+    gstNumber:      { type: String, default: '' },       // Optional GST/Tax ID for invoice compliance
+    billingDay:     { type: Number, default: 1, min: 1, max: 28 } // Day of month for auto-bill generation
 }, { timestamps: true });
 
 agencyClientSchema.index({ status: 1 });

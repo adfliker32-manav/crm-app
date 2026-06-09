@@ -1,20 +1,17 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
-import { useConfirm } from '../../context/ConfirmContext';
 
 const fmtINR = (n) => `₹${(n || 0).toLocaleString('en-IN')}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 
-// Live view of Cashfree autodebit subscriptions for SuperAdmin.
+// Live view of Razorpay autodebit subscriptions for SuperAdmin.
 // Lives as a tab inside FinanceView (not as a top-level sidebar item) because
 // it shares the operational mental model with payments/expenses.
 const AutodebitView = () => {
     const [subs, setSubs] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [retryingId, setRetryingId] = useState(null);
-    const { showSuccess, showError } = useNotification();
-    const { showDanger } = useConfirm();
+    const { showError } = useNotification();
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -30,23 +27,8 @@ const AutodebitView = () => {
 
     useEffect(() => { load(); }, [load]);
 
-    const retry = async (sub) => {
-        const ok = await showDanger(
-            `Trigger a manual Cashfree charge attempt for ${sub.client?.companyName || sub.client?.email}? Cashfree retries automatically — only do this if ops asked for it.`,
-            'Retry payment now?'
-        );
-        if (!ok) return;
-        setRetryingId(sub._id);
-        try {
-            await api.post(`/billing/superadmin/charge-now/${sub._id}`);
-            showSuccess('Charge attempt submitted to Cashfree');
-            load();
-        } catch (err) {
-            showError(err.response?.data?.message || 'Charge attempt failed');
-        } finally {
-            setRetryingId(null);
-        }
-    };
+    // NOTE: Manual charge is not available with Razorpay subscriptions.
+    // To retry a failed charge, use the Razorpay Dashboard → Subscriptions → Resume.
 
     // KPIs derived client-side from the sub list
     const activeMandates = subs.filter(s => s.status === 'active').length;
@@ -79,18 +61,15 @@ const AutodebitView = () => {
                     <Table
                         rows={failingSubs}
                         cols={[
-                            { label: 'Client',         render: s => <ClientCell s={s} /> },
-                            { label: 'Plan',           render: s => <span className="text-sm capitalize">{s.planCode}</span> },
-                            { label: 'Amount',         render: s => <span className="font-bold">{fmtINR(s.amount)}</span> },
+                            { label: 'Client',          render: s => <ClientCell s={s} /> },
+                            { label: 'Plan',            render: s => <span className="text-sm capitalize">{s.planCode}</span> },
+                            { label: 'Amount',          render: s => <span className="font-bold">{fmtINR(s.amount)}</span> },
                             { label: 'Failed attempts', render: s => <span className="text-rose-700 font-bold">{s.failedAttempts || 0}</span> },
-                            { label: 'Status',         render: s => <StatusBadge status={s.status} /> },
+                            { label: 'Status',          render: s => <StatusBadge status={s.status} /> },
                             {
-                                label: '',
-                                render: s => (
-                                    <button disabled={retryingId === s._id} onClick={() => retry(s)}
-                                        className="px-3 py-1.5 bg-slate-900 hover:bg-black text-white text-xs font-bold rounded-lg disabled:opacity-50">
-                                        {retryingId === s._id ? <i className="fa-solid fa-spinner fa-spin" /> : 'Retry now'}
-                                    </button>
+                                label: 'Action',
+                                render: () => (
+                                    <span className="text-xs text-slate-400 italic">Retry via Razorpay Dashboard</span>
                                 )
                             }
                         ]}

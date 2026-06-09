@@ -1,7 +1,7 @@
 // ============================================================
 // CRON JOBS
 // ============================================================
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
 
@@ -17,7 +17,7 @@ const cron = require('node-cron');
 const runTimeInStageTrigger = async () => {
     try {
         const AutomationRule = require('../models/AutomationRule');
-        const Lead           = require('../models/Lead');
+        const Lead = require('../models/Lead');
         const { evaluateLead } = require('./AutomationService');
         const { isFeatureDisabled } = require('../utils/systemConfig');
 
@@ -176,11 +176,11 @@ const runAppointmentReminders = async () => {
 
         // 24h window: appointments between 23h and 25h from now
         const window24Start = new Date(now + 23 * 3600000);
-        const window24End   = new Date(now + 25 * 3600000);
+        const window24End = new Date(now + 25 * 3600000);
 
         // 1h window: appointments between 55 min and 65 min from now
-        const window1Start  = new Date(now + 55 * 60000);
-        const window1End    = new Date(now + 65 * 60000);
+        const window1Start = new Date(now + 55 * 60000);
+        const window1End = new Date(now + 65 * 60000);
 
         const sendReminder = async (appt, triggerType, flagField) => {
             const template = await WhatsAppTemplate.findOne({
@@ -222,7 +222,7 @@ const runAppointmentReminders = async () => {
         ]);
 
         for (const appt of appts24h) await sendReminder(appt, 'appointment_reminder_24h', 'reminder24hSent');
-        for (const appt of appts1h)  await sendReminder(appt, 'appointment_reminder_1h',  'reminder1hSent');
+        for (const appt of appts1h) await sendReminder(appt, 'appointment_reminder_1h', 'reminder1hSent');
 
         if (appts24h.length + appts1h.length > 0) {
             console.log(`📅 [AppointmentReminder] Processed ${appts24h.length} 24h + ${appts1h.length} 1h reminders`);
@@ -339,8 +339,8 @@ const runScoreDecay = async () => {
 // calls enforceDowngrade() to strip modules + flip workspace to 'expired'.
 //
 // This is the cron half of "if payment not cut → downgrade plan". The other
-// half is the Cashfree SUBSCRIPTION_PAYMENT_FAILED webhook flipping status
-// from 'active' → 'grace' the moment Cashfree gives up retrying.
+// half is the Razorpay subscription.halted webhook flipping status
+// from 'active' → 'grace' the moment Razorpay gives up retrying.
 // ──────────────────────────────────────────────────────────────────────────────
 const GRACE_DAYS = 7;
 const runSubscriptionStatusSweep = async () => {
@@ -401,7 +401,7 @@ const runRenewalReminder = async () => {
         let totalSent = 0;
         for (const days of windows) {
             const start = new Date(now + (days - 0.5) * 24 * 3600 * 1000);
-            const end   = new Date(now + (days + 0.5) * 24 * 3600 * 1000);
+            const end = new Date(now + (days + 0.5) * 24 * 3600 * 1000);
             const subs = await Subscription.find({
                 status: 'active',
                 nextChargeAt: { $gte: start, $lte: end }
@@ -431,73 +431,83 @@ const runRenewalReminder = async () => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Drift reconciliation — runs daily at 2 AM.
-// For every active subscription, fetch the latest state from Cashfree and
+// For every active subscription, fetch the latest state from Razorpay and
 // repair local drift (catches the rare missed webhook). Safe to run as it
-// only flips local doc; never calls Cashfree write APIs.
+// only flips local doc; never calls Razorpay write APIs.
 // ──────────────────────────────────────────────────────────────────────────────
 const runSubscriptionReconcile = async () => {
     try {
         const Subscription = require('../models/Subscription');
         const Payment = require('../models/Payment');
-        const cashfreeService = require('./cashfreeService');
+        const razorpayService = require('./razorpayService');
         const subscriptionService = require('./subscriptionService');
 
-        if (!cashfreeService.isConfigured()) {
-            return; // Cashfree not set up yet — skip silently
+        if (!razorpayService.isConfigured()) {
+            return; // Razorpay not set up yet — skip silently
         }
 
         const subs = await Subscription.find({
             status: { $in: ['active', 'grace', 'pending_auth'] },
-            cashfreeSubscriptionId: { $ne: null }
-        }).select('_id clientId cashfreeSubscriptionId status').lean();
+            razorpaySubscriptionId: { $ne: null }
+        }).select('_id clientId razorpaySubscriptionId status').lean();
 
         let repaired = 0;
         let replayed = 0;
         for (const sub of subs) {
             try {
-                const cfSub = await cashfreeService.getSubscription(sub.cashfreeSubscriptionId);
-                const cfStatus = (cfSub.subscription_status || '').toUpperCase();
+                const rzpSub = await razorpayService.getSubscription(sub.razorpaySubscriptionId);
+                const rzpStatus = (rzpSub.status || '').toLowerCase();
+                // Map Razorpay status strings to our internal states
                 const map = {
-                    INITIALIZED: 'pending_auth',
-                    ACTIVE: 'active',
-                    ON_HOLD: 'grace',
-                    BANK_APPROVAL_PENDING: 'grace',
-                    CANCELLED: 'cancelled',
-                    COMPLETED: 'completed'
+                    created:         'pending_auth',
+                    authenticated:   'pending_auth',
+                    active:          'active',
+                    halted:          'grace',
+                    pending:         'grace',
+                    cancelled:       'cancelled',
+                    completed:       'completed',
+                    expired:         'cancelled'
                 };
-                const desired = map[cfStatus];
+                const desired = map[rzpStatus];
                 if (desired && desired !== sub.status) {
                     await Subscription.findByIdAndUpdate(sub._id, { $set: { status: desired } });
                     repaired++;
                 }
 
-                // ── Entitlement repair ────────────────────────────────────────
-                // Fixing local status alone is not enough: if a PAYMENT_SUCCESS
-                // webhook was missed, the customer paid but planExpiryDate was
-                // never extended (and no ledger row exists), so they'd silently go
-                // read-only despite paying. When Cashfree reports the sub active,
-                // pull its charge history and replay any SUCCESS charge we haven't
-                // recorded. applyChargeSuccess is idempotent (unique cf_payment_id),
-                // so this is a no-op once the ledger row exists.
-                if (cfStatus === 'ACTIVE' || cfStatus === 'COMPLETED') {
-                    let payList = [];
-                    try {
-                        const resp = await cashfreeService.getSubscriptionPayments(sub.cashfreeSubscriptionId);
-                        payList = Array.isArray(resp) ? resp : (resp?.data || resp?.payments || []);
-                    } catch { /* payments endpoint unavailable — skip replay, status was still synced */ }
-
-                    for (const p of payList) {
-                        const status = (p.payment_status || p.status || '').toUpperCase();
-                        if (status && status !== 'SUCCESS') continue;
-                        const cfPaymentId = p.cf_payment_id || p.payment_id;
-                        if (!cfPaymentId) continue;
-                        const already = await Payment.exists({ cashfreePaymentId: String(cfPaymentId) });
+                // ── Entitlement repair ──────────────────────────────────────
+                // If a subscription.charged webhook was missed, the customer paid
+                // but planExpiryDate was never extended. Pull invoice history and
+                // replay any settled charge we haven’t recorded yet.
+                // applyChargeSuccess is idempotent (unique razorpayPaymentId index),
+                // so replaying a recorded charge is always a safe no-op.
+                if (rzpStatus === 'active') {
+                    const invoices = await razorpayService.getSubscriptionInvoices(sub.razorpaySubscriptionId);
+                    for (const inv of invoices) {
+                        if ((inv.status || '').toLowerCase() !== 'paid') continue;
+                        const rzpPaymentId = inv.payment_id || inv.id;
+                        if (!rzpPaymentId) continue;
+                        const already = await Payment.exists({ razorpayPaymentId: String(rzpPaymentId) });
                         if (already) continue;
-                        await subscriptionService.applyChargeSuccess(sub.clientId, { payment: p });
+                        // Reconstruct a minimal webhook envelope for applyChargeSuccess
+                        const syntheticPayload = {
+                            event: 'subscription.charged',
+                            payload: {
+                                payment: {
+                                    entity: {
+                                        id:     rzpPaymentId,
+                                        amount: inv.amount,
+                                        method: inv.payment_method || 'upi',
+                                        created_at: inv.paid_at
+                                    }
+                                },
+                                subscription: { entity: { id: sub.razorpaySubscriptionId } }
+                            }
+                        };
+                        await subscriptionService.applyChargeSuccess(sub.clientId, syntheticPayload);
                         replayed++;
                     }
                 }
-            } catch (e) { /* per-sub failure shouldn't kill the sweep */ }
+            } catch (e) { /* per-sub failure shouldn’t kill the sweep */ }
         }
         if (repaired > 0 || replayed > 0) {
             console.log(`🔧 [SubscriptionReconcile] Repaired ${repaired} status / replayed ${replayed} missed charge(s)`);
@@ -595,7 +605,7 @@ const runFollowUpTemplateSend = async () => {
             } catch (err) {
                 console.error(`❌ [FollowUpTemplate] Failed for lead ${lead._id}:`, err.message);
                 // Mark sent to avoid hammering on persistent errors
-                await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } }).catch(() => {});
+                await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } }).catch(() => { });
             }
         }
     } catch (err) {
@@ -636,7 +646,7 @@ const startCronJobs = () => {
     cron.schedule('0 1 * * *', runScoreDecay);
     console.log('[CronJobs] Lead score decay scheduled (daily 01:00)');
 
-    // ── Autodebit / Cashfree subscriptions ─────────────────────────────────
+    // ── Autodebit / Razorpay subscriptions ────────────────────────────────────────
     // Hourly grace-window sweep — the workhorse of "failed payment → downgrade".
     cron.schedule('0 * * * *', runSubscriptionStatusSweep);
     console.log('[CronJobs] Autodebit grace sweep scheduled (hourly)');
@@ -645,9 +655,94 @@ const startCronJobs = () => {
     cron.schedule('0 9 * * *', runRenewalReminder);
     console.log('[CronJobs] Renewal reminders scheduled (daily 09:00)');
 
-    // Drift reconciliation against Cashfree — daily at 02:00
+    // Drift reconciliation against Razorpay — daily at 02:00
     cron.schedule('0 2 * * *', runSubscriptionReconcile);
     console.log('[CronJobs] Subscription drift reconcile scheduled (daily 02:00)');
+
+    // Agency client billing auto-sweep — daily at 01:00 AM
+    cron.schedule('0 1 * * *', runAgencyClientBillingSweep);
+    console.log('[CronJobs] Agency client billing sweep scheduled (daily 01:00 AM)');
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Agency Client Billing Sweep — runs daily at 01:00 AM.
+// Automatically generates invoices for active agency clients on their billing day.
+// ──────────────────────────────────────────────────────────────────────────────
+const runAgencyClientBillingSweep = async () => {
+    try {
+        const AgencyClient = require('../models/AgencyClient');
+        const AgencyPayment = require('../models/AgencyPayment');
+        const { scheduleAgencyBillFollowups } = require('./agencyBillingQueue');
+
+        const now = new Date();
+        const currentDay = now.getDate();
+        const month = now.getMonth() + 1;
+        const year = now.getFullYear();
+
+        const isLastDayOfMonth = (date) => {
+            const test = new Date(date.getTime());
+            test.setDate(test.getDate() + 1);
+            return test.getMonth() !== date.getMonth();
+        };
+
+        const query = { status: 'active' };
+        if (isLastDayOfMonth(now)) {
+            query.billingDay = { $gte: currentDay };
+        } else {
+            query.billingDay = currentDay;
+        }
+
+        const clients = await AgencyClient.find(query).lean();
+        if (!clients.length) return;
+
+        console.log(`[BillingSweep] Found ${clients.length} active client(s) due for billing today.`);
+
+        for (const client of clients) {
+            try {
+                const exists = await AgencyPayment.exists({
+                    agencyClientId: client._id,
+                    billingMonth: month,
+                    billingYear: year
+                });
+
+                if (exists) continue;
+
+                // Generate unique Invoice Number
+                const count = await AgencyPayment.countDocuments({ billingYear: year, billingMonth: month });
+                const seq = String(count + 1).padStart(4, '0');
+                const invoiceNumber = `INV-${year}-${String(month).padStart(2, '0')}-${seq}`;
+
+                const dueDate = new Date();
+                dueDate.setDate(dueDate.getDate() + 5); // Due in 5 days
+
+                const payment = await AgencyPayment.create({
+                    agencyClientId: client._id,
+                    clientName:    client.name,
+                    clientCompany: client.company,
+                    clientServiceType: client.serviceType || 'other',
+                    amount: Number(client.monthlyFee),
+                    billingMonth: month,
+                    billingYear:  year,
+                    dueDate,
+                    status: 'pending',
+                    invoiceNumber,
+                    billingAddressSnapshot: client.billingAddress || '',
+                    gstNumberSnapshot:      client.gstNumber     || '',
+                    recordedBy: null
+                });
+
+                const jobIds = await scheduleAgencyBillFollowups(payment);
+                payment.followUpJobs = jobIds;
+                await payment.save();
+
+                console.log(`[BillingSweep] Generated invoice ${invoiceNumber} for client ${client.name}`);
+            } catch (err) {
+                console.error(`[BillingSweep] Failed to generate invoice for client ${client._id}:`, err.message);
+            }
+        }
+    } catch (err) {
+        console.error('❌ [BillingSweep] Cron error:', err.message);
+    }
 };
 
 module.exports = {
@@ -661,5 +756,6 @@ module.exports = {
     runScoreDecay,
     runSubscriptionStatusSweep,
     runRenewalReminder,
-    runSubscriptionReconcile
+    runSubscriptionReconcile,
+    runAgencyClientBillingSweep
 };

@@ -123,40 +123,55 @@ const {
     listBillableClients
 } = require('../controllers/financeController');
 
-router.get('/finance/summary',  authMiddleware, requireSuperAdmin, getFinanceSummary);
-router.get('/finance/clients',  authMiddleware, requireSuperAdmin, listBillableClients);
+router.get('/finance/summary', authMiddleware, requireSuperAdmin, getFinanceSummary);
+router.get('/finance/clients', authMiddleware, requireSuperAdmin, listBillableClients);
 
-router.get('/finance/payments',     authMiddleware, requireSuperAdmin, listPayments);
-router.post('/finance/payments',    authMiddleware, requireSuperAdmin, recordPayment);
+router.get('/finance/payments', authMiddleware, requireSuperAdmin, listPayments);
+router.post('/finance/payments', authMiddleware, requireSuperAdmin, recordPayment);
 router.delete('/finance/payments/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deletePayment);
 
-router.get('/finance/expenses',     authMiddleware, requireSuperAdmin, listExpenses);
-router.post('/finance/expenses',    authMiddleware, requireSuperAdmin, recordExpense);
+router.get('/finance/expenses', authMiddleware, requireSuperAdmin, listExpenses);
+router.post('/finance/expenses', authMiddleware, requireSuperAdmin, recordExpense);
 router.delete('/finance/expenses/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deleteExpense);
 
 // 🏢 AGENCY FINANCE — independent agency client & payment management
 const {
-    getSummary:      agencySummary,
-    listClients:     agencyListClients,
-    createClient:    agencyCreateClient,
-    updateClient:    agencyUpdateClient,
-    deleteClient:    agencyDeleteClient,
-    listPayments:    agencyListPayments,
-    createPayment:   agencyCreatePayment,
-    updatePayment:   agencyUpdatePayment,
-    deletePayment:   agencyDeletePayment,
+    getSummary: agencySummary,
+    listClients: agencyListClients,
+    createClient: agencyCreateClient,
+    updateClient: agencyUpdateClient,
+    deleteClient: agencyDeleteClient,
+    listPayments: agencyListPayments,
+    getPayment:   agencyGetPayment,
+    createPayment: agencyCreatePayment,
+    updatePayment: agencyUpdatePayment,
+    deletePayment: agencyDeletePayment,
+    sendBillManually: agencySendBillManually,
 } = require('../controllers/agencyFinanceController');
 
-router.get('/agency-finance/summary',              authMiddleware, requireSuperAdmin, agencySummary);
+router.get('/agency-finance/summary', authMiddleware, requireSuperAdmin, agencySummary);
 
-router.get('/agency-finance/clients',              authMiddleware, requireSuperAdmin, agencyListClients);
-router.post('/agency-finance/clients',             authMiddleware, requireSuperAdmin, agencyCreateClient);
-router.put('/agency-finance/clients/:id',          validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyUpdateClient);
-router.delete('/agency-finance/clients/:id',       validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyDeleteClient);
+router.get('/agency-finance/clients', authMiddleware, requireSuperAdmin, agencyListClients);
+router.post('/agency-finance/clients', authMiddleware, requireSuperAdmin, agencyCreateClient);
+router.put('/agency-finance/clients/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyUpdateClient);
+router.delete('/agency-finance/clients/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyDeleteClient);
 
-router.get('/agency-finance/payments',             authMiddleware, requireSuperAdmin, agencyListPayments);
-router.post('/agency-finance/payments',            authMiddleware, requireSuperAdmin, agencyCreatePayment);
-router.put('/agency-finance/payments/:id',         validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyUpdatePayment);
-router.delete('/agency-finance/payments/:id',      validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyDeletePayment);
+router.get('/agency-finance/payments', authMiddleware, requireSuperAdmin, agencyListPayments);
+router.get('/agency-finance/payments/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyGetPayment);
+router.post('/agency-finance/payments', authMiddleware, requireSuperAdmin, agencyCreatePayment);
+router.post('/agency-finance/payments/:id/send-bill', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencySendBillManually);
+router.put('/agency-finance/payments/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyUpdatePayment);
+router.delete('/agency-finance/payments/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyDeletePayment);
 
-module.exports = router;
+// 🔔 BILLING REMINDER TEMPLATE CONFIG — one-time Super Admin setup
+const {
+    getConfig: getBillingReminderConfig,
+    saveConfig: saveBillingReminderConfig,
+    getAvailableTemplates: getBillingReminderTemplates
+} = require('../controllers/billingReminderConfigController');
+
+router.get('/billing-reminder-config',           authMiddleware, requireSuperAdmin, getBillingReminderConfig);
+router.put('/billing-reminder-config',           authMiddleware, requireSuperAdmin, saveBillingReminderConfig);
+router.get('/billing-reminder-config/templates', authMiddleware, requireSuperAdmin, getBillingReminderTemplates);
+
+module.exports = router;

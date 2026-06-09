@@ -12,6 +12,9 @@ import SupportInboxView from '../components/SuperAdmin/SupportInboxView';
 import FinanceView from '../components/SuperAdmin/FinanceView';
 import PlanCatalogView from '../components/SuperAdmin/PlanCatalogView';
 import CouponView from '../components/SuperAdmin/CouponView';
+import WhatsAppInbox from '../components/WhatsApp/WhatsAppInbox';
+import EmailInbox from '../components/Email/EmailInbox';
+import SuperAdminCommSettings from '../components/SuperAdmin/SuperAdminCommSettings';
 
 const SuperAdmin = () => {
     const [activeView, setActiveView] = useState('dashboard');
@@ -34,6 +37,12 @@ const SuperAdmin = () => {
                 return <CouponView />;
             case 'support':
                 return <SupportInboxView />;
+            case 'wa-inbox':
+                return <WhatsAppInbox />;
+            case 'email-inbox':
+                return <EmailInbox />;
+            case 'comm-settings':
+                return <SuperAdminCommSettings />;
             case 'system-health':
                 return <SystemHealthView />;
             case 'audit-logs':
@@ -47,6 +56,9 @@ const SuperAdmin = () => {
         }
     };
 
+    // Inbox views need full-height, no padding — all other views use the default wrapper
+    const isFullScreen = ['wa-inbox', 'email-inbox'].includes(activeView);
+
     return (
         <div className="flex h-screen bg-slate-50">
             {/* Sidebar */}
@@ -54,9 +66,16 @@ const SuperAdmin = () => {
 
             {/* Main Content */}
             <div className="flex-1 overflow-y-auto">
-                <div className="p-8">
-                    {renderView()}
-                </div>
+                {isFullScreen ? (
+                    // Full-screen for inbox views — no padding, fills the remaining space
+                    <div className="h-full">
+                        {renderView()}
+                    </div>
+                ) : (
+                    <div className="p-8">
+                        {renderView()}
+                    </div>
+                )}
             </div>
         </div>
     );

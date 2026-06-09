@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-// Records a manual payment received from a client (agency, direct manager, or sub-client).
+// Records a payment received from a client (agency, direct manager, or sub-client).
 // Each payment extends the client's `WorkspaceSettings.planExpiryDate` by `durationMonths`.
 // Renewals stack: if the client's current expiry is in the future, the new period starts
 // from that expiry. Otherwise it starts from `paymentDate`.
@@ -14,67 +14,110 @@ const paymentSchema = new mongoose.Schema({
         index: true
     },
     // Snapshotted at time of payment for stable reports if the client is renamed later.
-    clientName: { type: String, default: '' },
+    clientName:  { type: String, default: '' },
     clientEmail: { type: String, default: '' },
-    // Only managers are billable. The enum keeps the door closed against
-    // someone wiring an agency or agent in via raw API call.
+    // Only managers are billable.
     clientRole: {
         type: String,
         enum: ['manager'],
         default: 'manager'
     },
 
-    amount: { type: Number, required: true, min: 0 },
+    amount:   { type: Number, required: true, min: 0 },
     currency: { type: String, default: 'INR' },
 
-    paymentDate: { type: Date, default: Date.now },
+    paymentDate:    { type: Date, default: Date.now },
     durationMonths: { type: Number, required: true, min: 1, max: 60 },
 
     // Derived at save-time from the stacking logic (see financeController.recordPayment).
     activationStart: { type: Date, required: true },
-    activationEnd: { type: Date, required: true, index: true },
+    activationEnd:   { type: Date, required: true, index: true },
 
     paymentMethod: {
         type: String,
-        enum: ['bank_transfer', 'cash', 'upi', 'card', 'cheque', 'crypto', 'other', 'cashfree_upi', 'cashfree_card', 'cashfree_enach'],
+        enum: [
+            // Legacy manual methods (kept for existing records)
+            'bank_transfer', 'cash', 'upi', 'card', 'cheque', 'crypto', 'other',
+            // Razorpay autodebit methods
+            'razorpay_upi', 'razorpay_card', 'razorpay_emandate', 'razorpay_nach'
+        ],
         default: 'bank_transfer'
     },
-    reference: { type: String, default: '' }, // e.g. UTR / cheque number
-    notes: { type: String, default: '' },
+    reference: { type: String, default: '' }, // e.g. Razorpay payment_id / UTR
+    notes:     { type: String, default: '' },
 
-    // Gateway provenance. 'manual' = SuperAdmin-entered (legacy flow).
-    // 'cashfree' = autodebit charge synced via webhook — the two IDs below are set.
+    // Gateway provenance.
+    // 'manual'   = SuperAdmin-entered payment
+    // 'razorpay' = autodebit charge synced via webhook
     gateway: {
         type: String,
-        enum: ['manual', 'cashfree'],
+        enum: ['manual', 'razorpay'],
         default: 'manual',
         index: true
     },
-    cashfreeSubscriptionId: { type: String, default: null, index: true },
-    // cf_payment_id — unique per charge. Uniqueness is enforced via a PARTIAL
-    // index below (only when the value is a real string). A plain sparse index
-    // would NOT work here: this field defaults to null, so every manual payment
-    // stores null explicitly and a unique+sparse index would collide on the
-    // second null. The partialFilterExpression scopes uniqueness to gateway
-    // charges only, giving webhook idempotency without touching manual entries.
-    cashfreePaymentId: { type: String, default: null },
+
+    // Razorpay identifiers — set only for gateway='razorpay' rows.
+    // razorpaySubscriptionId = sub_XXXXXXX (our sub)
+    // razorpayPaymentId      = pay_XXXXXXX (unique per charge — used for idempotency)
+    razorpaySubscriptionId: { type: String, default: null, index: true },
+    razorpayPaymentId:      { type: String, default: null },
 
     recordedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         default: null
-    }
+    },
+
+    invoiceNumber:          { type: String, default: '' },
+    billingAddressSnapshot: { type: String, default: '' },
+    gstNumberSnapshot:      { type: String, default: '' }
 }, { timestamps: true });
 
 paymentSchema.index({ paymentDate: -1 });
 paymentSchema.index({ clientId: 1, paymentDate: -1 });
 
-// Idempotency guard for Cashfree autodebit charges: at most one ledger row per
-// cf_payment_id. Partial filter → only string values are indexed, so the many
-// manual payments with cashfreePaymentId=null are exempt and never collide.
+// Sparse unique prevents duplicate invoice numbers while allowing empty string on old payments.
 paymentSchema.index(
-    { cashfreePaymentId: 1 },
-    { unique: true, partialFilterExpression: { cashfreePaymentId: { $type: 'string' } } }
+    { invoiceNumber: 1 },
+    { unique: true, sparse: true, partialFilterExpression: { invoiceNumber: { $gt: '' } } }
 );
+
+// Idempotency guard for Razorpay autodebit charges: at most one ledger row per
+// razorpayPaymentId. Partial filter → only string values are indexed, so the many
+// manual payments with razorpayPaymentId=null are exempt and never collide.
+paymentSchema.index(
+    { razorpayPaymentId: 1 },
+    { unique: true, partialFilterExpression: { razorpayPaymentId: { $type: 'string' } } }
+);
+
+paymentSchema.pre('save', async function () {
+    if (this.isNew && !this.invoiceNumber) {
+        const date = this.paymentDate || new Date();
+        const year  = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+
+        const start = new Date(year, date.getMonth(), 1);
+        const end   = new Date(year, date.getMonth() + 1, 1);
+
+        const count = await this.constructor.countDocuments({
+            paymentDate: { $gte: start, $lt: end }
+        });
+        const seq = String(count + 1).padStart(4, '0');
+        this.invoiceNumber = `INV-${year}${month}-${seq}`;
+    }
+
+    if (this.isNew && (!this.billingAddressSnapshot || !this.gstNumberSnapshot)) {
+        try {
+            const WorkspaceSettings = mongoose.model('WorkspaceSettings');
+            const ws = await WorkspaceSettings.findOne({ userId: this.clientId }).lean();
+            if (ws) {
+                if (!this.billingAddressSnapshot) this.billingAddressSnapshot = ws.billingAddress || '';
+                if (!this.gstNumberSnapshot)      this.gstNumberSnapshot      = ws.gstNumber     || '';
+            }
+        } catch (err) {
+            console.error('[Payment Pre-Save] Failed to snapshot billing details:', err.message);
+        }
+    }
+});
 
 module.exports = mongoose.model('Payment', paymentSchema);

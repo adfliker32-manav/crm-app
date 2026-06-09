@@ -4,7 +4,8 @@ const Subscription = require('../models/Subscription');
 const Payment = require('../models/Payment');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const subscriptionService = require('../services/subscriptionService');
-const cashfreeService = require('../services/cashfreeService');
+const razorpayService = require('../services/razorpayService');
+const webhookMonitor = require('../services/webhookMonitor');
 const { validateCode: validateCouponCode } = require('./couponController');
 const Coupon = require('../models/Coupon');
 const { isFeatureDisabled } = require('../utils/systemConfig');
@@ -38,7 +39,7 @@ const getMySubscription = async (req, res) => {
         const [sub, ws, invoices, leadsUsed] = await Promise.all([
             Subscription.findOne({ clientId }).lean(),
             WorkspaceSettings.findOne({ userId: clientId }).lean(),
-            Payment.find({ clientId, gateway: 'cashfree' })
+            Payment.find({ clientId })
                 .sort({ paymentDate: -1 })
                 .limit(10)
                 .lean(),
@@ -53,17 +54,20 @@ const getMySubscription = async (req, res) => {
             subscription: sub,
             workspace: ws ? {
                 subscriptionStatus: ws.subscriptionStatus,
-                planExpiryDate: ws.planExpiryDate,
-                autoDebitEnabled: ws.autoDebitEnabled,
-                currentPlanCode: ws.currentPlanCode,
-                activeModules: ws.activeModules,
-                planFeatures: ws.planFeatures
+                planExpiryDate:     ws.planExpiryDate,
+                autoDebitEnabled:   ws.autoDebitEnabled,
+                currentPlanCode:    ws.currentPlanCode,
+                activeModules:      ws.activeModules,
+                planFeatures:       ws.planFeatures,
+                billingAddress:     ws.billingAddress || '',
+                gstNumber:          ws.gstNumber || ''
             } : null,
             plan,
             invoices,
             leadsUsed,
-            cashfreeConfigured: cashfreeService.isConfigured(),
-            cashfreeMode: cashfreeService.mode()
+            razorpayConfigured: razorpayService.isConfigured(),
+            razorpayKeyId:      razorpayService.isConfigured() ? process.env.RAZORPAY_KEY_ID : null,
+            razorpayMode:       razorpayService.mode()
         });
     } catch (err) {
         console.error('getMySubscription error:', err);
@@ -83,16 +87,14 @@ const guardBillable = (req, res) => {
 // Single source of truth for "what will we actually charge?". Applies the
 // plan-level sale discount (plan.discountPercentage) FIRST, then a discount
 // coupon on top — mirroring the frontend effectivePrice() exactly, so the
-// amount we put on the Cashfree mandate always equals the price the customer
-// was shown. (Previously the plan discount was displayed but never charged,
-// and the coupon was applied to the raw price — both are fixed here.)
+// amount we put on the Razorpay mandate always equals the price the customer
+// was shown.
 //
 // When a coupon is supplied it ATOMICALLY claims one use (maxUses guard) before
 // the mandate is built, so concurrent redemptions can't exceed the limit. If
 // the caller's mandate creation later fails it must release the claim via
 // releaseCouponClaim(). A mandate that is created but never authorized keeps its
-// claim (standard reservation semantics) — better to under-grant a capped
-// coupon than to over-grant it.
+// claim (standard reservation semantics).
 const resolveSubscriptionPricing = async (planCode, cycle, couponCode) => {
     const plan = await Plan.findOne({ code: planCode.toLowerCase(), isActive: true });
     if (!plan) {
@@ -118,8 +120,7 @@ const resolveSubscriptionPricing = async (planCode, cycle, couponCode) => {
             const e = new Error('This is a trial-extension coupon — apply it from the Billing page, not at checkout.');
             e.status = 400; throw e;
         }
-        // Atomic conditional claim: reserve the slot before the mandate is built,
-        // so two concurrent redemptions of a maxUses-capped coupon can't both win.
+        // Atomic conditional claim: reserve the slot before the mandate is built.
         const claimed = await Coupon.findOneAndUpdate(
             {
                 _id: coupon._id,
@@ -139,8 +140,6 @@ const resolveSubscriptionPricing = async (planCode, cycle, couponCode) => {
     }
 
     finalAmount = Math.max(0, finalAmount);
-    // Only override the service's own price lookup when there is a real discount;
-    // leaving it null for full price preserves the pending-sub reuse fast-path.
     const amountOverride = (appliedCoupon || plan.discountPercentage > 0) ? finalAmount : null;
 
     return { plan, base, listAmount, finalAmount, appliedCoupon, amountOverride };
@@ -167,9 +166,9 @@ const subscribe = async (req, res) => {
             return res.status(e.status || 400).json({ message: e.message });
         }
 
-        let subscription, sessionId;
+        let subscription, razorpaySubscriptionId, keyId;
         try {
-            ({ subscription, sessionId } = await subscriptionService.initiateSubscription(
+            ({ subscription, razorpaySubscriptionId, keyId } = await subscriptionService.initiateSubscription(
                 req.tenantId, planCode, cycle || 'monthly', pricing.amountOverride
             ));
         } catch (e) {
@@ -178,26 +177,27 @@ const subscribe = async (req, res) => {
             throw e;
         }
 
-        // The claim already incremented usedCount; just record provenance here.
+        // Record coupon provenance.
         if (pricing.appliedCoupon) {
             await Subscription.findByIdAndUpdate(subscription._id, {
                 $set: {
-                    couponCode: pricing.appliedCoupon.code,
-                    originalAmount: pricing.base   // full list price before any discount
+                    couponCode:     pricing.appliedCoupon.code,
+                    originalAmount: pricing.base
                 }
             });
         }
 
         res.json({
             success: true,
-            subscriptionId: subscription._id,
-            subscriptionSessionId: sessionId,
-            mode: cashfreeService.mode(),
+            subscriptionId:         subscription._id,
+            razorpaySubscriptionId,
+            keyId,
+            mode:                   razorpayService.mode(),
             ...(pricing.appliedCoupon ? { couponApplied: true, discountedAmount: pricing.finalAmount } : {})
         });
     } catch (err) {
         console.error('subscribe error:', err);
-        if (err.code === 'CASHFREE_NOT_CONFIGURED') {
+        if (err.code === 'RAZORPAY_NOT_CONFIGURED') {
             return res.status(503).json({ message: err.message });
         }
         res.status(400).json({ message: err.message });
@@ -221,9 +221,9 @@ const changePlan = async (req, res) => {
             return res.status(e.status || 400).json({ message: e.message });
         }
 
-        let subscription, sessionId;
+        let subscription, razorpaySubscriptionId, keyId;
         try {
-            ({ subscription, sessionId } = await subscriptionService.changePlan(
+            ({ subscription, razorpaySubscriptionId, keyId } = await subscriptionService.changePlan(
                 req.tenantId, planCode, cycle || 'monthly', pricing.amountOverride
             ));
         } catch (e) {
@@ -239,9 +239,10 @@ const changePlan = async (req, res) => {
 
         res.json({
             success: true,
-            subscriptionId: subscription._id,
-            subscriptionSessionId: sessionId,
-            mode: cashfreeService.mode(),
+            subscriptionId:         subscription._id,
+            razorpaySubscriptionId,
+            keyId,
+            mode:                   razorpayService.mode(),
             ...(pricing.appliedCoupon ? { couponApplied: true, discountedAmount: pricing.finalAmount } : {})
         });
     } catch (err) {
@@ -257,8 +258,9 @@ const cancel = async (req, res) => {
         const sub = await Subscription.findOne({ clientId: req.tenantId });
         if (!sub) return res.status(404).json({ message: 'No active subscription' });
 
-        if (sub.cashfreeSubscriptionId) {
-            await cashfreeService.cancelSubscription(sub.cashfreeSubscriptionId);
+        if (sub.razorpaySubscriptionId && sub.status !== 'cancelled') {
+            // cancel_at_cycle_end=true → customer keeps access until period end
+            await razorpayService.cancelSubscription(sub.razorpaySubscriptionId, true);
         }
         await subscriptionService.applyCancellation(req.tenantId, null, req.body?.reason || 'Customer initiated');
         res.json({ success: true, message: 'Subscription cancelled. Access continues until current period end.' });
@@ -268,105 +270,94 @@ const cancel = async (req, res) => {
     }
 };
 
-// ─── POST /api/billing/cashfree/webhook ────────────────────────────────────
-// Public — Cashfree → us. Verifies HMAC signature, dispatches per event type.
+// ─── POST /api/billing/razorpay/webhook ────────────────────────────────────
+// Public — Razorpay → us. Verifies HMAC-SHA256 signature, dispatches per event.
+// Must be registered BEFORE express.json() in index.js (rawBody capture needed).
+//
+// Razorpay webhook payload shape:
+//   payload.event  = event name (e.g. "subscription.charged")
+//   payload.payload.subscription.entity  = subscription object
+//   payload.payload.payment.entity       = payment object (on charge events)
 const webhook = async (req, res) => {
     try {
-        // Pass ONLY the captured raw bytes (set by the express.json verify hook in
-        // index.js). Never fall back to JSON.stringify(req.body) — that re-serialized
-        // form won't match Cashfree's HMAC and would weaken the check.
-        const ok = cashfreeService.verifyWebhookSignature(req.rawBody, req.headers);
+        const ok = razorpayService.verifyWebhookSignature(req.rawBody, req.headers);
         if (!ok) {
-            console.warn('🚨 Cashfree webhook: signature verification FAILED');
+            console.warn('🚨 Razorpay webhook: signature verification FAILED');
             return res.status(401).json({ message: 'Invalid signature' });
         }
 
-        const payload = req.body || {};
-        const eventType = (payload.type || payload.event_type || payload.event || '').toUpperCase();
-        const data = payload.data || payload;
-        // subscription_id is OUR id (we set it on create; Cashfree echoes it).
-        // Probe every documented location across Cashfree API versions.
-        const cfSubId = data.subscription_details?.subscription_id
-            || data.subscription?.subscription_id
-            || data.subscription_id
-            || data.subscription?.subscription_reference_id
-            || payload.subscription_id
-            || payload.subscription?.subscription_id
+        const payload   = req.body || {};
+        const eventType = (payload.event || '').toLowerCase();
+
+        // Extract the Razorpay subscription id from the standard webhook envelope.
+        const rzpSubId = payload?.payload?.subscription?.entity?.id
+            || payload?.payload?.subscription?.id
             || null;
 
-        if (!cfSubId) {
-            console.warn('Cashfree webhook missing subscription_id, ignoring:', eventType, JSON.stringify(payload).slice(0, 300));
+        if (!rzpSubId) {
+            console.warn('Razorpay webhook missing subscription id, ignoring:', eventType, JSON.stringify(payload).slice(0, 300));
             return res.json({ received: true });
         }
 
-        // Match on OUR subscription_id (which Cashfree echoes) OR Cashfree's own
-        // cf_subscription_id — whichever the event carries.
-        const cfOwnId = data.cf_subscription_id || data.subscription?.cf_subscription_id || payload.cf_subscription_id;
-        const sub = await Subscription.findOne({
-            $or: [
-                { cashfreeSubscriptionId: cfSubId },
-                ...(cfOwnId ? [{ cfSubscriptionId: String(cfOwnId) }] : [])
-            ]
-        });
+        const sub = await Subscription.findOne({ razorpaySubscriptionId: rzpSubId });
         if (!sub) {
-            console.warn(`Cashfree webhook for unknown subscription id=${cfSubId} / cf=${cfOwnId}`);
+            console.warn(`Razorpay webhook for unknown subscription rzpSubId=${rzpSubId}`);
             return res.json({ received: true, unknown: true });
         }
 
         const clientId = sub.clientId;
-        console.log(`📨 Cashfree webhook: ${eventType} for ${cfSubId} (clientId=${clientId})`);
+        console.log(`📨 Razorpay webhook: ${eventType} for ${rzpSubId} (clientId=${clientId})`);
 
         switch (eventType) {
-            case 'SUBSCRIPTION_ACTIVATED':
-            case 'SUBSCRIPTION_AUTHORIZED':
-                // Grant access immediately on authorization (don't wait for the
-                // first charge): applies plan modules + a short provisional expiry.
+            // ── Mandate authorized / subscription activated ──────────────────
+            // Customer completed Razorpay Checkout. Grant provisional access
+            // immediately; first subscription.charged will finalize the period.
+            case 'subscription.activated':
+            case 'subscription.authenticated':
                 await subscriptionService.applyActivation(clientId);
                 break;
 
-            case 'SUBSCRIPTION_PAYMENT_SUCCESS':
-            case 'SUBSCRIPTION_CHARGED':
+            // ── Recurring charge settled ─────────────────────────────────────
+            case 'subscription.charged':
                 await subscriptionService.applyChargeSuccess(clientId, payload);
                 break;
 
-            case 'SUBSCRIPTION_PAYMENT_FAILED':
-            case 'SUBSCRIPTION_PAYMENT_DECLINED':
-                await subscriptionService.applyChargeFailure(clientId, payload);
+            // ── Single charge attempt failed (retries still pending) ─────────
+            case 'subscription.pending':
+            case 'payment.failed':
+                await subscriptionService.applyChargeFailure(clientId, payload, false);
                 break;
 
-            case 'SUBSCRIPTION_CANCELLED':
-            case 'SUBSCRIPTION_CANCELED':
-                await subscriptionService.applyCancellation(clientId, payload, 'Cashfree event: cancelled');
+            // ── All retries exhausted by Razorpay → enter grace period ───────
+            case 'subscription.halted':
+                await subscriptionService.applyChargeFailure(clientId, payload, true);
+                break;
+
+            // ── Subscription cancelled ───────────────────────────────────────
+            case 'subscription.cancelled':
+            case 'subscription.completed':
+                await subscriptionService.applyCancellation(clientId, payload, `Razorpay event: ${eventType}`);
                 break;
 
             default:
-                // Persist payload for audit even on unrecognized events
-                sub.rawCashfreePayload = payload;
+                // Persist payload for audit on unrecognised events.
+                sub.rawRazorpayPayload = payload;
                 await sub.save();
         }
 
+        // Tell webhookMonitor this delivery was handled cleanly.
+        webhookMonitor.recordSuccess();
+
         res.json({ received: true });
     } catch (err) {
-        console.error('Cashfree webhook error:', err);
-        // Return 200 anyway — Cashfree will retry on non-2xx and we don't want
-        // a transient bug to cause replay storms. We've logged the error for ops.
+        console.error('Razorpay webhook error:', err);
+        // Return 200 anyway — Razorpay retries on non-2xx and we don't want
+        // a transient bug to cause replay storms. The monitor alerts ops.
+        //
+        // Alert fires here: superadmin receives an email within seconds.
+        // A 5-minute cooldown prevents flood alerts if Razorpay batch-retries.
+        webhookMonitor.recordFailure(eventType, err, req.body).catch(() => {});
         res.json({ received: true, error: err.message });
-    }
-};
-
-// ─── POST /api/billing/superadmin/charge-now/:subscriptionId ───────────────
-// SuperAdmin "Retry payment" button.
-const chargeNow = async (req, res) => {
-    try {
-        const sub = await Subscription.findById(req.params.subscriptionId);
-        if (!sub) return res.status(404).json({ message: 'Subscription not found' });
-        if (!sub.cashfreeSubscriptionId) return res.status(400).json({ message: 'No Cashfree subscription id' });
-
-        const resp = await cashfreeService.chargeNow(sub.cashfreeSubscriptionId);
-        res.json({ success: true, cashfreeResponse: resp });
-    } catch (err) {
-        console.error('chargeNow error:', err);
-        res.status(500).json({ message: err.message });
     }
 };
 
@@ -378,9 +369,12 @@ const listAllPlans = async (req, res) => {
 
 const upsertPlan = async (req, res) => {
     try {
-        const { code, name, description, monthlyPrice, yearlyPrice,
+        const {
+            code, name, description, monthlyPrice, yearlyPrice,
             discountPercentage,
-            activeModules, planFeatures, isActive, isCustom, sortOrder } = req.body;
+            razorpayMonthlyPlanId, razorpayYearlyPlanId,
+            activeModules, planFeatures, isActive, isCustom, sortOrder
+        } = req.body;
         if (!code || !name || monthlyPrice === undefined) {
             return res.status(400).json({ message: 'code, name, monthlyPrice are required' });
         }
@@ -391,8 +385,11 @@ const upsertPlan = async (req, res) => {
                     code: code.toLowerCase(),
                     name, description: description || '',
                     monthlyPrice: Number(monthlyPrice),
-                    yearlyPrice: Number(yearlyPrice || 0),
+                    yearlyPrice:  Number(yearlyPrice || 0),
                     discountPercentage: Math.min(100, Math.max(0, Number(discountPercentage || 0))),
+                    // Razorpay plan IDs — always from DB, never hardcoded
+                    razorpayMonthlyPlanId: razorpayMonthlyPlanId || null,
+                    razorpayYearlyPlanId:  razorpayYearlyPlanId  || null,
                     activeModules: activeModules || ['leads', 'team', 'reports'],
                     planFeatures: planFeatures || {},
                     isActive: isActive !== false,
@@ -403,24 +400,17 @@ const upsertPlan = async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
-        // 🔁 PROPAGATE to existing subscribers on this plan so a catalog edit takes
-        // effect immediately (modules/features/limits). Price is NOT pushed to live
-        // Cashfree mandates (a mandate's amount is fixed at authorization), so the
-        // new price applies only to NEW subscriptions/renewals. Custom plans are
-        // per-tenant and intentionally skipped.
+        // Propagate to existing subscribers so catalog edits take effect immediately.
         let propagatedTo = 0;
         if (!doc.isCustom) {
             const affected = await WorkspaceSettings.find({ currentPlanCode: doc.code })
                 .select('userId').lean();
             if (affected.length) {
-                // Use dotted-path updates so per-tenant planFeatures overrides set via
-                // Edit Company are not wiped when an admin edits the plan catalog.
-                // (Replacing planFeatures as a whole object would destroy those overrides.)
                 const featureSet = {};
                 for (const [k, v] of Object.entries(doc.planFeatures?.toObject?.() || doc.planFeatures || {})) {
                     featureSet[`planFeatures.${k}`] = v;
                 }
-                featureSet['planFeatures.leadLimit'] = doc.planFeatures?.leadLimit ?? 100;
+                featureSet['planFeatures.leadLimit']  = doc.planFeatures?.leadLimit  ?? 100;
                 featureSet['planFeatures.agentLimit'] = doc.planFeatures?.agentLimit ?? 5;
 
                 await WorkspaceSettings.updateMany(
@@ -428,14 +418,12 @@ const upsertPlan = async (req, res) => {
                     {
                         $set: {
                             subscriptionPlan: doc.name,
-                            activeModules: doc.activeModules,
-                            agentLimit: doc.planFeatures?.agentLimit ?? 5,
+                            activeModules:    doc.activeModules,
+                            agentLimit:       doc.planFeatures?.agentLimit ?? 5,
                             ...featureSet
                         }
                     }
                 );
-                // updateMany does not fire the per-doc cache-clear hook, so clear
-                // each affected tenant's cache explicitly → change is live at once.
                 try {
                     const { clearTenantCache } = require('../middleware/authMiddleware');
                     affected.forEach(w => clearTenantCache(w.userId));
@@ -455,7 +443,6 @@ const deletePlan = async (req, res) => {
     try {
         const plan = await Plan.findById(req.params.id);
         if (!plan) return res.status(404).json({ message: 'Plan not found' });
-        // Don't allow deleting a plan that tenants are currently on
         const inUse = await WorkspaceSettings.countDocuments({ currentPlanCode: plan.code });
         if (inUse > 0) {
             return res.status(400).json({ message: `Cannot delete — ${inUse} tenant(s) are still on this plan. Move them off first.` });
@@ -468,7 +455,7 @@ const deletePlan = async (req, res) => {
     }
 };
 
-// ─── SuperAdmin subscription list (for FinanceView dashboard) ──────────────
+// ─── SuperAdmin subscription list ───────────────────────────────────────────
 const listSubscriptions = async (req, res) => {
     try {
         const { status, page = 1, limit = 100 } = req.query;
@@ -484,7 +471,6 @@ const listSubscriptions = async (req, res) => {
             Subscription.countDocuments(filter)
         ]);
 
-        // Hydrate with client basics
         const User = require('../models/User');
         const ids = subs.map(s => s.clientId);
         const users = await User.find({ _id: { $in: ids } }).select('email name companyName').lean();
@@ -506,6 +492,134 @@ const listSubscriptions = async (req, res) => {
     }
 };
 
+const updateBillingDetails = async (req, res) => {
+    try {
+        if (req.user?.role !== 'manager') {
+            return res.status(403).json({ message: 'Billing is managed by the account owner.' });
+        }
+        const clientId = req.tenantId;
+        const { billingAddress, gstNumber } = req.body;
+
+        const ws = await WorkspaceSettings.findOneAndUpdate(
+            { userId: clientId },
+            { $set: { billingAddress: billingAddress || '', gstNumber: gstNumber || '' } },
+            { new: true, upsert: true }
+        );
+
+        res.json({
+            success: true,
+            message: 'Billing details updated successfully.',
+            billingAddress: ws.billingAddress,
+            gstNumber: ws.gstNumber
+        });
+    } catch (err) {
+        console.error('updateBillingDetails error:', err);
+        res.status(500).json({ message: 'Failed to update billing details' });
+    }
+};
+
+const getMyInvoice = async (req, res) => {
+    try {
+        if (req.user?.role !== 'manager') {
+            return res.status(403).json({ message: 'Billing is managed by the account owner.' });
+        }
+        const clientId = req.tenantId;
+        const { paymentId } = req.params;
+
+        if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+            return res.status(400).json({ message: 'Invalid payment ID.' });
+        }
+
+        const payment = await Payment.findOne({ _id: paymentId, clientId }).lean();
+        if (!payment) {
+            return res.status(404).json({ message: 'Invoice not found.' });
+        }
+
+        const GlobalSetting = require('../models/GlobalSetting');
+        const settings = await GlobalSetting.find({
+            key: { $in: ['app_name', 'company_address', 'company_gst', 'support_email'] }
+        }).lean();
+
+        const settingsMap = {};
+        settings.forEach(s => { settingsMap[s.key] = s.value; });
+
+        const company = {
+            name:    settingsMap.app_name || 'Adfliker CRM Platform',
+            address: settingsMap.company_address || 'Adfliker CRM, Delhi, India',
+            gst:     settingsMap.company_gst || '',
+            email:   settingsMap.support_email || 'support@adfliker.com'
+        };
+
+        const User = require('../models/User');
+        const client = await User.findById(clientId).select('name email companyName phone').lean();
+
+        const sub = await Subscription.findOne({ clientId }).lean();
+        let planName = 'CRM Subscription';
+        if (sub?.planCode) {
+            const p = await Plan.findOne({ code: sub.planCode }).lean();
+            if (p) planName = `${p.name} Plan`;
+        }
+
+        res.json({ success: true, payment, company, client, planName });
+    } catch (err) {
+        console.error('getMyInvoice error:', err);
+        res.status(500).json({ message: 'Failed to load invoice details' });
+    }
+};
+
+// ─── GET /api/billing/me/payment-link ─────────────────────────────────────
+// Returns a FRESH Razorpay short_url for the customer's current subscription.
+//
+// Why this exists (Concern #4 — authLink expiry):
+//   When a subscription is in 'grace' (halted) status, the Billing page shows
+//   an "Update payment method" button that links to sub.authLink. The problem:
+//   authLink is set once at subscription creation and can go stale after a
+//   plan change or server restart that clears the in-memory state.
+//
+//   Razorpay's short_url is the canonical, always-valid hosted payment page
+//   for a subscription. It does NOT expire as long as the subscription exists.
+//   Fetching it fresh from Razorpay on each button click guarantees the link
+//   is always valid — even months after the subscription was created.
+//
+// Used by Billing.jsx "Update payment method" button.
+const getFreshPaymentLink = async (req, res) => {
+    try {
+        if (req.user?.role !== 'manager') {
+            return res.status(403).json({ message: 'Billing is managed by the account owner.' });
+        }
+        const clientId = req.tenantId;
+        const sub = await Subscription.findOne({ clientId }).lean();
+        if (!sub) {
+            return res.status(404).json({ message: 'No subscription found.' });
+        }
+        if (!sub.razorpaySubscriptionId) {
+            return res.status(404).json({ message: 'No Razorpay subscription linked.' });
+        }
+
+        // Always fetch from Razorpay — never trust the stored authLink.
+        const rzpSub = await razorpayService.getSubscription(sub.razorpaySubscriptionId);
+        const freshLink = rzpSub?.short_url || null;
+
+        if (!freshLink) {
+            return res.status(404).json({ message: 'Payment link unavailable. Contact support.' });
+        }
+
+        // Persist the refreshed link so future page loads also have it.
+        await Subscription.updateOne(
+            { _id: sub._id },
+            { $set: { authLink: freshLink } }
+        );
+
+        return res.json({ success: true, paymentLink: freshLink });
+    } catch (err) {
+        console.error('getFreshPaymentLink error:', err);
+        if (err.code === 'RAZORPAY_NOT_CONFIGURED') {
+            return res.status(503).json({ message: 'Payment gateway not configured.' });
+        }
+        res.status(500).json({ message: 'Failed to fetch payment link. Please try again.' });
+    }
+};
+
 module.exports = {
     listPlans,
     getMySubscription,
@@ -513,9 +627,11 @@ module.exports = {
     changePlan,
     cancel,
     webhook,
-    chargeNow,
+    getFreshPaymentLink,
     listAllPlans,
     upsertPlan,
     deletePlan,
-    listSubscriptions
+    listSubscriptions,
+    updateBillingDetails,
+    getMyInvoice
 };

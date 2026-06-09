@@ -1,4 +1,4 @@
-const AgencyClient  = require('../models/AgencyClient');
+const AgencyClient = require('../models/AgencyClient');
 const AgencyPayment = require('../models/AgencyPayment');
 
 // ─── CLIENTS ───────────────────────────────────────────────────────────────────
@@ -18,13 +18,20 @@ exports.listClients = async (req, res) => {
 
 exports.createClient = async (req, res) => {
     try {
-        const { name, email, phone, company, serviceType, monthlyFee, requirements, startDate, status, notes } = req.body;
+        const {
+            name, email, phone, company, serviceType, monthlyFee,
+            requirements, startDate, status, notes,
+            billingAddress, gstNumber, billingDay
+        } = req.body;
         if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Client name is required.' });
         if (monthlyFee == null || isNaN(monthlyFee)) return res.status(400).json({ success: false, message: 'Monthly fee is required.' });
 
         const client = await AgencyClient.create({
             name: name.trim(), email, phone, company, serviceType,
-            monthlyFee: Number(monthlyFee), requirements, startDate, status, notes
+            monthlyFee: Number(monthlyFee), requirements, startDate, status, notes,
+            billingAddress: billingAddress || '',
+            gstNumber:      gstNumber      || '',
+            billingDay:     billingDay     ? Number(billingDay) : 1
         });
         res.status(201).json({ success: true, client, message: 'Client added.' });
     } catch (err) {
@@ -41,6 +48,19 @@ exports.updateClient = async (req, res) => {
             { new: true, runValidators: true }
         );
         if (!client) return res.status(404).json({ success: false, message: 'Client not found.' });
+
+        // If billing address or GST changed, refresh snapshots on all PENDING payments
+        // so the next invoice download reflects the updated address immediately.
+        if (req.body.billingAddress !== undefined || req.body.gstNumber !== undefined) {
+            const updateFields = {};
+            if (req.body.billingAddress !== undefined) updateFields.billingAddressSnapshot = client.billingAddress || '';
+            if (req.body.gstNumber      !== undefined) updateFields.gstNumberSnapshot      = client.gstNumber      || '';
+            await AgencyPayment.updateMany(
+                { agencyClientId: client._id, status: 'pending' },
+                { $set: updateFields }
+            );
+        }
+
         res.json({ success: true, client, message: 'Client updated.' });
     } catch (err) {
         console.error('[AgencyFinance] updateClient:', err);
@@ -48,10 +68,25 @@ exports.updateClient = async (req, res) => {
     }
 };
 
+
 exports.deleteClient = async (req, res) => {
     try {
         const client = await AgencyClient.findByIdAndDelete(req.params.id);
         if (!client) return res.status(404).json({ success: false, message: 'Client not found.' });
+
+        // Cancel all pending follow-up Agenda jobs before removing payments
+        const pendingPayments = await AgencyPayment.find({
+            agencyClientId: req.params.id,
+            followUpJobs: { $exists: true, $ne: [] }
+        }).select('followUpJobs').lean();
+
+        if (pendingPayments.length > 0) {
+            const { cancelAgencyBillFollowups } = require('../services/agencyBillingQueue');
+            for (const p of pendingPayments) {
+                await cancelAgencyBillFollowups(p);
+            }
+        }
+
         // Remove associated payments
         await AgencyPayment.deleteMany({ agencyClientId: req.params.id });
         res.json({ success: true, message: 'Client and related payments deleted.' });
@@ -68,9 +103,9 @@ exports.listPayments = async (req, res) => {
         const { clientId, month, year, status, limit = 200, page = 1 } = req.query;
         const filter = {};
         if (clientId) filter.agencyClientId = clientId;
-        if (month)    filter.billingMonth = Number(month);
-        if (year)     filter.billingYear  = Number(year);
-        if (status)   filter.status = status;
+        if (month) filter.billingMonth = Number(month);
+        if (year) filter.billingYear = Number(year);
+        if (status) filter.status = status;
 
         const skip = (Number(page) - 1) * Number(limit);
         const payments = await AgencyPayment
@@ -87,6 +122,65 @@ exports.listPayments = async (req, res) => {
     }
 };
 
+// GET /superadmin/agency-finance/payments/:id  — single payment (fresh from DB)
+// Self-heals old payments missing invoiceNumber, billingAddressSnapshot, or serviceType.
+exports.getPayment = async (req, res) => {
+    try {
+        const payment = await AgencyPayment.findById(req.params.id).lean();
+        if (!payment) return res.status(404).json({ success: false, message: 'Payment not found.' });
+
+        const needsFix = !payment.billingAddressSnapshot || !payment.invoiceNumber || !payment.clientServiceType;
+        const fixSet = {};
+
+        if (needsFix) {
+            const client = await AgencyClient.findById(payment.agencyClientId)
+                .select('billingAddress gstNumber serviceType name')
+                .lean();
+
+            if (client) {
+                // Fix billing address snapshot
+                if (!payment.billingAddressSnapshot) {
+                    payment.billingAddressSnapshot = client.billingAddress || '';
+                    fixSet.billingAddressSnapshot  = payment.billingAddressSnapshot;
+                }
+                // Fix GST snapshot
+                if (!payment.gstNumberSnapshot) {
+                    payment.gstNumberSnapshot = client.gstNumber || '';
+                    fixSet.gstNumberSnapshot  = payment.gstNumberSnapshot;
+                }
+                // Fix service type snapshot — only if field is truly missing (not if client chose 'other')
+                if (!payment.clientServiceType) {
+                    payment.clientServiceType = client.serviceType || 'other';
+                    fixSet.clientServiceType  = payment.clientServiceType;
+                }
+            }
+
+            // Auto-generate invoiceNumber if missing (for old payments)
+            if (!payment.invoiceNumber) {
+                const m   = String(payment.billingMonth).padStart(2, '0');
+                const cnt = await AgencyPayment.countDocuments({
+                    billingYear: payment.billingYear,
+                    billingMonth: payment.billingMonth,
+                    _id: { $lte: payment._id }
+                });
+                payment.invoiceNumber = `INV-${payment.billingYear}-${m}-${String(cnt).padStart(4, '0')}`;
+                fixSet.invoiceNumber  = payment.invoiceNumber;
+            }
+
+            // Persist all fixes once — future downloads use correct data instantly
+            if (Object.keys(fixSet).length > 0) {
+                await AgencyPayment.updateOne({ _id: payment._id }, { $set: fixSet });
+            }
+        }
+
+        res.json({ success: true, payment });
+    } catch (err) {
+        console.error('[AgencyFinance] getPayment:', err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+
 exports.createPayment = async (req, res) => {
     try {
         const {
@@ -102,20 +196,47 @@ exports.createPayment = async (req, res) => {
         const client = await AgencyClient.findById(agencyClientId).lean();
         if (!client) return res.status(404).json({ success: false, message: 'Agency client not found.' });
 
+        // Generate unique Invoice Number
+        const yearStr = billingYear;
+        const monthStr = String(billingMonth).padStart(2, '0');
+        const count = await AgencyPayment.countDocuments({ billingYear, billingMonth });
+        const seq = String(count + 1).padStart(4, '0');
+        const invoiceNumber = `INV-${yearStr}-${monthStr}-${seq}`;
+
+        // Auto due date: today + 5 days if not provided
+        let resolvedDueDate = dueDate || null;
+        if (!resolvedDueDate) {
+            const d = new Date();
+            d.setDate(d.getDate() + 5);
+            resolvedDueDate = d;
+        }
+
         const payment = await AgencyPayment.create({
             agencyClientId,
-            clientName:    client.name,
-            clientCompany: client.company,
+            clientName:        client.name,
+            clientCompany:     client.company,
+            clientServiceType: client.serviceType || 'other',
             amount: Number(amount),
             billingMonth: Number(billingMonth),
             billingYear:  Number(billingYear),
-            dueDate:       dueDate || null,
-            status:        status || 'pending',
-            receivedDate:  status === 'received' ? (receivedDate || new Date()) : null,
-            receivedAmount: status === 'partial'  ? Number(receivedAmount || 0) : null,
+            dueDate:      resolvedDueDate,
+            status: status || 'pending',
+            receivedDate: status === 'received' ? (receivedDate || new Date()) : null,
+            receivedAmount: status === 'partial' ? Number(receivedAmount || 0) : null,
             paymentMethod, reference, notes,
+            invoiceNumber,
+            billingAddressSnapshot: client.billingAddress || '',
+            gstNumberSnapshot:      client.gstNumber      || '',
             recordedBy: req.user?._id || null
         });
+
+        // Trigger Automated Reminders if status is pending
+        if (payment.status === 'pending') {
+            const { scheduleAgencyBillFollowups } = require('../services/agencyBillingQueue');
+            const jobIds = await scheduleAgencyBillFollowups(payment);
+            payment.followUpJobs = jobIds;
+            await payment.save();
+        }
 
         res.status(201).json({ success: true, payment, message: 'Payment recorded.' });
     } catch (err) {
@@ -126,6 +247,7 @@ exports.createPayment = async (req, res) => {
 
 exports.updatePayment = async (req, res) => {
     try {
+        const prevPayment = await AgencyPayment.findById(req.params.id).select('status agencyClientId').lean();
         const update = { ...req.body };
 
         // Auto-set receivedDate if marking as received
@@ -133,7 +255,7 @@ exports.updatePayment = async (req, res) => {
             update.receivedDate = new Date();
         }
         if (update.status === 'pending') {
-            update.receivedDate   = null;
+            update.receivedDate = null;
             update.receivedAmount = null;
         }
 
@@ -143,6 +265,26 @@ exports.updatePayment = async (req, res) => {
             { new: true, runValidators: true }
         );
         if (!payment) return res.status(404).json({ success: false, message: 'Payment not found.' });
+
+        // If status is changed to received or partial, cancel pending followup jobs
+        if (['received', 'partial'].includes(payment.status)) {
+            const { cancelAgencyBillFollowups } = require('../services/agencyBillingQueue');
+            await cancelAgencyBillFollowups(payment);
+        }
+
+        // ── Send Payment Receipt when status transitions TO 'received' ──────────
+        // Only fires if this is a real status change (not already received before).
+        // Runs non-blocking so API responds instantly.
+        if (payment.status === 'received' && prevPayment?.status !== 'received') {
+            const client = await AgencyClient.findById(payment.agencyClientId).lean();
+            if (client) {
+                const { sendPaymentReceipt } = require('../services/agencyBillingQueue');
+                sendPaymentReceipt(payment.toObject(), client).catch(err =>
+                    console.error('[updatePayment] Receipt send failed silently:', err.message)
+                );
+            }
+        }
+
         res.json({ success: true, payment, message: 'Payment updated.' });
     } catch (err) {
         console.error('[AgencyFinance] updatePayment:', err);
@@ -150,10 +292,17 @@ exports.updatePayment = async (req, res) => {
     }
 };
 
+
 exports.deletePayment = async (req, res) => {
     try {
-        const payment = await AgencyPayment.findByIdAndDelete(req.params.id);
+        const payment = await AgencyPayment.findById(req.params.id);
         if (!payment) return res.status(404).json({ success: false, message: 'Payment not found.' });
+
+        // Cancel pending followup jobs
+        const { cancelAgencyBillFollowups } = require('../services/agencyBillingQueue');
+        await cancelAgencyBillFollowups(payment);
+
+        await AgencyPayment.deleteOne({ _id: req.params.id });
         res.json({ success: true, message: 'Payment deleted.' });
     } catch (err) {
         console.error('[AgencyFinance] deletePayment:', err);
@@ -161,14 +310,87 @@ exports.deletePayment = async (req, res) => {
     }
 };
 
+// ─── MANUAL SEND BILL ──────────────────────────────────────────────────────────
+// POST /superadmin/agency-finance/payments/:id/send-bill
+// Immediately sends the billing email + WhatsApp reminder for a specific payment.
+// Uses the same logic as agencyBillingQueue's Day 0 step.
+
+exports.sendBillManually = async (req, res) => {
+    try {
+        const payment = await AgencyPayment.findById(req.params.id).lean();
+        if (!payment) return res.status(404).json({ success: false, message: 'Payment not found.' });
+
+        const client = await AgencyClient.findById(payment.agencyClientId).lean();
+        if (!client) return res.status(404).json({ success: false, message: 'Client not found.' });
+
+        const User = require('../models/User');
+        const superAdmin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
+        if (!superAdmin) return res.status(500).json({ success: false, message: 'Super Admin account not found.' });
+
+        const superAdminId = superAdmin._id;
+
+        // ── Send Email ────────────────────────────────────────────────────────────
+        if (client.email) {
+            try {
+                const { buildBillingEmail } = require('../services/agencyBillingQueue');
+                const { subject, html, text } = buildBillingEmail(payment, client, 'day0');
+                const { sendEmail } = require('../services/emailService');
+                await sendEmail({
+                    to:            client.email,
+                    subject,
+                    html,
+                    text,
+                    userId:        superAdminId,
+                    transactional: true
+                });
+                console.log(`📧 [ManualBill] Email sent to ${client.email} for invoice ${payment.invoiceNumber}`);
+            } catch (emailErr) {
+                console.error(`❌ [ManualBill] Email failed:`, emailErr.message);
+            }
+        }
+
+        // ── Send WhatsApp (template if configured, else skip) ─────────────────────
+        if (client.phone) {
+            try {
+                const BillingReminderConfig = require('../models/BillingReminderConfig');
+                const config = await BillingReminderConfig.findOne().lean();
+                const templateName = config?.day0TemplateName;
+                const langCode     = config?.day0LanguageCode || 'en';
+
+                if (templateName) {
+                    const { sendWhatsAppTemplateMessage } = require('../services/whatsappService');
+                    await sendWhatsAppTemplateMessage(
+                        client.phone, templateName, langCode, [], superAdminId,
+                        { isAutomated: false, triggerType: 'billing_reminder' }
+                    );
+                    console.log(`💬 [ManualBill] WA template '${templateName}' sent to ${client.phone}`);
+                } else {
+                    console.warn(`⚠️ [ManualBill] No Day 0 WA template configured — WA skipped.`);
+                }
+            } catch (waErr) {
+                console.error(`❌ [ManualBill] WhatsApp failed:`, waErr.message);
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Invoice ${payment.invoiceNumber} sent${client.email ? ' via Email' : ''}${client.phone ? ' & WhatsApp' : ''}.`
+        });
+    } catch (err) {
+        console.error('[AgencyFinance] sendBillManually:', err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+
 // ─── SUMMARY ───────────────────────────────────────────────────────────────────
 
 exports.getSummary = async (req, res) => {
     try {
         const { month: monthStr, year: yearStr } = req.query;
-        const now   = new Date();
+        const now = new Date();
         const month = monthStr ? Number(monthStr) : now.getMonth() + 1;
-        const year  = yearStr  ? Number(yearStr)  : now.getFullYear();
+        const year = yearStr ? Number(yearStr) : now.getFullYear();
 
         const [
             activeClients,
@@ -192,12 +414,16 @@ exports.getSummary = async (req, res) => {
             // All-time total received
             AgencyPayment.aggregate([
                 { $match: { status: { $in: ['received', 'partial'] } } },
-                { $group: {
-                    _id: null,
-                    total: { $sum: {
-                        $cond: [{ $eq: ['$status', 'partial'] }, '$receivedAmount', '$amount']
-                    }}
-                }}
+                {
+                    $group: {
+                        _id: null,
+                        total: {
+                            $sum: {
+                                $cond: [{ $eq: ['$status', 'partial'] }, '$receivedAmount', '$amount']
+                            }
+                        }
+                    }
+                }
             ]),
 
             // All-time total pending
@@ -213,11 +439,17 @@ exports.getSummary = async (req, res) => {
                         from: 'agencypayments',
                         let: { cid: '$_id' },
                         pipeline: [
-                            { $match: { $expr: { $and: [
-                                { $eq: ['$agencyClientId', '$$cid'] },
-                                { $eq: ['$billingMonth', month] },
-                                { $eq: ['$billingYear', year] }
-                            ]}}},
+                            {
+                                $match: {
+                                    $expr: {
+                                        $and: [
+                                            { $eq: ['$agencyClientId', '$$cid'] },
+                                            { $eq: ['$billingMonth', month] },
+                                            { $eq: ['$billingYear', year] }
+                                        ]
+                                    }
+                                }
+                            },
                         ],
                         as: 'payments'
                     }
@@ -287,7 +519,7 @@ exports.getSummary = async (req, res) => {
 
         // Monthly fee total for active clients (what we should be billing)
         const activeClientList = await AgencyClient.find({ status: 'active' }).select('monthlyFee').lean();
-        const expectedMonthly  = activeClientList.reduce((s, c) => s + (c.monthlyFee || 0), 0);
+        const expectedMonthly = activeClientList.reduce((s, c) => s + (c.monthlyFee || 0), 0);
 
         // Trend labels
         const trendLabels = monthlyTrend.map(m => {
@@ -304,10 +536,10 @@ exports.getSummary = async (req, res) => {
                 totalClients,
                 expectedMonthly,
                 periodReceived,
-                periodPending:  periodPending + periodPartial,
+                periodPending: periodPending + periodPartial,
                 allTimeReceived: allTimeReceived[0]?.total || 0,
-                allTimePending:  allTimePending[0]?.total  || 0,
-                collectionRate:  expectedMonthly > 0
+                allTimePending: allTimePending[0]?.total || 0,
+                collectionRate: expectedMonthly > 0
                     ? Math.round((periodReceived / expectedMonthly) * 100)
                     : 0
             },

@@ -54,7 +54,7 @@ const PaymentRequired = () => {
                         <ul className="space-y-1.5 ml-1">
                             <li className="flex items-start gap-2">
                                 <i className="fa-solid fa-circle-check text-emerald-500 mt-1 text-xs" />
-                                Resubscribe online via Cashfree autodebit (instant)
+                                Resubscribe online via Razorpay autodebit (instant)
                             </li>
                             <li className="flex items-start gap-2">
                                 <i className="fa-solid fa-circle-check text-emerald-500 mt-1 text-xs" />

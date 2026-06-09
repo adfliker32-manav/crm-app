@@ -1,16 +1,16 @@
 const mongoose = require('mongoose');
 
-// One per billable manager. Mirrors the Cashfree Subscription object and
+// One per billable manager. Mirrors the Razorpay Subscription object and
 // holds the mandate state machine. Source-of-truth for plan state stays on
 // WorkspaceSettings (planExpiryDate, subscriptionStatus, activeModules);
 // this doc carries the gateway-side identifiers + audit trail.
 //
 // Lifecycle:
-//   pending_auth → (customer authorizes mandate) → active
-//   active       → (charge succeeds) → active (planExpiryDate extended)
-//   active       → (charge fails, sub put ON_HOLD by Cashfree) → grace
-//   grace        → (retry succeeds) → active
-//   grace        → (grace window expires, cron sweep) → cancelled  + workspace downgraded
+//   pending_auth → (customer completes Razorpay Checkout) → active
+//   active       → (charge succeeds / subscription.charged) → active (planExpiryDate extended)
+//   active       → (subscription.halted — Razorpay gives up retrying) → grace
+//   grace        → (customer updates card, charge succeeds) → active
+//   grace        → (grace window expires, cron sweep) → cancelled + workspace downgraded
 //   any          → (customer/superadmin cancels) → cancelled
 //
 // Intentionally does NOT use saasPlugin — billing ledger is SuperAdmin-global.
@@ -30,16 +30,13 @@ const subscriptionSchema = new mongoose.Schema({
         trim: true
     },
 
-    // Cashfree identifiers (sparse — null until createSubscription returns).
-    // cashfreeSubscriptionId = OUR subscription_id (we generate it; Cashfree echoes
-    // it in webhooks). cfSubscriptionId = Cashfree's own numeric id (cf_subscription_id)
-    // — stored so webhooks can be matched on either. cashfreeSessionId =
-    // subscription_session_id, consumed by the JS SDK to open the mandate checkout.
-    cashfreeSubscriptionId: { type: String, default: null, index: { unique: true, sparse: true } },
-    cfSubscriptionId:       { type: String, default: null, index: { sparse: true } },
-    cashfreeSessionId:      { type: String, default: null },
-    cashfreeCustomerId:     { type: String, default: null },
-    cashfreePlanId:         { type: String, default: null },
+    // ─── Razorpay identifiers ─────────────────────────────────────────────────
+    // razorpaySubscriptionId = Razorpay's sub_XXXXXXX returned on createSubscription.
+    //   Used as the key passed to Razorpay Checkout on frontend (subscription_id param).
+    //   Echoed back in every webhook under payload.subscription.entity.id.
+    // razorpayPlanId = plan_XXXXXXX from the Plan document (stored here for audit).
+    razorpaySubscriptionId: { type: String, default: null, index: { unique: true, sparse: true } },
+    razorpayPlanId:         { type: String, default: null },
 
     status: {
         type: String,
@@ -57,13 +54,13 @@ const subscriptionSchema = new mongoose.Schema({
         default: 'monthly'
     },
 
-    // First-time mandate authorization URL Cashfree returns. We redirect
-    // the customer here from the PlanPicker. Cleared once status='active'.
+    // short_url returned by Razorpay — hosted payment page as a fallback if
+    // the JS popup is blocked. Cleared once status = 'active'.
     authLink: { type: String, default: null },
 
     mandateMethod: {
         type: String,
-        enum: ['upi', 'enach', 'card', null],
+        enum: ['upi', 'card', 'emandate', 'nach', null],
         default: null
     },
 
@@ -74,17 +71,16 @@ const subscriptionSchema = new mongoose.Schema({
 
     // Coupon applied at checkout (discount type only — trial_extension applied separately).
     couponCode:     { type: String, default: null },
-    originalAmount: { type: Number, default: null }, // plan price before discount; null = no coupon used
+    originalAmount: { type: Number, default: null }, // plan price before discount; null = no coupon
 
-    // Bumped on each SUBSCRIPTION_PAYMENT_FAILED; reset on success.
+    // Bumped on each subscription.pending / payment.failed; reset on subscription.charged.
     failedAttempts: { type: Number, default: 0 },
 
-    cancelledAt: { type: Date, default: null },
+    cancelledAt:  { type: Date,   default: null },
     cancelReason: { type: String, default: '' },
 
-    // Last webhook payload (truncated upstream if very large).
-    // Kept as Mixed so we don't have to track every Cashfree event shape.
-    rawCashfreePayload: { type: mongoose.Schema.Types.Mixed, default: null }
+    // Last webhook payload — kept as Mixed so we don't track every Razorpay shape.
+    rawRazorpayPayload: { type: mongoose.Schema.Types.Mixed, default: null }
 }, { timestamps: true });
 
 subscriptionSchema.index({ status: 1, nextChargeAt: 1 });

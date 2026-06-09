@@ -304,6 +304,10 @@ mongoose.connect(MONGO_URI, {
       const { defineSequenceJobs } = require('./src/services/sequenceService');
       defineSequenceJobs(agenda);
 
+      // 5. Agency monthly billing follow-ups
+      const { defineAgencyBillingJobs } = require('./src/services/agencyBillingQueue');
+      defineAgencyBillingJobs(agenda);
+
       // ✅ Start AFTER all definitions are registered
       await agenda.start();
       setAgenda(agenda); // Register for graceful shutdown
