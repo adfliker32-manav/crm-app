@@ -318,10 +318,34 @@ const applyChargeSuccess = async (clientId, payload) => {
                 const langCode     = config?.receiptLanguageCode || 'en';
                 if (templateName) {
                     const { sendWhatsAppTemplateMessage } = require('./whatsappService');
-                    const admin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
-                    if (admin?._id) {
+                    const IntegrationConfig = require('../models/IntegrationConfig');
+                    let superAdminId = null;
+
+                    try {
+                        const activeConfigs = await IntegrationConfig.find({
+                            $or: [
+                                { 'email.emailUser': { $exists: true, $ne: null, $ne: 'null', $ne: '' } },
+                                { 'whatsapp.accessToken': { $exists: true, $ne: null, $ne: '' } }
+                            ]
+                        }).select('userId').lean();
+
+                        if (activeConfigs.length > 0) {
+                            const userIds = activeConfigs.map(c => c.userId);
+                            const admin = await User.findOne({ _id: { $in: userIds }, role: 'superadmin' }).select('_id').lean();
+                            if (admin) superAdminId = admin._id.toString();
+                        }
+                    } catch (lookupErr) {
+                        console.error('⚠️ [BillingWA] Error resolving active superadmin for receipt:', lookupErr.message);
+                    }
+
+                    if (!superAdminId) {
+                        const admin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
+                        if (admin) superAdminId = admin._id.toString();
+                    }
+
+                    if (superAdminId) {
                         await sendWhatsAppTemplateMessage(
-                            client.phone, templateName, langCode, [], admin._id,
+                            client.phone, templateName, langCode, [], superAdminId,
                             { isAutomated: true, triggerType: 'payment_receipt' }
                         );
                     }
@@ -431,10 +455,34 @@ const applyChargeFailure = async (clientId, payload, isHalted = false) => {
                     const langCode     = config?.paymentFailedLanguageCode || 'en';
                     if (templateName) {
                         const { sendWhatsAppTemplateMessage } = require('./whatsappService');
-                        const admin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
-                        if (admin?._id) {
+                        const IntegrationConfig = require('../models/IntegrationConfig');
+                        let superAdminId = null;
+
+                        try {
+                            const activeConfigs = await IntegrationConfig.find({
+                                $or: [
+                                    { 'email.emailUser': { $exists: true, $ne: null, $ne: 'null', $ne: '' } },
+                                    { 'whatsapp.accessToken': { $exists: true, $ne: null, $ne: '' } }
+                                ]
+                            }).select('userId').lean();
+
+                            if (activeConfigs.length > 0) {
+                                const userIds = activeConfigs.map(c => c.userId);
+                                const admin = await User.findOne({ _id: { $in: userIds }, role: 'superadmin' }).select('_id').lean();
+                                if (admin) superAdminId = admin._id.toString();
+                            }
+                        } catch (lookupErr) {
+                            console.error('⚠️ [BillingWA] Error resolving active superadmin for failure alert:', lookupErr.message);
+                        }
+
+                        if (!superAdminId) {
+                            const admin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
+                            if (admin) superAdminId = admin._id.toString();
+                        }
+
+                        if (superAdminId) {
                             await sendWhatsAppTemplateMessage(
-                                client.phone, templateName, langCode, [], admin._id,
+                                client.phone, templateName, langCode, [], superAdminId,
                                 { isAutomated: true, triggerType: 'payment_failed' }
                             );
                             console.log(`💬 [BillingWA] Payment-failed WA sent to ${client.phone}`);

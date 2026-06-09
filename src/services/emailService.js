@@ -67,6 +67,15 @@ const createTransporter = (userCredentials = null) => {
         password = process.env.EMAIL_PASSWORD || process.env.GMAIL_APP_PASSWORD;
     }
 
+    if (password) {
+        const masked = password.length > 4 
+            ? `${password.substring(0, 2)}...${password.substring(password.length - 2)} (len: ${password.length})`
+            : `len: ${password.length}`;
+        console.log(`[EmailService] SMTP Transporter built for ${email} using password ${masked}`);
+    } else {
+        console.log(`[EmailService] SMTP Transporter built for ${email} with NO password`);
+    }
+
     if (!email || !password) {
         if (!userCredentials) {
             console.error('❌ EMAIL CONFIGURATION MISSING:');
@@ -178,6 +187,8 @@ const sendEmail = async (options) => {
             fromName = userCredentials.fromName;
         }
     }
+
+    console.log(`[EmailService] Sending email to ${to} using userId: ${userId || 'default-env'}. Credentials resolved: ${userCredentials ? 'YES' : 'NO'}. SMTP User: ${userCredentials ? userCredentials.email : 'env-default'}`);
 
     const transporter = getTransporter(userCredentials, userId);
     if (!transporter) {
