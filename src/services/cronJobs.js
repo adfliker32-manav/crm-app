@@ -739,7 +739,7 @@ const runAgencyClientBillingSweep = async () => {
                             const lastBilled = new Date(client.lastBilledDate);
                             const lastBilledMidnight = new Date(lastBilled.getFullYear(), lastBilled.getMonth(), lastBilled.getDate());
                             const diffTime = todayMidnight.getTime() - lastBilledMidnight.getTime();
-                            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                            const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
                             if (diffDays >= 30) {
                                 shouldBill = true;
                             }

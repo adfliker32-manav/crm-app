@@ -45,11 +45,13 @@ exports.createClient = async (req, res) => {
 
         const client = await AgencyClient.create({
             name: name.trim(), email, phone, company, serviceType,
-            monthlyFee: Number(monthlyFee), requirements, startDate, status, notes,
+            monthlyFee: Number(monthlyFee), requirements,
+            startDate: startDate ? new Date(startDate) : undefined,
+            status, notes,
             billingAddress:   billingAddress   || '',
             gstNumber:        gstNumber        || '',
             billingDay:       billingDay       ? Number(billingDay) : 1,
-            billingStartDate: billingStartDate || null
+            billingStartDate: billingStartDate ? new Date(billingStartDate) : null
         });
         res.status(201).json({ success: true, client, message: 'Client added.' });
     } catch (err) {
@@ -60,9 +62,22 @@ exports.createClient = async (req, res) => {
 
 exports.updateClient = async (req, res) => {
     try {
+        const updateData = { ...req.body };
+        if (updateData.startDate === '') {
+            updateData.startDate = undefined;
+        } else if (updateData.startDate) {
+            updateData.startDate = new Date(updateData.startDate);
+        }
+
+        if (updateData.billingStartDate === '') {
+            updateData.billingStartDate = null;
+        } else if (updateData.billingStartDate) {
+            updateData.billingStartDate = new Date(updateData.billingStartDate);
+        }
+
         const client = await AgencyClient.findByIdAndUpdate(
             req.params.id,
-            { $set: req.body },
+            { $set: updateData },
             { new: true, runValidators: true }
         );
         if (!client) return res.status(404).json({ success: false, message: 'Client not found.' });
@@ -141,13 +156,13 @@ exports.listPayments = async (req, res) => {
 };
 
 // GET /superadmin/agency-finance/payments/:id  — single payment (fresh from DB)
-// Self-heals old payments missing invoiceNumber, billingAddressSnapshot, or serviceType.
+// Self-heals old payments missing invoiceNumber, billingAddressSnapshot, serviceType, or agencyNameSnapshot.
 exports.getPayment = async (req, res) => {
     try {
         const payment = await AgencyPayment.findById(req.params.id).lean();
         if (!payment) return res.status(404).json({ success: false, message: 'Payment not found.' });
 
-        const needsFix = !payment.billingAddressSnapshot || !payment.invoiceNumber || !payment.clientServiceType;
+        const needsFix = !payment.billingAddressSnapshot || !payment.invoiceNumber || !payment.clientServiceType || !payment.agencyNameSnapshot;
         const fixSet = {};
 
         if (needsFix) {
@@ -171,6 +186,20 @@ exports.getPayment = async (req, res) => {
                     payment.clientServiceType = client.serviceType || 'other';
                     fixSet.clientServiceType  = payment.clientServiceType;
                 }
+            }
+
+            // Fix agency branding snapshot if missing
+            if (!payment.agencyNameSnapshot) {
+                const branding = await fetchAgencyBranding();
+                payment.agencyNameSnapshot = branding.agencyName;
+                payment.agencyAddressSnapshot = branding.agencyAddress;
+                payment.agencyGstSnapshot = branding.agencyGst;
+                payment.agencyLogoSnapshot = branding.agencyLogo;
+
+                fixSet.agencyNameSnapshot = branding.agencyName;
+                fixSet.agencyAddressSnapshot = branding.agencyAddress;
+                fixSet.agencyGstSnapshot = branding.agencyGst;
+                fixSet.agencyLogoSnapshot = branding.agencyLogo;
             }
 
             // Auto-generate invoiceNumber if missing (for old payments)
