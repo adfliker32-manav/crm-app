@@ -378,10 +378,33 @@ exports.sendBillManually = async (req, res) => {
         if (!client) return res.status(404).json({ success: false, message: 'Client not found.' });
 
         const User = require('../models/User');
-        const superAdmin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
-        if (!superAdmin) return res.status(500).json({ success: false, message: 'Super Admin account not found.' });
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        let superAdminId = null;
 
-        const superAdminId = superAdmin._id;
+        try {
+            const activeConfigs = await IntegrationConfig.find({
+                $or: [
+                    { 'email.emailUser': { $exists: true, $ne: null, $ne: 'null', $ne: '' } },
+                    { 'whatsapp.accessToken': { $exists: true, $ne: null, $ne: '' } }
+                ]
+            }).select('userId').lean();
+
+            if (activeConfigs.length > 0) {
+                const userIds = activeConfigs.map(c => c.userId);
+                const admin = await User.findOne({ _id: { $in: userIds }, role: 'superadmin' }).select('_id').lean();
+                if (admin) {
+                    superAdminId = admin._id;
+                }
+            }
+        } catch (err) {
+            console.error('⚠️ [sendBillManually] Error resolving active superadmin:', err.message);
+        }
+
+        if (!superAdminId) {
+            const superAdmin = await User.findOne({ role: 'superadmin' }).select('_id').lean();
+            if (!superAdmin) return res.status(500).json({ success: false, message: 'Super Admin account not found.' });
+            superAdminId = superAdmin._id;
+        }
 
         // ── Send Email ────────────────────────────────────────────────────────────
         if (client.email) {
