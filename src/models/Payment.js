@@ -95,15 +95,27 @@ paymentSchema.pre('save', async function () {
         const date = this.paymentDate || new Date();
         const year  = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
+        const counterKey = `${year}${month}`;
 
-        const start = new Date(year, date.getMonth(), 1);
-        const end   = new Date(year, date.getMonth() + 1, 1);
+        // Atomic counter — eliminates the race condition where two concurrent
+        // Payment.create() calls both read the same countDocuments() value and
+        // generate the same invoice number. findOneAndUpdate with $inc is atomic
+        // in MongoDB and guarantees a unique sequence number per month.
+        const CounterModel = mongoose.models.InvoiceCounter || mongoose.model(
+            'InvoiceCounter',
+            new mongoose.Schema({
+                _id:   { type: String },  // e.g. "202606"
+                seq:   { type: Number, default: 0 }
+            })
+        );
 
-        const count = await this.constructor.countDocuments({
-            paymentDate: { $gte: start, $lt: end }
-        });
-        const seq = String(count + 1).padStart(4, '0');
-        this.invoiceNumber = `INV-${year}${month}-${seq}`;
+        const counter = await CounterModel.findOneAndUpdate(
+            { _id: counterKey },
+            { $inc: { seq: 1 } },
+            { upsert: true, new: true }
+        );
+        const seq = String(counter.seq).padStart(4, '0');
+        this.invoiceNumber = `INV-${counterKey}-${seq}`;
     }
 
     if (this.isNew && (!this.billingAddressSnapshot || !this.gstNumberSnapshot)) {

@@ -408,6 +408,12 @@ const runRenewalReminder = async () => {
             }).lean();
 
             for (const sub of subs) {
+                // Idempotency: skip if a reminder was already sent in the last 20h.
+                // Prevents duplicate emails when the server restarts mid-cron window.
+                if (sub.lastRenewalReminderSentAt && (now - new Date(sub.lastRenewalReminderSentAt).getTime()) < 20 * 3600 * 1000) {
+                    continue;
+                }
+
                 const client = await User.findById(sub.clientId).select('email name companyName').lean();
                 if (!client?.email) continue;
                 const plan = await Plan.findOne({ code: sub.planCode }).select('name').lean();
@@ -418,6 +424,9 @@ const runRenewalReminder = async () => {
                     daysUntil: days,
                     chargeDate: sub.nextChargeAt
                 }).catch(err => console.error(`[RenewalReminder] email failed for ${client.email}:`, err.message));
+
+                // Stamp so the same sub won't get duplicate emails if server restarts.
+                await Subscription.findByIdAndUpdate(sub._id, { $set: { lastRenewalReminderSentAt: new Date() } });
                 totalSent++;
             }
         }
@@ -453,6 +462,7 @@ const runSubscriptionReconcile = async () => {
 
         let repaired = 0;
         let replayed = 0;
+        let consecutiveErrors = 0;
         for (const sub of subs) {
             try {
                 const rzpSub = await razorpayService.getSubscription(sub.razorpaySubscriptionId);
@@ -507,7 +517,15 @@ const runSubscriptionReconcile = async () => {
                         replayed++;
                     }
                 }
-            } catch (e) { /* per-sub failure shouldn’t kill the sweep */ }
+            } catch (e) {
+                // Log per-sub errors so broken credentials / rate limits are visible.
+                consecutiveErrors++;
+                console.error(`[SubscriptionReconcile] Failed for sub=${sub.razorpaySubscriptionId}: ${e.message}`);
+                if (consecutiveErrors >= 5) {
+                    console.error('🚨 [SubscriptionReconcile] 5+ consecutive errors — possible credential issue. Aborting sweep.');
+                    break;
+                }
+            }
         }
         if (repaired > 0 || replayed > 0) {
             console.log(`🔧 [SubscriptionReconcile] Repaired ${repaired} status / replayed ${replayed} missed charge(s)`);

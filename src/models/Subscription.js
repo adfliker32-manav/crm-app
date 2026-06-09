@@ -79,6 +79,10 @@ const subscriptionSchema = new mongoose.Schema({
     cancelledAt:  { type: Date,   default: null },
     cancelReason: { type: String, default: '' },
 
+    // Tracks the last time a renewal reminder was sent for this billing cycle.
+    // Used by the renewal reminder cron to avoid duplicate emails on server restart.
+    lastRenewalReminderSentAt: { type: Date, default: null },
+
     // Last webhook payload — kept as Mixed so we don't track every Razorpay shape.
     rawRazorpayPayload: { type: mongoose.Schema.Types.Mixed, default: null }
 }, { timestamps: true });

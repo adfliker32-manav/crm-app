@@ -301,8 +301,23 @@ const webhook = async (req, res) => {
 
         const sub = await Subscription.findOne({ razorpaySubscriptionId: rzpSubId });
         if (!sub) {
-            console.warn(`Razorpay webhook for unknown subscription rzpSubId=${rzpSubId}`);
-            return res.json({ received: true, unknown: true });
+            // Dead-letter: persist the full payload so ops can replay lost charges
+            // (e.g., server crashed between Razorpay API call and MongoDB save).
+            console.warn(`🚨 Razorpay webhook for unknown subscription rzpSubId=${rzpSubId} — saving to dead-letter`);
+            const DeadLetterSchema = mongoose.models.WebhookDeadLetter || mongoose.model(
+                'WebhookDeadLetter',
+                new mongoose.Schema({
+                    source:    { type: String, default: 'razorpay' },
+                    event:     { type: String },
+                    rzpSubId:  { type: String, index: true },
+                    payload:   { type: mongoose.Schema.Types.Mixed },
+                    processed: { type: Boolean, default: false }
+                }, { timestamps: true })
+            );
+            await DeadLetterSchema.create({ event: eventType, rzpSubId, payload }).catch(
+                e => console.error('Dead-letter save failed:', e.message)
+            );
+            return res.json({ received: true, deadLettered: true });
         }
 
         const clientId = sub.clientId;

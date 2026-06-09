@@ -37,7 +37,7 @@ const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
 const webLeadRoutes = require('./src/routes/webLeadRoutes'); // Web-to-Lead embed
 const mcpRoutes = require('./src/routes/mcpRoutes'); // Claude AI / MCP server
 const sequenceRoutes = require('./src/routes/sequenceRoutes'); // Drip Sequences
-const billingRoutes = require('./src/routes/billingRoutes'); // Cashfree Autodebit Subscriptions
+const billingRoutes = require('./src/routes/billingRoutes'); // Razorpay Autodebit Subscriptions
 
 const app = express();
 
@@ -73,8 +73,7 @@ const allowedOrigins = [
 ].filter(Boolean);
 
 // Apply CORS middleware only to API, Webhook, and Uploads endpoints.
-// Standard page navigations or redirects (like Cashfree POSTing back to /billing)
-// should not be blocked by CORS origin checks.
+// Standard page navigations or redirects should not be blocked by CORS origin checks.
 app.use((req, res, next) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/webhook/') || req.path.startsWith('/uploads') || req.path.startsWith('/socket.io')) {
     return cors({
@@ -143,6 +142,16 @@ if (!process.env.FRONTEND_URL) {
   console.warn('⚠️  WARNING: FRONTEND_URL is not set in .env');
   console.warn('   → CORS will only allow localhost origins.');
   console.warn('   → Set FRONTEND_URL to your production domain before deploying (e.g. https://app.adfliker.com)');
+}
+if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+  console.warn('⚠️  WARNING: RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not set in .env');
+  console.warn('   → Subscription billing will NOT work — customers will see RAZORPAY_NOT_CONFIGURED errors.');
+  console.warn('   → Get keys from Razorpay Dashboard → Account & Settings → API Keys.');
+}
+if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+  console.warn('⚠️  WARNING: RAZORPAY_WEBHOOK_SECRET not set in .env');
+  console.warn('   → Webhook signature verification is DISABLED — anyone can send fake payment events.');
+  console.warn('   → Set it from Razorpay Dashboard → Account & Settings → Webhooks.');
 }
 
 // ⚠️ PRODUCTION NOTE:
@@ -533,10 +542,8 @@ app.get('/book/:slug', (req, res) => {
 // Must be AFTER all API routes - serves React app for client-side routing
 app.use((req, res, next) => {
   const isFrontendRoute = !req.path.startsWith('/api/') && !req.path.startsWith('/webhook/') && !req.path.startsWith('/socket.io');
-  // Cashfree redirects back to the return URL (e.g. /billing) via POST
-  const isCashfreeReturn = req.method === 'POST' && req.path.startsWith('/billing');
 
-  if (isFrontendRoute && (req.method === 'GET' || isCashfreeReturn)) {
+  if (isFrontendRoute && req.method === 'GET') {
     const indexPath = path.join(__dirname, 'client/dist/index.html');
     res.sendFile(indexPath, (err) => {
       if (err) {

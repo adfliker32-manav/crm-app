@@ -81,17 +81,15 @@ const getPlan = (planId) => rzpRequest('GET', `/plans/${planId}`);
 //   id        → razorpaySubscriptionId stored in our Subscription doc
 //   short_url → hosted Razorpay payment link (fallback if popup blocked)
 //
-// Trial handling:
-//   If trialDays > 0, Razorpay creates the subscription with a start_at
-//   set to (now + trialDays). The mandate is captured immediately but the
-//   first charge is deferred — customer sees ₹0 charged today.
-//   If trialDays = 0 (default), the first charge happens at the first billing cycle.
+// Charging model:
+//   First charge fires IMMEDIATELY when the customer completes Razorpay Checkout.
+//   No start_at / no deferral. The 14-day trial is a free window before
+//   subscribing — once the mandate is approved, money moves same-day.
 const createSubscription = async ({
     razorpayPlanId,
     customerEmail,
     customerPhone,
     customerName,
-    trialDays = 0,           // 0 = no trial; >0 = deferred first charge
     totalCount = 100,        // Razorpay hard max is 100 cycles.
                              // monthly → 100 months ≈ 8.3 years (effectively lifetime for SaaS)
                              // yearly  → 100 years  (truly lifetime)
@@ -109,12 +107,6 @@ const createSubscription = async ({
             notify_email: customerEmail || undefined
         }
     };
-
-    // Deferred first charge for trial tenants:
-    // start_at must be a UNIX timestamp (seconds). We add trialDays * 86400s.
-    if (trialDays > 0) {
-        body.start_at = Math.floor(Date.now() / 1000) + trialDays * 86400;
-    }
 
     return rzpRequest('POST', '/subscriptions', body);
 };

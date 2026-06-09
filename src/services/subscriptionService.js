@@ -33,16 +33,18 @@ const stackExpiry = (currentExpiry, paymentDate, cycle) => {
 // Copy a Plan onto a WorkspaceSettings doc. Single chokepoint for module
 // permissions: every "customer is now on tier X" path goes through here.
 const applyPlanToWorkspace = async (clientId, plan) => {
+    const resolvedAgentLimit = plan.planFeatures?.agentLimit ?? 3;
     const update = {
         currentPlanCode: plan.code,
         activeModules: plan.activeModules || ['leads', 'team', 'reports'],
         planFeatures: {
             ...(plan.planFeatures || {}),
             leadLimit:  plan.planFeatures?.leadLimit  ?? 100,
-            agentLimit: plan.planFeatures?.agentLimit ?? 3
+            agentLimit: resolvedAgentLimit
         },
         subscriptionPlan: plan.name,
-        agentLimit: plan.planFeatures?.agentLimit ?? 5
+        // Single source of truth: top-level agentLimit must equal planFeatures.agentLimit.
+        agentLimit: resolvedAgentLimit
     };
     return WorkspaceSettings.findOneAndUpdate(
         { userId: clientId },
@@ -215,6 +217,12 @@ const applyChargeSuccess = async (clientId, payload) => {
 
     const wsNow = await WorkspaceSettings.findOne({ userId: clientId });
     const now = new Date();
+    // Stacking rule: extend from the later of (current expiry, now) so renewals
+    // never shorten the paid window. If planExpiryDate already lapsed (e.g. a late
+    // Razorpay retry), activationStart = now — the customer doesn't get credit for
+    // the gap days (correct: they had no access during those days).
+    // SAFETY: The E11000 guard on razorpayPaymentId (line ~250) prevents duplicate
+    // webhooks from double-stacking — the second attempt is a no-op.
     const activationStart = (wsNow?.planExpiryDate && new Date(wsNow.planExpiryDate) > now)
         ? new Date(wsNow.planExpiryDate)
         : now;
@@ -332,7 +340,10 @@ const applyChargeSuccess = async (clientId, payload) => {
 // charge settles. We grant provisional access immediately so a re-subscribing
 // customer isn't gated waiting for the first debit. The first
 // subscription.charged webhook then overwrites this with the real paid period.
-const ACTIVATION_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
+// Provisional access window after mandate is captured, before the first
+// subscription.charged webhook settles. NACH/emandate can take 3–5 business days;
+// 5 calendar days avoids premature "Plan expired" for slow settlement methods.
+const ACTIVATION_GRACE_MS = 5 * 24 * 60 * 60 * 1000;
 const applyActivation = async (clientId) => {
     const sub = await Subscription.findOne({ clientId });
     if (!sub) return null;
