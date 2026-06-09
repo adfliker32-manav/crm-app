@@ -92,7 +92,9 @@ const createSubscription = async ({
     customerPhone,
     customerName,
     trialDays = 0,           // 0 = no trial; >0 = deferred first charge
-    totalCount = 120,        // max billing cycles (120 monthly = 10 years)
+    totalCount = 100,        // Razorpay hard max is 100 cycles.
+                             // monthly → 100 months ≈ 8.3 years (effectively lifetime for SaaS)
+                             // yearly  → 100 years  (truly lifetime)
     quantity = 1
 }) => {
     if (!razorpayPlanId) throw new Error('razorpayPlanId is required');
