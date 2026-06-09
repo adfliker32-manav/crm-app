@@ -22,6 +22,8 @@ const emptyPlan = () => ({
     code: '', name: '', description: '',
     monthlyPrice: 0, yearlyPrice: 0,
     discountPercentage: 0,
+    razorpayMonthlyPlanId: '',
+    razorpayYearlyPlanId: '',
     activeModules: ['leads', 'team', 'reports'],
     planFeatures: { leadLimit: 100, agentLimit: 3 },
     isActive: true, isCustom: false, sortOrder: 0
@@ -120,7 +122,7 @@ const PlanCatalogView = () => {
                                 <th className="px-4 py-3">Monthly</th>
                                 <th className="px-4 py-3">Yearly</th>
                                 <th className="px-4 py-3">Discount</th>
-                                <th className="px-4 py-3">Modules</th>
+                                <th className="px-4 py-3">Razorpay IDs</th>
                                 <th className="px-4 py-3">Status</th>
                                 <th className="px-4 py-3 text-right">Actions</th>
                             </tr>
@@ -137,7 +139,31 @@ const PlanCatalogView = () => {
                                             ? <span className="bg-rose-100 text-rose-600 text-xs font-bold px-2 py-0.5 rounded-full">{p.discountPercentage}% off</span>
                                             : <span className="text-slate-400 text-xs">—</span>}
                                     </td>
-                                    <td className="px-4 py-3 text-xs text-slate-600">{(p.activeModules || []).join(', ')}</td>
+                                    <td className="px-4 py-3">
+                                        {/* Razorpay Plan ID status indicator */}
+                                        <div className="flex flex-col gap-0.5">
+                                            <span className={`inline-flex items-center gap-1 text-xs font-mono ${
+                                                p.razorpayMonthlyPlanId ? 'text-emerald-600' : 'text-rose-500 font-semibold'
+                                            }`}>
+                                                <i className={`fa-solid fa-circle text-[6px] ${
+                                                    p.razorpayMonthlyPlanId ? 'text-emerald-500' : 'text-rose-400'
+                                                }`} />
+                                                {p.razorpayMonthlyPlanId
+                                                    ? p.razorpayMonthlyPlanId.slice(0, 16) + '…'
+                                                    : 'Monthly ID missing'}
+                                            </span>
+                                            <span className={`inline-flex items-center gap-1 text-xs font-mono ${
+                                                p.razorpayYearlyPlanId ? 'text-emerald-600' : 'text-slate-400'
+                                            }`}>
+                                                <i className={`fa-solid fa-circle text-[6px] ${
+                                                    p.razorpayYearlyPlanId ? 'text-emerald-500' : 'text-slate-300'
+                                                }`} />
+                                                {p.razorpayYearlyPlanId
+                                                    ? p.razorpayYearlyPlanId.slice(0, 16) + '…'
+                                                    : 'Yearly ID not set'}
+                                            </span>
+                                        </div>
+                                    </td>
                                     <td className="px-4 py-3">
                                         <span className={`text-xs font-bold uppercase px-2 py-1 rounded ${p.isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
                                             {p.isActive ? 'Active' : 'Hidden'}
@@ -231,6 +257,65 @@ const PlanCatalogView = () => {
                                         value={editing.sortOrder}
                                         onChange={(e) => setEditing({ ...editing, sortOrder: Number(e.target.value) })}
                                         className="w-full border border-slate-300 rounded-lg px-3 py-2 mt-1" />
+                                </div>
+                            </div>
+
+                            {/* ── Razorpay Plan IDs ─────────────────────────────────── */}
+                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
+                                <div className="flex items-start gap-2">
+                                    <i className="fa-brands fa-cc-visa text-blue-500 mt-0.5" />
+                                    <div>
+                                        <p className="text-sm font-bold text-blue-900">Razorpay Plan IDs — required for autodebit</p>
+                                        <p className="text-xs text-blue-700 mt-0.5 leading-relaxed">
+                                            Every plan needs matching plan IDs from Razorpay Dashboard so customers can subscribe.
+                                            Without these, clicking "Subscribe" will fail with an error.
+                                        </p>
+                                        <p className="text-xs text-blue-600 mt-1.5 font-semibold">
+                                            How to get them:
+                                        </p>
+                                        <ol className="text-xs text-blue-700 mt-1 space-y-0.5 list-decimal list-inside">
+                                            <li>Open <a href="https://dashboard.razorpay.com/app/subscriptions/plans" target="_blank" rel="noopener noreferrer" className="underline font-semibold">dashboard.razorpay.com → Subscriptions → Plans</a></li>
+                                            <li>Click <strong>+ Create Plan</strong></li>
+                                            <li>Set Period = <strong>monthly</strong>, Amount = this plan's monthly price × 100 (paise)</li>
+                                            <li>Copy the <code className="bg-blue-100 px-1 rounded font-mono">plan_XXXXXXXXX</code> ID → paste below</li>
+                                            <li>Repeat for yearly period</li>
+                                        </ol>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-3">
+                                    <div>
+                                        <label className="text-xs font-bold text-blue-800 uppercase tracking-wider flex items-center gap-1.5">
+                                            <i className="fa-solid fa-calendar-day" />
+                                            Razorpay Monthly Plan ID
+                                            {!editing.razorpayMonthlyPlanId && (
+                                                <span className="text-rose-500 font-bold">← Required</span>
+                                            )}
+                                        </label>
+                                        <input
+                                            value={editing.razorpayMonthlyPlanId || ''}
+                                            onChange={(e) => setEditing({ ...editing, razorpayMonthlyPlanId: e.target.value.trim() })}
+                                            className="w-full border border-blue-300 rounded-lg px-3 py-2 mt-1 font-mono text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                                            placeholder="plan_XXXXXXXXXXXXXXXXXX" />
+                                        {editing.razorpayMonthlyPlanId && !editing.razorpayMonthlyPlanId.startsWith('plan_') && (
+                                            <p className="text-xs text-rose-500 mt-0.5">⚠️ Should start with <code>plan_</code></p>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-blue-800 uppercase tracking-wider flex items-center gap-1.5">
+                                            <i className="fa-solid fa-calendar" />
+                                            Razorpay Yearly Plan ID
+                                            <span className="text-blue-400 font-normal normal-case">(optional if no yearly billing)</span>
+                                        </label>
+                                        <input
+                                            value={editing.razorpayYearlyPlanId || ''}
+                                            onChange={(e) => setEditing({ ...editing, razorpayYearlyPlanId: e.target.value.trim() })}
+                                            className="w-full border border-blue-300 rounded-lg px-3 py-2 mt-1 font-mono text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                                            placeholder="plan_XXXXXXXXXXXXXXXXXX" />
+                                        {editing.razorpayYearlyPlanId && !editing.razorpayYearlyPlanId.startsWith('plan_') && (
+                                            <p className="text-xs text-rose-500 mt-0.5">⚠️ Should start with <code>plan_</code></p>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 
