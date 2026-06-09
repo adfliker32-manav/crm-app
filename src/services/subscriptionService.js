@@ -55,12 +55,11 @@ const applyPlanToWorkspace = async (clientId, plan) => {
 // Returns { subscription, razorpaySubscriptionId, keyId }.
 // Called from POST /api/billing/me/subscribe and /me/change-plan.
 //
-// Trial handling:
-//   If the tenant currently has an active trial (subscriptionStatus='trial' and
-//   planExpiryDate is in the future), we compute the remaining trial days and
-//   pass trialDays to Razorpay so the first charge is deferred until the trial
-//   ends. This means: mandate captured now → ₹0 charged today → first real
-//   charge on trial expiry date. The customer gets a seamless transition.
+// Charging model:
+//   Charge is IMMEDIATE on mandate approval — no deferral, no start_at.
+//   The 14-day trial is a free window before the customer decides to subscribe.
+//   Once they click Subscribe and approve the mandate, ₹X is debited the same
+//   day. Next charge is 30 days (monthly) or 365 days (yearly) from today.
 //
 // Plan ID resolution:
 //   Razorpay Plan IDs (plan_XXXXXXX) are stored in the Plan MongoDB document
@@ -95,18 +94,6 @@ const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amoun
     const amount = amountOverride !== null ? amountOverride : baseAmount;
     if (amount == null || amount < 0) throw new Error('Plan amount is not set');
 
-    // ── Trial detection ────────────────────────────────────────────────────
-    // If the tenant is currently on a trial with days remaining, defer the
-    // first Razorpay charge until the trial expires (seamless transition).
-    let trialDays = 0;
-    const ws = await WorkspaceSettings.findOne({ userId: clientId }).select('subscriptionStatus planExpiryDate').lean();
-    if (ws?.subscriptionStatus === 'trial' && ws?.planExpiryDate) {
-        const trialMs = new Date(ws.planExpiryDate).getTime() - Date.now();
-        if (trialMs > 0) {
-            trialDays = Math.ceil(trialMs / 86400000); // days remaining in trial
-        }
-    }
-
     // Reuse an existing pending sub if one is open for this client.
     let sub = await Subscription.findOne({ clientId });
 
@@ -140,9 +127,12 @@ const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amoun
         razorpayPlanId,
         customerEmail: client.email,
         customerPhone: phone,
-        customerName:  client.companyName || client.name || client.email,
-        trialDays
+        customerName:  client.companyName || client.name || client.email
+        // No trialDays / start_at — charge fires immediately on mandate approval.
+        // The 14-day trial is a free window before subscribing; once the customer
+        // approves the mandate, ₹X is debited the same day.
     });
+
 
     // rzpResp.id        = sub_XXXXXXX  (key for Razorpay Checkout on frontend)
     // rzpResp.short_url = hosted Razorpay link (fallback if popup blocked)
