@@ -19,6 +19,7 @@ const User            = require('../models/User');
 const BillingReminderConfig = require('../models/BillingReminderConfig');
 const { sendEmail }   = require('./emailService');
 const { sendWhatsAppTemplateMessage } = require('./whatsappService');
+const { buildInvoiceUrl } = require('../routes/invoicePublicRoute');
 
 let sharedAgenda = null;
 
@@ -86,6 +87,49 @@ const fmtDateEmail = (d) => d
     ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
     : '';
 
+// ─── WhatsApp Template Components Builder ──────────────────────────────────────
+// Builds the Meta API `components` array for billing templates.
+// If the template has a URL button, we pass the invoice URL suffix so the
+// client gets a clickable "View Invoice" button in WhatsApp.
+//
+// Your Meta template should have a CTA URL button like:
+//   URL type: Dynamic
+//   URL:      https://your-domain.com/api/invoice/{{1}}
+//
+// We pass the `INV-2026-06-0001?token=abc123` part as the dynamic suffix.
+const buildWaBillingComponents = (payment) => {
+    const components = [];
+    const paymentId = (payment._id || '').toString();
+    const invoiceNumber = payment.invoiceNumber || '';
+
+    if (paymentId && invoiceNumber) {
+        const invoiceUrl = buildInvoiceUrl(invoiceNumber, paymentId);
+        // Extract path + query from the full URL to use as the dynamic suffix
+        // Meta template URL format: https://domain.com/api/invoice/{{1}}
+        // We pass: "INV-2026-06-0001?token=abc123def..."
+        try {
+            const urlObj = new URL(invoiceUrl);
+            const suffix = urlObj.pathname.split('/api/invoice/')[1] + urlObj.search;
+            components.push({
+                type: 'button',
+                sub_type: 'url',
+                index: 0,
+                parameters: [{ type: 'text', text: suffix }]
+            });
+        } catch (e) {
+            // If URL parsing fails, pass the full URL as a fallback
+            components.push({
+                type: 'button',
+                sub_type: 'url',
+                index: 0,
+                parameters: [{ type: 'text', text: invoiceUrl }]
+            });
+        }
+    }
+
+    return components;
+};
+
 // Fetch company branding from GlobalSetting (cached per-call; these are tiny reads).
 const _fetchBrandingForEmail = async () => {
     const GlobalSetting = require('../models/GlobalSetting');
@@ -138,6 +182,10 @@ const buildBillingEmail = (payment, client, dayType, branding = {}) => {
     const invoice   = payment.invoiceNumber || `INV-${year}-${String(payment.billingMonth).padStart(2,'0')}`;
     const dueDate   = payment.dueDate ? fmtDateEmail(payment.dueDate) : `${monthName} ${year}`;
 
+    // Generate public invoice link (HMAC-secured, no login needed)
+    const paymentId = (payment._id || '').toString();
+    const invoiceUrl = paymentId ? buildInvoiceUrl(invoice, paymentId) : '';
+
     const subjectMap = {
         day0:  `Invoice ${invoice} — ${monthName} ${year} | Amount Due: ${amount}`,
         day5:  `Reminder: Invoice ${invoice} | ${amount} Still Due`,
@@ -185,12 +233,20 @@ const buildBillingEmail = (payment, client, dayType, branding = {}) => {
       </div>
     </div>
 
+    ${invoiceUrl ? `
+    <div style="text-align:center;margin:24px 0;">
+      <a href="${invoiceUrl}" target="_blank" style="display:inline-block;background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff;text-decoration:none;padding:14px 36px;border-radius:10px;font-size:15px;font-weight:700;letter-spacing:0.3px;box-shadow:0 4px 14px rgba(79,70,229,0.3);">
+        📄 View & Download Invoice
+      </a>
+      <p style="font-size:12px;color:#94a3b8;margin-top:8px;">Click to view the full invoice. You can print or save as PDF.</p>
+    </div>` : ''}
+
     <p style="color:#374151;font-size:13px;margin:0;">
       Please process this payment at your earliest convenience. If you have any questions or need assistance, feel free to contact us.
     </p>`;
 
     const html = _emailShell(branding, headerBg, headerIcon, headerTitle, '', bodyHtml);
-    const text = `Invoice ${invoice} | ${monthName} ${year} | Amount: ${amount} | Due: ${dueDate}`;
+    const text = `Invoice ${invoice} | ${monthName} ${year} | Amount: ${amount} | Due: ${dueDate}${invoiceUrl ? ` | View Invoice: ${invoiceUrl}` : ''}`;
 
     return { subject: subjectMap[dayType] || subjectMap.day0, html, text };
 };
@@ -345,16 +401,19 @@ const processFollowUp = async (job, dayType) => {
     if (client.phone) {
         if (templateKey.name) {
             // ✅ Use Meta-approved template selected by Super Admin
+            // Pass invoice URL as CTA button parameter so client gets a
+            // clickable "View Invoice" button in WhatsApp.
             try {
+                const waComponents = buildWaBillingComponents(payment);
                 await sendWhatsAppTemplateMessage(
                     client.phone,
                     templateKey.name,
                     templateKey.lang,
-                    [], // No components needed — template content is set in Meta
+                    waComponents,
                     superAdminId,
                     { isAutomated: true, triggerType: 'billing_reminder' }
                 );
-                console.log(`💬 [BillingQueue] ${dayType} WA template '${templateKey.name}' sent to ${client.phone}`);
+                console.log(`💬 [BillingQueue] ${dayType} WA template '${templateKey.name}' sent to ${client.phone}${waComponents.length ? ' (with invoice link)' : ''}`);
             } catch (waErr) {
                 console.error(`❌ [BillingQueue] Failed to send ${dayType} WA template to ${client.phone}:`, waErr.message);
             }
@@ -538,7 +597,8 @@ module.exports = {
     defineAgencyBillingJobs,
     scheduleAgencyBillFollowups,
     cancelAgencyBillFollowups,
-    buildBillingEmail,      // exported for manual send-bill endpoint
-    sendPaymentReceipt,     // exported for payment confirmation receipt
-    _fetchBrandingForEmail  // exported so manual send-bill can pass branding
+    buildBillingEmail,          // exported for manual send-bill endpoint
+    buildWaBillingComponents,   // exported for manual send-bill WA with invoice link
+    sendPaymentReceipt,         // exported for payment confirmation receipt
+    _fetchBrandingForEmail      // exported so manual send-bill can pass branding
 };

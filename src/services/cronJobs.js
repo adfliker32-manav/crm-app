@@ -684,7 +684,9 @@ const startCronJobs = () => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Agency Client Billing Sweep — runs daily at 01:00 AM.
-// Automatically generates invoices for active agency clients on their billing day.
+// Automatically generates invoices for active agency clients.
+// Each client has a per-client `billingDay` (1–28) that determines which day
+// of the month their invoice is auto-generated. Invoice date = actual generation date.
 // ──────────────────────────────────────────────────────────────────────────────
 const runAgencyClientBillingSweep = async () => {
     try {
@@ -729,6 +731,7 @@ const runAgencyClientBillingSweep = async () => {
                 let shouldBill = false;
 
                 if (client.billingStartDate) {
+                    // Start-date-based 30-day cycle (per-client override)
                     const startDate = new Date(client.billingStartDate);
                     const startDateMidnight = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
 
@@ -746,12 +749,13 @@ const runAgencyClientBillingSweep = async () => {
                         }
                     }
                 } else {
-                    // Legacy logic: bill based on calendar billingDay
-                    const dayMatchesLegacy = isLastDayOfMonth(now)
-                        ? (client.billingDay >= currentDay)
-                        : (client.billingDay === currentDay);
+                    // Per-client invoice generation day
+                    const clientBillingDay = client.billingDay || 1;
+                    const dayMatches = isLastDayOfMonth(now)
+                        ? (clientBillingDay >= currentDay)
+                        : (clientBillingDay === currentDay);
 
-                    if (dayMatchesLegacy) {
+                    if (dayMatches) {
                         const exists = await AgencyPayment.exists({
                             agencyClientId: client._id,
                             billingMonth: month,
@@ -765,33 +769,50 @@ const runAgencyClientBillingSweep = async () => {
 
                 if (!shouldBill) continue;
 
-                // Generate unique Invoice Number
-                const count = await AgencyPayment.countDocuments({ billingYear: year, billingMonth: month });
-                const seq = String(count + 1).padStart(4, '0');
-                const invoiceNumber = `INV-${year}-${String(month).padStart(2, '0')}-${seq}`;
-
+                // Due in 5 days from generation
                 const dueDate = new Date();
-                dueDate.setDate(dueDate.getDate() + 5); // Due in 5 days
+                dueDate.setDate(dueDate.getDate() + 5);
 
-                const payment = await AgencyPayment.create({
-                    agencyClientId: client._id,
-                    clientName:    client.name,
-                    clientCompany: client.company,
-                    clientServiceType: client.serviceType || 'other',
-                    amount: Number(client.monthlyFee),
-                    billingMonth: month,
-                    billingYear:  year,
-                    dueDate,
-                    status: 'pending',
-                    invoiceNumber,
-                    billingAddressSnapshot: client.billingAddress || '',
-                    gstNumberSnapshot:      client.gstNumber     || '',
-                    agencyNameSnapshot:     branding.agencyName,
-                    agencyAddressSnapshot:  branding.agencyAddress,
-                    agencyGstSnapshot:      branding.agencyGst,
-                    agencyLogoSnapshot:     branding.agencyLogo,
-                    recordedBy: null
-                });
+                // Generate unique Invoice Number with retry for race conditions (BUG 1 FIX)
+                const monthPad = String(month).padStart(2, '0');
+                let payment;
+                const MAX_RETRIES = 5;
+                for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                    const count = await AgencyPayment.countDocuments({ billingYear: year, billingMonth: month });
+                    const seq = String(count + 1 + attempt).padStart(4, '0');
+                    const invoiceNumber = `INV-${year}-${monthPad}-${seq}`;
+
+                    try {
+                        payment = await AgencyPayment.create({
+                            agencyClientId: client._id,
+                            clientName:    client.name,
+                            clientCompany: client.company,
+                            clientServiceType: client.serviceType || 'other',
+                            amount: Number(client.monthlyFee),
+                            billingMonth: month,
+                            billingYear:  year,
+                            dueDate,
+                            status: 'pending',
+                            invoiceNumber,
+                            billingAddressSnapshot: client.billingAddress || '',
+                            gstNumberSnapshot:      client.gstNumber     || '',
+                            agencyNameSnapshot:     branding.agencyName,
+                            agencyAddressSnapshot:  branding.agencyAddress,
+                            agencyGstSnapshot:      branding.agencyGst,
+                            agencyLogoSnapshot:     branding.agencyLogo,
+                            invoiceDate:          now,
+                            invoiceGeneratedDate: now,
+                            recordedBy: null
+                        });
+                        break; // Success
+                    } catch (createErr) {
+                        if (createErr.code === 11000 && attempt < MAX_RETRIES - 1) {
+                            console.warn(`[BillingSweep] Invoice number collision on ${invoiceNumber}, retrying...`);
+                            continue;
+                        }
+                        throw createErr;
+                    }
+                }
 
                 // Update lastBilledDate on the client model
                 await AgencyClient.updateOne(
@@ -799,11 +820,16 @@ const runAgencyClientBillingSweep = async () => {
                     { $set: { lastBilledDate: now } }
                 );
 
-                const jobIds = await scheduleAgencyBillFollowups(payment);
-                payment.followUpJobs = jobIds;
-                await payment.save();
+                // BUG 2 FIX: Wrap follow-up scheduling in try-catch
+                try {
+                    const jobIds = await scheduleAgencyBillFollowups(payment);
+                    payment.followUpJobs = jobIds;
+                    await payment.save();
+                } catch (followUpErr) {
+                    console.error(`[BillingSweep] Follow-up scheduling failed for ${payment.invoiceNumber} (invoice still created):`, followUpErr.message);
+                }
 
-                console.log(`[BillingSweep] Generated invoice ${invoiceNumber} for client ${client.name}`);
+                console.log(`[BillingSweep] Generated invoice ${payment.invoiceNumber} for client ${client.name}`);
             } catch (err) {
                 console.error(`[BillingSweep] Failed to generate invoice for client ${client._id}:`, err.message);
             }

@@ -38,6 +38,7 @@ const webLeadRoutes = require('./src/routes/webLeadRoutes'); // Web-to-Lead embe
 const mcpRoutes = require('./src/routes/mcpRoutes'); // Claude AI / MCP server
 const sequenceRoutes = require('./src/routes/sequenceRoutes'); // Drip Sequences
 const billingRoutes = require('./src/routes/billingRoutes'); // Razorpay Autodebit Subscriptions
+const { router: invoicePublicRoute } = require('./src/routes/invoicePublicRoute'); // Public invoice viewer (HMAC-secured)
 
 const app = express();
 
@@ -531,7 +532,11 @@ app.get('/api/health', (req, res) => {
   res.status(200).send('OK');
 });
 
-// Public Booking Page (HTML + Tailwind, no React required)
+// 📄 Public Invoice Viewer (HMAC-secured, no JWT needed)
+// Client clicks the link from their billing email → sees the invoice in-browser.
+app.use('/api/invoice', invoicePublicRoute);
+
+// Public booking page (HTML + Tailwind, no React required)
 // This prevents blank screens if the SPA bundle doesn't yet include /book/:slug.
 app.get('/book/:slug', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');

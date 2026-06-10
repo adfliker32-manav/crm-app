@@ -206,13 +206,13 @@ const ClientModal = ({ isOpen, onClose, onSuccess, initial }) => {
                             <p className="text-[10px] text-slate-400 mt-1">Generates every 30 days starting on this date</p>
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-slate-500 mb-1">
-                                Legacy Auto-billing Day
+                            <label className="block text-xs font-bold text-slate-600 mb-1">
+                                Invoice Generation Day
                                 <span className="ml-1 text-slate-400 font-normal">(1–28)</span>
                             </label>
                             <input type="number" min="1" max="28" value={form.billingDay} onChange={e => set('billingDay', Number(e.target.value))}
-                                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50 text-slate-500" />
-                            <p className="text-[10px] text-slate-400 mt-1">Only used if Billing Start Date is not set</p>
+                                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                            <p className="text-[10px] text-slate-400 mt-1">Day of month when invoice is auto-generated. Invoice date on PDF will match this day.</p>
                         </div>
                         <div className="col-span-2">
                             <label className="block text-xs font-bold text-slate-600 mb-1">Notes</label>
@@ -875,8 +875,10 @@ const printInvoice = (payment, globalBranding = null) => {
     const fmtD = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
 
     const period = `${MONTHS_FULL[(payment.billingMonth || 1) - 1]} ${payment.billingYear}`;
-    // Invoice date = 1st day of the billing month (official invoice date, not created timestamp)
-    const invoiceDate = new Date(payment.billingYear, (payment.billingMonth || 1) - 1, 1);
+    // Use stored invoiceDate if available, otherwise fall back to 1st of billing month
+    const invoiceDate = payment.invoiceDate
+        ? new Date(payment.invoiceDate)
+        : new Date(payment.billingYear, (payment.billingMonth || 1) - 1, 1);
     const statusColor = payment.status === 'received' ? '#10b981' : payment.status === 'partial' ? '#3b82f6' : '#f59e0b';
     const statusLabel = payment.status === 'received' ? 'PAID ✓ VERIFIED' : payment.status === 'partial' ? 'PARTIAL PAID' : 'OUTSTANDING';
     const isVerified  = payment.status === 'received';
@@ -996,7 +998,7 @@ const printInvoice = (payment, globalBranding = null) => {
 
   <div class="footer">
     <p>Thank you for your business!</p>
-    <p>Generated on ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
+    <p>Generated on ${fmtD(payment.invoiceGeneratedDate || payment.createdAt || new Date())}</p>
   </div>
 </div>
 <script>window.onload = () => { window.print(); window.onafterprint = () => window.close(); }<\/script>

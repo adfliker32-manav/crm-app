@@ -237,18 +237,27 @@ exports.createPayment = async (req, res) => {
         } = req.body;
 
         if (!agencyClientId) return res.status(400).json({ success: false, message: 'Client is required.' });
-        if (!amount || isNaN(amount)) return res.status(400).json({ success: false, message: 'Amount is required.' });
+        // BUG 5 FIX: Validate amount is a positive number
+        if (amount == null || isNaN(amount) || Number(amount) <= 0) {
+            return res.status(400).json({ success: false, message: 'Amount must be greater than zero.' });
+        }
         if (!billingMonth || !billingYear) return res.status(400).json({ success: false, message: 'Billing month and year are required.' });
 
         const client = await AgencyClient.findById(agencyClientId).lean();
         if (!client) return res.status(404).json({ success: false, message: 'Agency client not found.' });
 
-        // Generate unique Invoice Number
-        const yearStr = billingYear;
-        const monthStr = String(billingMonth).padStart(2, '0');
-        const count = await AgencyPayment.countDocuments({ billingYear, billingMonth });
-        const seq = String(count + 1).padStart(4, '0');
-        const invoiceNumber = `INV-${yearStr}-${monthStr}-${seq}`;
+        // BUG 4 FIX: Prevent duplicate invoices for same client + billing period
+        const existingBill = await AgencyPayment.exists({
+            agencyClientId,
+            billingMonth: Number(billingMonth),
+            billingYear: Number(billingYear)
+        });
+        if (existingBill) {
+            return res.status(409).json({
+                success: false,
+                message: 'An invoice already exists for this client in the selected billing period.'
+            });
+        }
 
         // Auto due date: today + 5 days if not provided
         let resolvedDueDate = dueDate || null;
@@ -258,38 +267,73 @@ exports.createPayment = async (req, res) => {
             resolvedDueDate = d;
         }
 
+        // Invoice dates: both set to now (the actual moment the bill is created)
+        const nowDate = new Date();
+
         // Fetch agency branding for invoice "From" block
         const branding = await fetchAgencyBranding();
 
-        const payment = await AgencyPayment.create({
-            agencyClientId,
-            clientName:        client.name,
-            clientCompany:     client.company,
-            clientServiceType: client.serviceType || 'other',
-            amount: Number(amount),
-            billingMonth: Number(billingMonth),
-            billingYear:  Number(billingYear),
-            dueDate:      resolvedDueDate,
-            status: status || 'pending',
-            receivedDate: status === 'received' ? (receivedDate || new Date()) : null,
-            receivedAmount: status === 'partial' ? Number(receivedAmount || 0) : null,
-            paymentMethod, reference, notes,
-            invoiceNumber,
-            billingAddressSnapshot: client.billingAddress || '',
-            gstNumberSnapshot:      client.gstNumber      || '',
-            agencyNameSnapshot:     branding.agencyName,
-            agencyAddressSnapshot:  branding.agencyAddress,
-            agencyGstSnapshot:      branding.agencyGst,
-            agencyLogoSnapshot:     branding.agencyLogo,
-            recordedBy: req.user?._id || null
-        });
+        // BUG 1 FIX: Invoice number with retry loop to handle race conditions.
+        // If a duplicate key error (E11000) occurs, increment the sequence and retry.
+        const yearStr = billingYear;
+        const monthStr = String(billingMonth).padStart(2, '0');
+        let payment;
+        const MAX_RETRIES = 5;
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            const count = await AgencyPayment.countDocuments({
+                billingYear: Number(billingYear),
+                billingMonth: Number(billingMonth)
+            });
+            const seq = String(count + 1 + attempt).padStart(4, '0');
+            const invoiceNumber = `INV-${yearStr}-${monthStr}-${seq}`;
 
-        // Trigger Automated Reminders if status is pending
+            try {
+                payment = await AgencyPayment.create({
+                    agencyClientId,
+                    clientName:        client.name,
+                    clientCompany:     client.company,
+                    clientServiceType: client.serviceType || 'other',
+                    amount: Number(amount),
+                    billingMonth: Number(billingMonth),
+                    billingYear:  Number(billingYear),
+                    dueDate:      resolvedDueDate,
+                    status: status || 'pending',
+                    receivedDate: status === 'received' ? (receivedDate || new Date()) : null,
+                    receivedAmount: status === 'partial' ? Number(receivedAmount || 0) : null,
+                    paymentMethod, reference, notes,
+                    invoiceNumber,
+                    billingAddressSnapshot: client.billingAddress || '',
+                    gstNumberSnapshot:      client.gstNumber      || '',
+                    agencyNameSnapshot:     branding.agencyName,
+                    agencyAddressSnapshot:  branding.agencyAddress,
+                    agencyGstSnapshot:      branding.agencyGst,
+                    agencyLogoSnapshot:     branding.agencyLogo,
+                    invoiceDate:          nowDate,
+                    invoiceGeneratedDate: nowDate,
+                    recordedBy: req.user?._id || null
+                });
+                break; // Success — exit retry loop
+            } catch (createErr) {
+                // E11000 = duplicate key — another payment grabbed this invoice number
+                if (createErr.code === 11000 && attempt < MAX_RETRIES - 1) {
+                    console.warn(`[AgencyFinance] Invoice number collision on ${invoiceNumber}, retrying (attempt ${attempt + 1})…`);
+                    continue;
+                }
+                throw createErr; // Non-duplicate error or max retries exhausted
+            }
+        }
+
+        // BUG 2 FIX (partial): Wrap follow-up scheduling in try-catch so payment
+        // creation still succeeds even if Agenda is down or fails to schedule.
         if (payment.status === 'pending') {
-            const { scheduleAgencyBillFollowups } = require('../services/agencyBillingQueue');
-            const jobIds = await scheduleAgencyBillFollowups(payment);
-            payment.followUpJobs = jobIds;
-            await payment.save();
+            try {
+                const { scheduleAgencyBillFollowups } = require('../services/agencyBillingQueue');
+                const jobIds = await scheduleAgencyBillFollowups(payment);
+                payment.followUpJobs = jobIds;
+                await payment.save();
+            } catch (followUpErr) {
+                console.error('[AgencyFinance] Follow-up scheduling failed (payment still created):', followUpErr.message);
+            }
         }
 
         res.status(201).json({ success: true, payment, message: 'Payment recorded.' });
@@ -299,10 +343,22 @@ exports.createPayment = async (req, res) => {
     }
 };
 
+// BUG 3 FIX: Whitelist of fields that can be updated via the API.
+// Prevents injection of immutable fields like invoiceNumber, snapshots, etc.
+const PAYMENT_UPDATABLE_FIELDS = [
+    'amount', 'dueDate', 'status', 'receivedDate', 'receivedAmount',
+    'paymentMethod', 'reference', 'notes'
+];
+
 exports.updatePayment = async (req, res) => {
     try {
         const prevPayment = await AgencyPayment.findById(req.params.id).select('status agencyClientId').lean();
-        const update = { ...req.body };
+
+        // BUG 3 FIX: Only allow whitelisted fields to be updated
+        const update = {};
+        PAYMENT_UPDATABLE_FIELDS.forEach(field => {
+            if (req.body[field] !== undefined) update[field] = req.body[field];
+        });
 
         // Auto-set receivedDate if marking as received
         if (update.status === 'received' && !update.receivedDate) {
@@ -415,11 +471,13 @@ exports.sendBillManually = async (req, res) => {
 
                 if (templateName) {
                     const { sendWhatsAppTemplateMessage } = require('../services/whatsappService');
+                    const { buildWaBillingComponents } = require('../services/agencyBillingQueue');
+                    const waComponents = buildWaBillingComponents(payment);
                     await sendWhatsAppTemplateMessage(
-                        client.phone, templateName, langCode, [], superAdminId,
+                        client.phone, templateName, langCode, waComponents, superAdminId,
                         { isAutomated: false, triggerType: 'billing_reminder' }
                     );
-                    console.log(`💬 [ManualBill] WA template '${templateName}' sent to ${client.phone}`);
+                    console.log(`💬 [ManualBill] WA template '${templateName}' sent to ${client.phone}${waComponents.length ? ' (with invoice link)' : ''}`);
                 } else {
                     console.warn(`⚠️ [ManualBill] No Day 0 WA template configured — WA skipped.`);
                 }

@@ -41,6 +41,10 @@ const agencyPaymentSchema = new mongoose.Schema({
     agencyGstSnapshot:      { type: String, default: '' },           // Agency GST from GlobalSetting
     agencyLogoSnapshot:     { type: String, default: '' },           // Agency logo URL from GlobalSetting
 
+    // Configurable invoice dates — set manually per payment or auto-populated on creation
+    invoiceDate:          { type: Date, default: null },             // Official "Invoice Date" shown on the PDF (defaults to 1st of billing month if null)
+    invoiceGeneratedDate: { type: Date, default: null },             // "Generated on" date in invoice footer (defaults to createdAt if null)
+
     recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
 }, { timestamps: true });
 
