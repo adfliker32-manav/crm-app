@@ -41,7 +41,11 @@ const buildInvoiceHtml = (payment, branding = {}, opts = {}) => {
 
     const invoiceDate = payment.invoiceDate
         ? new Date(payment.invoiceDate)
-        : new Date(payment.billingYear, (payment.billingMonth || 1) - 1, 1);
+        : payment.invoiceGeneratedDate
+            ? new Date(payment.invoiceGeneratedDate)
+            : payment.createdAt
+                ? new Date(payment.createdAt)
+                : new Date();
 
     const statusColor = payment.status === 'received' ? '#10b981'
         : payment.status === 'partial' ? '#3b82f6' : '#f59e0b';
