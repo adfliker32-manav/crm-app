@@ -875,14 +875,8 @@ const printInvoice = (payment, globalBranding = null) => {
     const fmtD = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
 
     const period = `${MONTHS_FULL[(payment.billingMonth || 1) - 1]} ${payment.billingYear}`;
-    // Use stored invoiceDate if available, otherwise fall back to generated date / createdAt
-    const invoiceDate = payment.invoiceDate
-        ? new Date(payment.invoiceDate)
-        : payment.invoiceGeneratedDate
-            ? new Date(payment.invoiceGeneratedDate)
-            : payment.createdAt
-                ? new Date(payment.createdAt)
-                : new Date();
+    // Always use current date as Invoice Date — so the PDF shows today's date when downloaded
+    const invoiceDate = new Date();
     const statusColor = payment.status === 'received' ? '#10b981' : payment.status === 'partial' ? '#3b82f6' : '#f59e0b';
     const statusLabel = payment.status === 'received' ? 'PAID ✓ VERIFIED' : payment.status === 'partial' ? 'PARTIAL PAID' : 'OUTSTANDING';
     const isVerified  = payment.status === 'received';

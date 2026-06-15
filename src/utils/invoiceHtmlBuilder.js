@@ -39,13 +39,8 @@ const buildInvoiceHtml = (payment, branding = {}, opts = {}) => {
     const serviceLabel = SERVICE_LABELS_MAP[payment.clientServiceType] || 'Monthly Retainer — Services';
     const period = `${MONTHS_FULL[(payment.billingMonth || 1) - 1]} ${payment.billingYear}`;
 
-    const invoiceDate = payment.invoiceDate
-        ? new Date(payment.invoiceDate)
-        : payment.invoiceGeneratedDate
-            ? new Date(payment.invoiceGeneratedDate)
-            : payment.createdAt
-                ? new Date(payment.createdAt)
-                : new Date();
+    // Always use current date as Invoice Date — so the PDF shows today's date when downloaded/viewed
+    const invoiceDate = new Date();
 
     const statusColor = payment.status === 'received' ? '#10b981'
         : payment.status === 'partial' ? '#3b82f6' : '#f59e0b';
