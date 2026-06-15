@@ -23,7 +23,8 @@ const getAppointments = async (req, res) => {
         }
 
         if (search) {
-            const rx = new RegExp(search, 'i');
+            const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const rx = new RegExp(escaped, 'i');
             query.$or = [
                 { customerName: rx },
                 { customerPhone: rx },

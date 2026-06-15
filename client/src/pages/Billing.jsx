@@ -172,7 +172,7 @@ const Billing = () => {
 
   <div class="meta-grid">
     <div class="meta-item"><label>Invoice #</label><span>${payment.invoiceNumber || '—'}</span></div>
-    <div class="meta-item"><label>Invoice Date</label><span>${fmtD(payment.paymentDate)}</span></div>
+    <div class="meta-item"><label>Invoice Date</label><span>${fmtD(new Date())}</span></div>
     <div class="meta-item"><label>Payment Status</label><span style="color:#10b981;font-weight:700">PAID ✓</span></div>
     <div class="meta-item"><label>Payment Date</label><span>${fmtD(payment.paymentDate)}</span></div>
   </div>

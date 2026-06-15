@@ -394,6 +394,9 @@ exports.createAgent = async (req, res) => {
         // the cap entirely when the resolved limit is 0.
         const limit = workspace?.agentLimit ?? 5;
 
+        // Count existing agents under this manager
+        const currentAgentCount = await User.countDocuments({ parentId: managerId, role: 'agent' });
+
         if (limit > 0 && currentAgentCount >= limit) {
             return res.status(403).json({
                 message: `Upgrade required. You have reached your current plan limit of ${limit} agents.`
