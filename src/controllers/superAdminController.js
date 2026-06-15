@@ -1197,29 +1197,42 @@ const impersonateUser = async (req, res) => {
 // Get aggregated platform-wide cloud usage
 const getCloudUsage = async (req, res) => {
     try {
-        const agencySettings = await AgencySettings.find().select('usage planLimits');
+        // Current billing cycle = 1st of current month to now
+        const now = new Date();
+        const cycleStart = new Date(now.getFullYear(), now.getMonth(), 1); // 1st of month, 00:00:00
 
-        let totalWhatsapp = 0;
-        let totalEmails = 0;
+        // Count ACTUAL logs from this billing cycle across ALL tenants
+        const [whatsappSent, emailsSent] = await Promise.all([
+            WhatsAppLog.countDocuments({ createdAt: { $gte: cycleStart } }).catch(() => 0),
+            EmailLog.countDocuments({ createdAt: { $gte: cycleStart } }).catch(() => 0)
+        ]);
+
+        // Aggregate plan limits from AgencySettings for the cap display
+        const agencySettings = await AgencySettings.find().select('planLimits').lean();
+
         let totalWhatsappLimit = 0;
         let totalEmailLimit = 0;
 
         agencySettings.forEach(setting => {
-            totalWhatsapp += setting.usage?.whatsappSent || 0;
-            totalEmails += setting.usage?.emailsSent || 0;
             totalWhatsappLimit += setting.planLimits?.whatsappMessagesPerMonth || 1000;
             totalEmailLimit += setting.planLimits?.emailsPerMonth || 5000;
         });
+
+        // If no agencies exist yet, show sensible defaults
+        if (agencySettings.length === 0) {
+            totalWhatsappLimit = 6000;
+            totalEmailLimit = 30000;
+        }
 
         res.json({
             success: true,
             usage: {
                 whatsapp: {
-                    sent: totalWhatsapp,
+                    sent: whatsappSent,
                     limit: totalWhatsappLimit
                 },
                 email: {
-                    sent: totalEmails,
+                    sent: emailsSent,
                     limit: totalEmailLimit
                 }
             }
@@ -1229,6 +1242,7 @@ const getCloudUsage = async (req, res) => {
         res.status(500).json({ message: "Server Error" });
     }
 };
+
 
 // ==========================================
 // 🛡️ COMMAND CENTER AUDIT LOGS
