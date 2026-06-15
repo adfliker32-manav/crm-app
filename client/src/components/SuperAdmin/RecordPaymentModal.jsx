@@ -35,12 +35,12 @@ const RecordPaymentModal = ({ isOpen, onClose, onSuccess, preselectedClient = nu
     const [search, setSearch] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
-    const todayIso = new Date().toISOString().split('T')[0];
+
     const [form, setForm] = useState({
         clientId: preselectedClient?._id || '',
         amount: '',
         durationMonths: 1,
-        paymentDate: todayIso,
+        paymentDate: new Date().toISOString().split('T')[0],
         paymentMethod: 'bank_transfer',
         reference: '',
         notes: '',
@@ -50,6 +50,7 @@ const RecordPaymentModal = ({ isOpen, onClose, onSuccess, preselectedClient = nu
     useEffect(() => {
         if (!isOpen) return;
         // Reset to defaults on each open
+        const todayIso = new Date().toISOString().split('T')[0];
         setForm({
             clientId: preselectedClient?._id || '',
             amount: '',
@@ -103,7 +104,7 @@ const RecordPaymentModal = ({ isOpen, onClose, onSuccess, preselectedClient = nu
     const handleSubmit = async (e) => {
         e?.preventDefault();
         if (!form.clientId)               return showError('Pick a client.');
-        if (!form.amount || Number(form.amount) < 0) return showError('Enter a valid amount.');
+        if (!form.amount || Number(form.amount) <= 0) return showError('Enter a valid amount.');
         if (!form.durationMonths)         return showError('Pick a duration.');
 
         setSubmitting(true);

@@ -293,7 +293,7 @@ const deletePayment = async (req, res) => {
 const recordExpense = async (req, res) => {
     try {
         const { category, description, vendor, amount, date, paymentMethod, reference, notes } = req.body;
-        if (!description || amount === undefined || Number(amount) < 0) {
+        if (!description || amount === undefined || Number(amount) <= 0) {
             return res.status(400).json({ message: 'Description and a non-negative amount are required.' });
         }
 

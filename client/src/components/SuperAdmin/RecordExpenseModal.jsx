@@ -24,14 +24,14 @@ const METHODS = [
 
 const RecordExpenseModal = ({ isOpen, onClose, onSuccess }) => {
     const { showError } = useNotification();
-    const todayIso = new Date().toISOString().split('T')[0];
+
 
     const [form, setForm] = useState({
         category: 'tools',
         description: '',
         vendor: '',
         amount: '',
-        date: todayIso,
+        date: new Date().toISOString().split('T')[0],
         paymentMethod: 'bank_transfer',
         reference: '',
         notes: ''
@@ -40,6 +40,7 @@ const RecordExpenseModal = ({ isOpen, onClose, onSuccess }) => {
 
     useEffect(() => {
         if (!isOpen) return;
+        const todayIso = new Date().toISOString().split('T')[0];
         setForm({
             category: 'tools', description: '', vendor: '', amount: '',
             date: todayIso, paymentMethod: 'bank_transfer', reference: '', notes: ''
@@ -49,7 +50,7 @@ const RecordExpenseModal = ({ isOpen, onClose, onSuccess }) => {
     const handleSubmit = async (e) => {
         e?.preventDefault();
         if (!form.description.trim()) return showError('Description is required.');
-        if (!form.amount || Number(form.amount) < 0) return showError('Enter a valid amount.');
+        if (!form.amount || Number(form.amount) <= 0) return showError('Enter a valid amount.');
 
         setSubmitting(true);
         try {

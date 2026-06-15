@@ -206,9 +206,11 @@ const receiveSheetPush = async (req, res) => {
         await IntegrationConfig.findOneAndUpdate(
             { userId },
             {
-                'googleSheet.lastPushAt': new Date(),
-                'googleSheet.lastPushStatus': 'success',
-                'googleSheet.lastPushError': null,
+                $set: {
+                    'googleSheet.lastPushAt': new Date(),
+                    'googleSheet.lastPushStatus': 'success',
+                    'googleSheet.lastPushError': null
+                },
                 $inc: { 'googleSheet.totalPushes': 1 }
             }
         );

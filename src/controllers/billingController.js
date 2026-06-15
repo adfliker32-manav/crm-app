@@ -552,7 +552,7 @@ const getMyInvoice = async (req, res) => {
 
         const GlobalSetting = require('../models/GlobalSetting');
         const settings = await GlobalSetting.find({
-            key: { $in: ['app_name', 'company_address', 'company_gst', 'support_email'] }
+            key: { $in: ['app_name', 'company_address', 'company_gst', 'support_email', 'company_logo'] }
         }).lean();
 
         const settingsMap = {};
@@ -562,7 +562,8 @@ const getMyInvoice = async (req, res) => {
             name:    settingsMap.app_name || 'Adfliker CRM Platform',
             address: settingsMap.company_address || 'Adfliker CRM, Delhi, India',
             gst:     settingsMap.company_gst || '',
-            email:   settingsMap.support_email || 'support@adfliker.com'
+            email:   settingsMap.support_email || 'support@adfliker.com',
+            logo:    settingsMap.company_logo || ''
         };
 
         const User = require('../models/User');
