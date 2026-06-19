@@ -93,7 +93,7 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess, userTags = [] }) => {
             };
             const res = await api.post('/leads', payload);
             if (res.status === 200 || res.status === 201) {
-                onSuccess();
+                onSuccess(res.data); // Pass new lead back for optimistic prepend
                 onClose();
                 setFormData({ name: '', phone: '', email: '', dealValue: '' });
                 setCustomData({});
@@ -126,7 +126,7 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess, userTags = [] }) => {
             };
             const res = await api.post('/leads', payload);
             if (res.status === 200 || res.status === 201) {
-                onSuccess();
+                onSuccess(res.data); // Pass new lead back for optimistic prepend
                 onClose();
                 setFormData({ name: '', phone: '', email: '', dealValue: '' });
                 setCustomData({});

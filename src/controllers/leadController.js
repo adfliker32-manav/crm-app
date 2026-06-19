@@ -23,7 +23,7 @@ const {
 
 const DEFAULT_LEAD_PAGE = 1;
 const DEFAULT_LEAD_PAGE_SIZE = 100;
-const MAX_LEAD_PAGE_SIZE = 200;
+const MAX_LEAD_PAGE_SIZE = 500; // Raised from 200 — frontend requests limit=500
 const DEFAULT_LEAD_STATUS = 'New';
 const DEFAULT_LEAD_SOURCE = 'Manual Entry';
 const ALLOWED_LEAD_UPDATE_FIELDS = new Set([

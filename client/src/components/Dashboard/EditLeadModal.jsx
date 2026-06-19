@@ -109,8 +109,10 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
                 followUpTemplateType: (sendTemplate && formData.nextFollowUpDate) ? templateType : null,
                 followUpTemplateName: (sendTemplate && formData.nextFollowUpDate && selectedTemplate) ? selectedTemplate : null,
             };
-            await api.put(`/leads/${lead._id}`, payload);
-            onSuccess();
+            const res = await api.put(`/leads/${lead._id}`, payload);
+            // Pass back the merged lead (server response has latest data)
+            const updatedLead = res.data?.lead ?? { ...lead, ...payload };
+            onSuccess(updatedLead);
             onClose();
         } catch (err) {
             if (err.response?.data?.error === 'validation_failed' && err.response?.data?.errors) {

@@ -351,24 +351,39 @@ const Leads = () => {
         );
         if (!confirmed) return;
 
+        // Snapshot for revert
+        const snapshot = leads.find(l => l._id === id);
+
+        // Optimistic remove
+        setLeads(prev => prev.filter(l => l._id !== id));
+
         try {
             await api.delete(`/leads/${id}`);
             showSuccess('Lead deleted successfully');
-            fetchData();
         } catch (err) {
-            console.error("Failed to delete lead", err);
-            showError("Failed to delete lead");
+            console.error('Failed to delete lead', err);
+            showError('Failed to delete lead');
+            // Revert — put lead back in its original position
+            if (snapshot) setLeads(prev => [...prev, snapshot]);
         }
     };
 
     const handleStatusChange = async (leadId, newStatus) => {
+        // 1. Capture old status for revert
+        const oldLead = leads.find(l => l._id === leadId);
+        const oldStatus = oldLead?.status;
+
+        // 2. Optimistic update — instant UI, no flicker, no scroll reset
+        setLeads(prev => prev.map(l => l._id === leadId ? { ...l, status: newStatus } : l));
+
         try {
             await api.put(`/leads/${leadId}`, { status: newStatus });
-            showSuccess('Status updated successfully');
-            fetchData();
+            showSuccess(`Stage updated to "${newStatus}"`);
         } catch (err) {
-            console.error("Failed to update status", err);
-            showError("Failed to update status");
+            // 3. Revert on failure
+            console.error('Failed to update status', err);
+            showError('Failed to update status');
+            setLeads(prev => prev.map(l => l._id === leadId ? { ...l, status: oldStatus } : l));
         }
     };
 
@@ -384,37 +399,64 @@ const Leads = () => {
         );
         if (!confirmed) return;
 
+        // Snapshot for revert
+        const idSet = new Set(ids);
+        const snapshot = leads.filter(l => idSet.has(l._id));
+
+        // Optimistic remove
+        setLeads(prev => prev.filter(l => !idSet.has(l._id)));
+
         try {
-            // Single bulk API call instead of N individual deletes
             await api.post('/leads/bulk-delete', { ids });
             showSuccess(`${ids.length} leads deleted successfully`);
-            fetchData();
         } catch (err) {
-            console.error("Failed to delete leads", err);
-            showError(err.response?.data?.message || "Failed to delete leads");
+            console.error('Failed to delete leads', err);
+            showError(err.response?.data?.message || 'Failed to delete leads');
+            // Revert
+            setLeads(prev => [...prev, ...snapshot]);
         }
     };
 
     const handleBulkStatusUpdate = async (ids, newStatus) => {
+        // Snapshot for revert
+        const idSet = new Set(ids);
+        const snapshot = leads.map(l => ({ ...l }));
+
+        // Optimistic update
+        setLeads(prev => prev.map(l => idSet.has(l._id) ? { ...l, status: newStatus } : l));
+
         try {
-            // Single bulk API call instead of N individual updates
             await api.post('/leads/bulk-status', { ids, status: newStatus });
             showSuccess(`${ids.length} leads updated successfully`);
-            fetchData();
         } catch (err) {
-            console.error("Failed to update leads", err);
-            showError(err.response?.data?.message || "Failed to update leads");
+            console.error('Failed to update leads', err);
+            showError(err.response?.data?.message || 'Failed to update leads');
+            // Revert
+            setLeads(snapshot);
         }
     };
 
     const handleBulkTag = async (ids, tagNamesArray) => {
+        // Snapshot for revert
+        const idSet = new Set(ids);
+        const snapshot = leads.map(l => ({ ...l }));
+
+        // Optimistic merge tags
+        setLeads(prev => prev.map(l => {
+            if (!idSet.has(l._id)) return l;
+            const existing = l.tags || [];
+            const merged = [...new Set([...existing, ...tagNamesArray])];
+            return { ...l, tags: merged };
+        }));
+
         try {
             await api.post('/leads/bulk-tags', { leadIds: ids, tags: tagNamesArray });
             showSuccess(`${ids.length} leads tagged successfully`);
-            fetchData();
         } catch (err) {
-            console.error("Failed to tag leads", err);
-            showError("Failed to apply tags");
+            console.error('Failed to tag leads', err);
+            showError('Failed to apply tags');
+            // Revert
+            setLeads(snapshot);
         }
     };
 
@@ -849,7 +891,16 @@ const Leads = () => {
             <AddLeadModal
                 isOpen={isAddLeadModalOpen}
                 onClose={() => setIsAddLeadModalOpen(false)}
-                onSuccess={fetchData}
+                userTags={userTags}
+                onSuccess={(newLead) => {
+                    // Optimistic prepend — new lead appears at top instantly, no refetch
+                    if (newLead?._id) {
+                        setLeads(prev => [newLead, ...prev]);
+                    } else {
+                        fetchData(); // Fallback if no lead returned
+                    }
+                    showSuccess('Lead added successfully');
+                }}
             />
 
             <AddStageModal
@@ -863,7 +914,17 @@ const Leads = () => {
                 onClose={() => setIsEditLeadModalOpen(false)}
                 lead={selectedLead}
                 userTags={userTags}
-                onSuccess={fetchData}
+                onSuccess={(updatedLead) => {
+                    // Optimistic merge — update this lead in local state, no refetch
+                    if (updatedLead?._id) {
+                        setLeads(prev => prev.map(l =>
+                            l._id === updatedLead._id ? { ...l, ...updatedLead } : l
+                        ));
+                    } else {
+                        fetchData(); // Fallback if no lead returned
+                    }
+                    showSuccess('Lead updated successfully');
+                }}
             />
 
             <LeadDetailsModal
