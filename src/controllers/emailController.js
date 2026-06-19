@@ -120,6 +120,14 @@ const sendEmailController = async (req, res) => {
                 if (!lead) {
                     lead = new Lead({ userId, email: to, name: to.split('@')[0], source: 'Email', status: 'New' });
                     await lead.save();
+
+                    // Trigger lead arrival alerts (socket and WhatsApp alerts)
+                    try {
+                        const { sendLeadArrivalAlert } = require('../services/leadAlertService');
+                        sendLeadArrivalAlert(lead).catch(err => console.error('❌ Error sending email lead arrival alerts:', err.message));
+                    } catch (alertErr) {
+                        console.error('❌ Failed to trigger email lead arrival alerts:', alertErr.message);
+                    }
                 }
                 
                 let conversation = await EmailConversation.findOne({ userId, leadId: lead._id });

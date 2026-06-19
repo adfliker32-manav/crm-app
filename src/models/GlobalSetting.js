@@ -33,4 +33,7 @@ const globalSettingSchema = new mongoose.Schema({
 // 'maintenance_mode', 'app_name', 'support_email', 'trial_days_default'
 // 'company_address', 'company_gst' (used by invoice generation)
 
+// key has unique:true which auto-creates an index. Add updatedAt for sweep sort.
+globalSettingSchema.index({ updatedAt: -1 });
+
 module.exports = mongoose.model('GlobalSetting', globalSettingSchema);

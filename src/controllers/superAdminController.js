@@ -151,7 +151,7 @@ const getSaaSAnalytics = async (req, res) => {
         const [totalCompanies, totalAgents, totalLeads, recentUsers] = await Promise.all([
             User.countDocuments({ role: { $in: ['manager', 'agency'] } }),
             User.countDocuments({ role: 'agent' }),
-            Lead.countDocuments(),
+            Lead.estimatedDocumentCount(), // O(1) metadata count — no full-collection scan
             User.find({ role: { $in: ['manager', 'agency'] } })
                 .select('name email createdAt')
                 .sort({ createdAt: -1 })
@@ -904,7 +904,7 @@ const getDashboardStats = async (req, res) => {
             User.countDocuments({ role: 'manager', parentId: null }),
             User.countDocuments({ role: 'manager', parentId: { $ne: null } }),
             User.countDocuments({ role: 'agent' }),
-            Lead.countDocuments(),
+            Lead.estimatedDocumentCount(), // O(1) metadata count — no full-collection scan
             User.countDocuments({ ...COMPANY_FILTER, status: 'approved', is_active: true }),
             User.countDocuments({ ...COMPANY_FILTER, status: 'pending' }),
             User.countDocuments({ ...COMPANY_FILTER, status: 'rejected' }),
@@ -1199,42 +1199,37 @@ const getCloudUsage = async (req, res) => {
     try {
         // Current billing cycle = 1st of current month to now
         const now = new Date();
-        const cycleStart = new Date(now.getFullYear(), now.getMonth(), 1); // 1st of month, 00:00:00
+        const cycleStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
         // Count ACTUAL logs from this billing cycle across ALL tenants
-        const [whatsappSent, emailsSent] = await Promise.all([
+        // + aggregate plan limit totals — all in parallel
+        const [whatsappSent, emailsSent, limitAgg] = await Promise.all([
             WhatsAppLog.countDocuments({ createdAt: { $gte: cycleStart } }).catch(() => 0),
-            EmailLog.countDocuments({ createdAt: { $gte: cycleStart } }).catch(() => 0)
+            EmailLog.countDocuments({ createdAt: { $gte: cycleStart } }).catch(() => 0),
+            // ── FIX: replaced AgencySettings.find() full scan with a server-side $group ──
+            // Previously: fetched every AgencySettings doc → summed in JS (O(n) docs).
+            // Now: single aggregate round-trip regardless of agency count.
+            AgencySettings.aggregate([
+                {
+                    $group: {
+                        _id: null,
+                        totalWhatsapp: { $sum: { $ifNull: ['$planLimits.whatsappMessagesPerMonth', 1000] } },
+                        totalEmail:    { $sum: { $ifNull: ['$planLimits.emailsPerMonth', 5000] } },
+                        count:         { $sum: 1 }
+                    }
+                }
+            ]).catch(() => [])
         ]);
 
-        // Aggregate plan limits from AgencySettings for the cap display
-        const agencySettings = await AgencySettings.find().select('planLimits').lean();
-
-        let totalWhatsappLimit = 0;
-        let totalEmailLimit = 0;
-
-        agencySettings.forEach(setting => {
-            totalWhatsappLimit += setting.planLimits?.whatsappMessagesPerMonth || 1000;
-            totalEmailLimit += setting.planLimits?.emailsPerMonth || 5000;
-        });
-
-        // If no agencies exist yet, show sensible defaults
-        if (agencySettings.length === 0) {
-            totalWhatsappLimit = 6000;
-            totalEmailLimit = 30000;
-        }
+        const agg = limitAgg[0] || null;
+        const totalWhatsappLimit = agg ? agg.totalWhatsapp : 6000;
+        const totalEmailLimit    = agg ? agg.totalEmail    : 30000;
 
         res.json({
             success: true,
             usage: {
-                whatsapp: {
-                    sent: whatsappSent,
-                    limit: totalWhatsappLimit
-                },
-                email: {
-                    sent: emailsSent,
-                    limit: totalEmailLimit
-                }
+                whatsapp: { sent: whatsappSent, limit: totalWhatsappLimit },
+                email:    { sent: emailsSent,   limit: totalEmailLimit }
             }
         });
     } catch (error) {
@@ -1449,9 +1444,14 @@ const analyzeHealthStatus = (metrics) => {
     const memoryUsagePercent = (metrics.server.memoryUsageMB / metrics.server.totalMemoryMB) * 100;
     if (memoryUsagePercent > 90) escalate('critical', `Memory Saturation > 90% (${Math.round(memoryUsagePercent)}%)`);
 
-    // CPU Load > 85% sustained (approximation)
-    const cpuCores = os.cpus().length;
-    if (metrics.server.loadAverage[0] / cpuCores > 0.85) escalate('warning', `Sustained High CPU Load`);
+    // CPU Load check — uses per-core load ratio to avoid false positives on low-core servers.
+    // Rule: warn only if 1-min load average exceeds 1.5× the core count (genuinely busy),
+    //       critical if it exceeds 3× core count (severely overloaded).
+    // A ratio of 1.0 means every core is fully utilized — 0.85 fires on virtually every server.
+    const cpuCores = os.cpus().length || 1;
+    const cpuRatio = metrics.server.loadAverage[0] / cpuCores;
+    if (cpuRatio > 3.0) escalate('critical', `CPU Critically Overloaded (${cpuRatio.toFixed(1)}× cores)`);
+    else if (cpuRatio > 1.5) escalate('warning', `Sustained High CPU Load (${cpuRatio.toFixed(1)}× cores)`);
 
     // 7️⃣ Abuse Detection
     if (metrics.topTenant && metrics.topTenant.requestCount > 5000) {

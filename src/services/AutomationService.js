@@ -9,6 +9,7 @@ const { sendWhatsAppMessage } = require('./whatsappService');
 const { logActivity } = require('./auditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { emitToUser } = require('./socketService');
 
 // Prototype-safe property resolver (handles 'customData.Property' etc)
 const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -101,6 +102,19 @@ const executeRuleActions = async (rule, lead) => {
                     updates.$set.assignedTo = action.userId;
                     historyEntries.push({ type: 'System', subType: 'Auto', content: `Lead assigned automatically (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
+
+                    // Real-time notification to the assigned agent
+                    if (action.userId) {
+                        setImmediate(() => {
+                            emitToUser(action.userId.toString(), 'lead:assigned', {
+                                leadId: lead._id,
+                                leadName: lead.name,
+                                ruleName: rule.name,
+                                message: `You have been assigned lead: ${lead.name}`,
+                                timestamp: new Date()
+                            });
+                        });
+                    }
                 }
 
             // ── WAIT_FOR_REPLY (New) ───────────────────────────────

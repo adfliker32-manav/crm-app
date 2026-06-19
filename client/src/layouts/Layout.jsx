@@ -27,7 +27,7 @@ const Layout = () => {
     }, []);
 
     const { socket } = useSocket();
-    const { showError, showInfo } = useNotification();
+    const { showError, showInfo, showSuccess } = useNotification();
 
     // ⚠️ Listen for account deletion — auto-logout if admin removes this agent
     useEffect(() => {
@@ -48,14 +48,23 @@ const Layout = () => {
         const handleAgentNotification = (data) => {
             const msg = data?.message || 'New notification';
             if (data?.type === 'meta_lead_drop') {
-                showError(msg, 10000);
+                // Show a longer-lived error with a link to the drop log
+                showError(
+                    `${msg} — View Drop Log in Settings → Meta`,
+                    15000
+                );
+            } else if (data?.type === 'meta_lead_recovered') {
+                showSuccess(msg, 8000);
+            } else if (data?.type === 'new_lead') {
+                // Strip markdown asterisks for clean UI display
+                showSuccess(msg.replace(/\*/g, ''), 8000);
             } else {
                 showInfo(msg, 6000);
             }
         };
         socket.on('notification:agent', handleAgentNotification);
         return () => socket.off('notification:agent', handleAgentNotification);
-    }, [socket, showError, showInfo]);
+    }, [socket, showError, showInfo, showSuccess]);
 
     return (
         <div className="flex h-screen bg-slate-900 overflow-hidden font-sans">

@@ -176,37 +176,10 @@ const runAppointmentReminders = async () => {
 
         // 24h window: appointments between 23h and 25h from now
         const window24Start = new Date(now + 23 * 3600000);
-        const window24End = new Date(now + 25 * 3600000);
-
+        const window24End   = new Date(now + 25 * 3600000);
         // 1h window: appointments between 55 min and 65 min from now
-        const window1Start = new Date(now + 55 * 60000);
-        const window1End = new Date(now + 65 * 60000);
-
-        const sendReminder = async (appt, triggerType, flagField) => {
-            const template = await WhatsAppTemplate.findOne({
-                userId: appt.userId,
-                isAutomated: true,
-                triggerType,
-                status: 'APPROVED'
-            }).lean().catch(() => null);
-
-            // No template configured: don't mark — let it retry next tick once admin sets one up
-            if (!template) return;
-
-            try {
-                if (appt.customerPhone) {
-                    await sendWhatsAppMessage(appt.customerPhone, template.name, appt.userId.toString());
-                    console.log(`📅 [AppointmentReminder] ${triggerType} sent to ${appt.customerPhone} (appt ${appt._id})`);
-                }
-            } catch (err) {
-                console.error(`❌ [AppointmentReminder] ${triggerType} failed for ${appt._id}:`, err.message);
-            } finally {
-                // Mark sent only when a template existed — prevents retry loops on persistent errors
-                // and on unreachable contacts (no phone), but does NOT silently drop reminders
-                // when the user hasn't configured a template yet.
-                await Appointment.findByIdAndUpdate(appt._id, { $set: { [flagField]: true } });
-            }
-        };
+        const window1Start  = new Date(now + 55 * 60000);
+        const window1End    = new Date(now + 65 * 60000);
 
         const [appts24h, appts1h] = await Promise.all([
             Appointment.find({
@@ -221,12 +194,57 @@ const runAppointmentReminders = async () => {
             }).lean()
         ]);
 
-        for (const appt of appts24h) await sendReminder(appt, 'appointment_reminder_24h', 'reminder24hSent');
-        for (const appt of appts1h) await sendReminder(appt, 'appointment_reminder_1h', 'reminder1hSent');
+        if (appts24h.length + appts1h.length === 0) return;
 
-        if (appts24h.length + appts1h.length > 0) {
-            console.log(`📅 [AppointmentReminder] Processed ${appts24h.length} 24h + ${appts1h.length} 1h reminders`);
-        }
+        // ── FIX N+1: Batch-fetch all templates upfront ──────────────────────────────
+        // Previously: WhatsAppTemplate.findOne() called inside every per-appointment
+        // loop iteration = O(n) sequential DB reads.
+        // Now: one query per triggerType, keyed by userId for O(1) lookup in loops.
+        const allAppts = [...appts24h, ...appts1h];
+        const tenantIds = [...new Set(allAppts.map(a => a.userId.toString()))];
+
+        const [templates24h, templates1h] = await Promise.all([
+            WhatsAppTemplate.find({
+                userId: { $in: tenantIds },
+                isAutomated: true,
+                triggerType: 'appointment_reminder_24h',
+                status: 'APPROVED'
+            }).lean(),
+            WhatsAppTemplate.find({
+                userId: { $in: tenantIds },
+                isAutomated: true,
+                triggerType: 'appointment_reminder_1h',
+                status: 'APPROVED'
+            }).lean()
+        ]);
+
+        // Build userId → template lookup map (one template per tenant per type)
+        const map24h = new Map(templates24h.map(t => [t.userId.toString(), t]));
+        const map1h  = new Map(templates1h.map(t => [t.userId.toString(), t]));
+
+        // ── Helper using the pre-fetched map instead of per-call DB query ───────────
+        const sendReminder = async (appt, templateMap, flagField) => {
+            const template = templateMap.get(appt.userId.toString());
+            // No template configured for this tenant: skip without marking so it retries
+            // next tick once admin creates a template.
+            if (!template) return;
+
+            try {
+                if (appt.customerPhone) {
+                    await sendWhatsAppMessage(appt.customerPhone, template.name, appt.userId.toString());
+                    console.log(`📅 [AppointmentReminder] ${template.triggerType} sent to ${appt.customerPhone} (appt ${appt._id})`);
+                }
+            } catch (err) {
+                console.error(`❌ [AppointmentReminder] ${template.triggerType} failed for ${appt._id}:`, err.message);
+            } finally {
+                await Appointment.findByIdAndUpdate(appt._id, { $set: { [flagField]: true } });
+            }
+        };
+
+        for (const appt of appts24h) await sendReminder(appt, map24h, 'reminder24hSent');
+        for (const appt of appts1h)  await sendReminder(appt, map1h,  'reminder1hSent');
+
+        console.log(`📅 [AppointmentReminder] Processed ${appts24h.length} 24h + ${appts1h.length} 1h reminders`);
     } catch (err) {
         console.error('❌ [AppointmentReminder] Cron error:', err.message);
     }
@@ -568,6 +586,24 @@ const runFollowUpTemplateSend = async () => {
 
         console.log(`📨 [FollowUpTemplate] Processing ${leads.length} lead(s) with scheduled templates`);
 
+        // ── FIX N+1: Batch-fetch users and email templates upfront ──────────────
+        // Previously: User.findById() and EmailTemplate.findOne() were called inside
+        // the per-lead loop — O(n) sequential queries for n email-type leads.
+        const tenantIds    = [...new Set(leads.map(l => l.userId.toString()))];
+        const emailTplIds  = leads
+            .filter(l => l.followUpTemplateType === 'email' && l.followUpTemplateName)
+            .map(l => l.followUpTemplateName);
+
+        const [tenantUsers, emailTemplates] = await Promise.all([
+            User.find({ _id: { $in: tenantIds } }).select('name companyName').lean(),
+            emailTplIds.length
+                ? EmailTemplate.find({ _id: { $in: emailTplIds } }).lean()
+                : Promise.resolve([])
+        ]);
+
+        const userMap     = new Map(tenantUsers.map(u  => [u._id.toString(), u]));
+        const templateMap = new Map(emailTemplates.map(t => [t._id.toString(), t]));
+
         for (const lead of leads) {
             try {
                 if (lead.followUpTemplateType === 'whatsapp') {
@@ -592,12 +628,13 @@ const runFollowUpTemplateSend = async () => {
                         await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } });
                         continue;
                     }
-                    const template = await EmailTemplate.findOne({ _id: lead.followUpTemplateName, userId: lead.userId }).lean().catch(() => null);
+                    // Lookup from pre-fetched Map — no extra DB query
+                    const template = templateMap.get(String(lead.followUpTemplateName));
                     if (!template) {
                         await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } });
                         continue;
                     }
-                    const user = await User.findById(lead.userId).select('name companyName').lean().catch(() => null);
+                    const user = userMap.get(lead.userId.toString());
                     const templateData = {
                         leadName: lead.name || '',
                         leadEmail: lead.email || '',
@@ -607,7 +644,7 @@ const runFollowUpTemplateSend = async () => {
                         stageName: lead.status || ''
                     };
                     const subject = replaceVariables(template.subject, templateData);
-                    const body = replaceVariables(template.body, templateData);
+                    const body    = replaceVariables(template.body, templateData);
                     await sendEmailWithRetry({ to: lead.email, subject, html: wrapEmailHtml(body), userId: lead.userId.toString() }, 1);
                     await Lead.findByIdAndUpdate(lead._id, {
                         $set: { followUpTemplateSent: true, followUpTemplateType: null, followUpTemplateName: null },
@@ -622,7 +659,6 @@ const runFollowUpTemplateSend = async () => {
                 }
             } catch (err) {
                 console.error(`❌ [FollowUpTemplate] Failed for lead ${lead._id}:`, err.message);
-                // Mark sent to avoid hammering on persistent errors
                 await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } }).catch(() => { });
             }
         }
@@ -680,6 +716,17 @@ const startCronJobs = () => {
     // Agency client billing auto-sweep — daily at 01:00 AM
     cron.schedule('0 1 * * *', runAgencyClientBillingSweep);
     console.log('[CronJobs] Agency client billing sweep scheduled (daily 01:00 AM)');
+
+    // ── Meta Lead Drop Recovery — every 15 minutes ─────────────────────────
+    // Retries Facebook leads that failed to arrive (token errors, API errors, DB saves).
+    // Uses MongoDB as the queue so retries survive server restarts (unlike setTimeout).
+    try {
+        const { runMetaLeadRecovery } = require('./metaLeadRecoveryService');
+        cron.schedule('*/15 * * * *', runMetaLeadRecovery);
+        console.log('[CronJobs] Meta lead drop recovery scheduled (every 15 min)');
+    } catch (e) {
+        console.error('⚠️ [CronJobs] Failed to schedule Meta lead recovery:', e.message);
+    }
 };
 
 // ──────────────────────────────────────────────────────────────────────────────

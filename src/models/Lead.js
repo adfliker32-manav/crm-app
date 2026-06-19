@@ -186,6 +186,12 @@ LeadSchema.index(
     { userId: 1, metaLeadgenId: 1 },
     { unique: true, partialFilterExpression: { metaLeadgenId: { $type: 'string' } } }
 );
+// Follow-up cron: runs daily, queries nextFollowUpDate per tenant
+LeadSchema.index({ userId: 1, nextFollowUpDate: 1, followUpTemplateSent: 1 });
+// TIME_IN_STAGE cron: runs every 30 min, queries stageEnteredAt per tenant
+LeadSchema.index({ userId: 1, stageEnteredAt: 1, status: 1 });
+// Lost lead recovery cron: queries lostAt + wonAt + recoveryAttemptedAt
+LeadSchema.index({ lostAt: 1, wonAt: 1, recoveryAttemptedAt: 1 }, { sparse: true });
 
 // Auto-truncate arrays to prevent document bloat (16MB limits)
 LeadSchema.pre('save', function() {

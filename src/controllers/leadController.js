@@ -342,6 +342,14 @@ const getLeadById = async (req, res) => {
 
         queueLeadCreatedEffects(newLead, ownerId);
 
+        // Trigger lead arrival alerts (socket and WhatsApp alerts)
+        try {
+            const { sendLeadArrivalAlert } = require('../services/leadAlertService');
+            sendLeadArrivalAlert(newLead).catch(err => console.error('❌ Error sending lead arrival alerts:', err.message));
+        } catch (alertErr) {
+            console.error('❌ Failed to trigger lead arrival alerts:', alertErr.message);
+        }
+
         res.json(newLead);
     } catch (err) {
         console.error(err);

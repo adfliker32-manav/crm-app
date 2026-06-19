@@ -83,11 +83,11 @@ export default function WebLeadSettings() {
     const fetchConfig = useCallback(async () => {
         try {
             setLoading(true);
-            const res = await api.get('/web-leads/config');
-            if (res.data.success) {
-                setApiKey(res.data.apiKey || '');
-                setDefaultStage(res.data.defaultStage || '');
-                setDefaultTag(res.data.defaultTag || '');
+            const configRes = await api.get('/web-leads/config');
+            if (configRes.data.success) {
+                setApiKey(configRes.data.apiKey || '');
+                setDefaultStage(configRes.data.defaultStage || '');
+                setDefaultTag(configRes.data.defaultTag || '');
             }
         } catch {
             setError('Failed to load Web-to-Lead config');
@@ -156,6 +156,21 @@ export default function WebLeadSettings() {
                     <i className="fa-solid fa-triangle-exclamation mr-2"></i> {error}
                 </div>
             )}
+
+            {/* ── Agent assignment moved to dedicated panel ── */}
+            <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 text-sm">
+                <i className="fa-solid fa-user-tag text-indigo-500 shrink-0"></i>
+                <span className="text-indigo-700">
+                    To set the <strong>Default Agent</strong> for Web-to-Lead leads, go to the{' '}
+                    <button
+                        onClick={() => window.dispatchEvent(new CustomEvent('settings:switchTab', { detail: 'leadAssignment' }))}
+                        className="font-bold underline underline-offset-2 hover:text-indigo-900 transition"
+                    >
+                        Lead Assignment
+                    </button>{' '}
+                    tab.
+                </span>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch">
                 {/* Security Card */}

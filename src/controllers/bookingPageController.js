@@ -189,6 +189,14 @@ const submitBooking = async (req, res) => {
                 await newLead.save();
                 lead = newLead.toObject();
                 leadWasCreated = true;
+
+                // Trigger lead arrival alerts (socket and WhatsApp alerts)
+                try {
+                    const { sendLeadArrivalAlert } = require('../services/leadAlertService');
+                    sendLeadArrivalAlert(newLead).catch(err => console.error('❌ Error sending booking lead arrival alerts:', err.message));
+                } catch (alertErr) {
+                    console.error('❌ Failed to trigger booking lead arrival alerts:', alertErr.message);
+                }
             }
 
             const leadId = lead?._id || null;

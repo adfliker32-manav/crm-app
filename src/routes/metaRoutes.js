@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const metaController = require('../controllers/metaController');
 const metaWebhookController = require('../controllers/metaWebhookController');
+const metaDropLogController = require('../controllers/metaDropLogController');
 
 // DDoS protection — Meta retries on 5xx not 429, so 429 safely drops floods
 const metaWebhookLimiter = rateLimit({
@@ -37,9 +38,24 @@ router.post('/toggle-sync', authMiddleware, requireFeature('metaSync'), metaCont
 // Manual lead backfill
 router.post('/fetch-leads', authMiddleware, requireFeature('metaSync'), metaWebhookController.fetchHistoricalLeads);
 
+// Lead Drop Log — persistent audit trail for dropped leads
+router.get('/lead-drop-log', authMiddleware, requireFeature('metaSync'), metaDropLogController.getLeadDropLog);
+router.post('/retry-drop/:id', authMiddleware, requireFeature('metaSync'), metaDropLogController.retryDroppedLead);
+
 // Field mapping routes
 router.get('/field-mapping', authMiddleware, requireFeature('metaSync'), metaController.getFieldMapping);
 router.post('/field-mapping', authMiddleware, requireFeature('metaSync'), metaController.saveFieldMapping);
+
+// Default agent assignment for Meta leads
+router.post('/default-agent', authMiddleware, requireFeature('metaSync'), metaController.saveDefaultAgent);
+
+// Lead arrival WhatsApp alert — notifies the configured number when a new lead arrives
+router.get('/lead-alert-config', authMiddleware, requireFeature('metaSync'), metaDropLogController.getLeadAlertConfig);
+router.post('/lead-alert-config', authMiddleware, requireFeature('metaSync'), metaDropLogController.saveLeadAlertConfig);
+
+// Per-form agent routing: map specific Meta forms to specific agents
+router.get('/form-agent-mapping', authMiddleware, requireFeature('metaSync'), metaController.getFormAgentMapping);
+router.post('/form-agent-mapping', authMiddleware, requireFeature('metaSync'), metaController.saveFormAgentMapping);
 
 // CAPI Settings routes
 router.get('/capi-settings', authMiddleware, requireFeature('metaSync'), metaController.getCapiSettings);

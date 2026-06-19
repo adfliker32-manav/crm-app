@@ -275,7 +275,7 @@ const Dashboard = () => {
                 {stats?.leadsToday > 0 && (
                     <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl border border-slate-700 relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-6">
                         <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl"></div>
-                        
+
                         <div className="flex items-center gap-4 relative z-10 w-full md:w-auto">
                             <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center border border-blue-500/30 shrink-0">
                                 <i className="fa-brands fa-meta text-blue-400 text-xl"></i>

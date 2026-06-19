@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const Lead = require('../models/Lead');
+const MetaLeadDropLog = require('../models/MetaLeadDropLog');
 const axios = require('axios');
 const { emitToUser } = require('../services/socketService');
 const { normalizePhoneForWhatsApp } = require('../utils/phoneUtils');
@@ -95,14 +96,21 @@ const handleLeadWebhook = async (req, res) => {
 
 // Process leadgen webhook data
 async function processLeadgenWebhook(pageId, leadgenData) {
+    const { leadgen_id, form_id } = leadgenData || {};
+
+    if (!leadgen_id || !pageId) {
+        console.warn('⚠️ processLeadgenWebhook: missing leadgen_id or pageId — skipping', { pageId, leadgen_id, form_id });
+        return;
+    }
+
+    const leadLock = require('../utils/leadProcessingLock');
+    const lockAcquired = await leadLock.acquire(leadgen_id);
+    if (!lockAcquired) {
+        console.log(`🔒 [processLeadgenWebhook] Lead ${leadgen_id} is already being processed. Skipping duplicate webhook.`);
+        return;
+    }
+
     try {
-        const { leadgen_id, form_id } = leadgenData || {};
-
-        if (!leadgen_id || !pageId) {
-            console.warn('⚠️ processLeadgenWebhook: missing leadgen_id or pageId — skipping', { pageId, leadgen_id, form_id });
-            return;
-        }
-
         console.log(`📋 Processing lead: ${leadgen_id} from form: ${form_id}`);
 
         // +meta.metaAccessToken required so checkAndRefreshToken can read/refresh it (select:false field)
@@ -149,11 +157,21 @@ async function processLeadgenWebhook(pageId, leadgenData) {
         if (!pageToken) {
             console.error(`❌ No page access token for page ${pageId}. Lead ${leadgen_id} cannot be fetched. Reconnect Meta in settings.`);
             for (const config of configs) {
+                const dropMsg = `Page access token missing. Please reconnect your Meta page in Settings → Meta.`;
                 emitToUser(config.userId.toString(), 'notification:agent', {
                     type: 'meta_lead_drop',
-                    message: `⚠️ Meta lead drop: page access token missing. Please reconnect your Meta page in Settings → Integrations.`,
+                    message: `⚠️ Meta lead drop: ${dropMsg}`,
                     leadgenId: leadgen_id,
                     timestamp: new Date()
+                });
+                // Persist the drop so the recovery cron can pick it up and email the user
+                await persistDropLog({
+                    userId: config.userId,
+                    leadgenId: leadgen_id,
+                    pageId,
+                    formId: form_id,
+                    reason: 'token_missing',
+                    message: dropMsg
                 });
             }
             return;
@@ -172,71 +190,26 @@ async function processLeadgenWebhook(pageId, leadgenData) {
         }
 
         if (!leadDetails) {
-            console.error(`❌ fetchLeadDetails failed for ${leadgen_id} with both page and user tokens. Scheduling 30-min retry with fresh tokens.`);
+            console.error(`❌ fetchLeadDetails failed for ${leadgen_id} with both page and user tokens. Writing to drop log for cron recovery.`);
             for (const config of configs) {
+                const dropMsg = `Lead fetch failed. The system will retry automatically every 15 minutes for up to 6 hours. If it keeps failing, check that your Meta app has the leads_retrieval permission and the page is subscribed.`;
                 emitToUser(config.userId.toString(), 'notification:agent', {
                     type: 'meta_lead_drop',
-                    message: `⚠️ Meta lead fetch failed — retrying in 30 minutes. If it keeps failing, check that your Meta app has the leads_retrieval permission and the page is subscribed.`,
+                    message: `⚠️ Meta lead fetch failed — retrying automatically. Check Settings → Meta → Lead Drop Log for details.`,
                     leadgenId: leadgen_id,
                     timestamp: new Date()
                 });
+                // Persist to DB — the recovery cron (every 15 min) will retry this.
+                // This replaces the old in-memory setTimeout which was lost on server restart.
+                await persistDropLog({
+                    userId: config.userId,
+                    leadgenId: leadgen_id,
+                    pageId,
+                    formId: form_id,
+                    reason: 'fetch_failed',
+                    message: dropMsg
+                });
             }
-
-            // 30-min retry — re-derives fresh tokens from DB instead of using stale closure values
-            setTimeout(async () => {
-                try {
-                    console.log(`🔄 30-min retry firing for leadgen ${leadgen_id}...`);
-
-                    // Re-query DB for fresh config + tokens — don't trust 30-min-old closure values
-                    let retryPageToken = null;
-                    let retryUserToken = null;
-                    try {
-                        const retryConfigs = await IntegrationConfig.find({
-                            'meta.metaPageId': pageId,
-                            'meta.metaLeadSyncEnabled': true
-                        }).select('+meta.metaAccessToken +meta.metaPageAccessToken');
-
-                        if (retryConfigs.length > 0) {
-                            const retryMeta = await checkAndRefreshToken(retryConfigs[0].userId.toString(), retryConfigs[0].meta);
-                            retryUserToken = retryMeta.metaAccessToken;
-                            try {
-                                const retryPageRes = await axios.get(`${META_GRAPH_URL}/${pageId}`, {
-                                    params: { access_token: retryUserToken, fields: 'access_token' },
-                                    timeout: META_API_TIMEOUT
-                                });
-                                retryPageToken = retryPageRes.data.access_token;
-                            } catch (e) {
-                                retryPageToken = retryMeta.metaPageAccessToken;
-                            }
-                        }
-                    } catch (e) {
-                        console.warn(`⚠️ 30-min retry: could not re-derive tokens, using stale values:`, e.message);
-                        retryPageToken = pageToken;
-                        retryUserToken = userToken;
-                    }
-
-                    const retryDetails =
-                        await fetchLeadDetails(leadgen_id, retryPageToken || pageToken) ||
-                        (retryUserToken && await fetchLeadDetails(leadgen_id, retryUserToken));
-
-                    if (retryDetails) {
-                        console.log(`✅ 30-min retry succeeded for leadgen ${leadgen_id}`);
-                        await distributeLeadToTenants(retryDetails, configs, form_id, leadgen_id);
-                    } else {
-                        console.error(`❌ 30-min retry also failed for leadgen ${leadgen_id}. Likely a permissions issue.`);
-                        for (const config of configs) {
-                            emitToUser(config.userId.toString(), 'notification:agent', {
-                                type: 'meta_lead_drop',
-                                message: `⚠️ Meta lead could not be fetched after retry. Possible cause: your Meta app may not have leads_retrieval permission, or the lead form was created by a different app. Go to Settings → Meta → Fetch Leads to recover manually.`,
-                                leadgenId: leadgen_id,
-                                timestamp: new Date()
-                            });
-                        }
-                    }
-                } catch (err) {
-                    console.error(`❌ 30-min retry error for leadgen ${leadgen_id}:`, err.message);
-                }
-            }, 30 * 60 * 1000);
             return;
         }
 
@@ -244,6 +217,8 @@ async function processLeadgenWebhook(pageId, leadgenData) {
 
     } catch (error) {
         console.error("❌ processLeadgenWebhook Error:", error.message);
+    } finally {
+        await leadLock.release(leadgen_id);
     }
 }
 
@@ -409,15 +384,32 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
         if (leadLimit != null && leadLimit > 0) {
             const currentCount = await Lead.countDocuments({ userId });
             if (currentCount >= leadLimit) {
-                console.warn(`⚠️ Lead limit reached for tenant ${userId} (${currentCount}/${leadLimit}). Meta lead dropped.`);
+                const dropMsg = `Lead limit reached (${currentCount}/${leadLimit}). A Meta lead was dropped. Upgrade your plan to receive more leads.`;
+                console.warn(`⚠️ ${dropMsg}`);
                 emitToUser(userId.toString(), 'notification:agent', {
                     type: 'meta_lead_drop',
-                    message: `⚠️ Lead limit reached (${currentCount}/${leadLimit}). A Meta lead was dropped. Upgrade your plan to receive more leads.`,
+                    message: `⚠️ ${dropMsg}`,
                     timestamp: new Date()
                 });
+                // Persist — not recoverable by fetch, but important for the audit trail
+                if (leadgenId) {
+                    await persistDropLog({
+                        userId,
+                        leadgenId,
+                        pageId: null,
+                        formId,
+                        reason: 'limit_reached',
+                        message: dropMsg
+                    });
+                }
                 return null;
             }
         }
+
+        // Fetch integConfig ALWAYS — not inside rawFields guard — so defaultAssignedAgent
+        // is applied even when the form has no custom fields (only standard name/phone fields).
+        const integConfig = await IntegrationConfig.findOne({ userId })
+            .select('meta.metaFieldMapping meta.defaultAssignedAgent meta.metaFormAgentMapping').lean();
 
         // Apply custom field mapping and save raw field keys for the mapping UI
         if (leadDetails.rawFields && Object.keys(leadDetails.rawFields).length > 0) {
@@ -430,12 +422,25 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             ).exec().catch(() => {});
 
             // Apply custom mapping overrides if configured
-            const integConfig = await IntegrationConfig.findOne({ userId }).select('meta.metaFieldMapping').lean();
             const mapping = integConfig?.meta?.metaFieldMapping || {};
             if (mapping.name  && leadDetails.rawFields[mapping.name])  leadDetails.name  = leadDetails.rawFields[mapping.name];
             if (mapping.phone && leadDetails.rawFields[mapping.phone]) leadDetails.phone = leadDetails.rawFields[mapping.phone];
             if (mapping.email && leadDetails.rawFields[mapping.email]) leadDetails.email = leadDetails.rawFields[mapping.email];
             if (mapping.city  && leadDetails.rawFields[mapping.city])  leadDetails.city  = leadDetails.rawFields[mapping.city];
+        }
+
+        // Resolve assigned agent: per-form mapping takes priority over source-level default.
+        // 1. Check if this formId has a specific agent mapped
+        // 2. Fall back to source-level defaultAssignedAgent
+        const formMap = integConfig?.meta?.metaFormAgentMapping || [];
+        const formEntry = formId ? formMap.find(e => e.formId === formId) : null;
+        const resolvedAgent = formEntry?.agentId || integConfig?.meta?.defaultAssignedAgent || null;
+        leadDetails._defaultAssignedAgent = resolvedAgent;
+
+        if (formEntry?.agentId) {
+            console.log(`🎯 Form-level agent routing: Form ${formId} → agent ${formEntry.agentId}`);
+        } else if (resolvedAgent) {
+            console.log(`👤 Source-level default agent applied for Meta lead (Form: ${formId})`);
         }
 
         // Normalize phone to WhatsApp international format using workspace's country code
@@ -492,6 +497,9 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
 
         const resolvedName = leadDetails.name || 'Unknown';
 
+        // Use form-specific source so automation conditions can distinguish forms.
+        const metaSource = formId ? `Meta (Form: ${formId})` : 'Meta';
+
         const notes = [{ text: `Lead captured from Meta Lead Ads (Form: ${formId})`, date: new Date() }];
         if (!leadDetails.name) {
             notes.push({ text: '⚠️ Name not captured — the Meta lead form may not include a name field.', date: new Date() });
@@ -506,15 +514,25 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             phone: cleanPhone,
             email: cleanEmail || `meta_${leadDetails.id}@lead.local`,
             status: 'New',
-            source: 'Meta',
+            source: metaSource,
             metaLeadgenId: leadgenId || null,
             city: leadDetails.city || null,
             state: leadDetails.state || null,
             zipCode: leadDetails.zipCode || null,
             gender: leadDetails.gender || null,
             dateOfBirth: leadDetails.dateOfBirth || null,
+            // Assign to Meta's default agent if configured
+            assignedTo: leadDetails._defaultAssignedAgent || null,
             customData,
-            notes
+            notes,
+            history: [{
+                type: 'System',
+                subType: 'Created',
+                content: leadDetails._defaultAssignedAgent
+                    ? `Lead captured from Meta Lead Ads (Form: ${formId}). Auto-assigned to default agent.`
+                    : `Lead captured from Meta Lead Ads (Form: ${formId}).`,
+                date: new Date()
+            }]
         });
 
         try {
@@ -524,28 +542,38 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
                 console.log(`↩️ Meta leadgen ${leadgenId} race-collided for tenant ${userId}. Skipping.`);
                 return null;
             }
-            // FIX 2: DB transient error — retry save once after 30 minutes
-            console.error(`❌ DB save failed for lead "${newLead.name}", scheduling 30-min retry:`, saveErr.message);
-            setTimeout(async () => {
-                try {
-                    await newLead.save();
-                    console.log(`✅ 30-min DB retry: saved lead "${newLead.name}" (${newLead._id})`);
-                } catch (retryErr) {
-                    if (retryErr.code === 11000) return; // created by backfill in the meantime — fine
-                    console.error(`❌ 30-min DB retry failed for "${newLead.name}":`, retryErr.message);
-                    emitToUser(userId.toString(), 'notification:agent', {
-                        type: 'meta_lead_drop',
-                        message: `⚠️ Meta lead "${newLead.name}" could not be saved after retry. Use Settings → Meta → Fetch Leads to recover it.`,
-                        timestamp: new Date()
-                    });
-                }
-            }, 30 * 60 * 1000);
-            return null; // return now; retry will persist it in 30 min
+            // DB transient error — write to drop log so recovery cron picks it up
+            const dropMsg = `Database save failed for lead "${newLead.name}". Will be retried automatically every 15 minutes.`;
+            console.error(`❌ ${dropMsg}`, saveErr.message);
+            if (leadgenId) {
+                await persistDropLog({
+                    userId,
+                    leadgenId,
+                    pageId: null,
+                    formId,
+                    reason: 'db_save_failed',
+                    message: dropMsg
+                });
+            }
+            emitToUser(userId.toString(), 'notification:agent', {
+                type: 'meta_lead_drop',
+                message: `⚠️ Meta lead "${newLead.name}" could not be saved — retrying automatically. Check Settings → Meta → Lead Drop Log.`,
+                timestamp: new Date()
+            });
+            return null;
         }
 
         console.log(`✅ Created Meta lead: ${newLead.name} (${newLead.phone || newLead.email})`);
 
         setImmediate(() => {
+            // ── Trigger lead arrival alerts (socket and WhatsApp alerts) ───────────
+            try {
+                const { sendLeadArrivalAlert } = require('../services/leadAlertService');
+                sendLeadArrivalAlert(newLead).catch(err => console.error('❌ Error sending lead arrival alerts:', err.message));
+            } catch (alertErr) {
+                console.error('❌ Failed to trigger lead arrival alerts:', alertErr.message);
+            }
+
             if (newLead.email) {
                 sendAutomatedEmailOnLeadCreate(newLead, userId)
                     .catch(err => console.error(`❌ [Lead:${newLead._id}] Email auto-message failed:`, err.message));
@@ -722,8 +750,82 @@ const fetchHistoricalLeads = async (req, res) => {
     }
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// persistDropLog
+// Shared helper — writes a MetaLeadDropLog record (idempotent via upsert).
+// Called from both the webhook handler and recovery service.
+// ─────────────────────────────────────────────────────────────────────────────
+async function persistDropLog({ userId, leadgenId, pageId, formId, reason, message }) {
+    try {
+        const existing = await MetaLeadDropLog.findOneAndUpdate(
+            { userId, leadgenId },
+            {
+                $setOnInsert: { userId, leadgenId, pageId, formId, reason, message, status: 'pending' }
+            },
+            { upsert: true, new: false }
+        );
+
+        // Send alerts on first insert only.
+        if (!existing) {
+            // Email Alert
+            setImmediate(async () => {
+                try {
+                    const { sendDropAlert } = require('../services/metaLeadRecoveryService');
+                    await sendDropAlert(userId, leadgenId, message, false);
+                } catch (e) {
+                    console.warn(`[persistDropLog] Could not send drop alert email:`, e.message);
+                }
+            });
+
+            // WhatsApp Alert
+            setImmediate(async () => {
+                try {
+                    const WorkspaceSettings = require('../models/WorkspaceSettings');
+                    const ws = await WorkspaceSettings.findOne({ userId })
+                        .select('leadAlertWhatsappEnabled leadAlertWhatsappNumber').lean();
+
+                    if (ws?.leadAlertWhatsappEnabled && ws?.leadAlertWhatsappNumber) {
+                        const alertPhone = ws.leadAlertWhatsappNumber.trim();
+                        if (alertPhone) {
+                            const { sendWhatsAppTextMessage } = require('../services/whatsappService');
+                            const truncatedId = leadgenId ? `...${leadgenId.slice(-8)}` : '—';
+                            const reasonStr = reason === 'token_missing' ? 'Page token missing' : reason === 'fetch_failed' ? 'Lead fetch failed' : reason === 'db_save_failed' ? 'Database save failed' : 'Lead limit reached';
+                            
+                            const msg = [
+                                `⚠️ *Meta Lead Ads Sync Alert*`,
+                                ``,
+                                `A lead from Facebook Ads could not be saved to your CRM.`,
+                                ``,
+                                `📋 *Lead ID:* ${truncatedId}`,
+                                `❌ *Reason:* ${reasonStr}`,
+                                `🕒 *Time:* ${new Date().toLocaleString()}`,
+                                ``,
+                                `The system will automatically retry. Or go to Settings → Meta to recover.`
+                            ].join('\n');
+
+                            await sendWhatsAppTextMessage(alertPhone, msg, userId.toString());
+                            console.log(`📲 [LeadAlert] WA drop alert sent to ${alertPhone} for leadgen ${leadgenId}`);
+                        }
+                    }
+                } catch (waErr) {
+                    console.warn(`⚠️ [LeadAlert] WA drop alert failed for leadgen ${leadgenId}:`, waErr.message);
+                }
+            });
+        }
+    } catch (e) {
+        // Must never throw — a logging failure must not crash the webhook handler
+        console.error('[persistDropLog] Failed to write drop log:', e.message);
+    }
+}
+
+// fetchLeadDetailsForRecovery — public alias used by metaLeadRecoveryService
+// Same as fetchLeadDetails but exported for the recovery cron to call directly.
+const fetchLeadDetailsForRecovery = (leadgenId, accessToken) => fetchLeadDetails(leadgenId, accessToken);
+
 module.exports = {
     verifyWebhook,
     handleLeadWebhook,
-    fetchHistoricalLeads
+    fetchHistoricalLeads,
+    fetchLeadDetailsForRecovery,
+    createLeadFromMeta
 };

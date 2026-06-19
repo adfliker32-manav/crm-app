@@ -9,6 +9,7 @@ import SheetSyncSettings from '../components/Settings/SheetSyncSettings';
 import TagsSettings from '../components/Settings/TagsSettings';
 import WebLeadSettings from '../components/Settings/WebLeadSettings';
 import ClaudeAISettings from '../components/Settings/ClaudeAISettings';
+import LeadAssignmentSettings from '../components/Settings/LeadAssignmentSettings';
 
 const Settings = () => {
     const { user, updateUser } = useAuth();
@@ -30,7 +31,7 @@ const Settings = () => {
     // Sync tab with URL search params
     useEffect(() => {
         const tab = searchParams.get('tab');
-        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead', 'claudeAI'].includes(tab)) {
+        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead', 'claudeAI', 'leadAssignment'].includes(tab)) {
             setActiveTab(tab);
         }
     }, [searchParams]);
@@ -40,6 +41,16 @@ const Settings = () => {
             setName(user.name || '');
         }
     }, [user]);
+
+    // Allow sub-components to switch tabs via a custom event
+    useEffect(() => {
+        const handler = (e) => {
+            const tab = e.detail;
+            if (tab) { setActiveTab(tab); setSearchParams({ tab }); }
+        };
+        window.addEventListener('settings:switchTab', handler);
+        return () => window.removeEventListener('settings:switchTab', handler);
+    }, [setSearchParams]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -78,13 +89,14 @@ const Settings = () => {
     };
 
     const tabs = [
-        { id: 'profile', label: 'Profile', icon: 'fa-user' },
-        { id: 'tags', label: 'Lead Tags', icon: 'fa-tags' },
-        { id: 'customFields', label: 'Custom Fields', icon: 'fa-list-check' },
-        { id: 'sheetSync', label: 'Sheet Sync', icon: 'fa-table' },
-        { id: 'meta', label: 'Meta Lead Sync', icon: 'fa-brands fa-facebook' },
-        { id: 'webLead', label: 'Web-to-Lead', icon: 'fa-code' },
-        { id: 'claudeAI', label: 'Claude AI', icon: 'fa-robot' },
+        { id: 'profile',        label: 'Profile',         icon: 'fa-user' },
+        { id: 'tags',           label: 'Lead Tags',        icon: 'fa-tags' },
+        { id: 'customFields',   label: 'Custom Fields',    icon: 'fa-list-check' },
+        { id: 'sheetSync',      label: 'Sheet Sync',       icon: 'fa-table' },
+        { id: 'meta',           label: 'Meta Lead Sync',   icon: 'fa-brands fa-facebook' },
+        { id: 'webLead',        label: 'Web-to-Lead',      icon: 'fa-code' },
+        { id: 'claudeAI',       label: 'Claude AI',        icon: 'fa-robot' },
+        { id: 'leadAssignment', label: 'Lead Assignment',  icon: 'fa-user-tag' },
     ];
 
     if (!canAccessSettings) return <Navigate to="/dashboard" replace />;
@@ -260,6 +272,12 @@ const Settings = () => {
                         <div className="p-8">
                             <ClaudeAISettings />
                         </div>
+                    </div>
+                )}
+
+                {activeTab === 'leadAssignment' && (
+                    <div className="animate-in fade-in duration-300">
+                        <LeadAssignmentSettings />
                     </div>
                 )}
             </div>

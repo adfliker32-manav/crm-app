@@ -133,6 +133,7 @@ exports.getConfig = async (req, res) => {
             apiKey: settings.webLeadApiKey,
             defaultStage: settings.webLeadDefaultStage || null,
             defaultTag: settings.webLeadDefaultTag || null,
+            defaultAgent: settings.webLeadDefaultAgent || null,
         });
     } catch (err) {
         console.error('[WebLead] getConfig error:', err);
@@ -156,13 +157,20 @@ exports.regenerateKey = async (req, res) => {
     }
 };
 
-// ── PUT /api/web-leads/config — update default stage/tag ────────────────────
+// ── PUT /api/web-leads/config — update default stage/tag/agent ─────────────────
 exports.updateConfig = async (req, res) => {
     try {
-        const { defaultStage, defaultTag } = req.body;
+        const { defaultStage, defaultTag, defaultAgent } = req.body;
+        // Only include fields that were explicitly sent — prevents silently overwriting
+        // a saved agent when caller only sends defaultStage (BUG 5 guard).
+        const updates = {};
+        if (defaultStage  !== undefined) updates.webLeadDefaultStage  = defaultStage  || null;
+        if (defaultTag    !== undefined) updates.webLeadDefaultTag    = defaultTag    || null;
+        if (defaultAgent  !== undefined) updates.webLeadDefaultAgent  = defaultAgent  || null;
+
         await WorkspaceSettings.findOneAndUpdate(
             { userId: req.tenantId },
-            { $set: { webLeadDefaultStage: defaultStage || null, webLeadDefaultTag: defaultTag || null } }
+            { $set: updates }
         );
         clearTenantCache(req.tenantId);
         res.json({ success: true });
@@ -211,7 +219,7 @@ exports.captureLead = async (req, res) => {
     let workspace;
     try {
         workspace = await WorkspaceSettings.findOne({ webLeadApiKey: apiKey })
-                                           .select('userId webLeadDefaultStage webLeadDefaultTag')
+                                           .select('userId webLeadDefaultStage webLeadDefaultTag webLeadDefaultAgent')
                                            .lean();
     } catch (dbErr) {
         console.error('[WebLead] DB lookup error:', dbErr.message);
@@ -256,11 +264,15 @@ exports.captureLead = async (req, res) => {
             source: source ? String(source).slice(0, 100) : 'Landing Page',
             status: stage ? String(stage).slice(0, 50) : (workspace.webLeadDefaultStage || 'New'),
             tags: tag ? [String(tag).slice(0, 50)] : (workspace.webLeadDefaultTag ? [workspace.webLeadDefaultTag] : []),
+            // Assign to default agent if configured; automation rules can override after
+            assignedTo: workspace.webLeadDefaultAgent || null,
             notes: message ? [{ text: String(message).trim().slice(0, 1000) }] : [],
             history: [{
                 type: 'System',
                 subType: 'Created',
-                content: 'Lead captured from landing page via Web-to-Lead snippet.',
+                content: workspace.webLeadDefaultAgent
+                    ? 'Lead captured from landing page via Web-to-Lead snippet. Auto-assigned to default agent.'
+                    : 'Lead captured from landing page via Web-to-Lead snippet.',
                 date: new Date()
             }]
         };
@@ -281,6 +293,14 @@ exports.captureLead = async (req, res) => {
 
         const lead = new Lead(leadData);
         await lead.save();
+
+        // Trigger lead arrival alerts (socket and WhatsApp alerts)
+        try {
+            const { sendLeadArrivalAlert } = require('../services/leadAlertService');
+            sendLeadArrivalAlert(lead).catch(e => console.error('[WebLead] alert error:', e.message));
+        } catch (alertErr) {
+            console.error('[WebLead] Failed to trigger lead arrival alerts:', alertErr.message);
+        }
 
         // Fire automations in background (non-blocking)
         const ownerId = lead.userId.toString();

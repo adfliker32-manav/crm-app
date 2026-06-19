@@ -23,8 +23,9 @@ const receiveSheetPush = async (req, res) => {
 
     try {
         // 1. Validate user & config (single query — reused for fieldMapping below)
+        // Note: webhookSecret is select:false so must be prefixed with '+' as a separate token.
         const config = await IntegrationConfig.findOne({ userId })
-            .select('googleSheet');
+            .select('googleSheet.syncEnabled googleSheet.fieldMapping googleSheet.sheetHeaders googleSheet.defaultAssignedAgent +googleSheet.webhookSecret');
 
 
         if (!config || !config.googleSheet?.syncEnabled) {
@@ -114,6 +115,10 @@ const receiveSheetPush = async (req, res) => {
             const isEmailDupe = normEmail && emailSet.has(normEmail);
 
             if (!isPhoneDupe && !isEmailDupe) {
+                const historyNote = config.googleSheet?.defaultAssignedAgent
+                    ? 'Lead captured from Google Sheet push sync. Auto-assigned to default agent.'
+                    : 'Lead captured from Google Sheet push sync.';
+
                 newLeadsToInsert.push({
                     userId,
                     name: finalName,
@@ -121,7 +126,15 @@ const receiveSheetPush = async (req, res) => {
                     phone: finalPhone,
                     source: finalSource,
                     status: finalStatus,
-                    customData
+                    // Assign to sheet's default agent if configured
+                    assignedTo: config.googleSheet?.defaultAssignedAgent || null,
+                    customData,
+                    history: [{
+                        type: 'System',
+                        subType: 'Created',
+                        content: historyNote,
+                        date: new Date()
+                    }]
                 });
 
                 // Add to sets to avoid duplicates within the same push batch
@@ -139,6 +152,14 @@ const receiveSheetPush = async (req, res) => {
 
                 // Fire automations (non-blocking)
                 for (const newLead of insertedLeads) {
+                    // Trigger lead arrival alerts (socket and WhatsApp alerts)
+                    try {
+                        const { sendLeadArrivalAlert } = require('../services/leadAlertService');
+                        sendLeadArrivalAlert(newLead).catch(err => console.error('❌ Error sending sheet lead arrival alerts:', err.message));
+                    } catch (alertErr) {
+                        console.error('❌ Failed to trigger sheet lead arrival alerts:', alertErr.message);
+                    }
+
                     // 1. Email Automation
                     if (newLead.email) {
                         sendAutomatedEmailOnLeadCreate(newLead, userId)

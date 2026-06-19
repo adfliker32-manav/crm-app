@@ -1112,13 +1112,70 @@ const handleDeauth = async (req, res) => {
 const getFieldMapping = async (req, res) => {
     try {
         const config = await IntegrationConfig.findOne({ userId: req.tenantId })
-            .select('meta.metaFieldMapping meta.metaLastRawFields').lean();
+            .select('meta.metaFieldMapping meta.metaLastRawFields meta.defaultAssignedAgent meta.metaFormAgentMapping').lean();
         res.json({
             fieldMapping: config?.meta?.metaFieldMapping || {},
-            lastRawFields: config?.meta?.metaLastRawFields || []
+            lastRawFields: config?.meta?.metaLastRawFields || [],
+            defaultAssignedAgent: config?.meta?.defaultAssignedAgent || null,
+            formAgentMapping: config?.meta?.metaFormAgentMapping || []
         });
     } catch (e) {
         res.status(500).json({ message: 'Failed to load field mapping' });
+    }
+};
+
+// Save default agent for Meta leads
+const saveDefaultAgent = async (req, res) => {
+    try {
+        const { defaultAssignedAgent } = req.body;
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: req.tenantId },
+            { $set: { 'meta.defaultAssignedAgent': defaultAssignedAgent || null } },
+            { upsert: true }
+        );
+        res.json({ success: true, message: 'Default agent saved' });
+    } catch (e) {
+        console.error('[Meta] saveDefaultAgent error:', e);
+        res.status(500).json({ message: 'Failed to save default agent' });
+    }
+};
+
+// GET /meta/form-agent-mapping — return the per-form agent mapping array
+const getFormAgentMapping = async (req, res) => {
+    try {
+        const config = await IntegrationConfig.findOne({ userId: req.tenantId })
+            .select('meta.metaFormAgentMapping').lean();
+        res.json({ formAgentMapping: config?.meta?.metaFormAgentMapping || [] });
+    } catch (e) {
+        console.error('[Meta] getFormAgentMapping error:', e);
+        res.status(500).json({ message: 'Failed to load form-agent mapping' });
+    }
+};
+
+// POST /meta/form-agent-mapping — replace the full per-form agent mapping array
+const saveFormAgentMapping = async (req, res) => {
+    try {
+        const { formAgentMapping } = req.body;
+        if (!Array.isArray(formAgentMapping)) {
+            return res.status(400).json({ message: 'formAgentMapping must be an array' });
+        }
+        // Sanitise: keep only entries with a valid formId
+        const clean = formAgentMapping
+            .filter(e => e.formId && typeof e.formId === 'string')
+            .map(e => ({
+                formId:   e.formId.trim(),
+                formName: (e.formName || '').trim(),
+                agentId:  e.agentId || null
+            }));
+        await IntegrationConfig.findOneAndUpdate(
+            { userId: req.tenantId },
+            { $set: { 'meta.metaFormAgentMapping': clean } },
+            { upsert: true }
+        );
+        res.json({ success: true, formAgentMapping: clean });
+    } catch (e) {
+        console.error('[Meta] saveFormAgentMapping error:', e);
+        res.status(500).json({ message: 'Failed to save form-agent mapping' });
     }
 };
 
@@ -1156,5 +1213,8 @@ module.exports = {
     debugToken,
     checkAndRefreshToken,
     getFieldMapping,
-    saveFieldMapping
+    saveFieldMapping,
+    saveDefaultAgent,
+    getFormAgentMapping,
+    saveFormAgentMapping
 };

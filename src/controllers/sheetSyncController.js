@@ -11,17 +11,18 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 const updateSheetSyncConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const { sheetId, sheetName, sheetUrl, syncEnabled, fieldMapping, sheetHeaders, selectedFields } = req.body;
+        const { sheetId, sheetName, sheetUrl, syncEnabled, fieldMapping, sheetHeaders, selectedFields, defaultAssignedAgent } = req.body;
 
         // Build update object
         const update = {};
-        if (sheetId !== undefined)        update['googleSheet.sheetId'] = sheetId;
-        if (sheetName !== undefined)      update['googleSheet.sheetName'] = sheetName;
-        if (sheetUrl !== undefined)       update['googleSheet.sheetUrl'] = sheetUrl;
-        if (syncEnabled !== undefined)    update['googleSheet.syncEnabled'] = syncEnabled;
-        if (fieldMapping !== undefined)   update['googleSheet.fieldMapping'] = fieldMapping;
-        if (sheetHeaders !== undefined)   update['googleSheet.sheetHeaders'] = sheetHeaders;
-        if (selectedFields !== undefined) update['googleSheet.selectedFields'] = selectedFields;
+        if (sheetId !== undefined)              update['googleSheet.sheetId'] = sheetId;
+        if (sheetName !== undefined)            update['googleSheet.sheetName'] = sheetName;
+        if (sheetUrl !== undefined)             update['googleSheet.sheetUrl'] = sheetUrl;
+        if (syncEnabled !== undefined)          update['googleSheet.syncEnabled'] = syncEnabled;
+        if (fieldMapping !== undefined)         update['googleSheet.fieldMapping'] = fieldMapping;
+        if (sheetHeaders !== undefined)         update['googleSheet.sheetHeaders'] = sheetHeaders;
+        if (selectedFields !== undefined)       update['googleSheet.selectedFields'] = selectedFields;
+        if (defaultAssignedAgent !== undefined) update['googleSheet.defaultAssignedAgent'] = defaultAssignedAgent || null;
 
         // Generate a webhook secret if enabling for the first time
         if (syncEnabled) {
@@ -62,8 +63,9 @@ const updateSheetSyncConfig = async (req, res) => {
 const getSheetSyncConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
+        // webhookSecret is select:false — must use '+' prefix to include it
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('googleSheet');
+            .select('googleSheet +googleSheet.webhookSecret');
 
         const gs = config?.googleSheet || {};
 

@@ -358,7 +358,11 @@ const closeTicket = async (req, res) => {
 
 const adminListTickets = async (req, res) => {
     try {
-        const tickets = await SupportTicket.find({})
+        // Filter to active statuses so Mongo uses the { status, lastMessageAt } compound index
+        // instead of a full collection scan. Closed tickets are hard-deleted so this is safe.
+        const tickets = await SupportTicket.find({
+            status: { $in: ['open', 'admin_replied', 'user_replied'] }
+        })
             .sort({ unreadByAdmin: -1, lastMessageAt: -1 })
             .limit(200)
             .lean();

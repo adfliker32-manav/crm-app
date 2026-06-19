@@ -1056,6 +1056,14 @@ const toolHandlers = {
             qualificationLevel: qualificationLevel || 'Cold'
         });
 
+        // Trigger lead arrival alerts (socket and WhatsApp alerts)
+        try {
+            const { sendLeadArrivalAlert } = require('../services/leadAlertService');
+            sendLeadArrivalAlert(lead).catch(err => console.error('❌ Error sending MCP lead arrival alerts:', err.message));
+        } catch (alertErr) {
+            console.error('❌ Failed to trigger MCP lead arrival alerts:', alertErr.message);
+        }
+
         return {
             success: true,
             leadId: lead._id,

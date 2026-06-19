@@ -109,7 +109,25 @@ const integrationConfigSchema = new mongoose.Schema({
         // ISO 3166-1 alpha-2 (e.g. 'in', 'us'); phone code is the dial prefix without '+'.
         // Per-tenant so non-India tenants don't get Indian numbers prepended.
         metaDefaultCountry: { type: String, default: 'in' },
-        metaDefaultPhoneCountryCode: { type: String, default: '91' }
+        metaDefaultPhoneCountryCode: { type: String, default: '91' },
+        // Default agent to assign when a lead arrives from this Meta page/form.
+        // ObjectId ref to User. null = no default (use automation rules instead).
+        defaultAssignedAgent: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            default: null
+        },
+        // Per-form agent mapping: each entry routes leads from a specific Meta Form
+        // to a specific agent, overriding defaultAssignedAgent for that form.
+        // [{ formId: '123456', formName: 'Summer Promo', agentId: ObjectId }]
+        metaFormAgentMapping: {
+            type: [{
+                formId:   { type: String, required: true },
+                formName: { type: String, default: '' },
+                agentId:  { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
+            }],
+            default: []
+        }
     },
 
     // 📊 Google Sheet Push-Based Sync Configuration
@@ -133,7 +151,14 @@ const integrationConfigSchema = new mongoose.Schema({
         sheetHeaders: { type: [String], default: [] },
         // User-selected fields for sync: [{ key, label, enabled, required }]
         // When empty, falls back to legacy core fields (name, phone, email)
-        selectedFields: { type: [mongoose.Schema.Types.Mixed], default: [] }
+        selectedFields: { type: [mongoose.Schema.Types.Mixed], default: [] },
+        // Default agent to assign when a lead is pushed from this Google Sheet.
+        // ObjectId ref to User. null = no default (use automation rules instead).
+        defaultAssignedAgent: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            default: null
+        }
     },
 
     createdAt: {

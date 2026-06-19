@@ -48,6 +48,7 @@ const SheetSyncSettings = () => {
     const [copied, setCopied] = useState(false);
     const [showFieldPicker, setShowFieldPicker] = useState(false);
 
+
     useEffect(() => { fetchConfig(); }, []);
 
     // Build the master list of available fields (default + custom)
@@ -86,7 +87,7 @@ const SheetSyncSettings = () => {
             setLoading(true);
             const [configRes, cfRes] = await Promise.all([
                 api.get('/leads/sheet-sync-config'),
-                api.get('/custom-fields')
+                api.get('/custom-fields'),
             ]);
             const config = configRes.data.googleSheetSync || {};
             const cfDefs = Array.isArray(cfRes.data) ? cfRes.data : [];
@@ -665,11 +666,13 @@ function onEdit(e) {
                         </div>
 
                         {!syncEnabled ? (
-                            <button onClick={handleSave} disabled={saving || !mappingComplete || enabledFields.length === 0}
-                                className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-emerald-500/25 transition-all duration-300 disabled:opacity-50 flex items-center justify-center gap-2"
-                            >
-                                {saving ? <><i className="fa-solid fa-spinner fa-spin"></i> Enabling...</> : <><i className="fa-solid fa-bolt"></i> Enable Push Sync</>}
-                            </button>
+                            <>
+                                <button onClick={handleSave} disabled={saving || !mappingComplete || enabledFields.length === 0}
+                                    className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-emerald-500/25 transition-all duration-300 disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    {saving ? <><i className="fa-solid fa-spinner fa-spin"></i> Enabling...</> : <><i className="fa-solid fa-bolt"></i> Enable Push Sync</>}
+                                </button>
+                            </>
                         ) : (
                             <>
                                 {/* Update mapping button when already enabled */}

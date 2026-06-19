@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import AssignLeadDropdown from '../Leads/AssignLeadDropdown';
 
@@ -34,10 +34,14 @@ const ScoreBadge = ({ score = 0 }) => {
     );
 };
 
+const PAGE_SIZE = 50;
+
 const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onBulkTag, onRefresh }) => {
     const { user } = useAuth();
     const [selectedIds, setSelectedIds] = useState([]);
     const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
+    const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+    const sentinelRef = useRef(null);
 
     // Sort and filter leads using useMemo instead of useEffect + setState
     const sortedLeads = useMemo(() => {
@@ -69,6 +73,27 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
 
         return processed;
     }, [leads, searchQuery, sortConfig]);
+
+    // Reset visible count whenever the filtered/sorted list changes
+    useEffect(() => {
+        setVisibleCount(PAGE_SIZE);
+    }, [sortedLeads]);
+
+    // IntersectionObserver: load more rows when the sentinel scrolls into view
+    const loadMore = useCallback(() => {
+        setVisibleCount(prev => Math.min(prev + PAGE_SIZE, sortedLeads.length));
+    }, [sortedLeads.length]);
+
+    useEffect(() => {
+        const sentinel = sentinelRef.current;
+        if (!sentinel) return;
+        const observer = new IntersectionObserver(
+            (entries) => { if (entries[0].isIntersecting) loadMore(); },
+            { threshold: 0.1 }
+        );
+        observer.observe(sentinel);
+        return () => observer.disconnect();
+    }, [loadMore]);
 
     const handleSort = (key) => {
         setSortConfig(prev => ({
@@ -270,7 +295,7 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                            {sortedLeads.slice(0, 50).map((lead) => (
+                            {sortedLeads.slice(0, visibleCount).map((lead) => (
                                 <tr key={lead._id} className={`hover:bg-slate-50 transition ${selectedIds.includes(lead._id) ? 'bg-blue-50' : ''}`}>
                                     <td className="px-6 py-4">
                                         <input
@@ -397,6 +422,27 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                         </tbody>
                     </table>
                 </div>
+
+                {/* Infinite-scroll sentinel + progress indicator */}
+                {visibleCount < sortedLeads.length && (
+                    <div
+                        ref={sentinelRef}
+                        className="flex items-center justify-center gap-3 py-5 border-t border-slate-100 bg-slate-50/50"
+                    >
+                        <svg className="animate-spin h-4 w-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                        </svg>
+                        <span className="text-xs text-slate-400 font-medium">
+                            Showing {visibleCount} of {sortedLeads.length} leads…
+                        </span>
+                    </div>
+                )}
+                {visibleCount >= sortedLeads.length && sortedLeads.length > PAGE_SIZE && (
+                    <div className="flex items-center justify-center py-3 border-t border-slate-100 bg-slate-50/50">
+                        <span className="text-xs text-slate-400 font-medium">All {sortedLeads.length} leads loaded</span>
+                    </div>
+                )}
             </div>
         </div>
     );

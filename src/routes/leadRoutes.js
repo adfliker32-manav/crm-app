@@ -30,7 +30,7 @@ const deleteLimiter = rateLimit({
 
 // ==========================
 // 📌 Lead Routes (With Permission Protection)
-// (Prefix '/api/leads' index.js se aayega)
+// (Prefix '/api/leads' comes from index.js)
 // ==========================
 
 // ⚠️ IMPORTANT: Non-parameterized routes MUST come BEFORE parameterized routes!
@@ -41,6 +41,8 @@ router.put('/sheet-sync-config', authMiddleware, sheetSyncController.updateSheet
 router.post('/google-sheets-list', authMiddleware, sheetSyncController.listGoogleSheets);
 router.post('/sheet-headers', authMiddleware, sheetSyncController.fetchSheetHeaders);
 router.post('/sheet-sync-config/regenerate-secret', authMiddleware, sheetSyncController.regenerateWebhookSecret);
+// Used by LeadAssignmentSettings to patch defaultAssignedAgent without changing the full sync config
+router.post('/update-sheet-sync-config', authMiddleware, sheetSyncController.updateSheetSyncConfig);
 
 // 1. Sync Google Sheet (Manual — MUST BE BEFORE /:id routes!)
 router.post('/sync-sheet', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.syncLeads);

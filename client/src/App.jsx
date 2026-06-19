@@ -51,63 +51,63 @@ function App() {
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <AuthProvider>
         <BrandingProvider>
-        <NotificationProvider>
-          <ConfirmProvider>
-            <PromptProvider>
-              <BrowserRouter>
-                <ErrorBoundary>
-                <Suspense fallback={<GlobalLoader />}>
-                  <Routes>
-                    <Route path="/login" element={<Login />} />
-                    <Route path="/register" element={<Register />} />
-                    <Route path="/book/:slug" element={<BookingPage />} />
-                    <Route path="/terms" element={<TermsAndConditions />} />
-                    <Route path="/privacy" element={<PrivacyPolicy />} />
-                    <Route path="/deletion-status" element={<DataDeletionStatus />} />
-                    <Route path="/payment-required" element={<PaymentRequired />} />
-                    <Route path="/plans" element={<Plans />} />
+          <NotificationProvider>
+            <ConfirmProvider>
+              <PromptProvider>
+                <BrowserRouter>
+                  <ErrorBoundary>
+                    <Suspense fallback={<GlobalLoader />}>
+                      <Routes>
+                        <Route path="/login" element={<Login />} />
+                        <Route path="/register" element={<Register />} />
+                        <Route path="/book/:slug" element={<BookingPage />} />
+                        <Route path="/terms" element={<TermsAndConditions />} />
+                        <Route path="/privacy" element={<PrivacyPolicy />} />
+                        <Route path="/deletion-status" element={<DataDeletionStatus />} />
+                        <Route path="/payment-required" element={<PaymentRequired />} />
+                        <Route path="/plans" element={<Plans />} />
 
-                    <Route element={<ProtectedRoute />}>
-                      <Route path="/super-admin" element={<SuperAdmin />} />
+                        <Route element={<ProtectedRoute />}>
+                          <Route path="/super-admin" element={<SuperAdmin />} />
 
-                      {/* Agency Reseller Layout Routes */}
-                      <Route path="/agency" element={<AgencyLayout />}>
-                        <Route path="dashboard" element={<AgencyDashboard />} />
-                        <Route path="clients" element={<AgencyClients />} />
-                        <Route path="white-label" element={<AgencyWhiteLabel />} />
-                      </Route>
+                          {/* Agency Reseller Layout Routes */}
+                          <Route path="/agency" element={<AgencyLayout />}>
+                            <Route path="dashboard" element={<AgencyDashboard />} />
+                            <Route path="clients" element={<AgencyClients />} />
+                            <Route path="white-label" element={<AgencyWhiteLabel />} />
+                          </Route>
 
-                      {/* Dashboard Layout Routes */}
-                      <Route element={<Layout />}>
-                        <Route path="/dashboard" element={<Dashboard />} />
+                          {/* Dashboard Layout Routes */}
+                          <Route element={<Layout />}>
+                            <Route path="/dashboard" element={<Dashboard />} />
 
-                        <Route path="/leads" element={<Leads />} />
-                        <Route path="/email" element={<EmailManagement />} />
-                        <Route path="/whatsapp" element={<WhatsAppManagement />} />
-                        <Route path="/team" element={<Team />} />
-                        <Route path="/automations" element={<Automations />} />
-                        <Route path="/sequences" element={<Sequences />} />
-                        <Route path="/appointments" element={<Appointments />} />
-                        <Route path="/settings" element={<Settings />} />
-                        <Route path="/reports" element={<Reports />} />
-                        <Route path="/billing" element={<Billing />} />
-                      </Route>
-                    </Route>
+                            <Route path="/leads" element={<Leads />} />
+                            <Route path="/email" element={<EmailManagement />} />
+                            <Route path="/whatsapp" element={<WhatsAppManagement />} />
+                            <Route path="/team" element={<Team />} />
+                            <Route path="/automations" element={<Automations />} />
+                            <Route path="/sequences" element={<Sequences />} />
+                            <Route path="/appointments" element={<Appointments />} />
+                            <Route path="/settings" element={<Settings />} />
+                            <Route path="/reports" element={<Reports />} />
+                            <Route path="/billing" element={<Billing />} />
+                          </Route>
+                        </Route>
 
-                    {/* Default root redirects to login for now (no Landing Page) */}
-                    <Route path="/" element={<Navigate to="/login" replace />} />
-                    <Route path="*" element={<NotFound />} />
-                  </Routes>
-                </Suspense>
-                <NotificationContainer />
+                        {/* Default root redirects to login for now (no Landing Page) */}
+                        <Route path="/" element={<Navigate to="/login" replace />} />
+                        <Route path="*" element={<NotFound />} />
+                      </Routes>
+                    </Suspense>
+                    <NotificationContainer />
 
-                <ConfirmDialog />
-                <PromptDialog />
-                </ErrorBoundary>
-              </BrowserRouter>
-            </PromptProvider>
-          </ConfirmProvider>
-        </NotificationProvider>
+                    <ConfirmDialog />
+                    <PromptDialog />
+                  </ErrorBoundary>
+                </BrowserRouter>
+              </PromptProvider>
+            </ConfirmProvider>
+          </NotificationProvider>
         </BrandingProvider>
       </AuthProvider>
     </GoogleOAuthProvider>

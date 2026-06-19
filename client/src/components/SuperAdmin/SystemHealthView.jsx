@@ -24,7 +24,7 @@ const SystemHealthView = () => {
 
     useEffect(() => {
         fetchHealth();
-        const intervalId = setInterval(fetchHealth, 15000); // 15s refresh
+        const intervalId = setInterval(fetchHealth, 60000); // 60s refresh (was 15s — health endpoint runs 10+ DB queries per call)
         return () => clearInterval(intervalId);
     }, []);
 

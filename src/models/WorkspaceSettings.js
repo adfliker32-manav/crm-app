@@ -86,6 +86,23 @@ const workspaceSettingsSchema = new mongoose.Schema({
         default: null
     },
 
+    // 📲 LEAD ARRIVAL WHATSAPP ALERT
+    // When enabled, sends a WhatsApp text message to `leadAlertWhatsappNumber`
+    // every time a new lead is received (from Meta, web form, or manual entry via API).
+    // Uses the tenant's own configured WhatsApp Business number to send.
+    leadAlertWhatsappEnabled: {
+        type: Boolean,
+        default: false
+    },
+    leadAlertWhatsappNumber: {
+        type: String,
+        default: null
+    },
+    leadAlertWhatsappSources: {
+        type: [String],
+        default: ['Meta']
+    },
+
     // 🎛️ WORKSPACE-LEVEL FEATURE FLAGS
     planFeatures: {
         whatsappAutomation:  { type: Boolean, default: true },
@@ -172,6 +189,13 @@ const workspaceSettingsSchema = new mongoose.Schema({
     },
     webLeadDefaultTag: {
         type: String,
+        default: null
+    },
+    // Default agent to assign when a lead arrives via the Web-to-Lead snippet.
+    // ObjectId ref to User. null = unassigned (automation rules can still assign later).
+    webLeadDefaultAgent: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
         default: null
     },
 
