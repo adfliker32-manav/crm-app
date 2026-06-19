@@ -693,9 +693,9 @@ const Leads = () => {
 
             {/* Content Area */}
             {view === 'pipeline' ? (
-                // Pipeline View
-                <div className="flex-1 overflow-x-auto pb-8 pt-4 px-6">
-                    <div className="flex h-full gap-8 min-w-max">
+                // Pipeline View — columns scroll independently so DnD coordinates are always correct
+                <div className="flex-1 overflow-auto pb-8 pt-4 px-6">
+                    <div className="flex h-full gap-6 min-w-max items-start">
                         <DragDropContext onDragEnd={onDragEnd}>
                             {Object.entries(columns).map(([columnId, column]) => {
                                 // Filter items for this column if search query exists
@@ -709,7 +709,7 @@ const Leads = () => {
                                     : column.items;
 
                                 return (
-                                    <div key={columnId} className="flex flex-col w-[340px] max-h-full">
+                                    <div key={columnId} className="flex flex-col w-[340px] flex-shrink-0" style={{ height: 'calc(100vh - 180px)' }}>
                                         <div className="group flex items-center justify-between p-4 mb-3 rounded-xl bg-white/60 backdrop-blur-sm border border-slate-200/60 shadow-sm">
                                             <div className="flex items-center gap-3 flex-1 min-w-0">
                                                 <div className={`w-3 h-3 rounded-full flex-shrink-0 ${column.name === 'New' ? 'bg-blue-500' :
@@ -778,7 +778,14 @@ const Leads = () => {
                                                 <div
                                                     {...provided.droppableProps}
                                                     ref={provided.innerRef}
-                                                    className={`min-h-[150px] transition-all duration-300 rounded-2xl flex-1 p-2 ${snapshot.isDraggingOver ? 'bg-slate-100/50 ring-2 ring-blue-500/20 ring-dashed' : 'bg-slate-100/30'}`}
+                                                    // KEY FIX: overflow-y-auto makes EACH COLUMN scroll independently.
+                                                    // DnD library tracks scroll within this container, not the page —
+                                                    // this is what makes all leads draggable, not just the top ones.
+                                                    className={`min-h-[150px] flex-1 overflow-y-auto transition-all duration-300 rounded-2xl p-2 ${
+                                                        snapshot.isDraggingOver
+                                                            ? 'bg-slate-100/50 ring-2 ring-blue-500/20 ring-dashed'
+                                                            : 'bg-slate-100/30'
+                                                    }`}
                                                 >
                                                     {filteredItems.map((item, index) => (
                                                         <Draggable
