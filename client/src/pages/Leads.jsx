@@ -920,6 +920,8 @@ const Leads = () => {
                         setLeads(prev => prev.map(l =>
                             l._id === updatedLead._id ? { ...l, ...updatedLead } : l
                         ));
+                        // BUG FIX: keep selectedLead fresh so LeadDetailsModal isn't stale
+                        setSelectedLead(prev => prev?._id === updatedLead._id ? { ...prev, ...updatedLead } : prev);
                     } else {
                         fetchData(); // Fallback if no lead returned
                     }
@@ -932,7 +934,17 @@ const Leads = () => {
                 onClose={() => setIsLeadDetailsModalOpen(false)}
                 lead={selectedLead}
                 userTags={userTags}
-                onSuccess={fetchData}
+                onSuccess={(updatedFields) => {
+                    // BUG FIX: optimistically update the lead in state instead of full reload
+                    if (updatedFields && selectedLead?._id) {
+                        setLeads(prev => prev.map(l =>
+                            l._id === selectedLead._id ? { ...l, ...updatedFields } : l
+                        ));
+                        setSelectedLead(prev => prev ? { ...prev, ...updatedFields } : prev);
+                    } else {
+                        fetchData();
+                    }
+                }}
             />
 
             {selectedLead && (

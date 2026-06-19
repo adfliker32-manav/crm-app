@@ -38,10 +38,15 @@ const PAGE_SIZE = 50;
 
 const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onBulkTag, onRefresh }) => {
     const { user } = useAuth();
-    const [selectedIds, setSelectedIds] = useState([]);
+    const [selectedIds, setSelectedIds] = useState(new Set());
     const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
     const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
     const sentinelRef = useRef(null);
+
+    // Auto-clear selection when the leads list changes (e.g. after bulk delete/status update)
+    useEffect(() => {
+        setSelectedIds(new Set());
+    }, [leads]);
 
     // Sort and filter leads using useMemo instead of useEffect + setState
     const sortedLeads = useMemo(() => {
@@ -102,18 +107,24 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
         }));
     };
 
+    // Visible rows (what the user actually sees)
+    const visibleLeads = sortedLeads.slice(0, visibleCount);
+
+    // BUG FIX: Select-All only applies to currently VISIBLE rows, not all 500+
     const handleSelectAll = (e) => {
         if (e.target.checked) {
-            setSelectedIds(sortedLeads.map(lead => lead._id));
+            setSelectedIds(new Set(visibleLeads.map(l => l._id)));
         } else {
-            setSelectedIds([]);
+            setSelectedIds(new Set());
         }
     };
 
     const handleSelect = (id) => {
-        setSelectedIds(prev =>
-            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
-        );
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            next.has(id) ? next.delete(id) : next.add(id);
+            return next;
+        });
     };
 
     const getStatusColor = (status) => {
@@ -195,7 +206,7 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                 <div className="absolute top-0 left-0 right-0 z-20 bg-blue-600 text-white p-3 rounded-t-xl flex items-center justify-between shadow-lg animate-fade-in-down">
                     <div className="flex items-center gap-3">
                         <span className="font-bold bg-white text-blue-600 px-2 py-0.5 rounded-full text-sm">
-                            {selectedIds.length}
+                            {selectedIds.size}
                         </span>
                         <span className="text-sm font-medium">Selected</span>
                     </div>
@@ -203,8 +214,8 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                         <select
                             onChange={(e) => {
                                 if (e.target.value) {
-                                    onBulkStatusUpdate(selectedIds, e.target.value);
-                                    setSelectedIds([]);
+                                    onBulkStatusUpdate([...selectedIds], e.target.value);
+                                    setSelectedIds(new Set());
                                 }
                             }}
                             className="text-gray-800 text-sm rounded-lg px-3 py-1.5 outline-none border-none cursor-pointer"
@@ -219,8 +230,8 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                             <select
                                 onChange={(e) => {
                                     if (e.target.value) {
-                                        onBulkTag(selectedIds, JSON.parse(e.target.value));
-                                        setSelectedIds([]);
+                                        onBulkTag([...selectedIds], JSON.parse(e.target.value));
+                                        setSelectedIds(new Set());
                                     }
                                 }}
                                 className="text-gray-800 text-sm rounded-lg px-3 py-1.5 outline-none border-none cursor-pointer"
@@ -235,8 +246,8 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                         {(user?.role === 'superadmin' || user?.role === 'manager' || user?.permissions?.deleteLeads) && (
                             <button
                                 onClick={() => {
-                                    onBulkDelete(selectedIds);
-                                    setSelectedIds([]);
+                                    onBulkDelete([...selectedIds]);
+                                    setSelectedIds(new Set());
                                 }}
                                 className="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-2"
                             >
@@ -244,7 +255,7 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                             </button>
                         )}
                         <button
-                            onClick={() => setSelectedIds([])}
+                            onClick={() => setSelectedIds(new Set())}
                             className="text-white hover:text-blue-200 px-3"
                         >
                             <i className="fa-solid fa-times"></i>
@@ -254,7 +265,7 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
             )}
 
             <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-                <div className={`p-6 border-b border-slate-100 flex justify-between items-center ${selectedIds.length > 0 ? 'invisible' : ''}`}>
+                <div className={`p-6 border-b border-slate-100 flex justify-between items-center ${selectedIds.size > 0 ? 'invisible' : ''}`}>
                     <h3 className="text-lg font-bold text-slate-800">Recent Leads</h3>
                     <span className="bg-blue-100 text-blue-800 text-xs font-bold px-3 py-1 rounded-full">
                         Total: {sortedLeads.length}
@@ -268,7 +279,7 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                                     <input
                                         type="checkbox"
                                         onChange={handleSelectAll}
-                                        checked={sortedLeads.length > 0 && selectedIds.length === sortedLeads.length}
+                                        checked={visibleLeads.length > 0 && visibleLeads.every(l => selectedIds.has(l._id))}
                                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                     />
                                 </th>
@@ -295,13 +306,14 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                            {sortedLeads.slice(0, visibleCount).map((lead) => (
-                                <tr key={lead._id} className={`hover:bg-slate-50 transition ${selectedIds.includes(lead._id) ? 'bg-blue-50' : ''}`}>
+                            {/* BUG FIX: use Set.has() — O(1) vs Array.includes() O(n) */}
+                            {visibleLeads.map((lead) => (
+                                <tr key={lead._id} className={`hover:bg-slate-50 transition ${selectedIds.has(lead._id) ? 'bg-blue-50' : ''}`}>
                                     <td className="px-6 py-4">
                                         <input
                                             type="checkbox"
                                             onChange={() => handleSelect(lead._id)}
-                                            checked={selectedIds.includes(lead._id)}
+                                            checked={selectedIds.has(lead._id)}
                                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                         />
                                     </td>

@@ -84,10 +84,11 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
         setLoading(true);
         try {
             await api.put(`/leads/${lead._id}`, {
-                nextFollowUpDate: nextFollowUpDate || null // Send null if empty to clear
+                nextFollowUpDate: nextFollowUpDate || null
             });
             showSuccess('Follow-up date updated successfully');
-            if (onSuccess) onSuccess();
+            // BUG FIX: pass updated field instead of triggering full refetch
+            if (onSuccess) onSuccess({ nextFollowUpDate: nextFollowUpDate || null });
         } catch (error) {
             console.error("Error updating follow-up:", error);
             showError("Failed to update follow-up date");
@@ -119,7 +120,7 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
             setTaskTitle('');
             setTaskDate('');
             showSuccess('Task created successfully');
-            if (onSuccess) onSuccess(); // To refresh dashboard if necessary
+            // Tasks don't affect the main leads list — no onSuccess call needed
         } catch(err) {
             showError("Failed to create task");
         } finally {
@@ -132,7 +133,7 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
             await api.put(`/tasks/${taskId}`, { status: 'Completed' });
             setTasks(tasks.map(t => t._id === taskId ? { ...t, status: 'Completed' } : t));
             showSuccess('Task marked as completed');
-            if (onSuccess) onSuccess(); // To refresh dashboard
+            // Tasks don't affect the main leads list — no onSuccess call needed
         } catch(err) {
             showError("Failed to complete task");
         }
