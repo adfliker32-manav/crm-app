@@ -1,4 +1,4 @@
-const User = require('../models/User'); 
+const User = require('../models/User');
 const Lead = require('../models/Lead');
 const Stage = require('../models/Stage');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
@@ -244,10 +244,10 @@ const getLeadById = async (req, res) => {
     try {
         const { id } = req.params;
         const query = { _id: id, ...req.dataScope };
-        
+
         const lead = await Lead.findOne(query).select('-messages').populate('assignedTo', 'name email').lean();
         if (!lead) return res.status(404).json({ message: 'Lead not found or unauthorized' });
-        
+
         res.json(lead);
     } catch (err) {
         console.error("Get Lead By Id Error:", err);
@@ -258,7 +258,7 @@ const getLeadById = async (req, res) => {
 // ==========================================
 // 2. CREATE LEAD
 // ==========================================
-    const createLead = async (req, res) => {
+const createLead = async (req, res) => {
     try {
         const { name, email, phone, status, source, customData, force } = req.body;
         const ownerId = req.tenantId;
@@ -805,9 +805,9 @@ const syncLeads = async (req, res) => {
 
         // Protection: Limit import to 100 leads at a time
         if (parsed.data.length > 100) {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Import limit exceeded: You are trying to import ${parsed.data.length} leads. The system currently strictly allows a maximum of 100 leads per import to ensure stability. Please split your Google Sheet.` 
+            return res.status(400).json({
+                success: false,
+                message: `Import limit exceeded: You are trying to import ${parsed.data.length} leads. The system currently strictly allows a maximum of 100 leads per import to ensure stability. Please split your Google Sheet.`
             });
         }
 
@@ -829,12 +829,12 @@ const syncLeads = async (req, res) => {
         // 🚦 BULK OPTIMIZATION: Get unique email/phone values directly from DB
         //    instead of loading all lead documents into memory
         const { normalizePhone } = require('../services/duplicateService');
-        
+
         const [existingEmailList, existingPhoneList] = await Promise.all([
             Lead.distinct('email', { userId: userId, email: { $ne: null } }),
             Lead.distinct('phone', { userId: userId, phone: { $ne: null } })
         ]);
-        
+
         const existingEmails = new Set(existingEmailList.map(e => e?.trim().toLowerCase()).filter(Boolean));
         const existingPhones = new Set(existingPhoneList.map(p => {
             const norm = normalizePhone(p);
@@ -870,7 +870,7 @@ const syncLeads = async (req, res) => {
                 const phoneLast10 = normPhone ? normPhone.slice(-10) : null;
 
                 let isDuplicate = false;
-                
+
                 // Check memory sets for duplication (Database + Current Batch)
                 if (normEmail && (existingEmails.has(normEmail) || emailsInThisBatch.has(normEmail))) {
                     isDuplicate = true;
@@ -944,7 +944,7 @@ const syncLeads = async (req, res) => {
 const getAnalyticsData = async (req, res) => {
     try {
         const query = { ...req.dataScope };
-        
+
         // Mongoose Aggregate $match requires strict ObjectIds for string fields that are ObjectIds in DB
         if (query.userId && typeof query.userId === 'string' && mongoose.Types.ObjectId.isValid(query.userId)) {
             query.userId = new mongoose.Types.ObjectId(query.userId);
@@ -974,18 +974,20 @@ const getAnalyticsData = async (req, res) => {
                     $group: {
                         _id: null,
                         totalLeads: { $sum: 1 },
-                        wonLeads: { 
-                            $sum: { 
-                                $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] 
-                            } 
+                        wonLeads: {
+                            $sum: {
+                                $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0]
+                            }
                         },
                         leadsToday: {
                             $sum: {
                                 $cond: [
-                                    { $and: [
-                                        { $gte: [{ $ifNull: ["$date", "$createdAt"] }, today] },
-                                        { $lt: [{ $ifNull: ["$date", "$createdAt"] }, tomorrow] }
-                                    ]}, 1, 0
+                                    {
+                                        $and: [
+                                            { $gte: [{ $ifNull: ["$date", "$createdAt"] }, today] },
+                                            { $lt: [{ $ifNull: ["$date", "$createdAt"] }, tomorrow] }
+                                        ]
+                                    }, 1, 0
                                 ]
                             }
                         }
@@ -1059,8 +1061,8 @@ const getAnalyticsData = async (req, res) => {
             };
         });
 
-        const conversionRate = basic.totalLeads > 0 
-            ? ((basic.wonLeads / basic.totalLeads) * 100).toFixed(1) 
+        const conversionRate = basic.totalLeads > 0
+            ? ((basic.wonLeads / basic.totalLeads) * 100).toFixed(1)
             : 0;
 
         res.json({
@@ -1519,11 +1521,11 @@ const bulkImportLeads = async (req, res) => {
             }).catch(err => console.error('Audit log error:', err));
         }
 
-        res.json({ 
-            success: true, 
-            message: "Import complete", 
-            importedCount: newLeadsToInsert.length, 
-            duplicateCount 
+        res.json({
+            success: true,
+            message: "Import complete",
+            importedCount: newLeadsToInsert.length,
+            duplicateCount
         });
 
     } catch (err) {
@@ -1538,23 +1540,23 @@ const bulkImportLeads = async (req, res) => {
 const bulkAddTags = async (req, res) => {
     try {
         const { leadIds, tags } = req.body;
-        
+
         if (!Array.isArray(leadIds) || leadIds.length === 0) {
             return res.status(400).json({ message: "No leads selected" });
         }
-        
+
         if (!Array.isArray(tags) || tags.length === 0) {
             return res.status(400).json({ message: "No tags provided" });
         }
 
         const query = { _id: { $in: leadIds }, ...req.dataScope };
-        
+
         // $addToSet prevents duplicate tags on the same lead
         const result = await Lead.updateMany(
             query,
             { $addToSet: { tags: { $each: tags } } }
         );
-        
+
         // Audit log
         logActivity({
             userId: getRequestUserId(req.user),
@@ -1565,7 +1567,7 @@ const bulkAddTags = async (req, res) => {
             metadata: { count: leadIds.length, tags },
             companyId: req.tenantId
         }).catch(err => console.error('Audit log error:', err));
-        
+
         res.json({ success: true, message: `${result.modifiedCount} leads tagged successfully` });
     } catch (err) {
         console.error("Bulk Add Tags Error:", err);

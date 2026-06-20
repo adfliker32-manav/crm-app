@@ -116,6 +116,9 @@ async function _processBroadcastJob(job) {
         console.log(`[Broadcast ${broadcastId}] Retry detected — ${alreadySentCount} leads already sent, resuming.`);
     }
 
+    // ── Main processing loop (wrapped for template-fatal error handling) ────────
+    try {
+
     if (selectionType === 'CSV') {
         // ─── CSV broadcast path ───────────────────────────────────────────────
         const contacts = broadcast.csvContacts || [];
@@ -236,6 +239,26 @@ async function _processBroadcastJob(job) {
     await redis.del(sentKey);
 
     console.log(`[Broadcast ${broadcastId}] Done. Sent: ${successCount}, Failed: ${failCount}`);
+
+    } catch (fatalErr) {
+        // ── Template blocked / paused by Meta mid-broadcast ───────────────────
+        if (fatalErr.isTemplateFatal) {
+            console.error(`[Broadcast ${broadcastId}] ABORTED — Template blocked by Meta: ${fatalErr.message}`);
+            await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+                $set: {
+                    status:         'FAILED',
+                    completedAt:    new Date(),
+                    'stats.sent':   successCount,
+                    'stats.failed': failCount,
+                    errorMessage:   `Template blocked by Meta (${fatalErr.errorCode || 'unknown'}): ${fatalErr.message}. ${successCount} messages were sent before the block.`
+                }
+            });
+            await redis.del(sentKey);
+            return; // Don't re-throw — job is done (not retriable)
+        }
+        // Other unexpected errors — let BullMQ retry via its backoff policy
+        throw fatalErr;
+    }
 }
 
 // ─── Batch processor ──────────────────────────────────────────────────────────
@@ -246,20 +269,53 @@ async function _processBatch(leads, template, user, userId, broadcastId, sentKey
         leads.map(lead => _processOneLead(lead, template, user, userId, broadcastId, sentKey, media))
     );
 
+    // Check for fatal errors that should abort the entire broadcast
+    for (const r of results) {
+        if (r.status === 'rejected') {
+            // Template blocked by Meta — abort immediately, no point continuing
+            if (r.reason?.isTemplateFatal) {
+                const err = new Error(r.reason.message);
+                err.isTemplateFatal = true;
+                err.errorCode = r.reason.errorCode;
+                throw err; // Will be caught by _processBroadcastJob
+            }
+        }
+    }
+
+    // Check for rate limit hits — if ANY lead got throttled, cool down
+    const hasRateLimit = results.some(r => r.status === 'rejected' && r.reason?.isRateLimit);
+    if (hasRateLimit) {
+        console.warn(`[Broadcast ${broadcastId}] ⚠️ Meta rate limit hit — cooling down ${RATE_LIMIT_COOLDOWN_MS / 1000}s`);
+        await new Promise(r => setTimeout(r, RATE_LIMIT_COOLDOWN_MS));
+    }
+
     // null = already sent in a previous attempt (idempotency skip) — not a new success or failure
     const success = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
     const failed  = results.filter(r => r.status === 'fulfilled' && r.value === false).length;
+    // Rate-limited leads aren't counted as failed — they'll be retried in the next batch
+    const rateLimited = results.filter(r => r.status === 'rejected' && r.reason?.isRateLimit).length;
+    if (rateLimited > 0) {
+        console.log(`[Broadcast ${broadcastId}] ${rateLimited} leads rate-limited (will retry on next batch)`);
+    }
 
     // Pace: wait out the rest of BATCH_RATE_MS plus random jitter so concurrent
     // tenant broadcasts don't all fire their next batch at the same millisecond.
-    const elapsed  = Date.now() - batchStart;
-    const baseWait = BATCH_RATE_MS - elapsed;
-    const jitter   = Math.floor(Math.random() * BATCH_JITTER_MS);
-    const wait     = Math.max(0, baseWait) + jitter;
-    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    if (!hasRateLimit) { // Skip pacing if we already waited for cooldown
+        const elapsed  = Date.now() - batchStart;
+        const baseWait = BATCH_RATE_MS - elapsed;
+        const jitter   = Math.floor(Math.random() * BATCH_JITTER_MS);
+        const wait     = Math.max(0, baseWait) + jitter;
+        if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    }
 
     return { success, failed };
 }
+
+// ─── Meta error codes that require special handling ───────────────────────────
+const META_RATE_LIMIT_CODES  = ['131056', '131045', '131057']; // Throttled / too many messages
+const META_TEMPLATE_BLOCKED  = ['131031', '131026'];            // Template paused / blocked
+const META_PERMANENT_FAIL    = ['130472', '131047', '131021'];  // Not on WA / re-engagement / invalid params
+const RATE_LIMIT_COOLDOWN_MS = 60000; // Back off 60s on rate limit
 
 // ─── Single lead processor ────────────────────────────────────────────────────
 async function _processOneLead(lead, template, user, userId, broadcastId, sentKey, media) {
@@ -289,7 +345,40 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
         );
 
         const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language || 'en_US');
-        if (!result || result.success === false) return false;
+
+        // ── Error code branching ───────────────────────────────────────────────
+        // Meta returns structured errors. Different codes need different responses:
+        //   131056 → Rate limit → back off, don't count as failed
+        //   131031 → Template paused by Meta → abort entire broadcast
+        //   130472 → User not on WhatsApp → permanent fail
+        if (!result || result.success === false) {
+            const errorCode = String(
+                result?.error?.code || result?.data?.error?.code || ''
+            );
+            const errorMsg = result?.error?.message || result?.data?.error?.message || 'Unknown error';
+
+            // Rate limit: throw special error so batch processor can cool down
+            if (META_RATE_LIMIT_CODES.includes(errorCode)) {
+                const rateLimitErr = new Error(`META_RATE_LIMIT: ${errorMsg}`);
+                rateLimitErr.isRateLimit = true;
+                throw rateLimitErr;
+            }
+
+            // Template blocked: throw special error to abort the entire broadcast
+            if (META_TEMPLATE_BLOCKED.includes(errorCode)) {
+                const templateErr = new Error(`META_TEMPLATE_BLOCKED: ${errorMsg}`);
+                templateErr.isTemplateFatal = true;
+                templateErr.errorCode = errorCode;
+                throw templateErr;
+            }
+
+            // Permanent fail (not on WA, re-engagement needed, invalid params)
+            if (META_PERMANENT_FAIL.includes(errorCode)) {
+                console.warn(`[Lead:${lead._id}] Permanent fail (${errorCode}): ${errorMsg}`);
+            }
+
+            return false; // Count as failed
+        }
 
         // ── Mark as sent BEFORE DB sync (atomic pipeline) ─────────────────────
         await redis.pipeline()
@@ -304,6 +393,8 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
         return true;
 
     } catch (err) {
+        // Re-throw rate limit and template errors so _processBatch can handle them
+        if (err.isRateLimit || err.isTemplateFatal) throw err;
         console.error(`[Lead:${lead._id}] Broadcast send failed:`, err.message);
         return false;
     }

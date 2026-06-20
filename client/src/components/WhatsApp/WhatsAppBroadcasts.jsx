@@ -52,6 +52,20 @@ const WhatsAppBroadcasts = () => {
     const [csvFileName, setCsvFileName] = useState('');
     const csvInputRef = useRef(null);
 
+    // Pagination state (M4)
+    const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 0 });
+
+    // Broadcast detail modal (H3)
+    const [detailBroadcast, setDetailBroadcast] = useState(null);
+    const [detailMessages, setDetailMessages]   = useState([]);
+    const [detailLoading, setDetailLoading]     = useState(false);
+    const [detailPagination, setDetailPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 0 });
+    const [detailStatusFilter, setDetailStatusFilter] = useState('');
+
+    // Test send state (H5)
+    const [testPhone, setTestPhone]   = useState('');
+    const [testSending, setTestSending] = useState(false);
+
     // Auto-refresh interval ref
     const autoRefreshRef = useRef(null);
 
@@ -60,8 +74,9 @@ const WhatsAppBroadcasts = () => {
         try {
             if (!silent) setLoading(true);
             else setRefreshing(true);
-            const res = await api.get('/whatsapp/broadcasts');
+            const res = await api.get(`/whatsapp/broadcasts?page=${pagination.page}&limit=${pagination.limit}`);
             setBroadcasts(res.data.broadcasts || []);
+            if (res.data.pagination) setPagination(res.data.pagination);
         } catch (error) {
             const d = error.response;
             if (!silent) showError(`Failed to load broadcasts (${d ? `${d.status}: ${d.data?.message}` : error.message})`);
@@ -69,7 +84,7 @@ const WhatsAppBroadcasts = () => {
             setLoading(false);
             setRefreshing(false);
         }
-    }, []);
+    }, [pagination.page, pagination.limit]);
 
     const fetchTemplates = async () => {
         try {
@@ -227,6 +242,50 @@ const WhatsAppBroadcasts = () => {
             fetchBroadcasts();
         } catch (error) {
             showError(error.response?.data?.message || 'Failed to create retarget broadcast');
+        }
+    };
+
+    // ── H3: Broadcast detail modal ─────────────────────────────────────────
+    const openDetailModal = async (broadcast) => {
+        setDetailBroadcast(broadcast);
+        setDetailMessages([]);
+        setDetailPagination(p => ({ ...p, page: 1 }));
+        setDetailStatusFilter('');
+        await fetchBroadcastMessages(broadcast._id, 1, '');
+    };
+
+    const fetchBroadcastMessages = async (id, page = 1, status = '') => {
+        try {
+            setDetailLoading(true);
+            const params = `page=${page}&limit=50${status ? `&status=${status}` : ''}`;
+            const res = await api.get(`/whatsapp/broadcasts/${id}/messages?${params}`);
+            setDetailMessages(res.data.messages || []);
+            if (res.data.pagination) setDetailPagination(res.data.pagination);
+        } catch {
+            showError('Failed to load message details');
+        } finally {
+            setDetailLoading(false);
+        }
+    };
+
+    // ── H5: Test send ──────────────────────────────────────────────────────
+    const handleTestSend = async () => {
+        if (!testPhone || !newBroadcast.templateId) {
+            showError('Select a template and enter a phone number');
+            return;
+        }
+        try {
+            setTestSending(true);
+            await api.post('/whatsapp/broadcasts/test-send', {
+                templateId: newBroadcast.templateId,
+                phone: testPhone,
+                media: newBroadcast.media
+            });
+            showSuccess('Test message sent! Check your WhatsApp.');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Test send failed');
+        } finally {
+            setTestSending(false);
         }
     };
 
@@ -431,6 +490,16 @@ const WhatsAppBroadcasts = () => {
                                                 <span className="hidden sm:inline">Retarget Failed</span>
                                             </button>
                                         )}
+                                        {broadcast.status !== 'DRAFT' && (
+                                            <button
+                                                onClick={() => openDetailModal(broadcast)}
+                                                title="View Delivery Details"
+                                                className="px-3 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg text-sm font-medium transition flex items-center gap-1.5"
+                                            >
+                                                <i className="fa-solid fa-circle-info"></i>
+                                                <span className="hidden sm:inline">Details</span>
+                                            </button>
+                                        )}
                                         <button
                                             onClick={() => handleDeleteBroadcast(broadcast._id)}
                                             className="w-9 h-9 flex items-center justify-center text-slate-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition"
@@ -492,6 +561,34 @@ const WhatsAppBroadcasts = () => {
                             </div>
                         );
                     })}
+                </div>
+            )}
+
+            {/* ── M4: Pagination ────────────────────────────────────────────── */}
+            {pagination.totalPages > 1 && (
+                <div className="flex items-center justify-between mt-6">
+                    <p className="text-sm text-slate-500">
+                        Showing {((pagination.page - 1) * pagination.limit) + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
+                    </p>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setPagination(p => ({ ...p, page: p.page - 1 }))}
+                            disabled={pagination.page <= 1}
+                            className="px-3 py-1.5 rounded-lg text-sm font-medium border border-slate-200 hover:bg-slate-50 disabled:opacity-40 transition"
+                        >
+                            <i className="fa-solid fa-chevron-left mr-1"></i>Prev
+                        </button>
+                        <span className="text-sm font-bold text-slate-600 px-2">
+                            {pagination.page} / {pagination.totalPages}
+                        </span>
+                        <button
+                            onClick={() => setPagination(p => ({ ...p, page: p.page + 1 }))}
+                            disabled={pagination.page >= pagination.totalPages}
+                            className="px-3 py-1.5 rounded-lg text-sm font-medium border border-slate-200 hover:bg-slate-50 disabled:opacity-40 transition"
+                        >
+                            Next<i className="fa-solid fa-chevron-right ml-1"></i>
+                        </button>
+                    </div>
                 </div>
             )}
 
@@ -597,6 +694,99 @@ const WhatsAppBroadcasts = () => {
                                                     <i className="fa-solid fa-check-circle mr-1"></i> Attached: {newBroadcast.media.filename}
                                                 </p>
                                             )}
+                                        </div>
+                                    );
+                                })()}
+
+                                {/* Template Preview & Test Send Section (H5) */}
+                                {(() => {
+                                    const selectedTemplate = templates.find(t => t._id === newBroadcast.templateId);
+                                    if (!selectedTemplate) return null;
+
+                                    const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY');
+                                    const headerComp = selectedTemplate.components?.find(c => c.type === 'HEADER');
+                                    const footerComp = selectedTemplate.components?.find(c => c.type === 'FOOTER');
+                                    const buttonsComp = selectedTemplate.components?.find(c => c.type === 'BUTTONS');
+
+                                    return (
+                                        <div className="space-y-3">
+                                            {/* Preview Card */}
+                                            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                                                    <i className="fa-regular fa-eye mr-1"></i>Template Preview
+                                                </span>
+                                                <div className="bg-[#d9fdd3] rounded-xl rounded-tl-none p-3.5 shadow-sm max-w-sm border border-[#c1ebd0] relative ml-2">
+                                                    {/* Triangle pointer */}
+                                                    <div className="absolute -left-2 top-0 w-0 h-0 border-t-[10px] border-t-[#d9fdd3] border-l-[10px] border-l-transparent z-10"></div>
+                                                    
+                                                    {headerComp && (
+                                                        <div className="text-xs font-bold text-slate-800 mb-1 border-b border-slate-900/5 pb-1">
+                                                            {headerComp.format === 'TEXT' ? (
+                                                                headerComp.text
+                                                            ) : (
+                                                                <span className="flex items-center gap-1.5 text-slate-600 italic">
+                                                                    <i className="fa-regular fa-image text-xs"></i>
+                                                                    Header Media ({headerComp.format})
+                                                                    {newBroadcast.media?.filename && ` - ${newBroadcast.media.filename}`}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    
+                                                    <div className="text-xs text-slate-800 whitespace-pre-wrap leading-relaxed">
+                                                        {bodyComp?.text || ''}
+                                                    </div>
+                                                    
+                                                    {footerComp && (
+                                                        <div className="text-[10px] text-slate-500/85 mt-1.5 border-t border-slate-900/5 pt-1.5 italic">
+                                                            {footerComp.text}
+                                                        </div>
+                                                    )}
+
+                                                    {buttonsComp?.buttons && buttonsComp.buttons.length > 0 && (
+                                                        <div className="mt-2.5 space-y-1.5 border-t border-slate-900/5 pt-2">
+                                                            {buttonsComp.buttons.map((btn, idx) => (
+                                                                <div
+                                                                    key={idx}
+                                                                    className="bg-white/80 hover:bg-white text-blue-600 rounded-lg py-1.5 text-center text-xs font-semibold border border-slate-200/50 cursor-pointer shadow-2xs transition"
+                                                                >
+                                                                    {btn.type === 'PHONE_NUMBER' && <i className="fa-solid fa-phone mr-1.5 text-[10px]"></i>}
+                                                                    {btn.type === 'URL' && <i className="fa-solid fa-arrow-up-right-from-square mr-1.5 text-[10px]"></i>}
+                                                                    {btn.type === 'QUICK_REPLY' && <i className="fa-solid fa-reply mr-1.5 text-[10px]"></i>}
+                                                                    {btn.text}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {/* Test Send Panel */}
+                                            <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100/60 space-y-2">
+                                                <label className="block text-xs font-bold text-blue-700 uppercase">
+                                                    <i className="fa-solid fa-flask mr-1"></i> Send Test Message
+                                                </label>
+                                                <p className="text-[11px] text-blue-600/80">
+                                                    Test this template configuration on a single WhatsApp number before starting the campaign.
+                                                </p>
+                                                <div className="flex gap-2">
+                                                    <input
+                                                        type="text"
+                                                        value={testPhone}
+                                                        onChange={e => setTestPhone(e.target.value)}
+                                                        placeholder="e.g. +919876543210 (with country code)"
+                                                        className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg outline-none text-xs bg-white focus:ring-2 focus:ring-blue-500/20"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleTestSend}
+                                                        disabled={testSending || !testPhone}
+                                                        className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50 transition shrink-0"
+                                                    >
+                                                        {testSending ? 'Sending...' : 'Send Test'}
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
                                     );
                                 })()}
@@ -813,6 +1003,191 @@ const WhatsAppBroadcasts = () => {
                                 </div>
                             </form>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Broadcast Detail Modal (H3) ─────────────────────────────────── */}
+            {detailBroadcast && (
+                <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl w-full max-w-4xl shadow-xl flex flex-col max-h-[85vh] overflow-hidden transition-all">
+                        {/* Header */}
+                        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                            <div>
+                                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                    <i className="fa-solid fa-circle-info text-[#00a884]"></i>
+                                    {detailBroadcast.name}
+                                </h2>
+                                <p className="text-xs text-slate-400 mt-1">
+                                    Created on {new Date(detailBroadcast.createdAt).toLocaleString()} · Status: {detailBroadcast.status}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setDetailBroadcast(null)}
+                                className="w-8 h-8 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition flex items-center justify-center"
+                            >
+                                <i className="fa-solid fa-xmark text-lg"></i>
+                            </button>
+                        </div>
+
+                        {/* Stats Summary Panel */}
+                        <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 grid grid-cols-5 gap-3">
+                            <div className="bg-white rounded-xl p-3 border border-slate-100 shadow-xs text-center">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Targets</p>
+                                <p className="text-lg font-black text-slate-700 mt-0.5">{detailBroadcast.stats?.totalTargets || 0}</p>
+                            </div>
+                            <div className="bg-white rounded-xl p-3 border border-slate-100 shadow-xs text-center">
+                                <p className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">Sent</p>
+                                <p className="text-lg font-black text-blue-600 mt-0.5">{detailBroadcast.stats?.sent || 0}</p>
+                            </div>
+                            <div className="bg-white rounded-xl p-3 border border-slate-100 shadow-xs text-center">
+                                <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Delivered</p>
+                                <p className="text-lg font-black text-emerald-600 mt-0.5">{detailBroadcast.stats?.delivered || 0}</p>
+                            </div>
+                            <div className="bg-white rounded-xl p-3 border border-slate-100 shadow-xs text-center">
+                                <p className="text-[10px] font-bold text-teal-400 uppercase tracking-wider">Read</p>
+                                <p className="text-lg font-black text-teal-600 mt-0.5">{detailBroadcast.stats?.read || 0}</p>
+                            </div>
+                            <div className="bg-white rounded-xl p-3 border border-slate-100 shadow-xs text-center">
+                                <p className="text-[10px] font-bold text-red-400 uppercase tracking-wider">Failed</p>
+                                <p className="text-lg font-black text-red-500 mt-0.5">{detailBroadcast.stats?.failed || 0}</p>
+                            </div>
+                        </div>
+
+                        {/* Toolbar / Filters */}
+                        <div className="px-6 py-3 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-semibold text-slate-500">Filter Status:</span>
+                                <select
+                                    value={detailStatusFilter}
+                                    onChange={(e) => {
+                                        setDetailStatusFilter(e.target.value);
+                                        fetchBroadcastMessages(detailBroadcast._id, 1, e.target.value);
+                                    }}
+                                    className="px-3 py-1 border border-slate-200 rounded-lg text-xs outline-none bg-white font-medium text-slate-700 focus:ring-2 focus:ring-[#00a884]/20"
+                                >
+                                    <option value="">All statuses</option>
+                                    <option value="sent">Sent</option>
+                                    <option value="delivered">Delivered</option>
+                                    <option value="read">Read</option>
+                                    <option value="failed">Failed</option>
+                                    <option value="pending">Pending</option>
+                                </select>
+                            </div>
+                            <button
+                                onClick={() => fetchBroadcastMessages(detailBroadcast._id, detailPagination.page, detailStatusFilter)}
+                                disabled={detailLoading}
+                                className="px-3 py-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                            >
+                                <i className={`fa-solid fa-arrows-rotate ${detailLoading ? 'animate-spin' : ''}`}></i>
+                                Refresh List
+                            </button>
+                        </div>
+
+                        {/* Message log content */}
+                        <div className="flex-1 overflow-y-auto min-h-0 bg-white">
+                            {detailLoading ? (
+                                <div className="flex flex-col justify-center items-center h-48 gap-2">
+                                    <div className="w-8 h-8 border-3 border-[#00a884] border-t-transparent rounded-full animate-spin"></div>
+                                    <p className="text-xs text-slate-400 font-medium">Loading details…</p>
+                                </div>
+                            ) : detailMessages.length === 0 ? (
+                                <div className="flex flex-col justify-center items-center h-48 gap-2 text-slate-400">
+                                    <i className="fa-regular fa-folder-open text-2xl text-slate-300"></i>
+                                    <p className="text-xs font-medium">No contacts match the selected status.</p>
+                                </div>
+                            ) : (
+                                <table className="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-wider sticky top-0 z-10 border-b border-slate-100">
+                                            <th className="px-6 py-3">Recipient</th>
+                                            <th className="px-6 py-3">Status</th>
+                                            <th className="px-6 py-3">Timeline</th>
+                                            <th className="px-6 py-3">Error / Note</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 text-xs">
+                                        {detailMessages.map(msg => (
+                                            <tr key={msg._id} className="hover:bg-slate-50/50 transition">
+                                                <td className="px-6 py-3">
+                                                    <p className="font-bold text-slate-800">{msg.name || 'Unknown Contact'}</p>
+                                                    <p className="text-[10px] text-slate-400 mt-0.5">{msg.phone}</p>
+                                                </td>
+                                                <td className="px-6 py-3">
+                                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                                        msg.status === 'read'      ? 'bg-teal-50 text-teal-600' :
+                                                        msg.status === 'delivered' ? 'bg-emerald-50 text-emerald-600' :
+                                                        msg.status === 'sent'      ? 'bg-blue-50 text-blue-600' :
+                                                        msg.status === 'failed'    ? 'bg-red-50 text-red-600' :
+                                                        'bg-slate-50 text-slate-500'
+                                                    }`}>
+                                                        <i className={`fa-solid ${
+                                                            msg.status === 'read'      ? 'fa-eye' :
+                                                            msg.status === 'delivered' ? 'fa-check-double' :
+                                                            msg.status === 'sent'      ? 'fa-check' :
+                                                            msg.status === 'failed'    ? 'fa-triangle-exclamation' :
+                                                            'fa-clock'
+                                                        } text-[8px]`}></i>
+                                                        {msg.status}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-3 text-slate-500 space-y-0.5 text-[10px]">
+                                                    {msg.sentAt && (
+                                                        <p><span className="font-semibold text-slate-400">Sent:</span> {new Date(msg.sentAt).toLocaleTimeString()}</p>
+                                                    )}
+                                                    {msg.deliveredAt && (
+                                                        <p><span className="font-semibold text-emerald-500">Delivered:</span> {new Date(msg.deliveredAt).toLocaleTimeString()}</p>
+                                                    )}
+                                                    {msg.readAt && (
+                                                        <p><span className="font-semibold text-teal-500">Read:</span> {new Date(msg.readAt).toLocaleTimeString()}</p>
+                                                    )}
+                                                    {msg.failedAt && (
+                                                        <p><span className="font-semibold text-red-500">Failed:</span> {new Date(msg.failedAt).toLocaleTimeString()}</p>
+                                                    )}
+                                                </td>
+                                                <td className="px-6 py-3 text-red-500 text-[10px] max-w-[200px] truncate" title={msg.error}>
+                                                    {msg.error || <span className="text-slate-300">—</span>}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+
+                        {/* Pagination Footer */}
+                        {detailPagination.totalPages > 1 && (
+                            <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
+                                <p className="text-[11px] text-slate-500">
+                                    Showing {((detailPagination.page - 1) * detailPagination.limit) + 1}–{Math.min(detailPagination.page * detailPagination.limit, detailPagination.total)} of {detailPagination.total} contacts
+                                </p>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => {
+                                            const nextP = detailPagination.page - 1;
+                                            fetchBroadcastMessages(detailBroadcast._id, nextP, detailStatusFilter);
+                                        }}
+                                        disabled={detailPagination.page <= 1}
+                                        className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 transition"
+                                    >
+                                        <i className="fa-solid fa-chevron-left mr-1"></i>Prev
+                                    </button>
+                                    <span className="text-xs font-bold text-slate-600 px-1">
+                                        {detailPagination.page} / {detailPagination.totalPages}
+                                    </span>
+                                    <button
+                                        onClick={() => {
+                                            const nextP = detailPagination.page + 1;
+                                            fetchBroadcastMessages(detailBroadcast._id, nextP, detailStatusFilter);
+                                        }}
+                                        disabled={detailPagination.page >= detailPagination.totalPages}
+                                        className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 transition"
+                                    >
+                                        Next<i className="fa-solid fa-chevron-right ml-1"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

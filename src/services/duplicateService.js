@@ -1,17 +1,34 @@
 const Lead = require('../models/Lead');
 
 // Normalize phone number for consistent matching
-// Strips spaces, dashes, dots, parentheses, and common country code prefixes (+91, 0)
+// Strips spaces, dashes, dots, parentheses, and common country code prefixes safely
 function normalizePhone(phone) {
     if (!phone) return null;
     let normalized = phone.toString().replace(/[\s\-\.\(\)]/g, '');
-    // Remove leading +91 or 91 (India) or leading 0
-    normalized = normalized.replace(/^(\+91|91|0)/, '');
-    // Strip any remaining non-digit characters (like letters)
-    normalized = normalized.replace(/\D/g, '');
+    
+    // Check if it explicitly starts with "+" (like +91)
+    const hasPlus = normalized.startsWith('+');
+    
+    // Strip non-digits to find the actual digit count
+    let cleanDigits = normalized.replace(/\D/g, '');
+    
+    if (hasPlus) {
+        if (cleanDigits.startsWith('91')) {
+            cleanDigits = cleanDigits.slice(2);
+        }
+    } else {
+        // Only strip country code "91" if the total length is 12 digits (91 + 10-digit number)
+        if (cleanDigits.startsWith('91') && cleanDigits.length === 12) {
+            cleanDigits = cleanDigits.slice(2);
+        } else if (cleanDigits.startsWith('0') && cleanDigits.length === 11) {
+            // Strip leading 0 if total length is 11 digits (0 + 10-digit number)
+            cleanDigits = cleanDigits.slice(1);
+        }
+    }
+    
     // Must have at least 7 digits to be valid
-    if (normalized.length < 7) return null;
-    return normalized;
+    if (cleanDigits.length < 7) return null;
+    return cleanDigits;
 }
 
 
@@ -58,7 +75,47 @@ async function findAllDuplicateGroups(userId) {
     const [phoneDups, emailDups] = await Promise.all([
         Lead.aggregate([
             { $match: { userId: userId, phone: { $ne: null, $exists: true } } },
-            { $addFields: { normPhone: { $substr: [ { $replaceAll: { input: '$phone', find: ' ', replacement: '' } }, -10, 10 ] } } },
+            {
+                $addFields: {
+                    normPhone: {
+                        $substr: [
+                            {
+                                $replaceAll: {
+                                    input: {
+                                        $replaceAll: {
+                                            input: {
+                                                $replaceAll: {
+                                                    input: {
+                                                        $replaceAll: {
+                                                            input: {
+                                                                $replaceAll: {
+                                                                    input: '$phone',
+                                                                    find: ' ',
+                                                                    replacement: ''
+                                                                }
+                                                            },
+                                                            find: '-',
+                                                            replacement: ''
+                                                        }
+                                                    },
+                                                    find: '.',
+                                                    replacement: ''
+                                                }
+                                            },
+                                            find: '(',
+                                            replacement: ''
+                                        }
+                                    },
+                                    find: ')',
+                                    replacement: ''
+                                }
+                            },
+                            -10,
+                            10
+                        ]
+                    }
+                }
+            },
             { $group: {
                 _id: '$normPhone',
                 count: { $sum: 1 },

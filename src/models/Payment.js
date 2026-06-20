@@ -90,6 +90,13 @@ paymentSchema.index(
     { unique: true, partialFilterExpression: { razorpayPaymentId: { $type: 'string' } } }
 );
 
+// InvoiceCounter schema and model defined at file scope to prevent OverwriteModelError under concurrency
+const invoiceCounterSchema = new mongoose.Schema({
+    _id:   { type: String },  // e.g. "202606"
+    seq:   { type: Number, default: 0 }
+});
+const InvoiceCounter = mongoose.models.InvoiceCounter || mongoose.model('InvoiceCounter', invoiceCounterSchema);
+
 paymentSchema.pre('save', async function () {
     if (this.isNew && !this.invoiceNumber) {
         const date = this.paymentDate || new Date();
@@ -101,15 +108,7 @@ paymentSchema.pre('save', async function () {
         // Payment.create() calls both read the same countDocuments() value and
         // generate the same invoice number. findOneAndUpdate with $inc is atomic
         // in MongoDB and guarantees a unique sequence number per month.
-        const CounterModel = mongoose.models.InvoiceCounter || mongoose.model(
-            'InvoiceCounter',
-            new mongoose.Schema({
-                _id:   { type: String },  // e.g. "202606"
-                seq:   { type: Number, default: 0 }
-            })
-        );
-
-        const counter = await CounterModel.findOneAndUpdate(
+        const counter = await InvoiceCounter.findOneAndUpdate(
             { _id: counterKey },
             { $inc: { seq: 1 } },
             { upsert: true, new: true }

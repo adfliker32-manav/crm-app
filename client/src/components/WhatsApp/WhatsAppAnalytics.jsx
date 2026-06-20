@@ -2,6 +2,23 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import {
+    Chart as ChartJS,
+    CategoryScale,
+    LinearScale,
+    PointElement,
+    LineElement,
+    BarElement,
+    Title,
+    Tooltip,
+    Legend,
+    Filler
+} from 'chart.js';
+import { Line } from 'react-chartjs-2';
+ChartJS.register(
+    CategoryScale, LinearScale, PointElement, LineElement,
+    BarElement, Title, Tooltip, Legend, Filler
+);
 
 const DATE_RANGES = [
     { label: '7 Days',  value: '7'   },
@@ -149,7 +166,110 @@ const WhatsAppAnalytics = () => {
 
     if (!stats) return null;
 
-    const { kpi, volume, recentCampaigns, chatbotKpi, chatbotFlows } = stats;
+    const { kpi, volume, recentCampaigns, broadcastTimeSeries, chatbotKpi, chatbotFlows } = stats;
+
+    // Chart configuration (H1)
+    const chartLabels = (broadcastTimeSeries || []).map(d => d.date);
+    const volumeChartData = {
+        labels: chartLabels,
+        datasets: [
+            {
+                label: 'Sent',
+                data: (broadcastTimeSeries || []).map(d => d.sent),
+                borderColor: 'rgb(59, 130, 246)',
+                backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                fill: true,
+                tension: 0.4,
+                borderWidth: 2.5,
+                pointRadius: 4,
+                pointBackgroundColor: 'rgb(59, 130, 246)',
+                pointBorderColor: '#fff',
+                pointBorderWidth: 2
+            },
+            {
+                label: 'Delivered',
+                data: (broadcastTimeSeries || []).map(d => d.delivered),
+                borderColor: 'rgb(16, 185, 129)',
+                backgroundColor: 'rgba(16, 185, 129, 0.07)',
+                fill: true,
+                tension: 0.4,
+                borderWidth: 2.5,
+                pointRadius: 4,
+                pointBackgroundColor: 'rgb(16, 185, 129)',
+                pointBorderColor: '#fff',
+                pointBorderWidth: 2
+            },
+            {
+                label: 'Read',
+                data: (broadcastTimeSeries || []).map(d => d.read),
+                borderColor: 'rgb(0, 168, 132)',
+                backgroundColor: 'rgba(0, 168, 132, 0.07)',
+                fill: true,
+                tension: 0.4,
+                borderWidth: 2.5,
+                pointRadius: 4,
+                pointBackgroundColor: 'rgb(0, 168, 132)',
+                pointBorderColor: '#fff',
+                pointBorderWidth: 2
+            },
+            {
+                label: 'Failed',
+                data: (broadcastTimeSeries || []).map(d => d.failed),
+                borderColor: 'rgba(244, 63, 94, 0.7)',
+                backgroundColor: 'rgba(244, 63, 94, 0.05)',
+                fill: false,
+                tension: 0.4,
+                borderWidth: 2,
+                borderDash: [5, 4],
+                pointRadius: 3,
+                pointBackgroundColor: 'rgb(244, 63, 94)',
+                pointBorderColor: '#fff',
+                pointBorderWidth: 2
+            }
+        ]
+    };
+
+    const chartOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'top',
+                labels: {
+                    usePointStyle: true,
+                    pointStyle: 'circle',
+                    boxWidth: 6,
+                    padding: 20,
+                    font: { size: 12, weight: '600' },
+                    color: '#64748b'
+                }
+            },
+            tooltip: {
+                mode: 'index',
+                intersect: false,
+                backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                padding: 12,
+                cornerRadius: 10,
+                titleFont: { size: 12, weight: '600' },
+                bodyFont: { size: 12 },
+                bodySpacing: 6
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                grid: { color: '#f1f5f9', drawBorder: false },
+                ticks: { color: '#94a3b8', font: { size: 11 }, padding: 8, precision: 0 },
+                border: { display: false }
+            },
+            x: {
+                grid: { display: false },
+                ticks: { color: '#94a3b8', font: { size: 11 }, maxRotation: 0 },
+                border: { display: false }
+            }
+        },
+        interaction: { mode: 'nearest', axis: 'x', intersect: false }
+    };
     const botConvRate = chatbotKpi.totalSessions > 0
         ? Math.round((chatbotKpi.totalLeads / chatbotKpi.totalSessions) * 100) : 0;
     const botComplRate = chatbotKpi.totalSessions > 0
@@ -307,6 +427,27 @@ const WhatsAppAnalytics = () => {
                         <KpiCard label="Delivered"       value={kpi.totalDelivered || 0}       icon="fa-check-double" iconBg="bg-emerald-50" iconColor="text-emerald-500" sub={`${kpi.deliveryRate}% rate`} />
                         <KpiCard label="Read"            value={kpi.totalRead || 0}            icon="fa-eye"          iconBg="bg-teal-50"    iconColor="text-teal-500"   sub={`${kpi.readRate}% rate`} />
                         <KpiCard label="Failed"          value={kpi.totalFailed}               icon="fa-triangle-exclamation" iconBg="bg-red-50" iconColor="text-red-400" />
+                    </div>
+
+                    {/* Volume Trend Chart (H1) */}
+                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                        <div className="flex items-center justify-between mb-6">
+                            <div>
+                                <h3 className="text-base font-bold text-slate-800">Broadcast Volume Trend</h3>
+                                <p className="text-xs text-slate-400 mt-0.5">Campaign activity and delivery performance over time</p>
+                            </div>
+                            <span className="text-xs text-slate-400 bg-slate-100 px-2.5 py-1 rounded-lg font-medium">Daily granularity</span>
+                        </div>
+                        <div className="h-[280px]">
+                            {broadcastTimeSeries && broadcastTimeSeries.length > 0 ? (
+                                <Line data={volumeChartData} options={chartOptions} />
+                            ) : (
+                                <div className="flex flex-col items-center justify-center h-full gap-2">
+                                    <i className="fa-solid fa-chart-line text-3xl text-slate-200"></i>
+                                    <p className="text-sm text-slate-400">No trend data available for this range</p>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     {/* Broadcast funnel + campaign table */}

@@ -2,18 +2,34 @@ const WhatsAppBroadcast    = require('../models/WhatsAppBroadcast');
 const WhatsAppTemplate     = require('../models/WhatsAppTemplate');
 const WhatsAppMessage      = require('../models/WhatsAppMessage');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
+const User                 = require('../models/User');
 const { getBroadcastQueue } = require('../services/broadcastQueueService');
+const { sendWhatsAppMessage }  = require('../services/whatsappService');
+const { buildMetaComponents }  = require('../utils/templateVariableResolver');
 
 // --- API Methods ---
 
 exports.getBroadcasts = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const broadcasts = await WhatsAppBroadcast.find({ userId })
-            .populate('templateId', 'name status category')
-            .sort({ createdAt: -1 });
+        const page   = Math.max(1, parseInt(req.query.page) || 1);
+        const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+        const skip   = (page - 1) * limit;
 
-        res.json({ broadcasts });
+        const [broadcasts, total] = await Promise.all([
+            WhatsAppBroadcast.find({ userId })
+                .select('-csvContacts')  // M2: Exclude large CSV arrays from list query
+                .populate('templateId', 'name status category')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit),
+            WhatsAppBroadcast.countDocuments({ userId })
+        ]);
+
+        res.json({
+            broadcasts,
+            pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
+        });
     } catch (error) {
         console.error('Error fetching broadcasts:', error);
         res.status(500).json({ message: 'Error fetching broadcasts', error: 'Server error' });
@@ -327,14 +343,119 @@ exports.retargetFailed = async (req, res) => {
     }
 };
 
+// ── H3: Contact-level delivery detail ─────────────────────────────────────────
+exports.getBroadcastMessages = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const broadcast = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId }).select('_id name').lean();
+        if (!broadcast) return res.status(404).json({ message: 'Broadcast not found' });
+
+        const page  = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
+        const skip  = (page - 1) * limit;
+        const statusFilter = req.query.status; // optional: 'sent', 'delivered', 'read', 'failed'
+
+        const query = { broadcastId: req.params.id };
+        if (statusFilter && ['sent', 'delivered', 'read', 'failed', 'pending'].includes(statusFilter)) {
+            query.status = statusFilter;
+        }
+
+        const [messages, total] = await Promise.all([
+            WhatsAppMessage.find(query)
+                .populate('conversationId', 'phone displayName')
+                .select('status statusTimestamps timestamp error conversationId')
+                .sort({ timestamp: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            WhatsAppMessage.countDocuments(query)
+        ]);
+
+        const formatted = messages.map(msg => ({
+            _id:       msg._id,
+            phone:     msg.conversationId?.phone || '',
+            name:      msg.conversationId?.displayName || '',
+            status:    msg.status,
+            sentAt:    msg.statusTimestamps?.sent || msg.timestamp,
+            deliveredAt: msg.statusTimestamps?.delivered || null,
+            readAt:    msg.statusTimestamps?.read || null,
+            failedAt:  msg.statusTimestamps?.failed || null,
+            error:     msg.error || null
+        }));
+
+        res.json({
+            messages: formatted,
+            pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
+        });
+    } catch (error) {
+        console.error('Error fetching broadcast messages:', error);
+        res.status(500).json({ message: 'Error fetching broadcast messages', error: 'Server error' });
+    }
+};
+
+// ── H5: Test send — send template to a single number before full blast ────────
+exports.testBroadcast = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const { templateId, phone, media } = req.body;
+
+        if (!templateId || !phone) {
+            return res.status(400).json({ message: 'Template ID and phone number are required' });
+        }
+
+        const template = await WhatsAppTemplate.findOne({ _id: templateId, userId });
+        if (!template) return res.status(404).json({ message: 'Template not found' });
+        if (template.status !== 'APPROVED') {
+            return res.status(400).json({ message: 'Can only test APPROVED templates' });
+        }
+
+        const user = await User.findById(userId).lean();
+        const templateData = {
+            leadName:    'Test User',
+            leadEmail:   'test@example.com',
+            leadPhone:   phone,
+            companyName: user?.companyName || '',
+            userName:    user?.name || '',
+            stageName:   'New',
+            media:       media || null
+        };
+
+        const metaComponents = buildMetaComponents(
+            template.components || [],
+            template.variableMapping,
+            templateData
+        );
+
+        const result = await sendWhatsAppMessage(
+            phone,
+            template.name,
+            userId,
+            metaComponents,
+            template.language || 'en_US'
+        );
+
+        if (!result || result.success === false) {
+            const errorMsg = result?.error?.message || result?.data?.error?.message || 'Unknown error';
+            return res.status(400).json({ message: `Test send failed: ${errorMsg}`, error: result?.error });
+        }
+
+        res.json({ message: 'Test message sent successfully', waMessageId: result.messages?.[0]?.id });
+    } catch (error) {
+        console.error('Error sending test broadcast:', error);
+        res.status(500).json({ message: 'Error sending test broadcast', error: 'Server error' });
+    }
+};
+
 module.exports = {
-    getBroadcasts:      exports.getBroadcasts,
-    getBroadcast:       exports.getBroadcast,
-    createBroadcast:    exports.createBroadcast,
-    startBroadcast:     exports.startBroadcast,
-    cancelBroadcast:    exports.cancelBroadcast,
-    deleteBroadcast:    exports.deleteBroadcast,
-    exportBroadcast:    exports.exportBroadcast,
-    recalculateStats:   exports.recalculateStats,
-    retargetFailed:     exports.retargetFailed
+    getBroadcasts:         exports.getBroadcasts,
+    getBroadcast:          exports.getBroadcast,
+    createBroadcast:       exports.createBroadcast,
+    startBroadcast:        exports.startBroadcast,
+    cancelBroadcast:       exports.cancelBroadcast,
+    deleteBroadcast:       exports.deleteBroadcast,
+    exportBroadcast:       exports.exportBroadcast,
+    recalculateStats:      exports.recalculateStats,
+    retargetFailed:        exports.retargetFailed,
+    getBroadcastMessages:  exports.getBroadcastMessages,
+    testBroadcast:         exports.testBroadcast
 };

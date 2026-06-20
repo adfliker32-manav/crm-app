@@ -31,4 +31,10 @@ router.post('/:id/recalculate-stats', validateObjectId({ params: ['id'] }), auth
 // Create a retarget-failed draft broadcast
 router.post('/:id/retarget-failed', validateObjectId({ params: ['id'] }), authMiddleware, requireFeature('whatsappAutomation'), whatsappBroadcastController.retargetFailed);
 
+// H3: Get contact-level delivery details for a broadcast (with pagination + status filter)
+router.get('/:id/messages', validateObjectId({ params: ['id'] }), authMiddleware, whatsappBroadcastController.getBroadcastMessages);
+
+// H5: Test send — send template to a single number before full blast
+router.post('/test-send', authMiddleware, requireFeature('whatsappAutomation'), whatsappBroadcastController.testBroadcast);
+
 module.exports = router;

@@ -1,5 +1,6 @@
 const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
+const WhatsAppMessage = require('../models/WhatsAppMessage');
 const ChatbotFlow = require('../models/ChatbotFlow');
 const ChatbotSession = require('../models/ChatbotSession');
 const mongoose = require('mongoose');
@@ -75,6 +76,28 @@ exports.getDashboardStats = async (req, res) => {
             read: bc.stats?.read || 0,
             failed: bc.stats?.failed || 0
         }));
+
+        // 3b. Time-Series Broadcast Analytics (daily granularity)
+        // Groups broadcast messages by day to power line/bar charts.
+        const timeSeriesMatch = { userId: objectId, automationSource: 'broadcast' };
+        if (dateFrom) timeSeriesMatch.timestamp = { $gte: dateFrom };
+
+        const broadcastTimeSeries = await WhatsAppMessage.aggregate([
+            { $match: timeSeriesMatch },
+            {
+                $group: {
+                    _id: {
+                        $dateToString: { format: '%Y-%m-%d', date: '$timestamp' }
+                    },
+                    sent:      { $sum: 1 },
+                    delivered: { $sum: { $cond: [{ $ifNull: ['$statusTimestamps.delivered', false] }, 1, 0] } },
+                    read:      { $sum: { $cond: [{ $ifNull: ['$statusTimestamps.read',      false] }, 1, 0] } },
+                    failed:    { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } }
+                }
+            },
+            { $sort: { _id: 1 } },
+            { $project: { _id: 0, date: '$_id', sent: 1, delivered: 1, read: 1, failed: 1 } }
+        ]);
 
         // 4. Chatbot Flow Analytics (date-filtered via session data)
         const flowsRaw = await ChatbotFlow.find({ userId: objectId })
@@ -171,6 +194,7 @@ exports.getDashboardStats = async (req, res) => {
                     outboundPercentage: totalMessages > 0 ? Math.round((totalSent / totalMessages) * 100) : 0
                 },
                 recentCampaigns,
+                broadcastTimeSeries,
                 chatbotKpi,
                 chatbotFlows,
                 // FIX #114: Tell frontend which metrics are time-filtered vs all-time

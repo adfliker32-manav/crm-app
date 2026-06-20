@@ -591,73 +591,82 @@ const processStatusUpdate = async (status, userId) => {
             };
         }
 
-        // Execute single atomic update that also returns the updated document instantly
-        let updatedMsg = await WhatsAppMessage.findOneAndUpdate(
+        // ── Atomic update returning the OLD document (new: false) ──────────────
+        // Returning the pre-update doc lets us detect first-time status transitions
+        // vs duplicate webhooks without any extra DB round-trips.
+        let oldMsg = await WhatsAppMessage.findOneAndUpdate(
             { waMessageId: waMessageId },
             updatePayload,
-            { new: true, select: 'conversationId userId automationSource broadcastId content' }
+            { new: false, select: 'conversationId userId automationSource broadcastId content statusTimestamps' }
         ).lean();
 
-        if (!updatedMsg) {
+        if (!oldMsg) {
             // RACE CONDITION MITIGATION:
             // Meta webhooks for 'sent' or 'delivered' can arrive faster than our own backend
             // finishes writing the initial message to the DB (especially during batch broadcasts).
             // Retry up to 5 times (total ~7.5 seconds) to allow DB writes to catch up.
             let retries = 5;
-            while (retries > 0 && !updatedMsg) {
+            while (retries > 0 && !oldMsg) {
                 debug(`⏳ Message ${waMessageId} not found in DB. Waiting 1.5s for DB write to finish... (${retries} retries left)`);
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                updatedMsg = await WhatsAppMessage.findOneAndUpdate(
+                oldMsg = await WhatsAppMessage.findOneAndUpdate(
                     { waMessageId: waMessageId },
                     updatePayload,
-                    { new: true, select: 'conversationId userId automationSource broadcastId content' }
+                    { new: false, select: 'conversationId userId automationSource broadcastId content statusTimestamps' }
                 ).lean();
                 retries--;
             }
 
-            if (!updatedMsg) {
+            if (!oldMsg) {
                 console.log(`⚠️ Message not found for status update after ${5} retries: ${waMessageId}`);
                 debug('   The message may not have been saved by this server (e.g., sent via another tool)');
                 return;
             }
         }
 
-        console.log(`📬 Message ${waMessageId} status: ${statusType}`);
+        // Was this the FIRST time this status was set on this message?
+        // If oldMsg already had statusTimestamps[statusType], it's a duplicate webhook.
+        const isFirstTimeStatus = !oldMsg.statusTimestamps?.[statusType];
+
+        console.log(`📬 Message ${waMessageId} status: ${statusType}${isFirstTimeStatus ? '' : ' (duplicate webhook — skipping stat increment)'}`);
         debug(`✅ Status atomic update completed`);
 
         // 🔌 Push status update to frontend via Socket.IO
         const statusPayload = {
             waMessageId,
             status: statusType,
-            conversationId: updatedMsg.conversationId,
+            conversationId: oldMsg.conversationId,
             statusTimestamp: timestamp,
             ...(statusType === 'failed' && updatePayload.$set.error && { error: updatePayload.$set.error })
         };
-        emitToUser(String(updatedMsg.userId), 'whatsapp:statusUpdate', statusPayload);
-        emitToConversation(updatedMsg.conversationId.toString(), 'whatsapp:statusUpdate', {
+        emitToUser(String(oldMsg.userId), 'whatsapp:statusUpdate', statusPayload);
+        emitToConversation(oldMsg.conversationId.toString(), 'whatsapp:statusUpdate', {
             waMessageId,
             status: statusType
         });
 
-        // Update broadcast stats (delivered/read/failed) using the stored broadcastId
-        if (updatedMsg.automationSource === 'broadcast' && updatedMsg.broadcastId && ['delivered', 'read', 'failed'].includes(statusType)) {
+        // ── Broadcast stats (DEDUP-SAFE) ──────────────────────────────────────
+        // Only increment if this is the FIRST time the message transitions to this status.
+        // Meta sends duplicate webhooks — without this guard, delivered/read/failed counts inflate
+        // beyond the actual number of messages sent (the #1 analytics bug).
+        if (isFirstTimeStatus && oldMsg.automationSource === 'broadcast' && oldMsg.broadcastId && ['delivered', 'read', 'failed'].includes(statusType)) {
             try {
                 const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
                 await WhatsAppBroadcast.updateOne(
-                    { _id: updatedMsg.broadcastId },
+                    { _id: oldMsg.broadcastId },
                     { $inc: { [`stats.${statusType}`]: 1 } }
                 );
             } catch (bcErr) {
-                console.error(`⚠️ Could not update broadcast stats for broadcast ${updatedMsg.broadcastId}:`, bcErr.message);
+                console.error(`⚠️ Could not update broadcast stats for broadcast ${oldMsg.broadcastId}:`, bcErr.message);
             }
         }
 
-        // FIX #21: Update template analytics counters
-        if (updatedMsg.content?.templateName && ['delivered', 'read', 'failed'].includes(statusType)) {
+        // FIX #21: Update template analytics counters (also dedup-safe)
+        if (isFirstTimeStatus && oldMsg.content?.templateName && ['delivered', 'read', 'failed'].includes(statusType)) {
             try {
                 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
                 await WhatsAppTemplate.updateOne(
-                    { userId: updatedMsg.userId, name: updatedMsg.content.templateName },
+                    { userId: oldMsg.userId, name: oldMsg.content.templateName },
                     { $inc: { [`analytics.${statusType}`]: 1 } }
                 );
             } catch (tplErr) {

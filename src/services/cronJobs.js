@@ -176,10 +176,10 @@ const runAppointmentReminders = async () => {
 
         // 24h window: appointments between 23h and 25h from now
         const window24Start = new Date(now + 23 * 3600000);
-        const window24End   = new Date(now + 25 * 3600000);
+        const window24End = new Date(now + 25 * 3600000);
         // 1h window: appointments between 55 min and 65 min from now
-        const window1Start  = new Date(now + 55 * 60000);
-        const window1End    = new Date(now + 65 * 60000);
+        const window1Start = new Date(now + 55 * 60000);
+        const window1End = new Date(now + 65 * 60000);
 
         const [appts24h, appts1h] = await Promise.all([
             Appointment.find({
@@ -220,7 +220,7 @@ const runAppointmentReminders = async () => {
 
         // Build userId → template lookup map (one template per tenant per type)
         const map24h = new Map(templates24h.map(t => [t.userId.toString(), t]));
-        const map1h  = new Map(templates1h.map(t => [t.userId.toString(), t]));
+        const map1h = new Map(templates1h.map(t => [t.userId.toString(), t]));
 
         // ── Helper using the pre-fetched map instead of per-call DB query ───────────
         const sendReminder = async (appt, templateMap, flagField) => {
@@ -242,7 +242,7 @@ const runAppointmentReminders = async () => {
         };
 
         for (const appt of appts24h) await sendReminder(appt, map24h, 'reminder24hSent');
-        for (const appt of appts1h)  await sendReminder(appt, map1h,  'reminder1hSent');
+        for (const appt of appts1h) await sendReminder(appt, map1h, 'reminder1hSent');
 
         console.log(`📅 [AppointmentReminder] Processed ${appts24h.length} 24h + ${appts1h.length} 1h reminders`);
     } catch (err) {
@@ -487,14 +487,14 @@ const runSubscriptionReconcile = async () => {
                 const rzpStatus = (rzpSub.status || '').toLowerCase();
                 // Map Razorpay status strings to our internal states
                 const map = {
-                    created:         'pending_auth',
-                    authenticated:   'pending_auth',
-                    active:          'active',
-                    halted:          'grace',
-                    pending:         'grace',
-                    cancelled:       'cancelled',
-                    completed:       'completed',
-                    expired:         'cancelled'
+                    created: 'pending_auth',
+                    authenticated: 'pending_auth',
+                    active: 'active',
+                    halted: 'grace',
+                    pending: 'grace',
+                    cancelled: 'cancelled',
+                    completed: 'completed',
+                    expired: 'cancelled'
                 };
                 const desired = map[rzpStatus];
                 if (desired && desired !== sub.status) {
@@ -522,7 +522,7 @@ const runSubscriptionReconcile = async () => {
                             payload: {
                                 payment: {
                                     entity: {
-                                        id:     rzpPaymentId,
+                                        id: rzpPaymentId,
                                         amount: inv.amount,
                                         method: inv.payment_method || 'upi',
                                         created_at: inv.paid_at
@@ -589,8 +589,8 @@ const runFollowUpTemplateSend = async () => {
         // ── FIX N+1: Batch-fetch users and email templates upfront ──────────────
         // Previously: User.findById() and EmailTemplate.findOne() were called inside
         // the per-lead loop — O(n) sequential queries for n email-type leads.
-        const tenantIds    = [...new Set(leads.map(l => l.userId.toString()))];
-        const emailTplIds  = leads
+        const tenantIds = [...new Set(leads.map(l => l.userId.toString()))];
+        const emailTplIds = leads
             .filter(l => l.followUpTemplateType === 'email' && l.followUpTemplateName)
             .map(l => l.followUpTemplateName);
 
@@ -601,7 +601,7 @@ const runFollowUpTemplateSend = async () => {
                 : Promise.resolve([])
         ]);
 
-        const userMap     = new Map(tenantUsers.map(u  => [u._id.toString(), u]));
+        const userMap = new Map(tenantUsers.map(u => [u._id.toString(), u]));
         const templateMap = new Map(emailTemplates.map(t => [t._id.toString(), t]));
 
         for (const lead of leads) {
@@ -644,7 +644,7 @@ const runFollowUpTemplateSend = async () => {
                         stageName: lead.status || ''
                     };
                     const subject = replaceVariables(template.subject, templateData);
-                    const body    = replaceVariables(template.body, templateData);
+                    const body = replaceVariables(template.body, templateData);
                     await sendEmailWithRetry({ to: lead.email, subject, html: wrapEmailHtml(body), userId: lead.userId.toString() }, 1);
                     await Lead.findByIdAndUpdate(lead._id, {
                         $set: { followUpTemplateSent: true, followUpTemplateType: null, followUpTemplateName: null },
@@ -727,6 +727,10 @@ const startCronJobs = () => {
     } catch (e) {
         console.error('⚠️ [CronJobs] Failed to schedule Meta lead recovery:', e.message);
     }
+
+    // Auto-recalculate broadcast stats — every 5 minutes
+    cron.schedule('*/5 * * * *', runBroadcastStatsAutoRecalculate);
+    console.log('[CronJobs] Broadcast stats auto-recalculate scheduled (every 5 min)');
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -761,10 +765,10 @@ const runAgencyClientBillingSweep = async () => {
         const brandingMap = {};
         settings.forEach(s => { brandingMap[s.key] = s.value || ''; });
         const branding = {
-            agencyName:    brandingMap.company_name    || '',
+            agencyName: brandingMap.company_name || '',
             agencyAddress: brandingMap.company_address || '',
-            agencyGst:     brandingMap.company_gst     || '',
-            agencyLogo:    brandingMap.company_logo    || ''
+            agencyGst: brandingMap.company_gst || '',
+            agencyLogo: brandingMap.company_logo || ''
         };
 
         // Fetch all active clients to evaluate their billing schedule
@@ -832,22 +836,22 @@ const runAgencyClientBillingSweep = async () => {
                     try {
                         payment = await AgencyPayment.create({
                             agencyClientId: client._id,
-                            clientName:    client.name,
+                            clientName: client.name,
                             clientCompany: client.company,
                             clientServiceType: client.serviceType || 'other',
                             amount: Number(client.monthlyFee),
                             billingMonth: month,
-                            billingYear:  year,
+                            billingYear: year,
                             dueDate,
                             status: 'pending',
                             invoiceNumber,
                             billingAddressSnapshot: client.billingAddress || '',
-                            gstNumberSnapshot:      client.gstNumber     || '',
-                            agencyNameSnapshot:     branding.agencyName,
-                            agencyAddressSnapshot:  branding.agencyAddress,
-                            agencyGstSnapshot:      branding.agencyGst,
-                            agencyLogoSnapshot:     branding.agencyLogo,
-                            invoiceDate:          now,
+                            gstNumberSnapshot: client.gstNumber || '',
+                            agencyNameSnapshot: branding.agencyName,
+                            agencyAddressSnapshot: branding.agencyAddress,
+                            agencyGstSnapshot: branding.agencyGst,
+                            agencyLogoSnapshot: branding.agencyLogo,
+                            invoiceDate: now,
                             invoiceGeneratedDate: now,
                             recordedBy: null
                         });
@@ -886,6 +890,81 @@ const runAgencyClientBillingSweep = async () => {
     }
 };
 
+// ──────────────────────────────────────────────────────────────────────────────
+// H4: Auto-recalculate broadcast stats — runs every 5 minutes.
+// Aggregates real status logs from WhatsAppMessage to update stats for active and
+// recently finished broadcasts.
+// ──────────────────────────────────────────────────────────────────────────────
+const runBroadcastStatsAutoRecalculate = async () => {
+    try {
+        const WhatsAppBroadcast = require('../models/WhatsAppBroadcast');
+        const WhatsAppMessage = require('../models/WhatsAppMessage');
+
+        const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+        const activeBroadcasts = await WhatsAppBroadcast.find({
+            $or: [
+                { status: 'PROCESSING' },
+                {
+                    status: { $in: ['COMPLETED', 'FAILED', 'CANCELLED'] },
+                    completedAt: { $gte: sixHoursAgo }
+                }
+            ]
+        }).select('_id stats status').lean();
+
+        if (activeBroadcasts.length === 0) return;
+
+        console.log(`[BroadcastAutoRecalc] Recalculating stats for ${activeBroadcasts.length} active broadcast(s)…`);
+
+        for (const bc of activeBroadcasts) {
+            try {
+                const agg = await WhatsAppMessage.aggregate([
+                    { $match: { broadcastId: bc._id } },
+                    {
+                        $group: {
+                            _id: null,
+                            total:     { $sum: 1 },
+                            sent:      { $sum: { $cond: [{ $ifNull: ['$statusTimestamps.sent',      false] }, 1, 0] } },
+                            delivered: { $sum: { $cond: [{ $ifNull: ['$statusTimestamps.delivered', false] }, 1, 0] } },
+                            read:      { $sum: { $cond: [{ $ifNull: ['$statusTimestamps.read',      false] }, 1, 0] } },
+                            failed:    { $sum: { $cond: [{ $eq:     ['$status', 'failed'] },                   1, 0] } }
+                        }
+                    }
+                ]);
+
+                const counts = agg[0] || { total: 0, sent: 0, delivered: 0, read: 0, failed: 0 };
+
+                const hasChanges =
+                    bc.stats?.delivered !== counts.delivered ||
+                    bc.stats?.read !== counts.read ||
+                    bc.stats?.failed !== counts.failed ||
+                    (counts.total > 0 && (
+                        bc.stats?.sent !== counts.sent ||
+                        bc.stats?.totalTargets !== counts.total
+                    ));
+
+                if (hasChanges) {
+                    await WhatsAppBroadcast.updateOne({ _id: bc._id }, {
+                        $set: {
+                            'stats.delivered': counts.delivered,
+                            'stats.read':      counts.read,
+                            'stats.failed':    counts.failed,
+                            ...(counts.total > 0 && {
+                                'stats.sent':         counts.sent || bc.stats.sent,
+                                'stats.totalTargets': bc.stats.totalTargets || counts.total
+                            })
+                        }
+                    });
+                    console.log(`[BroadcastAutoRecalc] Updated stats for broadcast ${bc._id}`);
+                }
+            } catch (err) {
+                console.error(`❌ [BroadcastAutoRecalc] Failed for broadcast ${bc._id}:`, err.message);
+            }
+        }
+    } catch (err) {
+        console.error('❌ [BroadcastAutoRecalc] Cron error:', err.message);
+    }
+};
+
 module.exports = {
     startCronJobs,
     cleanupWhatsAppMediaCache,
@@ -898,5 +977,6 @@ module.exports = {
     runSubscriptionStatusSweep,
     runRenewalReminder,
     runSubscriptionReconcile,
-    runAgencyClientBillingSweep
+    runAgencyClientBillingSweep,
+    runBroadcastStatsAutoRecalculate
 };
