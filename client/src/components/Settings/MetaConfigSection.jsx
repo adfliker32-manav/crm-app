@@ -340,6 +340,8 @@ const MetaConfigSection = () => {
             setCfmLoaded(true);
         } catch (e) {
             console.error('Failed to load custom field mapping:', e);
+            showError('Failed to load custom field mapping');
+            setCfmLoaded(true);
         }
     };
 

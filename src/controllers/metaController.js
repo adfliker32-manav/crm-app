@@ -1239,7 +1239,9 @@ const saveCustomFieldMapping = async (req, res) => {
 
         // Apply each metaKey mapping
         let updated = 0;
-        for (const { fieldKey, metaKey } of mappings) {
+        for (const item of mappings) {
+            if (!item || typeof item !== 'object') continue;
+            const { fieldKey, metaKey } = item;
             if (!fieldKey || typeof fieldKey !== 'string') continue;
             if (fieldMap[fieldKey]) {
                 fieldMap[fieldKey].metaKey = metaKey ? String(metaKey).trim() || null : null;

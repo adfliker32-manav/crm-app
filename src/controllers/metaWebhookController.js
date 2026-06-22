@@ -495,15 +495,18 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
         // Mapped fields are stored under the clean CRM key; unmapped raw fields keep their raw key.
         if (leadDetails.rawFields) {
             customFieldDefs.forEach(field => {
+                const normalizedLabel = field.label?.toLowerCase().replace(/\s+/g, '_');
+                const normalizedKey   = field.key?.toLowerCase().replace(/\s+/g, '_');
+
                 const byMetaKey = field.metaKey && leadDetails.rawFields[field.metaKey];
-                const byLabel   = !byMetaKey && leadDetails.rawFields[field.label?.toLowerCase()];
-                const byKey     = !byMetaKey && !byLabel && leadDetails.rawFields[field.key?.toLowerCase()];
+                const byLabel   = !byMetaKey && normalizedLabel && leadDetails.rawFields[normalizedLabel];
+                const byKey     = !byMetaKey && !byLabel && normalizedKey && leadDetails.rawFields[normalizedKey];
                 const value     = byMetaKey || byLabel || byKey;
                 if (value) {
                     customData[field.key] = value;
                     // If this raw field was already saved under its ugly raw key in Step 1,
                     // remove it — the CRM key is now the canonical home (Option C).
-                    const rawKey = byMetaKey ? field.metaKey : (byLabel ? field.label?.toLowerCase() : field.key?.toLowerCase());
+                    const rawKey = byMetaKey ? field.metaKey : (byLabel ? normalizedLabel : normalizedKey);
                     if (rawKey && rawKey !== field.key && customData[rawKey] !== undefined) {
                         delete customData[rawKey];
                     }

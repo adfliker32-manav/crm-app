@@ -45,6 +45,13 @@ exports.saveCustomFields = async (req, res) => {
             return res.status(400).json({ message: 'Fields must be an array' });
         }
 
+        // Validate all fields have labels
+        for (const field of fields) {
+            if (!field.label || typeof field.label !== 'string' || !field.label.trim()) {
+                return res.status(400).json({ message: 'All custom fields must have a valid label' });
+            }
+        }
+
         // Validate and process fields
         const processedFields = fields.map((field, index) => ({
             key: field.key || generateKey(field.label),
