@@ -4,10 +4,12 @@ import api from '../../services/api';
 const FunnelChart = ({ period, dateRange }) => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
         const fetch = async () => {
             setLoading(true);
+            setError(null);
             try {
                 const params = new URLSearchParams({ period });
                 if (period === 'custom' && dateRange?.start && dateRange?.end) {
@@ -18,6 +20,7 @@ const FunnelChart = ({ period, dateRange }) => {
                 setData(res.data);
             } catch (err) {
                 console.error('FunnelChart fetch error:', err);
+                setError(err.response?.data?.message || 'Failed to load funnel data.');
             } finally {
                 setLoading(false);
             }
@@ -26,6 +29,15 @@ const FunnelChart = ({ period, dateRange }) => {
     }, [period, dateRange]);
 
     if (loading) return <div className="text-center py-10 text-slate-400 text-sm animate-pulse">Loading funnel...</div>;
+    if (error) return (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center mb-4">
+                <i className="fa-solid fa-triangle-exclamation text-rose-500 text-xl"></i>
+            </div>
+            <p className="text-rose-600 font-semibold mb-1">{error}</p>
+            <p className="text-slate-400 text-xs">This feature may require a plan upgrade.</p>
+        </div>
+    );
     if (!data) return null;
 
     const maxCount = Math.max(...(data.funnel?.map(f => f.count) || [1]));

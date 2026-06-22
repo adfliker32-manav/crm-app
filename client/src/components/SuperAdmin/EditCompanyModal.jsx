@@ -10,12 +10,12 @@ const AVAILABLE_MODULES = WORKSPACE_MODULES;
 
 // Sub-permissions appear only when their parent module is active.
 const SUB_PERMISSIONS = [
-    { key: 'aiChatbot',          label: 'AI Chatbot',          parentModule: 'whatsapp', icon: 'fa-robot' },
+    { key: 'aiChatbot', label: 'AI Chatbot', parentModule: 'whatsapp', icon: 'fa-robot' },
     { key: 'whatsappAutomation', label: 'WhatsApp Automation', parentModule: 'whatsapp', icon: 'fa-bolt-lightning' },
-    { key: 'emailAutomation',    label: 'Email Automation',    parentModule: 'email',    icon: 'fa-envelopes-bulk' },
-    { key: 'campaigns',          label: 'Bulk Campaigns',      parentModule: 'email',    icon: 'fa-bullhorn' },
-    { key: 'metaSync',           label: 'Meta Lead Ads Sync',  parentModule: 'leads',    icon: 'fa-meta' },
-    { key: 'advancedAnalytics',  label: 'Advanced Analytics',  parentModule: 'reports',  icon: 'fa-chart-line' }
+    { key: 'emailAutomation', label: 'Email Automation', parentModule: 'email', icon: 'fa-envelopes-bulk' },
+    { key: 'campaigns', label: 'Bulk Campaigns', parentModule: 'email', icon: 'fa-bullhorn' },
+    { key: 'metaSync', label: 'Meta Lead Ads Sync', parentModule: 'leads', icon: 'fa-meta' },
+    { key: 'advancedAnalytics', label: 'Advanced Analytics', parentModule: 'reports', icon: 'fa-chart-line' }
 ];
 
 const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
@@ -213,15 +213,13 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                                         <div
                                             key={mod.id}
                                             onClick={() => handleModuleToggle(mod.id)}
-                                            className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition select-none ${
-                                                isEnabled
+                                            className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition select-none ${isEnabled
                                                     ? 'border-purple-600 bg-purple-50'
                                                     : 'border-slate-200 hover:border-slate-300'
-                                            }`}
+                                                }`}
                                         >
-                                            <div className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center transition ${
-                                                isEnabled ? 'bg-purple-600 text-white' : 'bg-slate-200 text-transparent'
-                                            }`}>
+                                            <div className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center transition ${isEnabled ? 'bg-purple-600 text-white' : 'bg-slate-200 text-transparent'
+                                                }`}>
                                                 <i className="fa-solid fa-check text-xs"></i>
                                             </div>
                                             <div className="flex items-center gap-2 overflow-hidden">

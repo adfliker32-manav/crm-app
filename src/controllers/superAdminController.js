@@ -349,7 +349,7 @@ const updateCompany = async (req, res) => {
         const SUB_PERMISSION_KEYS = [
             'aiChatbot', 'whatsappAutomation', 'emailAutomation', 'metaSync',
             'campaigns', 'advancedAnalytics'
-        ];
+        ];how 
         if (planFeatures && typeof planFeatures === 'object') {
             for (const key of SUB_PERMISSION_KEYS) {
                 if (planFeatures[key] !== undefined) {

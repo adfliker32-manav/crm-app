@@ -10,6 +10,7 @@ const GoalTracker = ({ period }) => {
     const [editing, setEditing] = useState(null); // agentId being edited
     const [form, setForm] = useState({ targetLeads: 0, targetWon: 0, targetRevenue: 0, targetTasks: 0 });
     const [saving, setSaving] = useState(false);
+    const [error, setError] = useState(null);
 
     const isManager = user?.role === 'manager' || user?.role === 'superadmin';
 
@@ -18,11 +19,13 @@ const GoalTracker = ({ period }) => {
 
     const fetchGoals = async () => {
         setLoading(true);
+        setError(null);
         try {
             const res = await api.get(`/analytics/goals?month=${month}`);
             setData(res.data);
         } catch (err) {
             console.error('GoalTracker fetch error:', err);
+            setError(err.response?.data?.message || 'Failed to load goal data.');
         } finally {
             setLoading(false);
         }
@@ -75,6 +78,18 @@ const GoalTracker = ({ period }) => {
     };
 
     if (loading) return <div className="text-center py-10 text-slate-400 text-sm">Loading goals...</div>;
+    if (error) return (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center mb-4">
+                <i className="fa-solid fa-triangle-exclamation text-rose-500 text-xl"></i>
+            </div>
+            <p className="text-rose-600 font-semibold mb-1">{error}</p>
+            <p className="text-slate-400 text-xs mb-4">This feature may require a plan upgrade.</p>
+            <button onClick={fetchGoals} className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition">
+                <i className="fa-solid fa-arrows-rotate mr-2"></i>Retry
+            </button>
+        </div>
+    );
     if (!data?.agents?.length) return (
         <div className="text-center py-10 text-slate-400 text-sm">
             <i className="fa-solid fa-bullseye text-4xl mb-3 block text-slate-300"></i>

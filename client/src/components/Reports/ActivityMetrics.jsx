@@ -5,10 +5,12 @@ import api from '../../services/api';
 const ActivityMetrics = ({ period, dateRange }) => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
         const fetch = async () => {
             setLoading(true);
+            setError(null);
             try {
                 const params = new URLSearchParams({ period });
                 if (period === 'custom' && dateRange?.start && dateRange?.end) {
@@ -19,6 +21,7 @@ const ActivityMetrics = ({ period, dateRange }) => {
                 setData(res.data);
             } catch (err) {
                 console.error('ActivityMetrics fetch error:', err);
+                setError(err.response?.data?.message || 'Failed to load activity data.');
             } finally {
                 setLoading(false);
             }
@@ -27,6 +30,15 @@ const ActivityMetrics = ({ period, dateRange }) => {
     }, [period, dateRange]);
 
     if (loading) return <div className="text-center py-10 text-slate-400 text-sm animate-pulse">Loading activity data...</div>;
+    if (error) return (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center mb-4">
+                <i className="fa-solid fa-triangle-exclamation text-rose-500 text-xl"></i>
+            </div>
+            <p className="text-rose-600 font-semibold mb-1">{error}</p>
+            <p className="text-slate-400 text-xs">This feature may require a plan upgrade.</p>
+        </div>
+    );
     if (!data?.agents?.length) return (
         <div className="text-center py-10 text-slate-400 text-sm">
             <i className="fa-solid fa-chart-bar text-4xl mb-3 block text-slate-300"></i>
@@ -46,16 +58,16 @@ const ActivityMetrics = ({ period, dateRange }) => {
                 <p className="text-xs text-slate-500">Based on tasks completed + follow-ups done this period.</p>
             </div>
 
-            {/* Summary Cards */}
+            {/* Summary Cards — using static inline styles to avoid Tailwind purge issues with dynamic class names */}
             <div className="grid grid-cols-3 gap-4">
                 {[
-                    { label: 'Total Tasks Done', value: data.agents.reduce((s, a) => s + a.tasksCompleted, 0), icon: 'fa-list-check', color: 'orange' },
-                    { label: 'Total Follow-ups', value: data.agents.reduce((s, a) => s + a.followUpsDone, 0), icon: 'fa-phone', color: 'blue' },
-                    { label: 'Leads Handled', value: data.agents.reduce((s, a) => s + a.leadsHandled, 0), icon: 'fa-users', color: 'green' },
-                ].map(({ label, value, icon, color }) => (
-                    <div key={label} className={`bg-${color}-50 border border-${color}-100 rounded-xl p-4`}>
-                        <p className={`text-xs font-semibold text-${color}-600`}>{label}</p>
-                        <p className={`text-2xl font-bold text-${color}-700 mt-1`}>{value}</p>
+                    { label: 'Total Tasks Done', value: data.agents.reduce((s, a) => s + a.tasksCompleted, 0), icon: 'fa-list-check', bg: '#fff7ed', border: '#fed7aa', text: '#c2410c' },
+                    { label: 'Total Follow-ups', value: data.agents.reduce((s, a) => s + a.followUpsDone, 0), icon: 'fa-phone', bg: '#eff6ff', border: '#bfdbfe', text: '#1d4ed8' },
+                    { label: 'Leads Handled', value: data.agents.reduce((s, a) => s + a.leadsHandled, 0), icon: 'fa-users', bg: '#f0fdf4', border: '#bbf7d0', text: '#15803d' },
+                ].map(({ label, value, icon, bg, border, text }) => (
+                    <div key={label} style={{ background: bg, borderColor: border }} className="border rounded-xl p-4">
+                        <p style={{ color: text }} className="text-xs font-semibold">{label}</p>
+                        <p style={{ color: text }} className="text-2xl font-bold mt-1">{value}</p>
                     </div>
                 ))}
             </div>

@@ -6,12 +6,12 @@ import { WORKSPACE_MODULES } from '../../constants/modules';
 const ALL_MODULES = WORKSPACE_MODULES;
 
 const SUB_PERMISSIONS = [
-    { key: 'aiChatbot',          label: 'AI Chatbot',         parentModule: 'whatsapp', icon: 'fa-robot' },
+    { key: 'aiChatbot', label: 'AI Chatbot', parentModule: 'whatsapp', icon: 'fa-robot' },
     { key: 'whatsappAutomation', label: 'WhatsApp Automation', parentModule: 'whatsapp', icon: 'fa-bolt-lightning' },
-    { key: 'emailAutomation',    label: 'Email Automation',   parentModule: 'email',    icon: 'fa-envelopes-bulk' },
-    { key: 'campaigns',          label: 'Bulk Campaigns',     parentModule: 'email',    icon: 'fa-bullhorn' },
-    { key: 'metaSync',           label: 'Meta Lead Ads Sync', parentModule: 'leads',    icon: 'fa-meta' },
-    { key: 'advancedAnalytics',  label: 'Advanced Analytics', parentModule: 'reports',  icon: 'fa-chart-line' }
+    { key: 'emailAutomation', label: 'Email Automation', parentModule: 'email', icon: 'fa-envelopes-bulk' },
+    { key: 'campaigns', label: 'Bulk Campaigns', parentModule: 'email', icon: 'fa-bullhorn' },
+    { key: 'metaSync', label: 'Meta Lead Ads Sync', parentModule: 'leads', icon: 'fa-meta' },
+    { key: 'advancedAnalytics', label: 'Advanced Analytics', parentModule: 'reports', icon: 'fa-chart-line' }
 ];
 
 const ReviewApprovalModal = ({ isOpen, account, onClose, onApproved }) => {
@@ -59,9 +59,11 @@ const ReviewApprovalModal = ({ isOpen, account, onClose, onApproved }) => {
     const toggleModule = (modId) => {
         setForm(prev => {
             const has = prev.activeModules.includes(modId);
-            const next = { ...prev, activeModules: has
-                ? prev.activeModules.filter(id => id !== modId)
-                : [...prev.activeModules, modId] };
+            const next = {
+                ...prev, activeModules: has
+                    ? prev.activeModules.filter(id => id !== modId)
+                    : [...prev.activeModules, modId]
+            };
             if (has) {
                 const newFeatures = { ...prev.planFeatures };
                 SUB_PERMISSIONS.filter(sp => sp.parentModule === modId)
