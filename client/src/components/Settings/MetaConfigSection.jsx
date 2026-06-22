@@ -47,10 +47,16 @@ const MetaConfigSection = () => {
     });
     const [stages, setStages] = useState([]);
 
-    // Field mapping
+    // Field mapping (core: name/phone/email/city)
     const [fieldMapping, setFieldMapping] = useState({ name: '', phone: '', email: '', city: '' });
     const [lastRawFields, setLastRawFields] = useState([]);
     const [fieldMappingSaving, setFieldMappingSaving] = useState(false);
+
+    // Custom question mapping (Meta raw field keys → CRM custom fields)
+    const [customFieldMappings, setCustomFieldMappings] = useState([]); // [{ key, label, metaKey }]
+    const [cfmRawFields, setCfmRawFields] = useState([]); // raw field keys from last Meta lead
+    const [cfmSaving, setCfmSaving] = useState(false);
+    const [cfmLoaded, setCfmLoaded] = useState(false);
 
     // WhatsApp lead arrival alert
     const [leadAlert, setLeadAlert] = useState({ enabled: false, phone: '', sources: ['Meta'] });
@@ -103,6 +109,7 @@ const MetaConfigSection = () => {
         loadStages();
         loadFieldMapping();
         loadLeadAlertConfig();
+        loadCustomFieldMapping();
     }, []);
 
     const loadStatus = async () => {
@@ -322,6 +329,30 @@ const MetaConfigSection = () => {
             setLastRawFields(mappingRes.data.lastRawFields || []);
         } catch (e) {
             console.error('Failed to load field mapping:', e);
+        }
+    };
+
+    const loadCustomFieldMapping = async () => {
+        try {
+            const res = await api.get('/meta/custom-field-mapping');
+            setCustomFieldMappings(res.data.customFields || []);
+            setCfmRawFields(res.data.lastRawFields || []);
+            setCfmLoaded(true);
+        } catch (e) {
+            console.error('Failed to load custom field mapping:', e);
+        }
+    };
+
+    const handleSaveCustomFieldMapping = async () => {
+        try {
+            setCfmSaving(true);
+            const mappings = customFieldMappings.map(f => ({ fieldKey: f.key, metaKey: f.metaKey || null }));
+            const res = await api.post('/meta/custom-field-mapping', { mappings });
+            showSuccess(res.data.message || 'Custom question mapping saved!');
+        } catch (e) {
+            showError('Failed to save custom question mapping');
+        } finally {
+            setCfmSaving(false);
         }
     };
 
@@ -735,6 +766,124 @@ const MetaConfigSection = () => {
                         {fieldMappingSaving ? 'Saving...' : 'Save Field Mapping'}
                     </button>
 
+                </div>
+
+                {/* ─── Custom Question Mapping ───────────────────────────────────────── */}
+                <div className="mt-6 bg-indigo-50 border border-indigo-200 rounded-xl p-6">
+                    <h4 className="font-bold text-indigo-800 mb-1 flex items-center gap-2">
+                        <i className="fa-solid fa-link"></i>
+                        Custom Question Mapping (Meta → CRM)
+                    </h4>
+                    <p className="text-xs text-indigo-600 mb-4">
+                        Map each custom question from your Meta lead form to a CRM custom field.
+                        Answers will be stored under the correct field label — not the raw Meta key.
+                    </p>
+
+                    {/* Step-by-step instructions */}
+                    <div className="bg-white border border-indigo-100 rounded-lg p-4 mb-5 text-xs text-slate-600 space-y-1.5">
+                        <p className="font-semibold text-indigo-700 mb-2"><i className="fa-solid fa-circle-info mr-1"></i>How to set this up:</p>
+                        <p><span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 font-bold mr-2 text-[10px]">1</span>Create your CRM custom fields in <strong>Settings → Custom Fields</strong></p>
+                        <p><span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 font-bold mr-2 text-[10px]">2</span>Receive at least one test lead from your Meta form — Meta field keys will appear in the dropdowns below</p>
+                        <p><span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 font-bold mr-2 text-[10px]">3</span>For each CRM field, select the matching Meta question → Save</p>
+                        <p><span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 font-bold mr-2 text-[10px]">4</span>Done! Every future Meta lead will map answers to the correct CRM field automatically</p>
+                    </div>
+
+                    {!cfmLoaded ? (
+                        <div className="flex items-center gap-2 text-slate-400 text-sm py-4">
+                            <i className="fa-solid fa-spinner fa-spin"></i> Loading...
+                        </div>
+                    ) : customFieldMappings.length === 0 ? (
+                        <div className="flex flex-col items-center py-8 text-center">
+                            <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center mb-3">
+                                <i className="fa-solid fa-list-check text-indigo-400 text-lg"></i>
+                            </div>
+                            <p className="text-slate-600 text-sm font-medium">No CRM custom fields yet</p>
+                            <p className="text-slate-400 text-xs mt-1">
+                                Go to <strong>Settings → Custom Fields</strong> to create your custom fields first.
+                            </p>
+                        </div>
+                    ) : (
+                        <>
+                            {/* Table header */}
+                            <div className="grid grid-cols-2 gap-3 mb-2 px-1">
+                                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">CRM Field</p>
+                                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Meta Form Field Key</p>
+                            </div>
+
+                            {/* Mapping rows */}
+                            <div className="space-y-2">
+                                {customFieldMappings.map((field, idx) => (
+                                    <div key={field.key} className="grid grid-cols-2 gap-3 items-center bg-white border border-indigo-100 rounded-lg px-3 py-2.5">
+                                        {/* CRM field label */}
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <div className="w-7 h-7 rounded-md bg-indigo-100 flex items-center justify-center shrink-0">
+                                                <i className="fa-solid fa-tag text-indigo-500 text-xs"></i>
+                                            </div>
+                                            <div className="min-w-0">
+                                                <p className="text-sm font-semibold text-slate-700 truncate">{field.label}</p>
+                                                <p className="text-[10px] text-slate-400 font-mono">{field.key}</p>
+                                            </div>
+                                        </div>
+
+                                        {/* Meta key selector */}
+                                        <div className="relative">
+                                            {cfmRawFields.length > 0 ? (
+                                                <select
+                                                    value={field.metaKey || ''}
+                                                    onChange={e => setCustomFieldMappings(prev =>
+                                                        prev.map((f, i) => i === idx ? { ...f, metaKey: e.target.value || null } : f)
+                                                    )}
+                                                    className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
+                                                >
+                                                    <option value="">— Not mapped —</option>
+                                                    {cfmRawFields.map(rawKey => (
+                                                        <option key={rawKey} value={rawKey}>{rawKey}</option>
+                                                    ))}
+                                                </select>
+                                            ) : (
+                                                <input
+                                                    type="text"
+                                                    value={field.metaKey || ''}
+                                                    onChange={e => setCustomFieldMappings(prev =>
+                                                        prev.map((f, i) => i === idx ? { ...f, metaKey: e.target.value || null } : f)
+                                                    )}
+                                                    placeholder="e.g. your_business_name_"
+                                                    className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
+                                                />
+                                            )}
+                                            {field.metaKey && (
+                                                <button
+                                                    onClick={() => setCustomFieldMappings(prev =>
+                                                        prev.map((f, i) => i === idx ? { ...f, metaKey: null } : f)
+                                                    )}
+                                                    className="absolute right-8 top-1/2 -translate-y-1/2 text-slate-300 hover:text-rose-400 transition"
+                                                    title="Clear mapping"
+                                                >
+                                                    <i className="fa-solid fa-xmark text-xs"></i>
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {cfmRawFields.length === 0 && (
+                                <p className="mt-3 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                                    <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                                    No Meta field keys detected yet. Receive at least one test lead first, then refresh this page — the keys from that lead will populate the dropdowns.
+                                </p>
+                            )}
+
+                            <button
+                                onClick={handleSaveCustomFieldMapping}
+                                disabled={cfmSaving}
+                                className="mt-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-5 py-2 rounded-lg font-bold text-sm transition flex items-center gap-2"
+                            >
+                                <i className={`fa-solid ${cfmSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`}></i>
+                                {cfmSaving ? 'Saving...' : 'Save Custom Question Mapping'}
+                            </button>
+                        </>
+                    )}
                 </div>
 
                 {/* Meta Conversion API Settings (Always Visible when connected) */}

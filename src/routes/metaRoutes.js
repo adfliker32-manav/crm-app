@@ -42,9 +42,13 @@ router.post('/fetch-leads', authMiddleware, requireFeature('metaSync'), metaWebh
 router.get('/lead-drop-log', authMiddleware, requireFeature('metaSync'), metaDropLogController.getLeadDropLog);
 router.post('/retry-drop/:id', authMiddleware, requireFeature('metaSync'), metaDropLogController.retryDroppedLead);
 
-// Field mapping routes
+// Field mapping routes (core: name / phone / email / city)
 router.get('/field-mapping', authMiddleware, requireFeature('metaSync'), metaController.getFieldMapping);
 router.post('/field-mapping', authMiddleware, requireFeature('metaSync'), metaController.saveFieldMapping);
+
+// Custom question mapping routes — maps Meta raw field keys to CRM custom fields
+router.get('/custom-field-mapping', authMiddleware, requireFeature('metaSync'), metaController.getCustomFieldMapping);
+router.post('/custom-field-mapping', authMiddleware, requireFeature('metaSync'), metaController.saveCustomFieldMapping);
 
 // Default agent assignment for Meta leads
 router.post('/default-agent', authMiddleware, requireFeature('metaSync'), metaController.saveDefaultAgent);

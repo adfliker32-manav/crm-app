@@ -487,11 +487,27 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             }
         }
 
-        // Step 2: Overlay any workspace customFieldDefinition mappings on top
+        // Step 2: Overlay CRM custom field definitions on top of raw data.
+        // Priority order (first match wins):
+        //   1. metaKey — exact raw Meta field key set explicitly by the user (most reliable)
+        //   2. label   — CRM field label lowercased (e.g. "Business Name" → "business name")
+        //   3. key     — CRM field key (e.g. "business_name")
+        // Mapped fields are stored under the clean CRM key; unmapped raw fields keep their raw key.
         if (leadDetails.rawFields) {
             customFieldDefs.forEach(field => {
-                const value = leadDetails.rawFields[field.label?.toLowerCase()] || leadDetails.rawFields[field.key?.toLowerCase()];
-                if (value) customData[field.key] = value;
+                const byMetaKey = field.metaKey && leadDetails.rawFields[field.metaKey];
+                const byLabel   = !byMetaKey && leadDetails.rawFields[field.label?.toLowerCase()];
+                const byKey     = !byMetaKey && !byLabel && leadDetails.rawFields[field.key?.toLowerCase()];
+                const value     = byMetaKey || byLabel || byKey;
+                if (value) {
+                    customData[field.key] = value;
+                    // If this raw field was already saved under its ugly raw key in Step 1,
+                    // remove it — the CRM key is now the canonical home (Option C).
+                    const rawKey = byMetaKey ? field.metaKey : (byLabel ? field.label?.toLowerCase() : field.key?.toLowerCase());
+                    if (rawKey && rawKey !== field.key && customData[rawKey] !== undefined) {
+                        delete customData[rawKey];
+                    }
+                }
             });
         }
 

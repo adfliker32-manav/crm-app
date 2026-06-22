@@ -154,7 +154,11 @@ const workspaceSettingsSchema = new mongoose.Schema({
         },
         options: [String],
         required: { type: Boolean, default: false },
-        order: { type: Number, default: 0 }
+        order: { type: Number, default: 0 },
+        // The raw field key from the Meta Lead Ads form (e.g. "your_business_name_").
+        // Set by the user in Settings → Meta → Custom Question Mapping.
+        // When set, Meta sync will map the value under this key to this CRM field.
+        metaKey: { type: String, default: null }
     }],
 
     // Lead Tags Configuration

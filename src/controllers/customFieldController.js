@@ -52,7 +52,8 @@ exports.saveCustomFields = async (req, res) => {
             type: field.type || 'text',
             options: field.type === 'dropdown' ? (field.options || []) : [],
             required: field.required || false,
-            order: field.order !== undefined ? field.order : index
+            order: field.order !== undefined ? field.order : index,
+            metaKey: field.metaKey || null
         }));
 
         // Check for duplicate keys
@@ -112,7 +113,8 @@ exports.addCustomField = async (req, res) => {
             type: type || 'text',
             options: type === 'dropdown' ? (options || []) : [],
             required: required || false,
-            order: (settings.customFieldDefinitions?.length || 0)
+            order: (settings.customFieldDefinitions?.length || 0),
+            metaKey: null
         };
 
         const updated = await WorkspaceSettings.findOneAndUpdate(

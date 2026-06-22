@@ -1179,7 +1179,7 @@ const saveFormAgentMapping = async (req, res) => {
     }
 };
 
-// Save custom field mapping
+// Save field mapping for core fields (name/phone/email/city)
 const saveFieldMapping = async (req, res) => {
     try {
         const { name, phone, email, city } = req.body;
@@ -1191,6 +1191,73 @@ const saveFieldMapping = async (req, res) => {
         res.json({ success: true, message: 'Field mapping saved' });
     } catch (e) {
         res.status(500).json({ message: 'Failed to save field mapping' });
+    }
+};
+
+// GET /meta/custom-field-mapping
+// Returns all CRM custom field definitions (with current metaKey) + last raw Meta fields seen.
+// Used by the Custom Question Mapping UI in Settings → Meta.
+const getCustomFieldMapping = async (req, res) => {
+    try {
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
+        const [ws, config] = await Promise.all([
+            WorkspaceSettings.findOne({ userId: req.tenantId }).select('customFieldDefinitions').lean(),
+            IntegrationConfig.findOne({ userId: req.tenantId }).select('meta.metaLastRawFields').lean()
+        ]);
+        res.json({
+            customFields: (ws?.customFieldDefinitions || []).map(f => ({
+                key:    f.key,
+                label:  f.label,
+                metaKey: f.metaKey || null
+            })),
+            lastRawFields: config?.meta?.metaLastRawFields || []
+        });
+    } catch (e) {
+        console.error('[Meta] getCustomFieldMapping error:', e);
+        res.status(500).json({ message: 'Failed to load custom field mapping' });
+    }
+};
+
+// POST /meta/custom-field-mapping
+// Body: [{ fieldKey: "business_name", metaKey: "your_business_name_" }, ...]
+// Updates the metaKey on each matching custom field definition.
+// Does NOT touch any other field property (label, type, options, etc.).
+const saveCustomFieldMapping = async (req, res) => {
+    try {
+        const { mappings } = req.body; // [{ fieldKey, metaKey }]
+        if (!Array.isArray(mappings)) {
+            return res.status(400).json({ message: 'mappings must be an array' });
+        }
+
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
+        const ws = await WorkspaceSettings.findOne({ userId: req.tenantId }).select('customFieldDefinitions');
+        if (!ws) return res.status(404).json({ message: 'Workspace settings not found' });
+
+        // Build a lookup map for fast field access
+        const fieldMap = {};
+        ws.customFieldDefinitions.forEach(f => { fieldMap[f.key] = f; });
+
+        // Apply each metaKey mapping
+        let updated = 0;
+        for (const { fieldKey, metaKey } of mappings) {
+            if (!fieldKey || typeof fieldKey !== 'string') continue;
+            if (fieldMap[fieldKey]) {
+                fieldMap[fieldKey].metaKey = metaKey ? String(metaKey).trim() || null : null;
+                updated++;
+            }
+        }
+
+        ws.markModified('customFieldDefinitions');
+        await ws.save();
+
+        console.log(`[Meta] Custom field mapping updated for tenant ${req.tenantId}: ${updated} field(s)`);
+        res.json({
+            success: true,
+            message: `Custom question mapping saved for ${updated} field(s). New Meta leads will use this mapping.`
+        });
+    } catch (e) {
+        console.error('[Meta] saveCustomFieldMapping error:', e);
+        res.status(500).json({ message: 'Failed to save custom field mapping' });
     }
 };
 
@@ -1216,5 +1283,7 @@ module.exports = {
     saveFieldMapping,
     saveDefaultAgent,
     getFormAgentMapping,
-    saveFormAgentMapping
+    saveFormAgentMapping,
+    getCustomFieldMapping,
+    saveCustomFieldMapping
 };
