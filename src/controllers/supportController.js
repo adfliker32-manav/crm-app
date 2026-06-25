@@ -226,7 +226,10 @@ const createTicket = async (req, res) => {
                     GlobalSetting.findOne({ key: 'global_openai_api_key' })
                 ]);
                 
-                const apiKey = config?.ai?.provider === 'openai' ? globalOpenai?.value : globalGemini?.value;
+                const { decryptToken } = require('../utils/encryptionUtils');
+                const apiKey = config?.ai?.provider === 'openai' 
+                    ? decryptToken(globalOpenai?.value) 
+                    : decryptToken(globalGemini?.value);
                 const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
                 
                 if (config?.ai?.aiEnabled && config?.ai?.aiSupportEnabled && apiKey && hasAiPlan) {

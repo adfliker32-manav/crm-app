@@ -667,8 +667,29 @@ const runFollowUpTemplateSend = async () => {
     }
 };
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Monthly AI Token Reset
+// Resets the ai.tokensUsedThisMonth counter to 0 for all tenants on the 1st of the month.
+// ──────────────────────────────────────────────────────────────────────────────
+const resetMonthlyAiTokens = async () => {
+    try {
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const result = await IntegrationConfig.updateMany(
+            { 'ai.tokensUsedThisMonth': { $gt: 0 } },
+            { $set: { 'ai.tokensUsedThisMonth': 0 } }
+        );
+        console.log(`[MonthlyAIReset] Reset tokensUsedThisMonth for ${result.modifiedCount} tenant(s).`);
+    } catch (err) {
+        console.error('❌ [MonthlyAIReset] Cron error:', err.message);
+    }
+};
+
 const startCronJobs = () => {
     console.log('[CronJobs] Trial/expiry cron jobs disabled (approval-based). Autodebit jobs ENABLED below.');
+
+    // Monthly AI Token Reset — Midnight on the 1st of every month
+    cron.schedule('0 0 1 * *', resetMonthlyAiTokens);
+    console.log('[CronJobs] Monthly AI token reset scheduled (1st of every month at 00:00)');
 
     // Media cache cleanup — 3:00 AM daily (wall-clock, survives restarts)
     cron.schedule('0 3 * * *', cleanupWhatsAppMediaCache);
@@ -969,6 +990,7 @@ module.exports = {
     startCronJobs,
     cleanupWhatsAppMediaCache,
     refreshExpiringTokens,
+    resetMonthlyAiTokens,
     runTimeInStageTrigger,
     runAppointmentReminders,
     runFollowUpTemplateSend,

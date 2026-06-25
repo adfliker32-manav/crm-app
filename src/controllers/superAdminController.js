@@ -1066,16 +1066,30 @@ const getSettings = async (req, res) => {
     try {
         const settings = await GlobalSetting.find().sort({ key: 1 });
 
+        const { encryptToken, decryptToken } = require('../utils/encryptionUtils');
+
         // Convert array to object for easier frontend consumption
         const settingsMap = {};
         settings.forEach(item => {
-            settingsMap[item.key] = item.value;
+            let val = item.value;
+            if (item.key.endsWith('_api_key') && typeof val === 'string' && val) {
+                val = '••••••••••••••••'; // Mask for frontend
+            }
+            settingsMap[item.key] = val;
+        });
+
+        // Ensure raw doesn't leak it either
+        const rawMasked = settings.map(item => {
+            if (item.key.endsWith('_api_key') && typeof item.value === 'string' && item.value) {
+                return { ...item.toObject(), value: '••••••••••••••••' };
+            }
+            return item;
         });
 
         res.json({
             success: true,
             settings: settingsMap,
-            raw: settings
+            raw: rawMasked
         });
     } catch (error) {
         console.error("Get Settings Error:", error);
@@ -1092,14 +1106,25 @@ const updateSettings = async (req, res) => {
             return res.status(400).json({ message: "Invalid settings format" });
         }
 
+        const { encryptToken } = require('../utils/encryptionUtils');
         const updates = [];
         for (const [key, value] of Object.entries(settings)) {
+            // Ignore API key updates if they are masked (unchanged)
+            if (key.endsWith('_api_key') && value === '••••••••••••••••') {
+                continue;
+            }
+            
+            let finalValue = value;
+            if (key.endsWith('_api_key') && typeof value === 'string' && value.trim() !== '') {
+                finalValue = encryptToken(value.trim());
+            }
+
             updates.push({
                 updateOne: {
                     filter: { key },
                     update: {
                         key,
-                        value,
+                        value: finalValue,
                         updatedBy: req.user.id,
                         updatedAt: new Date()
                     },

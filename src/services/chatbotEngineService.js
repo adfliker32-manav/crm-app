@@ -14,6 +14,7 @@ const NodeCache = require('node-cache');
 const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const bookingPageCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const { generateReply } = require('./aiService');
+const { decryptToken } = require('../utils/encryptionUtils');
 
 const normalizeBaseUrl = (value) => {
     const v = String(value || '').trim();
@@ -745,13 +746,27 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                 GlobalSetting.findOne({ key: 'global_openai_api_key' })
             ]);
             
-            const apiKey = aiConfig?.ai?.provider === 'openai' ? globalOpenai?.value : globalGemini?.value;
+            const apiKey = aiConfig?.ai?.provider === 'openai' 
+                ? decryptToken(globalOpenai?.value) 
+                : decryptToken(globalGemini?.value);
             const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
             
             if (aiConfig?.ai?.aiEnabled && aiConfig?.ai?.aiFallbackEnabled && apiKey && hasAiPlan) {
                 console.log(`🤖 [Chatbot] AI Fallback enabled for tenant ${tenantId}. Invoking AI qualification.`);
                 
                 const maxFallbackTurns = aiConfig.ai.maxTurns || 5;
+                const tokensUsed = aiConfig.ai.tokensUsedThisMonth || 0;
+                
+                // --- MONTHLY LIMIT GUARD ---
+                if (tokensUsed >= 1000) {
+                    console.log(`🤖 [Chatbot] Tenant ${tenantId} hit monthly AI limit (1000). Stopping AI Fallback.`);
+                    await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+                        $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+                    });
+                    const limitMsg = "Our AI assistant is currently unavailable. An agent will connect with you shortly.";
+                    await sendWhatsAppTextMessage(conversation.phone, limitMsg, tenantId);
+                    return null;
+                }
 
                 // ── maxTurns guard: count existing AI-sent bot messages for this conversation ──
                 const aiBotMessageCount = await WhatsAppMessage.countDocuments({
@@ -805,6 +820,9 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                     // Send WhatsApp reply
                     const result = await sendWhatsAppTextMessage(conversation.phone, reply, tenantId);
                     await saveBotMessage(conversationId, tenantId, reply, 'text', result);
+                    
+                    // Increment AI usage limit
+                    await IntegrationConfig.updateOne({ userId: tenantId }, { $inc: { 'ai.tokensUsedThisMonth': 1 } });
                     
                     // Execute actions returned by the AI
                     if (action && action.type) {
@@ -1914,11 +1932,14 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     GlobalSetting.findOne({ key: 'global_openai_api_key' })
                 ]);
                 
-                const apiKey = aiConfig?.ai?.provider === 'openai' ? globalOpenai?.value : globalGemini?.value;
+                const apiKey = aiConfig?.ai?.provider === 'openai' 
+                    ? decryptToken(globalOpenai?.value) 
+                    : decryptToken(globalGemini?.value);
                 const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
+                const tokensUsed = aiConfig?.ai?.tokensUsedThisMonth || 0;
 
-                if (!apiKey || !hasAiPlan) {
-                    console.warn(`[Chatbot] AI node configuration error: missing API key or Enterprise Plan for user ${session.userId}. Advancing to handoff.`);
+                if (!apiKey || !hasAiPlan || tokensUsed >= 1000) {
+                    console.warn(`[Chatbot] AI node configuration error or limit reached (API Key: ${!!apiKey}, Plan: ${hasAiPlan}, LimitReached: ${tokensUsed >= 1000}) for user ${session.userId}. Advancing to handoff.`);
                     const errMsg = 'Connecting you to an agent...';
                     const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);
@@ -1967,6 +1988,9 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     // 4. Send WhatsApp reply
                     const result = await sendWhatsAppTextMessage(conversation.phone, reply, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, reply, 'text', result);
+
+                    // Increment AI usage limit
+                    await IntegrationConfig.updateOne({ userId: session.userId }, { $inc: { 'ai.tokensUsedThisMonth': 1 } });
 
                     // 5. Execute actions if returned
                     if (action) {

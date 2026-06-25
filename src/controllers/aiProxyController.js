@@ -3,6 +3,7 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 const Lead = require('../models/Lead');
 const GlobalSetting = require('../models/GlobalSetting');
 const { generateReply } = require('../services/aiService');
+const { decryptToken } = require('../utils/encryptionUtils');
 
 // Helper to get or create integration config
 async function getOrCreateConfig(userId) {
@@ -109,7 +110,9 @@ exports.testAI = async (req, res) => {
             WorkspaceSettings.findOne({ userId: req.tenantId })
         ]);
         
-        const apiKey = config.ai.provider === 'openai' ? globalOpenai?.value : globalGemini?.value;
+        const apiKey = config.ai.provider === 'openai' 
+            ? decryptToken(globalOpenai?.value) 
+            : decryptToken(globalGemini?.value);
         const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
 
         if (!hasAiPlan) {
