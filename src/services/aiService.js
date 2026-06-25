@@ -79,11 +79,27 @@ Additional Rules:
 async function callGemini(apiKey, modelName, systemPrompt, history, lastUserMessage) {
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // Format history for Gemini
-    const geminiHistory = history.map(h => ({
-        role: h.role === 'user' ? 'user' : 'model',
-        parts: [{ text: h.text }]
-    }));
+    // Format history for Gemini and enforce alternating roles starting with 'user'
+    let geminiHistory = [];
+    let expectedRole = 'user';
+
+    for (const h of history) {
+        const mappedRole = h.role === 'user' ? 'user' : 'model';
+        
+        if (geminiHistory.length === 0 && mappedRole === 'model') {
+            // Gemini strictly requires the first message to be from 'user'
+            geminiHistory.push({ role: 'user', parts: [{ text: '(Customer triggered conversation)' }] });
+            expectedRole = 'model';
+        }
+        
+        if (mappedRole === expectedRole) {
+            geminiHistory.push({ role: mappedRole, parts: [{ text: h.text }] });
+            expectedRole = expectedRole === 'user' ? 'model' : 'user';
+        } else if (geminiHistory.length > 0) {
+            // Same role consecutively: merge them to maintain alternating pattern
+            geminiHistory[geminiHistory.length - 1].parts[0].text += `\n${h.text}`;
+        }
+    }
     
     const model = genAI.getGenerativeModel({
         model: modelName || 'gemini-2.5-flash',
