@@ -71,7 +71,7 @@ const DeletableEdge = ({
 const CompactFlowNode = ({ data, id, selected }) => {
     const type = data.blockType || 'message';
     const icon = {
-        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️', delay: '⏱️', condition: '🔀', booking_link: '📅'
+        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️', delay: '⏱️', condition: '🔀', booking_link: '📅', ai: '🧠'
     }[type] || '💬';
 
     return (
@@ -213,6 +213,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         delay: CompactFlowNode,
         condition: CompactFlowNode,
         booking_link: CompactFlowNode,
+        ai: CompactFlowNode,
         start: CompactFlowNode // Fallback for old custom types
     }), []);
 
@@ -260,6 +261,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         { type: 'product', icon: '🛍️', label: 'Single Product', desc: 'Show one product' },
         { type: 'products', icon: '🛒', label: 'Multi Product', desc: 'Show product catalog' },
         { type: 'template', icon: '📄', label: 'Template', desc: 'Use message template' },
+        { type: 'ai', icon: '🧠', label: 'AI Assistant', desc: 'Auto-reply using AI' },
         { type: 'action', icon: '⚙️', label: 'Lead Action', desc: 'Create lead or update CRM fields' },
         { type: 'handoff', icon: '👤', label: 'Request Intervention', desc: 'Transfer to agent' },
         { type: 'booking_link', icon: '📅', label: 'Booking Link', desc: 'Send appointment booking link to customer' }
@@ -504,7 +506,8 @@ const FlowBuilder = ({ flowId, onBack }) => {
             template: { text: 'Send approved template', templateName: '', templateLanguage: 'en' },
             action: { text: 'Action: Create Lead', actionType: 'create_lead', actionData: { source: 'WhatsApp Chatbot', status: 'New' } },
             handoff: { text: 'Connecting you to an agent...' },
-            booking_link: { text: '📅 Click the link below to book your appointment:' }
+            booking_link: { text: '📅 Click the link below to book your appointment:' },
+            ai: { text: 'Ask our AI Assistant a question', aiSystemPromptOverride: '', aiMaxTurns: 5 }
         };
 
         const newNode = {
@@ -1590,6 +1593,46 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                 </p>
                                             </div>
                                         )}
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'ai' && (
+                                    <div className="bg-sky-50 p-4 rounded-xl border border-sky-200 mt-4 space-y-4">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xl">🧠</span>
+                                            <span className="text-sm font-bold text-sky-700">AI Assistant</span>
+                                        </div>
+                                        <p className="text-xs text-sky-600">
+                                            This node hands the conversation over to the AI engine for dynamic replies. 
+                                            The AI will use your Global AI API Key and Tenant AI settings.
+                                        </p>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">System Prompt Override (Optional)</label>
+                                            <textarea
+                                                value={selectedNode.data.aiSystemPromptOverride || ''}
+                                                onChange={(e) => updateSelectedNodeData({ aiSystemPromptOverride: e.target.value })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-sky-500"
+                                                rows="4"
+                                                placeholder="Leave blank to use the default AI prompt from Global Settings, or type a specific prompt for this node."
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Max Turns Before Handoff</label>
+                                            <input
+                                                type="number"
+                                                value={selectedNode.data.aiMaxTurns || 5}
+                                                onChange={(e) => updateSelectedNodeData({ aiMaxTurns: parseInt(e.target.value) || 5 })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-sky-500"
+                                                min="1"
+                                                max="20"
+                                            />
+                                        </div>
+                                        <div className="bg-white border border-sky-100 rounded-lg p-3">
+                                            <p className="text-xs text-slate-500 font-semibold mb-1">🔌 How to connect:</p>
+                                            <ul className="text-xs text-slate-400 space-y-1 list-disc pl-4">
+                                                <li>Draw from the <span className="text-sky-500 font-bold">teal output handle</span> to define what happens if the AI hits max turns or encounters an error (usually a Handoff node).</li>
+                                            </ul>
+                                        </div>
                                     </div>
                                 )}
                             </div>
