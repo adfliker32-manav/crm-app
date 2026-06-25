@@ -10,7 +10,6 @@ const AVAILABLE_MODULES = WORKSPACE_MODULES;
 
 // Sub-permissions appear only when their parent module is active.
 const SUB_PERMISSIONS = [
-    { key: 'aiChatbot', label: 'AI Chatbot', parentModule: 'whatsapp', icon: 'fa-robot' },
     { key: 'whatsappAutomation', label: 'WhatsApp Automation', parentModule: 'whatsapp', icon: 'fa-bolt-lightning' },
     { key: 'emailAutomation', label: 'Email Automation', parentModule: 'email', icon: 'fa-envelopes-bulk' },
     { key: 'campaigns', label: 'Bulk Campaigns', parentModule: 'email', icon: 'fa-bullhorn' },
@@ -67,6 +66,12 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                 SUB_PERMISSIONS
                     .filter(sp => sp.parentModule === moduleId)
                     .forEach(sp => { newFeatures[sp.key] = false; });
+                
+                // If disabling whatsapp, also disable aiChatbot
+                if (moduleId === 'whatsapp') {
+                    newFeatures.aiChatbot = false;
+                }
+                
                 next.planFeatures = newFeatures;
             }
             return next;
@@ -91,6 +96,9 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
             for (const sp of SUB_PERMISSIONS) {
                 featurePayload[sp.key] = !!formData.planFeatures[sp.key];
             }
+            // Add explicit AI configuration payload
+            featurePayload.aiChatbot = !!formData.planFeatures.aiChatbot;
+            featurePayload.aiModel = formData.planFeatures.aiModel || 'chatmini';
 
             await api.put(`/superadmin/companies/${company._id}`, {
                 companyName: formData.companyName,
@@ -231,6 +239,59 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                                         </div>
                                     );
                                 })}
+                            </div>
+                        </div>
+
+                        {/* AI Configuration */}
+                        <div className="pt-4 border-t">
+                            <label className="block text-sm font-bold text-slate-700 mb-1">AI Configuration</label>
+                            <p className="text-xs text-slate-500 mb-3">Enable the AI Chatbot and specify the underlying intelligence model for this client.</p>
+                            
+                            <div className="flex flex-col md:flex-row gap-4">
+                                {/* Chatbot Enable Toggle */}
+                                <div className={`flex-1 flex items-center gap-3 p-4 rounded-xl border-2 transition ${
+                                        formData.planFeatures.aiChatbot ? 'border-purple-600 bg-purple-50' : 'border-slate-200 bg-white hover:border-slate-300'
+                                    }`}
+                                >
+                                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                        formData.planFeatures.aiChatbot ? 'bg-purple-600 text-white shadow-md shadow-purple-500/30' : 'bg-slate-100 text-slate-400'
+                                    }`}>
+                                        <i className="fa-solid fa-robot"></i>
+                                    </div>
+                                    <div className="flex-1">
+                                        <div className="text-sm font-bold text-slate-800">AI Chatbot</div>
+                                        <div className="text-xs font-medium text-slate-500">Allow client to use the AI</div>
+                                    </div>
+                                    <button 
+                                        type="button" 
+                                        onClick={() => handleFeatureToggle('aiChatbot')}
+                                        className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 ${
+                                            formData.planFeatures.aiChatbot ? 'bg-purple-600' : 'bg-slate-300'
+                                        }`}
+                                    >
+                                        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all ${
+                                            formData.planFeatures.aiChatbot ? 'left-6' : 'left-0.5'
+                                        }`} />
+                                    </button>
+                                </div>
+
+                                {/* Model Dropdown */}
+                                <div className={`flex-1 flex flex-col justify-center transition-opacity ${
+                                    formData.planFeatures.aiChatbot ? 'opacity-100' : 'opacity-50 pointer-events-none'
+                                }`}>
+                                    <label className="block text-xs font-bold text-slate-700 mb-1">Select AI Model</label>
+                                    <select
+                                        value={formData.planFeatures.aiModel || 'chatmini'}
+                                        onChange={(e) => setFormData(prev => ({
+                                            ...prev, 
+                                            planFeatures: { ...prev.planFeatures, aiModel: e.target.value }
+                                        }))}
+                                        className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none bg-white text-sm font-medium text-slate-800 transition-shadow hover:border-slate-400"
+                                    >
+                                        <option value="chatmini">Chatmini (Faster, cost-effective)</option>
+                                        <option value="chativity">Chativity (Advanced, reasoning)</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
 

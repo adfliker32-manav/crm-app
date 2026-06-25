@@ -112,6 +112,7 @@ const workspaceSettingsSchema = new mongoose.Schema({
         campaigns:           { type: Boolean, default: true },
         advancedAnalytics:   { type: Boolean, default: true },
         aiChatbot:           { type: Boolean, default: true },
+        aiModel:             { type: String, enum: ['chativity', 'chatmini'], default: 'chatmini' },
         webhooks:            { type: Boolean, default: true },
         leadLimit:           { type: Number, default: 100 },
         agentLimit:          { type: Number, default: 5 }

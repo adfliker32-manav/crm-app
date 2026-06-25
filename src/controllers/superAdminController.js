@@ -348,12 +348,17 @@ const updateCompany = async (req, res) => {
         // Sub-permissions: only honor known keys to prevent arbitrary writes
         const SUB_PERMISSION_KEYS = [
             'aiChatbot', 'whatsappAutomation', 'emailAutomation', 'metaSync',
-            'campaigns', 'advancedAnalytics'
-        ];how 
+            'campaigns', 'advancedAnalytics', 'aiModel'
+        ];
+
         if (planFeatures && typeof planFeatures === 'object') {
             for (const key of SUB_PERMISSION_KEYS) {
                 if (planFeatures[key] !== undefined) {
-                    updateFields[`planFeatures.${key}`] = !!planFeatures[key];
+                    if (key === 'aiModel') {
+                        updateFields[`planFeatures.${key}`] = planFeatures[key];
+                    } else {
+                        updateFields[`planFeatures.${key}`] = !!planFeatures[key];
+                    }
                 }
             }
         }
