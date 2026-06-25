@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { useAuth } from '../../context/AuthContext';
 
 const AISettings = () => {
+    const { user } = useAuth();
     const { showSuccess, showError } = useNotification();
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -11,8 +13,7 @@ const AISettings = () => {
     
     // Config states
     const [provider, setProvider] = useState('gemini');
-    const [apiKey, setApiKey] = useState('');
-    const [model, setModel] = useState('gemini-1.5-flash');
+    const [model, setModel] = useState('gemini-2.5-flash');
     const [agentName, setAgentName] = useState('AI Assistant');
     const [systemPrompt, setSystemPrompt] = useState('');
     const [aiEnabled, setAiEnabled] = useState(false);
@@ -20,7 +21,6 @@ const AISettings = () => {
     const [aiSupportEnabled, setAiSupportEnabled] = useState(false);
     const [maxTurns, setMaxTurns] = useState(5);
     const [tokensUsed, setTokensUsed] = useState(0);
-    const [hasApiKey, setHasApiKey] = useState(false);
 
     // Test Chat Simulator state
     const [testMessage, setTestMessage] = useState('');
@@ -59,11 +59,6 @@ const AISettings = () => {
                 setAiSupportEnabled(data.aiSupportEnabled || false);
                 setMaxTurns(data.maxTurns || 5);
                 setTokensUsed(data.tokensUsedThisMonth || 0);
-                setHasApiKey(data.hasApiKey || false);
-                
-                if (data.hasApiKey) {
-                    setApiKey('••••••••••••••••');
-                }
             } catch (error) {
                 console.error('Failed to load AI settings:', error);
                 showError('Failed to load AI Chatbot settings.');
@@ -106,7 +101,6 @@ const AISettings = () => {
         try {
             const payload = {
                 provider,
-                apiKey,
                 model,
                 agentName,
                 systemPrompt,
@@ -116,12 +110,8 @@ const AISettings = () => {
                 maxTurns
             };
             
-            const response = await api.put('/ai/settings', payload);
+            await api.put('/ai/settings', payload);
             showSuccess('AI Qualification settings updated successfully!');
-            setHasApiKey(response.data.settings.hasApiKey);
-            if (response.data.settings.hasApiKey) {
-                setApiKey('••••••••••••••••');
-            }
         } catch (error) {
             console.error('Failed to save settings:', error);
             showError(error.response?.data?.error || 'Failed to update AI settings.');
@@ -200,6 +190,23 @@ const AISettings = () => {
             <div className="flex flex-col items-center justify-center py-20 bg-slate-50/20">
                 <i className="fa-solid fa-spinner fa-spin text-4xl text-blue-500 mb-4"></i>
                 <p className="text-slate-500 font-bold">Loading AI configuration...</p>
+            </div>
+        );
+    }
+
+    if (!user?.workspace?.planFeatures?.aiChatbot) {
+        return (
+            <div className="flex flex-col items-center justify-center py-32">
+                <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center max-w-md">
+                    <i className="fa-solid fa-lock text-5xl text-slate-300 mb-6"></i>
+                    <h2 className="text-2xl font-bold text-slate-800 mb-2">AI Chatbot is locked</h2>
+                    <p className="text-slate-500 mb-6">
+                        The Global AI Chatbot feature is only available on the Enterprise plan. Upgrade your subscription to automatically qualify leads and handle support using AI.
+                    </p>
+                    <button className="px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition w-full">
+                        Upgrade to Enterprise
+                    </button>
+                </div>
             </div>
         );
     }
@@ -343,35 +350,6 @@ const AISettings = () => {
                                     </div>
                                 </label>
                             </div>
-                        </div>
-
-                        {/* API Key */}
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
-                            <div className="relative">
-                                <input
-                                    type="password"
-                                    value={apiKey}
-                                    onChange={(e) => setApiKey(e.target.value)}
-                                    placeholder={hasApiKey ? '••••••••••••••••' : `Enter your ${provider === 'gemini' ? 'Google AI Studio' : 'OpenAI'} API Key`}
-                                    required
-                                    className="w-full p-3.5 pl-11 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition shadow-sm font-medium"
-                                />
-                                <div className="absolute left-4 top-4 text-slate-400">
-                                    <i className="fa-solid fa-lock"></i>
-                                </div>
-                            </div>
-                            <p className="text-[11px] text-slate-400 mt-2 font-medium">
-                                {provider === 'gemini' ? (
-                                    <>
-                                        Get a free key from the <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google AI Studio Console</a>.
-                                    </>
-                                ) : (
-                                    <>
-                                        Generate an API key in the <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">OpenAI Developer Platform</a>.
-                                    </>
-                                )}
-                            </p>
                         </div>
 
                         {/* Model & Parameters */}

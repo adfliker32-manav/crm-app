@@ -735,9 +735,20 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             
             // Check for AI fallback
             const IntegrationConfig = require('../models/IntegrationConfig');
-            const aiConfig = await IntegrationConfig.findOne({ userId: tenantId }).select('+ai.apiKey');
+            const WorkspaceSettings = require('../models/WorkspaceSettings');
+            const GlobalSetting = require('../models/GlobalSetting');
             
-            if (aiConfig?.ai?.aiEnabled && aiConfig?.ai?.aiFallbackEnabled && aiConfig?.ai?.apiKey) {
+            const [aiConfig, workspace, globalGemini, globalOpenai] = await Promise.all([
+                IntegrationConfig.findOne({ userId: tenantId }),
+                WorkspaceSettings.findOne({ userId: tenantId }),
+                GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
+                GlobalSetting.findOne({ key: 'global_openai_api_key' })
+            ]);
+            
+            const apiKey = aiConfig?.ai?.provider === 'openai' ? globalOpenai?.value : globalGemini?.value;
+            const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
+            
+            if (aiConfig?.ai?.aiEnabled && aiConfig?.ai?.aiFallbackEnabled && apiKey && hasAiPlan) {
                 console.log(`🤖 [Chatbot] AI Fallback enabled for tenant ${tenantId}. Invoking AI qualification.`);
                 
                 const maxFallbackTurns = aiConfig.ai.maxTurns || 5;
@@ -784,7 +795,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                 try {
                     const { reply, action } = await generateReply({
                         provider: aiConfig.ai.provider,
-                        apiKey: aiConfig.ai.apiKey,
+                        apiKey: apiKey,
                         modelName: aiConfig.ai.model,
                         systemPrompt: aiConfig.ai.systemPrompt,
                         conversationHistory: history,
@@ -1893,10 +1904,21 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
 
             case 'ai': {
                 const IntegrationConfig = require('../models/IntegrationConfig');
+                const WorkspaceSettings = require('../models/WorkspaceSettings');
+                const GlobalSetting = require('../models/GlobalSetting');
                 
-                const aiConfig = await IntegrationConfig.findOne({ userId: session.userId }).select('+ai.apiKey');
-                if (!aiConfig?.ai?.apiKey) {
-                    console.warn(`[Chatbot] AI node configuration error: missing API key for user ${session.userId}. Advancing to handoff.`);
+                const [aiConfig, workspace, globalGemini, globalOpenai] = await Promise.all([
+                    IntegrationConfig.findOne({ userId: session.userId }),
+                    WorkspaceSettings.findOne({ userId: session.userId }),
+                    GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
+                    GlobalSetting.findOne({ key: 'global_openai_api_key' })
+                ]);
+                
+                const apiKey = aiConfig?.ai?.provider === 'openai' ? globalOpenai?.value : globalGemini?.value;
+                const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
+
+                if (!apiKey || !hasAiPlan) {
+                    console.warn(`[Chatbot] AI node configuration error: missing API key or Enterprise Plan for user ${session.userId}. Advancing to handoff.`);
                     const errMsg = 'Connecting you to an agent...';
                     const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);
@@ -1935,7 +1957,7 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 try {
                     const { reply, action } = await generateReply({
                         provider: aiConfig.ai.provider,
-                        apiKey: aiConfig.ai.apiKey,
+                        apiKey: apiKey,
                         modelName: aiConfig.ai.model,
                         systemPrompt,
                         conversationHistory: history,

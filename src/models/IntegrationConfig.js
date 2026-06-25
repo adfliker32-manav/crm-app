@@ -164,7 +164,6 @@ const integrationConfigSchema = new mongoose.Schema({
     // 🤖 AI Chatbot Configuration
     ai: {
         provider: { type: String, enum: ['gemini', 'openai'], default: 'gemini' },
-        apiKey: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         model: { type: String, default: 'gemini-2.5-flash' },
         agentName: { type: String, default: 'AI Assistant' },
         systemPrompt: { type: String, default: 'You are a helpful lead qualification assistant. Your goal is to qualify the customer by asking for their name, requirements, budget, and location. Be brief and polite.' },

@@ -1,11 +1,12 @@
 const axios = require('axios');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const Lead = require('../models/Lead');
+const GlobalSetting = require('../models/GlobalSetting');
 const { generateReply } = require('../services/aiService');
 
 // Helper to get or create integration config
 async function getOrCreateConfig(userId) {
-    let config = await IntegrationConfig.findOne({ userId }).select('+ai.apiKey');
+    let config = await IntegrationConfig.findOne({ userId });
     if (!config) {
         config = new IntegrationConfig({ userId });
         await config.save();
@@ -28,8 +29,7 @@ exports.getSettings = async (req, res) => {
             aiFallbackEnabled: config.ai?.aiFallbackEnabled || false,
             aiSupportEnabled: config.ai?.aiSupportEnabled || false,
             maxTurns: config.ai?.maxTurns || 5,
-            tokensUsedThisMonth: config.ai?.tokensUsedThisMonth || 0,
-            hasApiKey: !!(config.ai?.apiKey)
+            tokensUsedThisMonth: config.ai?.tokensUsedThisMonth || 0
         };
         
         return res.status(200).json(settings);
@@ -44,7 +44,6 @@ exports.updateSettings = async (req, res) => {
     try {
         const {
             provider,
-            apiKey,
             model,
             agentName,
             systemPrompt,
@@ -66,13 +65,6 @@ exports.updateSettings = async (req, res) => {
         if (aiSupportEnabled !== undefined) config.ai.aiSupportEnabled = aiSupportEnabled;
         if (maxTurns !== undefined) config.ai.maxTurns = maxTurns;
 
-        // Handle API key updates
-        if (apiKey === '') {
-            config.ai.apiKey = null;
-        } else if (apiKey && apiKey !== '••••••••••••••••') {
-            config.ai.apiKey = apiKey;
-        }
-
         await config.save();
 
         return res.status(200).json({
@@ -86,8 +78,7 @@ exports.updateSettings = async (req, res) => {
                 aiFallbackEnabled: config.ai.aiFallbackEnabled,
                 aiSupportEnabled: config.ai.aiSupportEnabled,
                 maxTurns: config.ai.maxTurns,
-                tokensUsedThisMonth: config.ai.tokensUsedThisMonth,
-                hasApiKey: !!(config.ai.apiKey)
+                tokensUsedThisMonth: config.ai.tokensUsedThisMonth
             }
         });
     } catch (error) {
@@ -104,9 +95,15 @@ exports.testAI = async (req, res) => {
             return res.status(400).json({ error: 'Message is required for testing' });
         }
 
-        const config = await IntegrationConfig.findOne({ userId: req.tenantId }).select('+ai.apiKey');
-        if (!config?.ai?.apiKey) {
-            return res.status(400).json({ error: 'AI Settings are incomplete. Please save a valid API key first.' });
+        const config = await IntegrationConfig.findOne({ userId: req.tenantId });
+        
+        const globalGemini = await GlobalSetting.findOne({ key: 'global_gemini_api_key' });
+        const globalOpenai = await GlobalSetting.findOne({ key: 'global_openai_api_key' });
+        
+        const apiKey = config.ai.provider === 'openai' ? globalOpenai?.value : globalGemini?.value;
+
+        if (!apiKey) {
+            return res.status(400).json({ error: 'Global AI API Key is not configured by the Super Admin.' });
         }
 
         // Fetch dummy/first lead context if available, or mock one
@@ -144,7 +141,7 @@ exports.testAI = async (req, res) => {
         console.log(`🤖 Proxying test call to local AI Service`);
         const result = await generateReply({
             provider: config.ai.provider,
-            apiKey: config.ai.apiKey,
+            apiKey: apiKey,
             modelName: config.ai.model,
             systemPrompt: config.ai.systemPrompt,
             conversationHistory,

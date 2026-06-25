@@ -11,6 +11,8 @@ const GlobalSettingsView = () => {
         company_logo: '',
         maintenance_mode: false,
         trial_days_default: 14,
+        global_gemini_api_key: '',
+        global_openai_api_key: '',
         whatsappSync: true,
         emailMarketing: true,
         automations: true,
@@ -275,6 +277,43 @@ const GlobalSettingsView = () => {
                             </p>
                         </div>
                     )}
+                </div>
+
+                {/* AI Configuration Card */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                    <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2">
+                        <i className="fa-solid fa-robot text-purple-500"></i> Global AI API Keys
+                    </h2>
+                    <p className="text-sm text-slate-500 mb-4">
+                        These API keys will power the AI Chatbot for all tenants on the Enterprise plan. Tenants will no longer need to provide their own API keys.
+                    </p>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Google Gemini API Key</label>
+                            <input
+                                type="password"
+                                name="global_gemini_api_key"
+                                value={settings.global_gemini_api_key || ''}
+                                onChange={handleChange}
+                                placeholder="AIzaSy..."
+                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition font-mono"
+                            />
+                            <p className="text-xs text-slate-400 mt-1">Powers the "Gemini (Recommended)" model.</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">OpenAI API Key (ChatGPT)</label>
+                            <input
+                                type="password"
+                                name="global_openai_api_key"
+                                value={settings.global_openai_api_key || ''}
+                                onChange={handleChange}
+                                placeholder="sk-..."
+                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition font-mono"
+                            />
+                            <p className="text-xs text-slate-400 mt-1">Powers the "ChatGPT" model.</p>
+                        </div>
+                    </div>
                 </div>
 
                 {/* System Control Card */}
