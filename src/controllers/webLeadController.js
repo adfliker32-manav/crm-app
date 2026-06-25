@@ -310,6 +310,16 @@ exports.captureLead = async (req, res) => {
             console.error('[WebLead] automation trigger error:', e.message)
         );
 
+        // FIX: Enroll Web leads in drip sequences (was missing — only manual leads were enrolled)
+        try {
+            const { enrollLeadInSequences } = require('../services/sequenceService');
+            enrollLeadInSequences(lead, 'LEAD_CREATED').catch(e =>
+                console.error('[WebLead] sequence enrollment error:', e.message)
+            );
+        } catch (seqErr) {
+            console.error('[WebLead] sequence import error:', seqErr.message);
+        }
+
         // ✅ Don't expose MongoDB ObjectID to public callers
         res.status(201).json({ success: true });
     } catch (err) {

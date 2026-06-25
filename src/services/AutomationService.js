@@ -414,7 +414,7 @@ const handleWatcherReply = async (conversationId) => {
         const updates = {};
 
         if (watcher.ifRepliedAction?.changeStage) {
-            updates.$set = { status: watcher.ifRepliedAction.changeStage };
+            updates.$set = { status: watcher.ifRepliedAction.changeStage, stageEnteredAt: new Date() };
             updates.$push = {
                 history: {
                     $each: [{

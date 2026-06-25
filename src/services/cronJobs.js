@@ -58,6 +58,17 @@ const runTimeInStageTrigger = async () => {
 
             for (const lead of leads) {
                 try {
+                    // ── RE-FIRE GUARD ──────────────────────────────────────────
+                    // Skip leads where this rule already fired during the CURRENT
+                    // stage residency. Without this, rules without a CHANGE_STAGE
+                    // action would re-fire every 30-minute cron tick forever.
+                    const alreadyFiredThisStage = (lead.history || []).some(h =>
+                        h.subType === 'Auto' &&
+                        h.content && h.content.includes(`Rule: ${rule.name}`) &&
+                        lead.stageEnteredAt && new Date(h.date) >= new Date(lead.stageEnteredAt)
+                    );
+                    if (alreadyFiredThisStage) continue;
+
                     await evaluateLead(lead, 'TIME_IN_STAGE');
                 } catch (err) {
                     console.error(`[TimeInStage] Error evaluating lead ${lead._id}:`, err.message);

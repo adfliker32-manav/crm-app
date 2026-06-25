@@ -138,7 +138,7 @@ const defineWhatsAppJobs = (agenda) => {
             const updates = {};
 
             if (watcher.ifNoReplyAction?.changeStage) {
-                updates.$set = { status: watcher.ifNoReplyAction.changeStage };
+                updates.$set = { status: watcher.ifNoReplyAction.changeStage, stageEnteredAt: new Date() };
                 updates.$push = {
                     history: {
                         $each: [{

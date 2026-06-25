@@ -222,6 +222,10 @@ const triggerChatbotLeadCreatedEffects = (lead, userId, leadStatus = null) => {
             const { evaluateLead } = require('./AutomationService');
             evaluateLead(lead, 'LEAD_CREATED').catch(e => console.error('[Chatbot] Automation engine error:', e));
 
+            // FIX: Enroll chatbot-captured leads in drip sequences (was missing)
+            const { enrollLeadInSequences } = require('./sequenceService');
+            enrollLeadInSequences(lead, 'LEAD_CREATED').catch(e => console.error('[Chatbot] Sequence enrollment error:', e));
+
             const IntegrationConfig = require('../models/IntegrationConfig');
             const config = await IntegrationConfig.findOne({ userId })
                 .select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
@@ -1064,6 +1068,10 @@ const evaluateSmartLead = async (session, flow, conversation) => {
                 try {
                     const { evaluateLead } = require('./AutomationService');
                     evaluateLead(updatedLead, 'STAGE_CHANGED').catch(e => console.error('[Chatbot] Automation engine error:', e));
+
+                    // FIX: Enroll in drip sequences on chatbot-triggered stage change (was missing)
+                    const { enrollLeadInSequences } = require('./sequenceService');
+                    enrollLeadInSequences(updatedLead, 'STAGE_CHANGED', bestRule.changeStageTo).catch(e => console.error('[Chatbot] Sequence enrollment (STAGE_CHANGED) error:', e));
 
                     const IntegrationConfig = require('../models/IntegrationConfig');
                     const config = await IntegrationConfig.findOne({ userId: session.userId }).select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');

@@ -213,6 +213,14 @@ const receiveSheetPush = async (req, res) => {
 
                     // 4. Automation Builder Rules
                     evaluateLead(newLead, 'LEAD_CREATED').catch(err => console.error('[Sheet Push] AutomationService error (LEAD_CREATED):', err));
+
+                    // 5. FIX: Enroll Sheet leads in drip sequences (was missing — only manual leads were enrolled)
+                    try {
+                        const { enrollLeadInSequences } = require('../services/sequenceService');
+                        enrollLeadInSequences(newLead, 'LEAD_CREATED').catch(err => console.error('[Sheet Push] Sequence enrollment error (LEAD_CREATED):', err));
+                    } catch (seqErr) {
+                        console.error('[Sheet Push] Sequence import error:', seqErr.message);
+                    }
                 }
             } catch (insertErr) {
                 if (insertErr.name === 'BulkWriteError' && insertErr.insertedDocs) {

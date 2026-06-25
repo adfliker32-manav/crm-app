@@ -634,6 +634,15 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
 
             evaluateLead(newLead, 'LEAD_CREATED')
                 .catch(err => console.error(`❌ [Lead:${newLead._id}] AutomationService (LEAD_CREATED) failed:`, err.message));
+
+            // FIX: Enroll Meta leads in drip sequences (was missing — only manual leads were enrolled)
+            try {
+                const { enrollLeadInSequences } = require('../services/sequenceService');
+                enrollLeadInSequences(newLead, 'LEAD_CREATED')
+                    .catch(err => console.error(`❌ [Lead:${newLead._id}] Sequence enrollment (LEAD_CREATED) failed:`, err.message));
+            } catch (seqErr) {
+                console.error(`❌ [Lead:${newLead._id}] Sequence enrollment import error:`, seqErr.message);
+            }
         });
 
         return newLead;

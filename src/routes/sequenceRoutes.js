@@ -6,7 +6,7 @@ const checkPermission = require('../middleware/checkPermission');
 const validateObjectId = require('../middleware/validateObjectId');
 
 router.use(authMiddleware);
-router.use(requireFeature('emailAutomation'));
+router.use(requireFeature(['emailAutomation', 'whatsappAutomation']));
 router.use(checkPermission('manageTeam'));
 
 // Static routes BEFORE dynamic /:id to prevent shadowing

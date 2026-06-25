@@ -110,13 +110,35 @@ const toggleRule = async (req, res) => {
         }
         const { isActive } = req.body;
 
+        const updateFields = { isActive };
+        // When deactivating, also release any held lock so the rule doesn't
+        // appear "stuck" when re-activated later.
+        if (!isActive) {
+            updateFields.currentlyProcessingLeadId = null;
+            updateFields.lockAcquiredAt = null;
+        }
+
         const rule = await AutomationRule.findOneAndUpdate(
             { _id: id, tenantId: req.tenantId },
-            { $set: { isActive } },
+            { $set: updateFields },
             { new: true }
         );
 
         if (!rule) return res.status(404).json({ message: 'Automation rule not found' });
+
+        // FIX: When deactivating, cancel any in-flight Agenda jobs and pending watchers
+        // so they don't fire after the user explicitly paused the rule.
+        if (!isActive) {
+            try {
+                const { cancelJobsForRule } = require('../services/AutomationService');
+                const result = await cancelJobsForRule(id);
+                if (result.cancelledJobs > 0 || result.cancelledWatchers > 0) {
+                    console.log(`🛑 [Automation] Rule "${rule.name}" paused — cancelled ${result.cancelledJobs} job(s), ${result.cancelledWatchers} watcher(s)`);
+                }
+            } catch (cleanupErr) {
+                console.error('[Automation] Cleanup on toggle-off failed:', cleanupErr.message);
+            }
+        }
 
         res.json(rule);
     } catch (err) {

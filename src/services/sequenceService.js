@@ -36,11 +36,13 @@ const enrollLeadInSequences = async (lead, triggerType, triggerStage = null) => 
         for (const seq of sequences) {
             if (!seq.steps || seq.steps.length === 0) continue;
 
-            // Never enroll a lead that is already active in this sequence
+            // Never re-enroll a lead that is already active, completed, or paused in this sequence.
+            // Previously only checked 'active' — a lead that completed or was paused by a reply
+            // could get re-enrolled on the next trigger, causing duplicate messaging.
             const existing = await SequenceEnrollment.findOne({
                 sequenceId: seq._id,
                 leadId: lead._id,
-                status: 'active'
+                status: { $in: ['active', 'completed', 'paused'] }
             });
             if (existing) continue;
 
@@ -79,7 +81,62 @@ const executeStepAction = async (step, lead, sequenceName) => {
 
     if (step.action.type === 'SEND_WHATSAPP' && lead.phone && step.action.templateId) {
         const { sendWhatsAppMessage } = require('./whatsappService');
-        await sendWhatsAppMessage(lead.phone, step.action.templateId, lead.userId.toString());
+        const result = await sendWhatsAppMessage(lead.phone, step.action.templateId, lead.userId.toString());
+
+        // FIX: Sync to conversation DB so sequence WA sends appear in inbox
+        // (previously ghost messages — sent via Meta API but not recorded)
+        try {
+            const waMessageId = result?.messages?.[0]?.id;
+            if (waMessageId) {
+                const WhatsAppConversation = require('../models/WhatsAppConversation');
+                const WhatsAppMessage = require('../models/WhatsAppMessage');
+                const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
+
+                let conversation = await WhatsAppConversation.findOne({
+                    userId: lead.userId,
+                    waContactId: normalizedPhone
+                });
+
+                if (!conversation && normalizedPhone.length >= 10) {
+                    const phoneLastTen = normalizedPhone.slice(-10);
+                    conversation = await WhatsAppConversation.findOne({
+                        userId: lead.userId,
+                        waContactId: { $regex: phoneLastTen + '$' }
+                    });
+                }
+
+                if (conversation) {
+                    const messageRecord = new WhatsAppMessage({
+                        conversationId: conversation._id,
+                        userId: lead.userId,
+                        waMessageId: waMessageId,
+                        direction: 'outbound',
+                        type: 'template',
+                        content: { text: `[Auto] Sequence "${sequenceName}": ${step.action.templateId}`, templateName: step.action.templateId },
+                        status: 'sent',
+                        timestamp: new Date(),
+                        isAutomated: true,
+                        automationSource: 'sequence'
+                    });
+                    await messageRecord.save();
+
+                    await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                        $set: {
+                            lastMessage: `[Auto] Sequence: ${step.action.templateId}`,
+                            lastMessageAt: new Date(),
+                            lastMessageDirection: 'outbound'
+                        },
+                        $inc: {
+                            'metadata.totalMessages': 1,
+                            'metadata.totalOutbound': 1
+                        }
+                    });
+                }
+            }
+        } catch (syncErr) {
+            console.error(`⚠️ [Sequence] WA sent but DB sync failed for ${lead.phone}:`, syncErr.message);
+        }
+
         await Lead.findByIdAndUpdate(lead._id, {
             $push: {
                 history: {
