@@ -557,8 +557,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
         console.log(`🤖 [Chatbot] Found ${allActiveFlows.length} active flow(s) for owners: [${flowOwnerIds.join(', ')}]`);
         
         if (allActiveFlows.length === 0) {
-            console.log(`🤖 [Chatbot] No active flows found. Chatbot will not trigger.`);
-            return null;
+            console.log(`🤖 [Chatbot] No active chatbot flows found. Will check for AI Fallback.`);
         }
 
         let targetFlow = null;
