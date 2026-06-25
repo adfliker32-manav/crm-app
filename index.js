@@ -39,6 +39,8 @@ const mcpRoutes = require('./src/routes/mcpRoutes'); // Claude AI / MCP server
 const sequenceRoutes = require('./src/routes/sequenceRoutes'); // Drip Sequences
 const billingRoutes = require('./src/routes/billingRoutes'); // Razorpay Autodebit Subscriptions
 const { router: invoicePublicRoute } = require('./src/routes/invoicePublicRoute'); // Public invoice viewer (HMAC-secured)
+const aiProxyRoutes = require('./src/routes/aiProxyRoutes');
+
 
 const app = express();
 
@@ -491,6 +493,8 @@ app.use('/api/meta', metaRoutes);
 app.use('/api/activity-logs', require('./src/routes/activityLogRoutes'));
 app.use('/api/reports', reportRoutes); // Reports & Analytics
 app.use('/mcp', mcpRoutes);           // Claude AI MCP server (API-key auth, no JWT)
+app.use('/api/ai', aiProxyRoutes);
+
 
 // Meta Webhook URL: /api/meta/webhook
 

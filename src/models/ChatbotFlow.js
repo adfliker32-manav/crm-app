@@ -83,7 +83,7 @@ const chatbotFlowSchema = new mongoose.Schema({
         id: { type: String, required: true },
         type: {
             type: String,
-            enum: ['start', 'message', 'question', 'condition', 'action', 'delay', 'template', 'media', 'request_media', 'list', 'product', 'products', 'handoff', 'booking_link', 'end'],
+            enum: ['start', 'message', 'question', 'condition', 'action', 'delay', 'template', 'media', 'request_media', 'list', 'product', 'products', 'handoff', 'booking_link', 'end', 'ai'],
             required: true
         },
         position: {
@@ -147,6 +147,9 @@ const chatbotFlowSchema = new mongoose.Schema({
             // For template nodes
             templateName: String,
             templateLanguage: String,
+            // For AI nodes
+            aiSystemPromptOverride: String,
+            aiMaxTurns: { type: Number, default: 5 },
             // Default next node (for non-branching nodes)
             nextNodeId: String
         }

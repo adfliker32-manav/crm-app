@@ -19,6 +19,7 @@
   "dependencies": {
     "@bull-board/api": "^7.0.0",
     "@bull-board/express": "^7.0.0",
+    "@google/generative-ai": "^0.24.1",
     "agenda": "^5.0.0",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",
@@ -40,6 +41,7 @@
     "node-cache": "^5.1.2",
     "node-cron": "^4.2.1",
     "nodemailer": "^7.0.12",
+    "openai": "^6.45.0",
     "papaparse": "^5.5.3",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",

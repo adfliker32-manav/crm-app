@@ -1,11 +1,14 @@
 const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
+const axios = require('axios');
 const SupportTicket = require('../models/SupportTicket');
 const SupportMessage = require('../models/SupportMessage');
 const User = require('../models/User');
+const IntegrationConfig = require('../models/IntegrationConfig');
 const { SUPPORT_UPLOAD_ROOT, classifyAttachment } = require('../middleware/supportUploadMiddleware');
 const { getIO } = require('../services/socketService');
+const { generateReply } = require('../services/aiService');
 
 // Smart auto-tag — keyword rules, no LLM. Lightweight & deterministic.
 const TAG_RULES = [
@@ -209,6 +212,70 @@ const createTicket = async (req, res) => {
         emitToSuperAdmins('support:newTicket', { ticketId: ticket._id, subject, tag });
 
         res.status(201).json({ ticket });
+
+        // 🤖 AI Support Assistant auto-reply
+        setImmediate(async () => {
+            try {
+                const config = await IntegrationConfig.findOne({ userId: req.tenantId }).select('+ai.apiKey');
+                
+                if (config?.ai?.aiEnabled && config?.ai?.aiSupportEnabled && config?.ai?.apiKey) {
+                    console.log(`🤖 [Support] AI support response triggered for ticket ${ticket._id}`);
+
+                    // Use the admin's configured system prompt if set;
+                    // otherwise fall back to a sensible CRM-support default.
+                    const defaultSupportPrompt = `You are the Support AI for our CRM Platform.
+A user (CRM tenant agent/manager) has created a support ticket.
+Provide a helpful, polite, and technical response to resolve their issue.
+If they ask about billing, SMTP config, WhatsApp setup, or Facebook lead ads sync, use your knowledge of CRM platforms to guide them step-by-step.
+If you cannot solve their issue, tell them you are forwarding this to a human administrator.`;
+
+                    const basePrompt = config.ai.systemPrompt && config.ai.systemPrompt.trim()
+                        ? config.ai.systemPrompt.trim()
+                        : defaultSupportPrompt;
+
+                    const systemPrompt = `${basePrompt}
+
+Ticket Details:
+- Subject: ${subject}
+- Tag: ${tag}
+- Submitter Name: ${sender?.name || req.user.name || ''} (${sender?.role || req.user.role || ''})`;
+                    
+                    const { reply } = await generateReply({
+                        provider: config.ai.provider,
+                        apiKey: config.ai.apiKey,
+                        modelName: config.ai.model,
+                        systemPrompt,
+                        conversationHistory: [
+                            { role: 'user', text: firstMessage || `Ticket Created: ${subject}` }
+                        ],
+                        leadContext: {}
+                    });
+                    
+                    // Create AI message reply
+                    const aiMsg = await SupportMessage.create({
+                        ticketId: ticket._id,
+                        senderId: new mongoose.Types.ObjectId(SUPERADMIN_VIRTUAL_ID),
+                        senderRole: 'superadmin',
+                        senderName: `${config.ai.agentName} (AI Support)`,
+                        text: reply,
+                        attachments: []
+                    });
+                    
+                    // Update ticket status
+                    ticket.status = 'admin_replied';
+                    ticket.unreadByUser = (ticket.unreadByUser || 0) + 1;
+                    ticket.unreadByAdmin = 0;
+                    ticket.lastMessageAt = new Date();
+                    await ticket.save();
+                    
+                    // Emit socket updates to user & super admins
+                    emitToTenantUser(ticket.createdBy, 'support:newMessage', { ticketId: ticket._id, message: aiMsg });
+                    emitToSuperAdmins('support:newMessage', { ticketId: ticket._id, message: aiMsg });
+                }
+            } catch (aiErr) {
+                console.error('Support AI Assistant failed:', aiErr.message);
+            }
+        });
     } catch (err) {
         console.error('createTicket error:', err);
         res.status(500).json({ message: 'Failed to create support ticket' });

@@ -6,12 +6,14 @@ const BookingPage = require('../models/BookingPage');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
 const AgencySettings = require('../models/AgencySettings');
+const axios = require('axios');
 const { sendWhatsAppTextMessage, sendInteractiveMessage, sendCtaUrlMessage, sendMediaMessage } = require('./whatsappService');
 const { emitToUser } = require('./socketService');
 const whatsappQueueService = require('./whatsappQueueService');
 const NodeCache = require('node-cache');
 const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const bookingPageCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+const { generateReply } = require('./aiService');
 
 const normalizeBaseUrl = (value) => {
     const v = String(value || '').trim();
@@ -731,6 +733,117 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             console.log(`⏸️ [Chatbot] No keyword match found. Chatbot remains paused for conversation ${conversationId}`);
         } else {
             console.log(`🤖 [Chatbot] No matching flow found for message "${messageText}" in conversation ${conversationId}`);
+            
+            // Check for AI fallback
+            const IntegrationConfig = require('../models/IntegrationConfig');
+            const aiConfig = await IntegrationConfig.findOne({ userId: tenantId }).select('+ai.apiKey');
+            
+            if (aiConfig?.ai?.aiEnabled && aiConfig?.ai?.aiFallbackEnabled && aiConfig?.ai?.apiKey) {
+                console.log(`🤖 [Chatbot] AI Fallback enabled for tenant ${tenantId}. Invoking AI qualification.`);
+                
+                const maxFallbackTurns = aiConfig.ai.maxTurns || 5;
+
+                // ── maxTurns guard: count existing AI-sent bot messages for this conversation ──
+                const aiBotMessageCount = await WhatsAppMessage.countDocuments({
+                    conversationId,
+                    direction: 'outbound',
+                    source: 'bot'
+                });
+                if (aiBotMessageCount >= maxFallbackTurns) {
+                    console.log(`🤖 [Chatbot] AI Fallback max turns (${maxFallbackTurns}) reached for conversation ${conversationId}. Stopping auto-reply.`);
+                    // Pause chatbot to allow human takeover
+                    await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+                        $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+                    });
+                    return null;
+                }
+
+                // Get recent messages (last 15)
+                const recentMessages = await WhatsAppMessage.find({ conversationId })
+                    .sort({ timestamp: -1 })
+                    .limit(15)
+                    .lean();
+                
+                const history = recentMessages.reverse();
+                
+                // Get lead context
+                let leadDetails = {};
+                if (conversation.leadId) {
+                    const lead = await Lead.findById(conversation.leadId).lean();
+                    if (lead) {
+                        leadDetails = {
+                            name: lead.name,
+                            phone: lead.phone,
+                            email: lead.email,
+                            currentStage: lead.status,
+                            tags: lead.tags,
+                            customData: lead.customData
+                        };
+                    }
+                }
+                
+                try {
+                    const { reply, action } = await generateReply({
+                        provider: aiConfig.ai.provider,
+                        apiKey: aiConfig.ai.apiKey,
+                        modelName: aiConfig.ai.model,
+                        systemPrompt: aiConfig.ai.systemPrompt,
+                        conversationHistory: history,
+                        leadContext: leadDetails
+                    });
+                    
+                    // Send WhatsApp reply
+                    const result = await sendWhatsAppTextMessage(conversation.phone, reply, tenantId);
+                    await saveBotMessage(conversationId, tenantId, reply, 'text', result);
+                    
+                    // Execute actions returned by the AI
+                    if (action && action.type) {
+                        // Build a session-like object with leadDetails pre-populated so
+                        // executeAction's change_stage path can find/create the lead correctly.
+                        const fallbackVariables = new Map();
+                        if (leadDetails.name)  fallbackVariables.set('name', leadDetails.name);
+                        if (leadDetails.phone) fallbackVariables.set('phone', leadDetails.phone);
+                        if (leadDetails.email) fallbackVariables.set('email', leadDetails.email);
+
+                        const mockSession = {
+                            userId: tenantId,
+                            conversationId,
+                            variables: fallbackVariables,
+                            save: async () => {}
+                        };
+
+                        if (action.type === 'change_stage' && action.stage) {
+                            console.log(`🤖 [AI Fallback] Executing change_stage → "${action.stage}" for conversation ${conversationId}`);
+                            await executeAction({
+                                actionType: 'change_stage',
+                                actionData: { stage: action.stage }
+                            }, mockSession, conversation);
+                        } else if (action.type === 'assign_tag' && action.tag) {
+                            console.log(`🤖 [AI Fallback] Executing assign_tag → "${action.tag}" for conversation ${conversationId}`);
+                            await executeAction({
+                                actionType: 'assign_tag',
+                                actionData: { tag: action.tag }
+                            }, mockSession, conversation);
+                        } else if (action.type === 'notify_agent') {
+                            const agentMsg = action.reason || `AI Fallback: Handoff requested for ${conversation.displayName || conversation.phone}`;
+                            console.log(`🤖 [AI Fallback] Executing notify_agent — pausing chatbot for 24h on conversation ${conversationId}`);
+                            await executeAction({
+                                actionType: 'notify_agent',
+                                actionData: { message: agentMsg }
+                            }, mockSession, conversation);
+                            
+                            // Pause chatbot for 24h so the human agent can take over
+                            await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+                                $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+                            });
+                        }
+                    }
+                    
+                    return 'ai_fallback';
+                } catch (err) {
+                    console.error('Error in AI fallback auto-reply:', err.message);
+                }
+            }
         }
 
         return null;
@@ -1769,6 +1882,113 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     session.currentNodeId = node.data.nextNodeId;
                     await session.save();
                     return await executeNode(session, flow, node.data.nextNodeId, conversation, depth + 1);
+                }
+                break;
+            }
+
+            case 'ai': {
+                const IntegrationConfig = require('../models/IntegrationConfig');
+                
+                const aiConfig = await IntegrationConfig.findOne({ userId: session.userId }).select('+ai.apiKey');
+                if (!aiConfig?.ai?.apiKey) {
+                    console.warn(`[Chatbot] AI node configuration error: missing API key for user ${session.userId}. Advancing to handoff.`);
+                    const errMsg = 'Connecting you to an agent...';
+                    const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);
+                    await endSession(session, 'handoff');
+                    break;
+                }
+
+                const systemPrompt = node.data.aiSystemPromptOverride || aiConfig.ai.systemPrompt;
+                const maxTurns = node.data.aiMaxTurns || aiConfig.ai.maxTurns || 5;
+
+                // 1. Get recent conversation messages (last 15 messages)
+                const recentMessages = await WhatsAppMessage.find({ conversationId: session.conversationId })
+                    .sort({ timestamp: -1 })
+                    .limit(15)
+                    .lean();
+                
+                const history = recentMessages.reverse();
+
+                // 2. Fetch Lead details
+                let leadDetails = {};
+                if (conversation.leadId) {
+                    const lead = await Lead.findById(conversation.leadId).lean();
+                    if (lead) {
+                        leadDetails = {
+                            name: lead.name,
+                            phone: lead.phone,
+                            email: lead.email,
+                            currentStage: lead.status,
+                            tags: lead.tags,
+                            customData: lead.customData
+                        };
+                    }
+                }
+
+                // 3. Make HTTP request to AI Service
+                try {
+                    const { reply, action } = await generateReply({
+                        provider: aiConfig.ai.provider,
+                        apiKey: aiConfig.ai.apiKey,
+                        modelName: aiConfig.ai.model,
+                        systemPrompt,
+                        conversationHistory: history,
+                        leadContext: leadDetails
+                    });
+
+                    // 4. Send WhatsApp reply
+                    const result = await sendWhatsAppTextMessage(conversation.phone, reply, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, reply, 'text', result);
+
+                    // 5. Execute actions if returned
+                    if (action) {
+                        if (action.type === 'change_stage' && action.stage) {
+                            await executeAction({
+                                actionType: 'change_stage',
+                                actionData: { stage: action.stage }
+                            }, session, conversation);
+                        } else if (action.type === 'assign_tag' && action.tag) {
+                            await executeAction({
+                                actionType: 'assign_tag',
+                                actionData: { tag: action.tag }
+                            }, session, conversation);
+                        } else if (action.type === 'notify_agent') {
+                            const agentMsg = action.reason || `AI Qualify: Handoff requested for ${conversation.displayName || conversation.phone}`;
+                            await executeAction({
+                                actionType: 'notify_agent',
+                                actionData: { message: agentMsg }
+                            }, session, conversation);
+                            break;
+                        }
+                    }
+
+                    // 6. Check max turn count
+                    const turnCount = parseInt(session.variables.get('ai_turn_count') || '0');
+                    if (turnCount + 1 >= maxTurns) {
+                        console.log(`🤖 [Chatbot] AI Node max turns (${maxTurns}) reached. Handing off to human agent.`);
+                        const handoffMsg = 'Connecting you with our sales team...';
+                        const handoffResult = await sendWhatsAppTextMessage(conversation.phone, handoffMsg, session.userId);
+                        await saveBotMessage(session.conversationId, session.userId, handoffMsg, 'text', handoffResult);
+                        
+                        await executeAction({
+                            actionType: 'notify_agent',
+                            actionData: { message: 'AI qualification limit reached. Please take over.' }
+                        }, session, conversation);
+                        break;
+                    }
+
+                    // Increment turn count and stay on AI node (re-evaluate on next message)
+                    session.variables.set('ai_turn_count', (turnCount + 1).toString());
+                    session.markModified('variables');
+                    await session.save();
+
+                } catch (error) {
+                    console.error('Error calling standalone AI Chatbot Service:', error.message);
+                    const errMsg = 'Let me connect you with a team member.';
+                    const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);
+                    await endSession(session, 'handoff');
                 }
                 break;
             }

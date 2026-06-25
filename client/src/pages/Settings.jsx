@@ -9,6 +9,7 @@ import SheetSyncSettings from '../components/Settings/SheetSyncSettings';
 import TagsSettings from '../components/Settings/TagsSettings';
 import WebLeadSettings from '../components/Settings/WebLeadSettings';
 import ClaudeAISettings from '../components/Settings/ClaudeAISettings';
+import AISettings from '../components/Settings/AISettings';
 import LeadAssignmentSettings from '../components/Settings/LeadAssignmentSettings';
 
 const Settings = () => {
@@ -31,7 +32,7 @@ const Settings = () => {
     // Sync tab with URL search params
     useEffect(() => {
         const tab = searchParams.get('tab');
-        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead', 'claudeAI', 'leadAssignment'].includes(tab)) {
+        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead', 'claudeAI', 'leadAssignment', 'aiSettings'].includes(tab)) {
             setActiveTab(tab);
         }
     }, [searchParams]);
@@ -95,7 +96,8 @@ const Settings = () => {
         { id: 'sheetSync',      label: 'Sheet Sync',       icon: 'fa-table' },
         { id: 'meta',           label: 'Meta Lead Sync',   icon: 'fa-brands fa-facebook' },
         { id: 'webLead',        label: 'Web-to-Lead',      icon: 'fa-code' },
-        { id: 'claudeAI',       label: 'Claude AI',        icon: 'fa-robot' },
+        { id: 'claudeAI',       label: 'Claude AI',        icon: 'fa-brain' },
+        { id: 'aiSettings',     label: 'AI Chatbot',       icon: 'fa-robot' },
         { id: 'leadAssignment', label: 'Lead Assignment',  icon: 'fa-user-tag' },
     ];
 
@@ -278,6 +280,18 @@ const Settings = () => {
                 {activeTab === 'leadAssignment' && (
                     <div className="animate-in fade-in duration-300">
                         <LeadAssignmentSettings />
+                    </div>
+                )}
+                
+                {activeTab === 'aiSettings' && (
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
+                            <h2 className="text-xl font-bold text-slate-800">AI Chatbot Qualification Settings</h2>
+                            <p className="text-sm text-slate-500 mt-1">Configure your automated lead qualification AI bot using Gemini or OpenAI.</p>
+                        </div>
+                        <div className="p-8">
+                            <AISettings />
+                        </div>
                     </div>
                 )}
             </div>
