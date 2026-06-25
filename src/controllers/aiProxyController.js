@@ -42,6 +42,11 @@ exports.getSettings = async (req, res) => {
 // Update AI Settings
 exports.updateSettings = async (req, res) => {
     try {
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
+        const workspace = await WorkspaceSettings.findOne({ userId: req.tenantId });
+        if (!workspace?.planFeatures?.aiChatbot) {
+            return res.status(403).json({ error: 'AI Chatbot feature requires the Enterprise plan.' });
+        }
         const {
             provider,
             model,
@@ -96,11 +101,20 @@ exports.testAI = async (req, res) => {
         }
 
         const config = await IntegrationConfig.findOne({ userId: req.tenantId });
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
         
-        const globalGemini = await GlobalSetting.findOne({ key: 'global_gemini_api_key' });
-        const globalOpenai = await GlobalSetting.findOne({ key: 'global_openai_api_key' });
+        const [globalGemini, globalOpenai, workspace] = await Promise.all([
+            GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
+            GlobalSetting.findOne({ key: 'global_openai_api_key' }),
+            WorkspaceSettings.findOne({ userId: req.tenantId })
+        ]);
         
         const apiKey = config.ai.provider === 'openai' ? globalOpenai?.value : globalGemini?.value;
+        const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
+
+        if (!hasAiPlan) {
+            return res.status(403).json({ error: 'AI Chatbot feature requires the Enterprise plan.' });
+        }
 
         if (!apiKey) {
             return res.status(400).json({ error: 'Global AI API Key is not configured by the Super Admin.' });
