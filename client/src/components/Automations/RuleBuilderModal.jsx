@@ -42,7 +42,7 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
 
             // Fetch team users
             try {
-                const userRes = await api.get('/team');
+                const userRes = await api.get('/auth/my-team?includeManager=true');
                 setUsers(userRes.data || []);
             } catch (err) { console.error('Failed to load users', err); }
 

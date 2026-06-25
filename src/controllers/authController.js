@@ -536,6 +536,14 @@ exports.getMyTeam = async (req, res) => {
     try {
         const managerId = getRequestUserId(req.user);
         const agents = await User.find({ parentId: managerId, role: 'agent' }).select('-password');
+        
+        if (req.query.includeManager === 'true') {
+            const manager = await User.findById(managerId).select('-password');
+            if (manager) {
+                agents.unshift(manager);
+            }
+        }
+        
         res.json(agents);
     } catch (err) {
         console.error(err);

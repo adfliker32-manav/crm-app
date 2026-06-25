@@ -69,7 +69,7 @@ const LeadAssignmentSettings = () => {
         setLoadingData(true);
         try {
             const [teamRes, webRes, sheetRes, metaRes] = await Promise.all([
-                api.get('/team').catch(() => ({ data: [] })),
+                api.get('/auth/my-team?includeManager=true').catch(() => ({ data: [] })),
                 api.get('/web-leads/config').catch(() => ({ data: {} })),
                 api.get('/leads/sheet-sync-config').catch(() => ({ data: {} })),
                 api.get('/meta/field-mapping').catch(() => ({ data: {} })),

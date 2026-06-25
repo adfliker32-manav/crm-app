@@ -14,7 +14,7 @@ const AssignLeadDropdown = ({ leadId, currentAssignee, onAssign }) => {
 
     const fetchAgents = async () => {
         try {
-            const res = await api.get('/auth/my-team');
+            const res = await api.get('/auth/my-team?includeManager=true');
             setAgents(res.data);
         } catch (err) {
             console.error('Failed to fetch agents:', err);
