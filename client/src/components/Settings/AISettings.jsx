@@ -194,7 +194,7 @@ const AISettings = () => {
         );
     }
 
-    if (!user?.workspace?.planFeatures?.aiChatbot) {
+    if (!user?.planFeatures?.aiChatbot) {
         return (
             <div className="flex flex-col items-center justify-center py-32">
                 <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center max-w-md">
