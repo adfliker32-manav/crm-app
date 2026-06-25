@@ -835,6 +835,12 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                             await WhatsAppConversation.findByIdAndUpdate(conversationId, {
                                 $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
                             });
+                        } else if (action.type === 'book_appointment') {
+                            console.log(`🤖 [AI Fallback] Executing book_appointment for conversation ${conversationId}`);
+                            await executeAction({
+                                actionType: 'book_appointment',
+                                actionData: action
+                            }, mockSession, conversation);
                         }
                     }
                     
@@ -1959,6 +1965,11 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                                 actionData: { message: agentMsg }
                             }, session, conversation);
                             break;
+                        } else if (action.type === 'book_appointment') {
+                            await executeAction({
+                                actionType: 'book_appointment',
+                                actionData: action
+                            }, session, conversation);
                         }
                     }
 
@@ -2112,6 +2123,32 @@ const executeAction = async (actionData, session, conversation) => {
                 break;
             }
 
+
+            case 'book_appointment': {
+                const Appointment = require('../models/Appointment');
+                const { serviceType, appointmentDate, appointmentTime } = actionData.actionData || {};
+                
+                if (appointmentDate && appointmentTime && serviceType) {
+                    const customerName = getFirstPopulatedVariable(session.variables, [
+                        'name', 'full_name', 'customer_name', 'firstName'
+                    ]) || conversation.displayName || conversation.phone;
+                    
+                    const appt = new Appointment({
+                        userId: session.userId,
+                        leadId: conversation.leadId || null,
+                        customerName: customerName,
+                        customerPhone: conversation.phone,
+                        serviceType: serviceType,
+                        appointmentDate: new Date(appointmentDate),
+                        appointmentTime: appointmentTime,
+                        source: 'chatbot',
+                        status: 'Pending'
+                    });
+                    await appt.save();
+                    console.log(`🤖 [Chatbot] book_appointment: created appointment ${appt._id} for ${customerName}`);
+                }
+                break;
+            }
 
             case 'create_lead': {
                 const targetStage = actionData.actionData?.status || 'New';

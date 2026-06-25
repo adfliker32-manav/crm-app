@@ -58,9 +58,12 @@ Output JSON Schema:
 {
   "reply": "Your WhatsApp response message here. Keep it to 1-3 sentences maximum. Be polite and ask qualifying questions one by one.",
   "action": {
-    "type": "change_stage" | "assign_tag" | "notify_agent" | null,
+    "type": "change_stage" | "assign_tag" | "notify_agent" | "book_appointment" | null,
     "stage": "The stage name to change the lead to (e.g. 'Qualified', 'Interested', 'Lost') if qualification conditions are met, otherwise null",
     "tag": "A tag to assign to the lead (e.g. 'hot-lead', 'invalid-number') if applicable, otherwise null",
+    "serviceType": "If type is book_appointment, the service requested (e.g. 'Consultation'). Otherwise null",
+    "appointmentDate": "If type is book_appointment, the date in YYYY-MM-DD format. Otherwise null",
+    "appointmentTime": "If type is book_appointment, the time (e.g. '10:00 AM' or '14:30'). Otherwise null",
     "reason": "Brief justification of why this action was chosen"
   }
 }
@@ -70,6 +73,7 @@ Additional Rules:
 2. If they have answered all qualifying questions successfully, set the action type to "change_stage" and stage to "Qualified".
 3. If they specifically ask for a human agent or present a query you cannot resolve, set action type to "notify_agent".
 4. If they are rude, spamming, or not interested, set action type to "change_stage" and stage to "Lost" or "Dead Lead".
+5. If they want to book an appointment, ask for their preferred date, time, and service. Once you have all three, set the action type to "book_appointment" and provide serviceType, appointmentDate, and appointmentTime.
 `;
 }
 
