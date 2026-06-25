@@ -216,9 +216,20 @@ const createTicket = async (req, res) => {
         // 🤖 AI Support Assistant auto-reply
         setImmediate(async () => {
             try {
-                const config = await IntegrationConfig.findOne({ userId: req.tenantId }).select('+ai.apiKey');
+                const WorkspaceSettings = require('../models/WorkspaceSettings');
+                const GlobalSetting = require('../models/GlobalSetting');
                 
-                if (config?.ai?.aiEnabled && config?.ai?.aiSupportEnabled && config?.ai?.apiKey) {
+                const [config, workspace, globalGemini, globalOpenai] = await Promise.all([
+                    IntegrationConfig.findOne({ userId: req.tenantId }),
+                    WorkspaceSettings.findOne({ userId: req.tenantId }),
+                    GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
+                    GlobalSetting.findOne({ key: 'global_openai_api_key' })
+                ]);
+                
+                const apiKey = config?.ai?.provider === 'openai' ? globalOpenai?.value : globalGemini?.value;
+                const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
+                
+                if (config?.ai?.aiEnabled && config?.ai?.aiSupportEnabled && apiKey && hasAiPlan) {
                     console.log(`🤖 [Support] AI support response triggered for ticket ${ticket._id}`);
 
                     // Use the admin's configured system prompt if set;
@@ -242,7 +253,7 @@ Ticket Details:
                     
                     const { reply } = await generateReply({
                         provider: config.ai.provider,
-                        apiKey: config.ai.apiKey,
+                        apiKey: apiKey,
                         modelName: config.ai.model,
                         systemPrompt,
                         conversationHistory: [
