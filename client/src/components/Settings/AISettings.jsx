@@ -22,6 +22,9 @@ const AISettings = () => {
     const [maxTurns, setMaxTurns] = useState(5);
     const [tokensUsed, setTokensUsed] = useState(0);
 
+    // Tenants use the global superadmin API key now
+    const hasApiKey = true;
+
     // Test Chat Simulator state
     const [testMessage, setTestMessage] = useState('');
     const [chatMessages, setChatMessages] = useState([
