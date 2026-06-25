@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import MetaLeadDropLog from './MetaLeadDropLog';
@@ -31,6 +31,8 @@ const MetaConfigSection = () => {
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
     const [fetchingLeads, setFetchingLeads] = useState(false);
+    const [fetchCooldown, setFetchCooldown] = useState(0); // seconds remaining in cooldown
+    const fetchCooldownRef = useRef(null);
 
     // CAPI Settings
     const [capiSettings, setCapiSettings] = useState({
@@ -281,15 +283,39 @@ const MetaConfigSection = () => {
         }
     };
 
+    const startFetchCooldown = (seconds) => {
+        setFetchCooldown(seconds);
+        if (fetchCooldownRef.current) clearInterval(fetchCooldownRef.current);
+        fetchCooldownRef.current = setInterval(() => {
+            setFetchCooldown(prev => {
+                if (prev <= 1) {
+                    clearInterval(fetchCooldownRef.current);
+                    return 0;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+    };
+
     const handleFetchLeads = async () => {
-        if (!confirm('Fetch up to 100 recent leads from your connected Meta form?')) return;
+        if (fetchCooldown > 0) return; // Guard: button should already be disabled
+        if (!confirm('Fetch up to 200 recent leads from your connected Meta forms?')) return;
         setFetchingLeads(true);
         try {
             const res = await api.post('/meta/fetch-leads');
-            const { imported, skipped, failed } = res.data;
-            showSuccess(`Imported ${imported} lead${imported !== 1 ? 's' : ''}${skipped ? `, ${skipped} already existed` : ''}${failed ? `, ${failed} failed` : ''}`);
+            const { created, skipped } = res.data;
+            showSuccess(`Imported ${created ?? 0} lead${(created ?? 0) !== 1 ? 's' : ''}${skipped ? `, ${skipped} already existed` : ''}`);
+            // Start 2-minute cooldown after a successful fetch
+            startFetchCooldown(120);
         } catch (error) {
-            showError(error.response?.data?.message || 'Failed to fetch leads');
+            const data = error.response?.data;
+            if (data?.cooldown && data?.secondsLeft) {
+                // Server told us exactly how many seconds are left
+                startFetchCooldown(data.secondsLeft);
+                showError(`Please wait ${data.secondsLeft}s before fetching again.`);
+            } else {
+                showError(data?.message || 'Failed to fetch leads');
+            }
         } finally {
             setFetchingLeads(false);
         }
@@ -559,12 +585,16 @@ const MetaConfigSection = () => {
                             <div className="flex items-center gap-2 flex-wrap">
                                 <button
                                     onClick={handleFetchLeads}
-                                    disabled={fetchingLeads}
-                                    className="text-green-700 hover:bg-green-50 px-4 py-2 rounded-lg border border-green-200 text-sm font-bold flex items-center gap-2 transition disabled:opacity-50"
-                                    title="Import recent leads from your connected Meta form"
+                                    disabled={fetchingLeads || fetchCooldown > 0}
+                                    className={`px-4 py-2 rounded-lg border text-sm font-bold flex items-center gap-2 transition
+                                        ${fetchCooldown > 0
+                                            ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                                            : 'text-green-700 hover:bg-green-50 border-green-200 disabled:opacity-50'
+                                        }`}
+                                    title={fetchCooldown > 0 ? `Rate limit protection — wait ${fetchCooldown}s` : 'Import recent leads from your connected Meta form'}
                                 >
-                                    <i className={`fa-solid ${fetchingLeads ? 'fa-spinner fa-spin' : 'fa-download'}`}></i>
-                                    {fetchingLeads ? 'Fetching...' : 'Fetch Leads'}
+                                    <i className={`fa-solid ${fetchingLeads ? 'fa-spinner fa-spin' : fetchCooldown > 0 ? 'fa-clock' : 'fa-download'}`}></i>
+                                    {fetchingLeads ? 'Fetching...' : fetchCooldown > 0 ? `Wait ${fetchCooldown}s` : 'Fetch Leads'}
                                 </button>
                                 <button
                                     onClick={handleChangePage}

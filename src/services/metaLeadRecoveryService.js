@@ -26,6 +26,10 @@ const META_API_TIMEOUT = 8000;
 const MAX_RETRY_COUNT = 5;
 const RECOVERY_WINDOW_HOURS = 12;
 
+// BUG 6 FIX: Prevent concurrent cron runs.
+// If the previous run is still processing (slow DB, many pending drops), skip this tick.
+let isRecoveryRunning = false;
+
 function getNextRetryDelayMinutes(retryCount) {
     switch (retryCount) {
         case 1: return 10;
@@ -41,6 +45,11 @@ function getNextRetryDelayMinutes(retryCount) {
 // Main entry point called by the cron schedule.
 // ─────────────────────────────────────────────────────────────────────────────
 const runMetaLeadRecovery = async () => {
+    if (isRecoveryRunning) {
+        console.log('[MetaLeadRecovery] Previous run still in progress — skipping this tick.');
+        return;
+    }
+    isRecoveryRunning = true;
     try {
         const now = new Date();
         const windowStart = new Date(Date.now() - RECOVERY_WINDOW_HOURS * 60 * 60 * 1000);
@@ -77,6 +86,8 @@ const runMetaLeadRecovery = async () => {
         console.log(`[MetaLeadRecovery] Recovery sweep complete.`);
     } catch (err) {
         console.error('❌ [MetaLeadRecovery] Cron error:', err.message);
+    } finally {
+        isRecoveryRunning = false;
     }
 };
 

@@ -17,7 +17,7 @@ const LeadProcessingLockSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now,
-        expires: 300 // Auto-expire after 5 minutes (300 seconds)
+        expires: 60 // Auto-expire after 60 seconds — max real processing time is ~30s (5 retry attempts)
     }
 });
 

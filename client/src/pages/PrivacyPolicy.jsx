@@ -144,8 +144,6 @@ const PrivacyPolicy = () => {
                                 Ad forms and import them into your CRM workspace.</li>
                             <li><strong>pages_manage_ads</strong> — to subscribe your page to the leadgen webhook so
                                 new leads are delivered in real time.</li>
-                            <li><strong>ads_management</strong> — to manage webhook subscriptions for lead ad
-                                delivery notifications.</li>
                         </ul>
                         <p className="mt-2">
                             We collect only the data necessary to operate the integration and do not access any

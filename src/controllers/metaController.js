@@ -129,7 +129,6 @@ const getAuthUrl = async (req, res) => {
             'leads_retrieval',
             'pages_manage_metadata', // required by Meta docs for leadgen webhook subscription
             'pages_manage_ads',
-            'ads_management',
             'business_management'   // required to fetch Business Manager pages via /me/businesses
         ].join(',');
 
@@ -426,6 +425,9 @@ const getPages = async (req, res) => {
             if (!granted.includes('pages_show_list')) {
                 console.log(`   ⚠️  pages_show_list NOT granted → /me/accounts will return nothing`);
             }
+            if (!granted.includes('pages_manage_ads')) {
+                console.log(`   ⚠️  pages_manage_ads NOT granted → fetching lead forms will fail with a permission error`);
+            }
         } catch (e) {
             console.log(`   ⚠️  Could not read /me/permissions:`, e.response?.data?.error?.message || e.message);
         }
@@ -604,6 +606,9 @@ const getForms = async (req, res) => {
         console.error('❌ Meta getForms Error:', metaErr || error.message);
         if (metaErr?.code === 190 || error.response?.status === 401) {
             return res.status(401).json({ success: false, message: 'Meta access token expired. Please reconnect your Facebook account.' });
+        }
+        if (metaErr?.message && metaErr.message.includes('pages_manage_ads')) {
+            return res.status(403).json({ success: false, message: 'Missing "pages_manage_ads" permission. Please reconnect your Facebook account and ensure you grant permission to manage ads.' });
         }
         res.status(500).json({ success: false, message: 'Failed to fetch lead forms. Please try again.' });
     }

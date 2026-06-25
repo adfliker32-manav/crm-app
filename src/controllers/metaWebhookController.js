@@ -56,8 +56,14 @@ const handleLeadWebhook = async (req, res) => {
                 console.warn("⛔ Unauthorized - Missing Meta Signature");
                 return;
             }
-            const payloadToVerify = req.rawBody || Buffer.from(JSON.stringify(body));
-            const expectedSignature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(payloadToVerify).digest('hex');
+            if (!req.rawBody) {
+                // rawBody MUST be set by the express raw-body middleware.
+                // Falling back to JSON.stringify(body) is insecure — the byte sequence
+                // can differ from the original payload, making HMAC verification unreliable.
+                console.warn("⛔ Unauthorized - rawBody not available. Ensure express raw-body middleware is configured for this route.");
+                return;
+            }
+            const expectedSignature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(req.rawBody).digest('hex');
             const sigBuffer = Buffer.from(signature);
             const expBuffer = Buffer.from(expectedSignature);
             if (sigBuffer.length !== expBuffer.length || !crypto.timingSafeEqual(sigBuffer, expBuffer)) {
@@ -531,7 +537,9 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             userId,
             name: resolvedName,
             phone: cleanPhone,
-            email: cleanEmail || `meta_${leadDetails.id}@lead.local`,
+            // Store null when no real email — a fake placeholder triggers email automations
+            // to attempt delivery to a non-existent address, causing bounces.
+            email: cleanEmail || null,
             status: 'New',
             source: metaSource,
             metaLeadgenId: leadgenId || null,
@@ -636,11 +644,40 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
     }
 }
 
-// Manual backfill — fetch up to 100 historical leads from Meta.
+// ─────────────────────────────────────────────────────────────────────────────
+// fetchHistoricalLeads — 2-minute per-tenant cooldown
+// Prevents rate limit exhaustion when users rapidly click "Fetch Leads".
+// Uses an in-memory Map (survives the request, resets on server restart which is fine).
+// ─────────────────────────────────────────────────────────────────────────────
+const FETCH_LEADS_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+const fetchLeadsCooldowns = new Map(); // tenantId → timestamp of last fetch
+
+// Manual backfill — fetch up to 200 historical leads from Meta.
 // Supports both a specific form and "Any Form" (metaFormId === null).
 const fetchHistoricalLeads = async (req, res) => {
     try {
         const ownerId = req.tenantId;
+
+        // ── Cooldown check ─────────────────────────────────────────────────
+        const lastFetch = fetchLeadsCooldowns.get(ownerId);
+        if (lastFetch) {
+            const elapsed = Date.now() - lastFetch;
+            const remaining = FETCH_LEADS_COOLDOWN_MS - elapsed;
+            if (remaining > 0) {
+                const secondsLeft = Math.ceil(remaining / 1000);
+                return res.status(429).json({
+                    success: false,
+                    cooldown: true,
+                    secondsLeft,
+                    message: `Please wait ${secondsLeft} second${secondsLeft !== 1 ? 's' : ''} before fetching leads again.`
+                });
+            }
+        }
+        // Record this fetch attempt immediately
+        fetchLeadsCooldowns.set(ownerId, Date.now());
+        // Auto-cleanup after cooldown expires to prevent memory leak
+        setTimeout(() => fetchLeadsCooldowns.delete(ownerId), FETCH_LEADS_COOLDOWN_MS + 5000);
+
         const config = await IntegrationConfig.findOne({ userId: ownerId })
             .select('+meta.metaAccessToken +meta.metaPageAccessToken meta.metaFormId meta.metaPageId');
 
@@ -679,7 +716,11 @@ const fetchHistoricalLeads = async (req, res) => {
                 });
                 formIds = (formsRes.data.data || []).filter(f => f.status === 'ACTIVE').map(f => f.id);
             } catch (e) {
-                console.error('fetchHistoricalLeads: failed to list forms for page:', e.response?.data?.error?.message || e.message);
+                const metaErr = e.response?.data?.error;
+                console.error('fetchHistoricalLeads: failed to list forms for page:', metaErr?.message || e.message);
+                if (metaErr?.message && metaErr.message.includes('pages_manage_ads')) {
+                    return res.status(403).json({ success: false, message: 'Missing "pages_manage_ads" permission. Please reconnect your Facebook account and ensure you grant permission to manage ads.' });
+                }
                 return res.status(500).json({ success: false, message: 'Failed to list lead forms for this page. Please try again.' });
             }
         } else {
@@ -691,8 +732,15 @@ const fetchHistoricalLeads = async (req, res) => {
         }
 
         let totalFetched = 0, totalCreated = 0, totalSkipped = 0;
+        const MAX_LEADS_PER_REQUEST = 200; // Rate limit guard: max 200 leads per fetch request (matches Meta's per-user hourly call limit)
 
         for (const formId of formIds) {
+            // BUG 5 FIX: Cap total leads processed per request to avoid exhausting rate limits
+            if (totalFetched >= MAX_LEADS_PER_REQUEST) {
+                console.warn(`fetchHistoricalLeads: reached ${MAX_LEADS_PER_REQUEST} lead cap — stopping early. Re-run to get remaining leads.`);
+                break;
+            }
+
             let formLeads = [];
             try {
                 const response = await axios.get(`${META_GRAPH_URL}/${formId}/leads`, {
@@ -746,6 +794,12 @@ const fetchHistoricalLeads = async (req, res) => {
                 const result = await createLeadFromMeta(ownerId, leadDetails, formId, metaLead.id);
                 if (result) totalCreated++; else totalSkipped++;
             }
+
+            // BUG 5 FIX: 200ms inter-form delay to avoid burst-rate issues when a user has many forms.
+            // This spaces out the API calls and prevents hitting the rate limit ceiling in one sweep.
+            if (formIds.length > 1) {
+                await new Promise(r => setTimeout(r, 200));
+            }
         }
 
         console.log(`✅ Meta backfill for tenant ${ownerId}: ${totalCreated} created, ${totalSkipped} skipped from ${totalFetched} total`);
@@ -776,16 +830,48 @@ const fetchHistoricalLeads = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 async function persistDropLog({ userId, leadgenId, pageId, formId, reason, message }) {
     try {
+        // BUG 4 FIX: Use a two-step approach instead of pure $setOnInsert.
+        // $setOnInsert only fires on INSERT — if the lead was previously marked 'failed'
+        // or 'recovered' and drops again, $setOnInsert does nothing and the lead is
+        // permanently lost. We now explicitly reset status to 'pending' on re-drop,
+        // but only if it's NOT already pending (to avoid unnecessary writes).
         const existing = await MetaLeadDropLog.findOneAndUpdate(
-            { userId, leadgenId },
             {
-                $setOnInsert: { userId, leadgenId, pageId, formId, reason, message, status: 'pending' }
+                userId,
+                leadgenId,
+                // Only reset records that are NOT already pending — if it's pending,
+                // the cron will pick it up on its own schedule.
+                status: { $in: ['failed', 'recovered', 'manual_recovery'] }
             },
-            { upsert: true, new: false }
+            {
+                $set: {
+                    status: 'pending',
+                    reason,
+                    message,
+                    retryCount: 0,
+                    nextRetryAt: new Date(Date.now() + 2 * 60 * 1000),
+                    recoveredAt: null,
+                    emailAlertSent: false
+                }
+            },
+            { new: false }
         );
 
-        // Send alerts on first insert only.
+        // If no existing failed/recovered record was found, try to insert a new one
         if (!existing) {
+            await MetaLeadDropLog.findOneAndUpdate(
+                { userId, leadgenId },
+                { $setOnInsert: { userId, leadgenId, pageId, formId, reason, message, status: 'pending' } },
+                { upsert: true, new: false }
+            );
+        }
+
+        // Re-fetch to check if this was a fresh insert (for alerting logic)
+        const currentRecord = await MetaLeadDropLog.findOne({ userId, leadgenId }).select('retryCount emailAlertSent').lean();
+        const isFirstDrop = !currentRecord || (currentRecord.retryCount === 0 && !currentRecord.emailAlertSent);
+
+        // Send alerts on first drop or re-drop after failure.
+        if (isFirstDrop || existing) {
             // Email Alert
             setImmediate(async () => {
                 try {

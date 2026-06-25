@@ -29,8 +29,8 @@ owned by a **Meta Business Portfolio**, so `/me/accounts` returns 0 — the app 
 
 > Already-approved permissions (no action): `pages_show_list`, `leads_retrieval`,
 > `pages_read_engagement`, `pages_manage_metadata`, `public_profile`.
-> Only submit `business_management` now. Add `pages_manage_ads` / `ads_management` **only**
-> if/when you actually build ad-management features — extra permissions slow down review.
+> Submit `business_management` to fetch Business Manager pages.
+> **IMPORTANT:** You must also submit `pages_manage_ads` if it is not already approved. Meta's API requires `pages_manage_ads` to fetch leadgen forms and historical leads.
 
 ---
 
