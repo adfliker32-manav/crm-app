@@ -2194,6 +2194,15 @@ const executeAction = async (actionData, session, conversation) => {
                     });
                     await appt.save();
                     console.log(`🤖 [Chatbot] book_appointment: created appointment ${appt._id} for ${customerName}`);
+                    
+                    // Send system confirmation message
+                    try {
+                        const confMsg = `✅ Your appointment for *${serviceType}* on *${appointmentDate}* at *${appointmentTime}* has been successfully booked. We look forward to seeing you!`;
+                        const confResult = await sendWhatsAppTextMessage(conversation.phone, confMsg, session.userId);
+                        await saveBotMessage(session.conversationId, session.userId, confMsg, 'text', confResult);
+                    } catch (err) {
+                        console.error('Failed to send appointment confirmation message:', err.message);
+                    }
                 }
                 break;
             }

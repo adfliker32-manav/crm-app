@@ -144,8 +144,25 @@ async function callOpenAI(apiKey, modelName, systemPrompt, history, lastUserMess
         response_format: { type: 'json_object' }
     });
     
-    const responseText = response.choices[0].message.content;
-    return JSON.parse(responseText);
+    let responseText = response.choices[0].message.content;
+    
+    if (typeof responseText === 'string') {
+        // Strip out markdown code blocks if the model ignored instructions
+        responseText = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+    }
+    
+    let parsed = JSON.parse(responseText);
+    
+    // Sometimes the model double-stringifies the JSON
+    if (typeof parsed === 'string') {
+        try {
+            parsed = JSON.parse(parsed);
+        } catch (e) {
+            // keep the string if it's not valid JSON inside
+        }
+    }
+    
+    return parsed;
 }
 
 /**
@@ -181,7 +198,8 @@ exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conv
     }
     
     // Validation check on the response object format
-    if (!resultJson || typeof resultJson !== 'object') {
+    if (!resultJson || typeof resultJson !== 'object' || Array.isArray(resultJson)) {
+        console.error('[AI_SERVICE ERROR] Invalid response format. resultJson:', JSON.stringify(resultJson));
         throw new Error('Invalid response received from LLM.');
     }
     
