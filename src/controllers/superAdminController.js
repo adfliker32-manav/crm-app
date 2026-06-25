@@ -307,7 +307,7 @@ const updateCompany = async (req, res) => {
         const { id } = req.params;
         const {
             name, email, companyName, contactPerson, phone,
-            activeModules, leadLimit, agentLimit,
+            activeModules, leadLimit, agentLimit, aiMessageLimit,
             planFeatures   // NEW: sub-permission overrides (aiChatbot, metaSync, etc.)
         } = req.body;
 
@@ -344,6 +344,7 @@ const updateCompany = async (req, res) => {
         if (activeModules !== undefined && Array.isArray(activeModules)) updateFields.activeModules = activeModules;
         if (leadLimit !== undefined) updateFields['planFeatures.leadLimit'] = Number.parseInt(leadLimit, 10);
         if (agentLimit !== undefined) updateFields.agentLimit = Number.parseInt(agentLimit, 10);
+        if (aiMessageLimit !== undefined) updateFields['planFeatures.aiMessageLimit'] = Number.parseInt(aiMessageLimit, 10);
 
         // Sub-permissions: only honor known keys to prevent arbitrary writes
         const SUB_PERMISSION_KEYS = [

@@ -251,7 +251,9 @@ const AISettings = () => {
                     
                     <div className="text-right">
                         <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Usage this month</p>
-                        <p className="text-xl font-black text-slate-800 mt-0.5">{tokensUsed.toLocaleString()} <span className="text-xs font-normal text-slate-500">tokens</span></p>
+                        <p className="text-xl font-black text-slate-800 mt-0.5">
+                            {tokensUsed.toLocaleString()} <span className="text-sm font-bold text-slate-400">/ {user?.planFeatures?.aiMessageLimit?.toLocaleString() || '1,000'} messages</span>
+                        </p>
                     </div>
                 </div>
 

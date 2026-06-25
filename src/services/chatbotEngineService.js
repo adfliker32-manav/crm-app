@@ -758,8 +758,9 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                 const tokensUsed = aiConfig.ai.tokensUsedThisMonth || 0;
                 
                 // --- MONTHLY LIMIT GUARD ---
-                if (tokensUsed >= 1000) {
-                    console.log(`🤖 [Chatbot] Tenant ${tenantId} hit monthly AI limit (1000). Stopping AI Fallback.`);
+                const limit = workspace?.planFeatures?.aiMessageLimit || 1000;
+                if (tokensUsed >= limit) {
+                    console.log(`🤖 [Chatbot] Tenant ${tenantId} hit monthly AI limit (${limit}). Stopping AI Fallback.`);
                     await WhatsAppConversation.findByIdAndUpdate(conversationId, {
                         $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
                     });
@@ -1938,8 +1939,9 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
                 const tokensUsed = aiConfig?.ai?.tokensUsedThisMonth || 0;
 
-                if (!apiKey || !hasAiPlan || tokensUsed >= 1000) {
-                    console.warn(`[Chatbot] AI node configuration error or limit reached (API Key: ${!!apiKey}, Plan: ${hasAiPlan}, LimitReached: ${tokensUsed >= 1000}) for user ${session.userId}. Advancing to handoff.`);
+                const limit = workspace?.planFeatures?.aiMessageLimit || 1000;
+                if (!apiKey || !hasAiPlan || tokensUsed >= limit) {
+                    console.warn(`[Chatbot] AI node configuration error or limit reached (API Key: ${!!apiKey}, Plan: ${hasAiPlan}, LimitReached: ${tokensUsed >= limit}) for user ${session.userId}. Advancing to handoff.`);
                     const errMsg = 'Connecting you to an agent...';
                     const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);

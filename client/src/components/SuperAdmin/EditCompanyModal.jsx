@@ -27,6 +27,7 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
         activeModules: [],
         leadLimit: 1000,
         agentLimit: 5,
+        aiMessageLimit: 1000,
         planFeatures: {}
     });
     const [loading, setLoading] = useState(false);
@@ -41,6 +42,7 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                 activeModules: company.activeModules || [],
                 leadLimit: company.planFeatures?.leadLimit || 1000,
                 agentLimit: company.agentLimit || company.planFeatures?.agentLimit || 5,
+                aiMessageLimit: company.planFeatures?.aiMessageLimit || 1000,
                 planFeatures: company.planFeatures || {}
             });
         }
@@ -108,6 +110,7 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                 activeModules: formData.activeModules,
                 leadLimit: formData.leadLimit,
                 agentLimit: formData.agentLimit,
+                aiMessageLimit: formData.aiMessageLimit,
                 planFeatures: featurePayload
             });
             showSuccess('Company updated successfully');
@@ -201,6 +204,17 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                                     type="number"
                                     name="agentLimit"
                                     value={formData.agentLimit}
+                                    onChange={handleChange}
+                                    min="0"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">AI Message Limit</label>
+                                <input
+                                    type="number"
+                                    name="aiMessageLimit"
+                                    value={formData.aiMessageLimit}
                                     onChange={handleChange}
                                     min="0"
                                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
