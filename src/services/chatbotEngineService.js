@@ -2182,6 +2182,9 @@ const executeAction = async (actionData, session, conversation) => {
 
             case 'book_appointment': {
                 const Appointment = require('../models/Appointment');
+                const BookingPage = require('../models/BookingPage');
+                const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+                const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } = require('./whatsappService');
                 const { serviceType, appointmentDate, appointmentTime } = actionData.actionData || {};
                 
                 if (appointmentDate && appointmentTime && serviceType) {
@@ -2203,11 +2206,96 @@ const executeAction = async (actionData, session, conversation) => {
                     await appt.save();
                     console.log(`🤖 [Chatbot] book_appointment: created appointment ${appt._id} for ${customerName}`);
                     
-                    // Send system confirmation message
+                    // Send system confirmation message using BookingPage template
                     try {
-                        const confMsg = `✅ Your appointment for *${serviceType}* on *${appointmentDate}* at *${appointmentTime}* has been successfully booked. We look forward to seeing you!`;
-                        const confResult = await sendWhatsAppTextMessage(conversation.phone, confMsg, session.userId);
-                        await saveBotMessage(session.conversationId, session.userId, confMsg, 'text', confResult);
+                        const page = await BookingPage.findOne({ userId: session.userId, isActive: true }).lean();
+                        let sentTemplate = false;
+
+                        if (page && page.sendConfirmation && page.confirmationTemplateId) {
+                            const tpl = await WhatsAppTemplate.findOne({ _id: page.confirmationTemplateId }).lean();
+                            if (tpl && tpl.status === 'APPROVED') {
+                                const formattedDate = new Date(appointmentDate).toLocaleDateString('en-IN', {
+                                    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+                                });
+                                
+                                const bookingData = {
+                                    name: customerName,
+                                    date: formattedDate,
+                                    time: appointmentTime,
+                                    service: serviceType,
+                                    businessName: page.businessName || ''
+                                };
+
+                                const metaComponents = [];
+                                const resolveBookingVar = (varNum) => {
+                                    switch (varNum) {
+                                        case 1: return bookingData.name;
+                                        case 2: return bookingData.date;
+                                        case 3: return bookingData.time;
+                                        case 4: return bookingData.service;
+                                        case 5: return bookingData.businessName;
+                                        default: return '';
+                                    }
+                                };
+
+                                for (const comp of (tpl.components || [])) {
+                                    if (comp.type === 'BODY' && comp.text) {
+                                        const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+                                        if (matches && matches.length > 0) {
+                                            const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
+                                            metaComponents.push({
+                                                type: 'body',
+                                                parameters: nums.map(n => ({ type: 'text', text: resolveBookingVar(n) }))
+                                            });
+                                        }
+                                    }
+                                    if (comp.type === 'HEADER' && comp.format === 'TEXT' && comp.text) {
+                                        const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+                                        if (matches && matches.length > 0) {
+                                            const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
+                                            metaComponents.push({
+                                                type: 'header',
+                                                parameters: nums.map(n => ({ type: 'text', text: resolveBookingVar(n) }))
+                                            });
+                                        }
+                                    }
+                                }
+
+                                const confResult = await sendWhatsAppTemplateMessage(
+                                    conversation.phone,
+                                    tpl.name,
+                                    tpl.language || 'en',
+                                    metaComponents,
+                                    session.userId,
+                                    { isAutomated: true, triggerType: 'booking_confirmation' }
+                                );
+                                
+                                await saveBotMessage(session.conversationId, session.userId, `📄 Template: ${tpl.name}`, 'template', confResult);
+                                sentTemplate = true;
+                                await Appointment.findByIdAndUpdate(appt._id, { confirmationSent: true });
+                            }
+                        }
+
+                        // Fallback if no template is configured or not sent
+                        if (!sentTemplate) {
+                            let confMsg = `✅ Your appointment for *${serviceType}* on *${appointmentDate}* at *${appointmentTime}* has been successfully booked. We look forward to seeing you!`;
+                            
+                            if (page && page.confirmationMessage) {
+                                const { replaceVariables } = require('../utils/emailTemplateUtils');
+                                const formattedDate = new Date(appointmentDate).toLocaleDateString('en-IN', {
+                                    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+                                });
+                                confMsg = replaceVariables(page.confirmationMessage, {
+                                    name:    customerName,
+                                    date:    formattedDate,
+                                    time:    appointmentTime,
+                                    service: serviceType
+                                });
+                            }
+                            
+                            const confResult = await sendWhatsAppTextMessage(conversation.phone, confMsg, session.userId);
+                            await saveBotMessage(session.conversationId, session.userId, confMsg, 'text', confResult);
+                        }
                     } catch (err) {
                         console.error('Failed to send appointment confirmation message:', err.message);
                     }
