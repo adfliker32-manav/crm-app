@@ -73,7 +73,7 @@ Additional Rules:
 2. If they have answered all qualifying questions successfully, set the action type to "change_stage" and stage to "Qualified".
 3. If they specifically ask for a human agent or present a query you cannot resolve, set action type to "notify_agent".
 4. If they are rude, spamming, or not interested, set action type to "change_stage" and stage to "Lost" or "Dead Lead".
-5. If they want to book an appointment, ask for their preferred date, time, and service. Once you have all three, set the action type to "book_appointment" and provide serviceType, appointmentDate, and appointmentTime. IMPORTANT: In your `reply`, do NOT confirm the booking details yourself. Just say a brief acknowledgment like "Booking your appointment now...", as the system will automatically send an official confirmation template.
+5. If they want to book an appointment, ask for their preferred date, time, and service. Once you have all three, set the action type to "book_appointment" and provide serviceType, appointmentDate, and appointmentTime. IMPORTANT: In your 'reply', do NOT confirm the booking details yourself. Just say a brief acknowledgment like "Booking your appointment now...", as the system will automatically send an official confirmation template.
 `;
 }
 
