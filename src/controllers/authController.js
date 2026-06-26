@@ -101,7 +101,9 @@ const blockUnapprovedLogin = (user, res) => {
         return false;
     }
 
-    if (!user.approved_by_admin) {
+    // Agents are created directly by their manager — that act IS the approval.
+    // Skip the admin-approval gate entirely for agents.
+    if (user.role !== 'agent' && !user.approved_by_admin) {
         res.status(403).json({
             message: 'Account not approved yet. Please wait for admin approval.',
             status: 'pending_approval'
@@ -411,7 +413,11 @@ exports.createAgent = async (req, res) => {
             password: password,
             role: 'agent',
             parentId: managerId,
-            permissions: agentPermissions
+            permissions: agentPermissions,
+            // Auto-approve agents — manager creating them IS the approval.
+            approved_by_admin: true,
+            is_active: true,
+            status: 'approved'
         });
 
         res.json({
