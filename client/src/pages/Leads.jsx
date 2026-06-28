@@ -56,6 +56,7 @@ const Leads = () => {
     const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+    const [exportSelectedLeads, setExportSelectedLeads] = useState(null); // null = export all, array = export selected
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [selectedLead, setSelectedLead] = useState(null);
 
@@ -459,6 +460,56 @@ const Leads = () => {
             setLeads(snapshot);
         }
     };
+
+    const handleBulkRemoveTag = async (ids, tagNamesArray) => {
+        // Snapshot for revert
+        const idSet = new Set(ids);
+        const snapshot = leads.map(l => ({ ...l }));
+
+        // Optimistic remove tags
+        setLeads(prev => prev.map(l => {
+            if (!idSet.has(l._id)) return l;
+            return { ...l, tags: (l.tags || []).filter(t => !tagNamesArray.includes(t)) };
+        }));
+
+        try {
+            await api.post('/leads/bulk-remove-tags', { leadIds: ids, tags: tagNamesArray });
+            showSuccess(`Tag removed from ${ids.length} leads`);
+        } catch (err) {
+            console.error('Failed to remove tags', err);
+            showError('Failed to remove tags');
+            setLeads(snapshot);
+        }
+    };
+
+    const handleBulkAssign = async (ids, agentId, agentName) => {
+        const idSet = new Set(ids);
+        const snapshot = leads.map(l => ({ ...l }));
+
+        // Optimistic update
+        setLeads(prev => prev.map(l => {
+            if (!idSet.has(l._id)) return l;
+            return { ...l, assignedTo: agentId ? { _id: agentId, name: agentName } : null };
+        }));
+
+        try {
+            await api.post('/leads/bulk-assign', { ids, agentId: agentId || null });
+            showSuccess(agentId ? `${ids.length} leads assigned to ${agentName}` : `${ids.length} leads unassigned`);
+        } catch (err) {
+            console.error('Failed to assign leads', err);
+            showError(err.response?.data?.message || 'Failed to assign leads');
+            setLeads(snapshot);
+        }
+    };
+
+    const handleBulkExport = (ids) => {
+        const idSet = new Set(ids);
+        const selectedLeads = leads.filter(l => idSet.has(l._id));
+        // We re-use the same ExportCSVModal but pre-filter to selected leads only
+        setExportSelectedLeads(selectedLeads);
+        setIsExportModalOpen(true);
+    };
+
 
     if (loading) return <div className="p-8 text-center text-slate-500">Loading leads...</div>;
 
@@ -888,6 +939,9 @@ const Leads = () => {
                             onBulkDelete={handleBulkDelete}
                             onBulkStatusUpdate={handleBulkStatusUpdate}
                             onBulkTag={handleBulkTag}
+                            onBulkRemoveTag={handleBulkRemoveTag}
+                            onBulkAssign={handleBulkAssign}
+                            onBulkExport={handleBulkExport}
                             onRefresh={fetchData}
                         />
                     </div>
@@ -978,10 +1032,11 @@ const Leads = () => {
 
             <ExportCSVModal
                 isOpen={isExportModalOpen}
-                onClose={() => setIsExportModalOpen(false)}
-                leads={leads}
+                onClose={() => { setIsExportModalOpen(false); setExportSelectedLeads(null); }}
+                leads={exportSelectedLeads ?? leads}
                 stages={stages}
                 userTags={userTags}
+                exportLabel={exportSelectedLeads ? `${exportSelectedLeads.length} Selected Leads` : undefined}
             />
         </div>
     );

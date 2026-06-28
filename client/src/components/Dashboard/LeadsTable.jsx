@@ -36,17 +36,38 @@ const ScoreBadge = ({ score = 0 }) => {
 
 const PAGE_SIZE = 50;
 
-const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onBulkTag, onRefresh }) => {
+const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onBulkTag, onBulkRemoveTag, onBulkAssign, onBulkExport, onRefresh }) => {
     const { user } = useAuth();
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
     const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
     const sentinelRef = useRef(null);
 
+    // Team members for bulk assign
+    const [agents, setAgents] = useState([]);
+    const [agentsLoading, setAgentsLoading] = useState(false);
+    const agentsFetched = useRef(false);
+
+    // Fetch agents once when the bulk bar first appears (lazy load)
+    useEffect(() => {
+        const canAssign = user?.role === 'manager' || user?.role === 'superadmin' || user?.permissions?.assignLeads;
+        if (selectedIds.size > 0 && canAssign && !agentsFetched.current) {
+            agentsFetched.current = true;
+            setAgentsLoading(true);
+            import('../../services/api').then(({ default: api }) => {
+                api.get('/auth/my-team?includeManager=true')
+                    .then(res => setAgents(res.data || []))
+                    .catch(err => console.error('Failed to load agents:', err))
+                    .finally(() => setAgentsLoading(false));
+            });
+        }
+    }, [selectedIds.size, user]);
+
     // Auto-clear selection when the leads list changes (e.g. after bulk delete/status update)
     useEffect(() => {
         setSelectedIds(new Set());
     }, [leads]);
+
 
     // Sort and filter leads using useMemo instead of useEffect + setState
     const sortedLeads = useMemo(() => {
@@ -201,64 +222,158 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
 
     return (
         <div className="relative">
-            {/* Bulk Actions Bar */}
-            {selectedIds.length > 0 && (
-                <div className="absolute top-0 left-0 right-0 z-20 bg-blue-600 text-white p-3 rounded-t-xl flex items-center justify-between shadow-lg animate-fade-in-down">
-                    <div className="flex items-center gap-3">
-                        <span className="font-bold bg-white text-blue-600 px-2 py-0.5 rounded-full text-sm">
-                            {selectedIds.size}
-                        </span>
-                        <span className="text-sm font-medium">Selected</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <select
-                            onChange={(e) => {
-                                if (e.target.value) {
-                                    onBulkStatusUpdate([...selectedIds], e.target.value);
-                                    setSelectedIds(new Set());
-                                }
-                            }}
-                            className="text-gray-800 text-sm rounded-lg px-3 py-1.5 outline-none border-none cursor-pointer"
-                            defaultValue=""
-                        >
-                            <option value="" disabled>Move to...</option>
-                            {stages.map(stage => (
-                                <option key={stage._id} value={stage.name}>{stage.name}</option>
-                            ))}
-                        </select>
-                        {userTags && userTags.length > 0 && (
+            {/* ── Bulk Actions Bar ── */}
+            {selectedIds.size > 0 && (
+                <div className="absolute top-0 left-0 right-0 z-20 rounded-t-xl shadow-2xl overflow-hidden">
+                    {/* Gradient header */}
+                    <div className="bg-gradient-to-r from-indigo-600 via-blue-600 to-blue-500 text-white px-4 py-3 flex flex-wrap items-center gap-3">
+
+                        {/* Selection count badge */}
+                        <div className="flex items-center gap-2 mr-2">
+                            <span className="flex items-center justify-center w-7 h-7 bg-white text-blue-700 rounded-full text-sm font-black shadow">
+                                {selectedIds.size}
+                            </span>
+                            <span className="text-sm font-semibold tracking-wide">
+                                lead{selectedIds.size !== 1 ? 's' : ''} selected
+                            </span>
+                        </div>
+
+                        {/* Divider */}
+                        <div className="h-6 w-px bg-white/25 hidden sm:block" />
+
+                        {/* ── Move to Stage ── */}
+                        <div className="relative group">
                             <select
                                 onChange={(e) => {
                                     if (e.target.value) {
-                                        onBulkTag([...selectedIds], JSON.parse(e.target.value));
-                                        setSelectedIds(new Set());
+                                        onBulkStatusUpdate([...selectedIds], e.target.value);
+                                        e.target.value = '';
                                     }
                                 }}
-                                className="text-gray-800 text-sm rounded-lg px-3 py-1.5 outline-none border-none cursor-pointer"
                                 defaultValue=""
+                                title="Move selected leads to a pipeline stage"
+                                className="appearance-none bg-white/15 hover:bg-white/25 text-white text-xs font-semibold rounded-lg pl-8 pr-3 py-2 outline-none border border-white/20 hover:border-white/40 cursor-pointer transition backdrop-blur-sm"
                             >
-                                <option value="" disabled>Apply Tag...</option>
-                                {userTags.map(tag => (
-                                    <option key={tag._id} value={JSON.stringify([tag.name])}>{tag.name}</option>
+                                <option value="" disabled className="text-gray-800">Move to Stage…</option>
+                                {stages.map(stage => (
+                                    <option key={stage._id} value={stage.name} className="text-gray-800">{stage.name}</option>
                                 ))}
                             </select>
+                            <i className="fa-solid fa-right-left absolute left-2.5 top-1/2 -translate-y-1/2 text-white/70 text-[10px] pointer-events-none" />
+                        </div>
+
+                        {/* ── Apply Tag ── */}
+                        {userTags && userTags.length > 0 && (
+                            <div className="relative group">
+                                <select
+                                    onChange={(e) => {
+                                        if (e.target.value) {
+                                            onBulkTag([...selectedIds], JSON.parse(e.target.value));
+                                            e.target.value = '';
+                                        }
+                                    }}
+                                    defaultValue=""
+                                    title="Apply a tag to selected leads"
+                                    className="appearance-none bg-white/15 hover:bg-white/25 text-white text-xs font-semibold rounded-lg pl-8 pr-3 py-2 outline-none border border-white/20 hover:border-white/40 cursor-pointer transition backdrop-blur-sm"
+                                >
+                                    <option value="" disabled className="text-gray-800">Add Tag…</option>
+                                    {userTags.map(tag => (
+                                        <option key={tag._id} value={JSON.stringify([tag.name])} className="text-gray-800">{tag.name}</option>
+                                    ))}
+                                </select>
+                                <i className="fa-solid fa-tag absolute left-2.5 top-1/2 -translate-y-1/2 text-white/70 text-[10px] pointer-events-none" />
+                            </div>
                         )}
+
+                        {/* ── Remove Tag ── */}
+                        {userTags && userTags.length > 0 && onBulkRemoveTag && (
+                            <div className="relative group">
+                                <select
+                                    onChange={(e) => {
+                                        if (e.target.value) {
+                                            onBulkRemoveTag([...selectedIds], JSON.parse(e.target.value));
+                                            e.target.value = '';
+                                        }
+                                    }}
+                                    defaultValue=""
+                                    title="Remove a tag from selected leads"
+                                    className="appearance-none bg-white/15 hover:bg-white/25 text-white text-xs font-semibold rounded-lg pl-8 pr-3 py-2 outline-none border border-white/20 hover:border-white/40 cursor-pointer transition backdrop-blur-sm"
+                                >
+                                    <option value="" disabled className="text-gray-800">Remove Tag…</option>
+                                    {userTags.map(tag => (
+                                        <option key={tag._id} value={JSON.stringify([tag.name])} className="text-gray-800">{tag.name}</option>
+                                    ))}
+                                </select>
+                                <i className="fa-solid fa-tag-slash absolute left-2.5 top-1/2 -translate-y-1/2 text-white/70 text-[10px] pointer-events-none" />
+                            </div>
+                        )}
+
+                        {/* Divider */}
+                        <div className="h-6 w-px bg-white/25 hidden sm:block" />
+
+                        {/* ── Bulk Assign ── */}
+                        {(user?.role === 'manager' || user?.role === 'superadmin' || user?.permissions?.assignLeads) && onBulkAssign && (
+                            <div className="relative group">
+                                <select
+                                    onChange={(e) => {
+                                        const val = e.target.value;
+                                        const agentName = agents.find(a => a._id === val)?.name || 'Unassigned';
+                                        onBulkAssign([...selectedIds], val || null, agentName);
+                                        e.target.value = '';
+                                    }}
+                                    defaultValue=""
+                                    disabled={agentsLoading}
+                                    title="Assign selected leads to a team member"
+                                    className="appearance-none bg-white/15 hover:bg-white/25 text-white text-xs font-semibold rounded-lg pl-8 pr-3 py-2 outline-none border border-white/20 hover:border-white/40 cursor-pointer transition backdrop-blur-sm disabled:opacity-50"
+                                >
+                                    <option value="" disabled className="text-gray-800">
+                                        {agentsLoading ? 'Loading…' : 'Assign To…'}
+                                    </option>
+                                    <option value="" className="text-gray-800">— Unassign —</option>
+                                    {agents.map(agent => (
+                                        <option key={agent._id} value={agent._id} className="text-gray-800">{agent.name}</option>
+                                    ))}
+                                </select>
+                                <i className="fa-solid fa-user-check absolute left-2.5 top-1/2 -translate-y-1/2 text-white/70 text-[10px] pointer-events-none" />
+                            </div>
+                        )}
+
+                        {/* ── Export Selected ── */}
+                        {onBulkExport && (
+                            <button
+                                onClick={() => onBulkExport([...selectedIds])}
+                                title={`Export ${selectedIds.size} selected lead${selectedIds.size !== 1 ? 's' : ''} to CSV`}
+                                className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 border border-white/20 hover:border-white/40 text-white text-xs font-semibold px-3 py-2 rounded-lg transition backdrop-blur-sm"
+                            >
+                                <i className="fa-solid fa-file-arrow-down text-[10px]" />
+                                Export
+                            </button>
+                        )}
+
+                        {/* Divider */}
+                        <div className="h-6 w-px bg-white/25 hidden sm:block" />
+
+                        {/* ── Delete ── */}
                         {(user?.role === 'superadmin' || user?.role === 'manager' || user?.permissions?.deleteLeads) && (
                             <button
                                 onClick={() => {
                                     onBulkDelete([...selectedIds]);
-                                    setSelectedIds(new Set());
                                 }}
-                                className="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-2"
+                                title={`Permanently delete ${selectedIds.size} lead${selectedIds.size !== 1 ? 's' : ''}`}
+                                className="flex items-center gap-1.5 bg-red-500/80 hover:bg-red-500 border border-red-400/40 text-white text-xs font-semibold px-3 py-2 rounded-lg transition"
                             >
-                                <i className="fa-solid fa-trash-can"></i> Delete
+                                <i className="fa-solid fa-trash-can text-[10px]" />
+                                Delete
                             </button>
                         )}
+
+                        {/* ── Clear selection ── */}
                         <button
                             onClick={() => setSelectedIds(new Set())}
-                            className="text-white hover:text-blue-200 px-3"
+                            title="Clear selection"
+                            className="ml-auto flex items-center gap-1.5 text-white/70 hover:text-white text-xs font-semibold px-3 py-2 rounded-lg hover:bg-white/10 transition"
                         >
-                            <i className="fa-solid fa-times"></i>
+                            <i className="fa-solid fa-xmark" /> Clear
                         </button>
                     </div>
                 </div>

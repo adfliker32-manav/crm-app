@@ -68,6 +68,9 @@ router.post('/bulk-assign', authMiddleware, checkPermission('assignLeads'), lead
 // 7.2 Bulk Add Tags (MUST BE BEFORE /:id routes!)
 router.post('/bulk-tags', authMiddleware, checkPermission('editLeads'), leadController.bulkAddTags);
 
+// 7.3 Bulk Remove Tags (MUST BE BEFORE /:id routes!)
+router.post('/bulk-remove-tags', authMiddleware, checkPermission('editLeads'), leadController.bulkRemoveTags);
+
 // 7.5. Duplicate Detection Routes (MUST BE BEFORE /:id routes!)
 router.post('/check-duplicates', authMiddleware, leadController.checkDuplicates);
 router.get('/duplicates', authMiddleware, leadController.getDuplicateGroups);

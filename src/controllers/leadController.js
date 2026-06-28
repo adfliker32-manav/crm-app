@@ -1576,6 +1576,46 @@ const bulkAddTags = async (req, res) => {
 };
 
 // ==========================================
+// NEW: BULK REMOVE TAGS
+// ==========================================
+const bulkRemoveTags = async (req, res) => {
+    try {
+        const { leadIds, tags } = req.body;
+
+        if (!Array.isArray(leadIds) || leadIds.length === 0) {
+            return res.status(400).json({ message: "No leads selected" });
+        }
+
+        if (!Array.isArray(tags) || tags.length === 0) {
+            return res.status(400).json({ message: "No tags provided" });
+        }
+
+        const query = { _id: { $in: leadIds }, ...req.dataScope };
+
+        // $pull removes matching tag values from the tags array
+        const result = await Lead.updateMany(
+            query,
+            { $pull: { tags: { $in: tags } } }
+        );
+
+        logActivity({
+            userId: getRequestUserId(req.user),
+            userName: req.user.name || 'Unknown',
+            actionType: 'LEAD_EDITED',
+            entityType: 'Lead',
+            entityName: 'Bulk Remove Tags',
+            metadata: { count: leadIds.length, tags },
+            companyId: req.tenantId
+        }).catch(err => console.error('Audit log error:', err));
+
+        res.json({ success: true, message: `Tags removed from ${result.modifiedCount} leads` });
+    } catch (err) {
+        console.error("Bulk Remove Tags Error:", err);
+        res.status(500).json({ message: "Error removing tags" });
+    }
+};
+
+// ==========================================
 // NEW: BULK DELETE LEADS (single DB query replaces N individual deletes)
 // ==========================================
 const bulkDeleteLeads = async (req, res) => {
@@ -1679,6 +1719,7 @@ module.exports = {
     autoDeleteDuplicates,
     bulkImportLeads,
     bulkAddTags,
+    bulkRemoveTags,
     bulkDeleteLeads,
     bulkUpdateStatus
 };
