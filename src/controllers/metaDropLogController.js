@@ -223,13 +223,15 @@ const getLeadAlertConfig = async (req, res) => {
     try {
         const userId = req.tenantId;
         const ws = await WorkspaceSettings.findOne({ userId })
-            .select('leadAlertWhatsappEnabled leadAlertWhatsappNumber leadAlertWhatsappSources').lean();
+            .select('leadAlertWhatsappEnabled leadAlertWhatsappNumber leadAlertWhatsappSources leadAlertWhatsappCustomMessage leadAlertWhatsappTemplateName').lean();
 
         res.json({
             success: true,
             leadAlertWhatsappEnabled: ws?.leadAlertWhatsappEnabled || false,
             leadAlertWhatsappNumber: ws?.leadAlertWhatsappNumber || '',
-            leadAlertWhatsappSources: ws?.leadAlertWhatsappSources || ['Meta']
+            leadAlertWhatsappSources: ws?.leadAlertWhatsappSources || ['Meta', 'WhatsApp', 'Web', 'Manual', 'Booking', 'Email', 'Google Sheet'],
+            leadAlertWhatsappCustomMessage: ws?.leadAlertWhatsappCustomMessage || '',
+            leadAlertWhatsappTemplateName: ws?.leadAlertWhatsappTemplateName || ''
         });
     } catch (err) {
         console.error('❌ getLeadAlertConfig error:', err.message);
@@ -252,13 +254,20 @@ const saveLeadAlertConfig = async (req, res) => {
             leadAlertWhatsappTemplateName 
         } = req.body;
 
+        // If sources aren't passed, fetch existing so we don't accidentally overwrite with just 'Meta'
+        let sourcesToSave = leadAlertWhatsappSources;
+        if (!Array.isArray(sourcesToSave)) {
+            const existing = await WorkspaceSettings.findOne({ userId }).select('leadAlertWhatsappSources').lean();
+            sourcesToSave = existing?.leadAlertWhatsappSources || ['Meta', 'WhatsApp', 'Web', 'Manual', 'Booking', 'Email', 'Google Sheet'];
+        }
+
         await WorkspaceSettings.findOneAndUpdate(
             { userId },
             {
                 $set: {
                     leadAlertWhatsappEnabled: !!leadAlertWhatsappEnabled,
                     leadAlertWhatsappNumber: leadAlertWhatsappNumber?.trim() || null,
-                    leadAlertWhatsappSources: Array.isArray(leadAlertWhatsappSources) ? leadAlertWhatsappSources : ['Meta'],
+                    leadAlertWhatsappSources: sourcesToSave,
                     leadAlertWhatsappCustomMessage: leadAlertWhatsappCustomMessage?.trim() || null,
                     leadAlertWhatsappTemplateName: leadAlertWhatsappTemplateName?.trim() || null
                 }
