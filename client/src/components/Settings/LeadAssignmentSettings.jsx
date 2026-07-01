@@ -64,15 +64,24 @@ const LeadAssignmentSettings = () => {
     const [isBuilderOpen, setIsBuilderOpen] = useState(false);
     const [editingRule, setEditingRule] = useState(null);
 
+    // WhatsApp lead arrival alert (Agent notification)
+    const [leadAlert, setLeadAlert] = useState({
+        enabled: false,
+        customMessage: '',
+        templateName: ''
+    });
+    const [leadAlertSaving, setLeadAlertSaving] = useState(false);
+
     // ── Load all data ─────────────────────────────────────────────────────
     const loadAll = useCallback(async () => {
         setLoadingData(true);
         try {
-            const [teamRes, webRes, sheetRes, metaRes] = await Promise.all([
+            const [teamRes, webRes, sheetRes, metaRes, alertRes] = await Promise.all([
                 api.get('/auth/my-team?includeManager=true').catch(() => ({ data: [] })),
                 api.get('/web-leads/config').catch(() => ({ data: {} })),
                 api.get('/leads/sheet-sync-config').catch(() => ({ data: {} })),
                 api.get('/meta/field-mapping').catch(() => ({ data: {} })),
+                api.get('/meta/lead-alert-config').catch(() => ({ data: {} }))
             ]);
 
             setTeamUsers(Array.isArray(teamRes.data) ? teamRes.data : []);
@@ -86,6 +95,14 @@ const LeadAssignmentSettings = () => {
                 sheet:   { value: sheetAgent, saving: false, savedValue: sheetAgent },
                 meta:    { value: metaAgent,  saving: false, savedValue: metaAgent },
             });
+
+            if (alertRes.data) {
+                setLeadAlert({
+                    enabled: alertRes.data.leadAlertWhatsappEnabled || false,
+                    customMessage: alertRes.data.leadAlertWhatsappCustomMessage || '',
+                    templateName: alertRes.data.leadAlertWhatsappTemplateName || ''
+                });
+            }
         } catch (e) {
             showError('Failed to load assignment data');
         } finally {
@@ -137,6 +154,23 @@ const LeadAssignmentSettings = () => {
 
     const setSourceValue = (key, val) =>
         setSources(s => ({ ...s, [key]: { ...s[key], value: val } }));
+
+    // ── Save Agent Alerts ──────────────────────────────────────────────────
+    const handleSaveAlerts = async () => {
+        setLeadAlertSaving(true);
+        try {
+            await api.post('/meta/lead-alert-config', {
+                leadAlertWhatsappEnabled: leadAlert.enabled,
+                leadAlertWhatsappCustomMessage: leadAlert.customMessage,
+                leadAlertWhatsappTemplateName: leadAlert.templateName
+            });
+            showSuccess('Agent alert settings saved');
+        } catch {
+            showError('Failed to save agent alert settings');
+        } finally {
+            setLeadAlertSaving(false);
+        }
+    };
 
     // ── Rule actions ──────────────────────────────────────────────────────
     const toggleRule = async (id, current) => {
@@ -427,6 +461,82 @@ const LeadAssignmentSettings = () => {
                         </div>
                     </div>
                 )}
+            </section>
+
+            {/* ══ SECTION 3: Agent Notifications ═══════════════════════════ */}
+            <section>
+                <div className="flex items-center gap-2 mb-4">
+                    <div className="w-6 h-6 rounded-lg bg-green-100 flex items-center justify-center">
+                        <i className="fa-brands fa-whatsapp text-green-600 text-xs"></i>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-700 uppercase tracking-widest">Agent WhatsApp Notifications</h3>
+                </div>
+                <p className="text-xs text-slate-500 mb-5 -mt-2">
+                    Automatically send a WhatsApp message to the assigned agent when a new lead is assigned to them.
+                </p>
+                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-6 pb-6 border-b border-slate-100">
+                        <div>
+                            <h4 className="font-semibold text-slate-800">Enable Agent Alerts</h4>
+                            <p className="text-xs text-slate-500 mt-1">Notify agents immediately on their personal WhatsApp number.</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={leadAlert.enabled}
+                                onChange={e => setLeadAlert(prev => ({ ...prev, enabled: e.target.checked }))}
+                                className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-500"></div>
+                        </label>
+                    </div>
+
+                    {leadAlert.enabled && (
+                        <div className="space-y-5">
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 mb-1">
+                                    Custom Notification Message
+                                </label>
+                                <p className="text-xs text-slate-500 mb-2">
+                                    This message will be sent to the agent. You can use variables like <code>{`{{leadName}}`}</code>, <code>{`{{leadPhone}}`}</code>, and <code>{`{{leadSource}}`}</code>.
+                                </p>
+                                <textarea
+                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-green-400 outline-none min-h-[100px]"
+                                    placeholder="Hey! A new lead {{leadName}} has been assigned to you. Phone: {{leadPhone}}"
+                                    value={leadAlert.customMessage}
+                                    onChange={e => setLeadAlert(prev => ({ ...prev, customMessage: e.target.value }))}
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 mb-1">
+                                    Fallback Template Name
+                                </label>
+                                <p className="text-xs text-slate-500 mb-2">
+                                    If the custom message fails (e.g. outside 24-hour window), this pre-approved WhatsApp template will be sent instead.
+                                </p>
+                                <input
+                                    type="text"
+                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-green-400 outline-none"
+                                    placeholder="e.g. agent_new_lead_alert"
+                                    value={leadAlert.templateName}
+                                    onChange={e => setLeadAlert(prev => ({ ...prev, templateName: e.target.value }))}
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="mt-6 pt-6 border-t border-slate-100 flex justify-end">
+                        <button
+                            onClick={handleSaveAlerts}
+                            disabled={leadAlertSaving}
+                            className="bg-green-600 hover:bg-green-700 text-white px-6 py-2.5 rounded-xl text-sm font-bold shadow-md shadow-green-500/20 transition flex items-center gap-2 disabled:opacity-50"
+                        >
+                            <i className={`fa-solid ${leadAlertSaving ? 'fa-spinner fa-spin' : 'fa-check'}`}></i>
+                            {leadAlertSaving ? 'Saving...' : 'Save Alert Settings'}
+                        </button>
+                    </div>
+                </div>
             </section>
 
             {/* RuleBuilderModal — reuse existing */}

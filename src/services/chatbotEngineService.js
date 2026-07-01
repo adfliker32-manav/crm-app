@@ -1845,6 +1845,53 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 break;
             }
 
+            case 'notify_agent': {
+                // Tell customer
+                const notifyCustomerText = replaceVariables(node.data.text || 'Agent will be notified and chatbot paused for 24 hours.', session.variables);
+                const notifyResult = await sendWhatsAppTextMessage(conversation.phone, notifyCustomerText, session.userId);
+                await saveBotMessage(session.conversationId, session.userId, notifyCustomerText, 'text', notifyResult);
+
+                // Pause chatbot for 24 hours
+                await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                    $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+                });
+
+                // Notify the selected agent via WhatsApp
+                const targetAgentId = node.data.notifyAgentId;
+                if (targetAgentId) {
+                    try {
+                        const agent = await User.findById(targetAgentId).select('phone name').lean();
+                        if (agent && agent.phone) {
+                            const note = node.data.internalNote ? `\nNote: ${node.data.internalNote}` : '';
+                            const alertMsg = `🔔 *Chatbot Agent Request*\nA customer (${conversation.displayName || conversation.phone}) needs your attention.${note}\nChatbot is paused for 24 hours for this conversation.`;
+                            
+                            // Send text message directly to agent
+                            await sendWhatsAppTextMessage(agent.phone, alertMsg, session.userId);
+                            console.log(`[Chatbot] Successfully sent notify_agent WhatsApp to agent ${targetAgentId}`);
+                        } else {
+                            console.warn(`[Chatbot] notify_agent: Agent ${targetAgentId} has no phone number configured.`);
+                        }
+                    } catch (err) {
+                        console.error('[Chatbot] Failed to send WhatsApp alert to agent in notify_agent node:', err.message);
+                    }
+                }
+
+                // Notify via Socket.IO as well
+                const notifyUserId = targetAgentId || conversation.assignedTo || session.userId;
+                emitToUser(notifyUserId, 'notification:agent', {
+                    type: 'chatbot_notify_agent',
+                    conversationId: conversation._id,
+                    phone: conversation.phone,
+                    displayName: conversation.displayName,
+                    message: `🔔 Chatbot requested your attention for ${conversation.displayName || conversation.phone}`,
+                    timestamp: new Date()
+                });
+
+                // End the chatbot session
+                await endSession(session, 'notify_agent');
+                return { success: true };
+            }
+
             case 'handoff':
                 // Transfer to human agent — end chatbot session and notify agent
                 const handoffText = replaceVariables(node.data.text || 'An agent will assist you shortly.', session.variables);

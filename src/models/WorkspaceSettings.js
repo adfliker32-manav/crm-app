@@ -102,6 +102,14 @@ const workspaceSettingsSchema = new mongoose.Schema({
         type: [String],
         default: ['Meta']
     },
+    leadAlertWhatsappCustomMessage: {
+        type: String,
+        default: ''
+    },
+    leadAlertWhatsappTemplateName: {
+        type: String,
+        default: ''
+    },
 
     // 🎛️ WORKSPACE-LEVEL FEATURE FLAGS
     planFeatures: {

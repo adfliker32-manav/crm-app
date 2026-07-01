@@ -71,7 +71,7 @@ const DeletableEdge = ({
 const CompactFlowNode = ({ data, id, selected }) => {
     const type = data.blockType || 'message';
     const icon = {
-        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️', delay: '⏱️', condition: '🔀', booking_link: '📅', ai: '🧠'
+        message: '💬', media: '🖼️', request_media: '📸', list: '📋', product: '🛍️', products: '🛒', template: '📄', handoff: '👤', start: '🚀', question: '❓', action: '⚙️', delay: '⏱️', condition: '🔀', booking_link: '📅', ai: '🧠', notify_agent: '🔔'
     }[type] || '💬';
 
     return (
@@ -180,6 +180,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [approvedTemplates, setApprovedTemplates] = useState([]);
     const [crmStages, setCrmStages] = useState([]);
+    const [teamUsers, setTeamUsers] = useState([]);
     const [reactFlowReady, setReactFlowReady] = useState(false);
     const reactFlowRef = useRef(null);
     const didInitialFitViewRef = useRef(false);
@@ -197,6 +198,10 @@ const FlowBuilder = ({ flowId, onBack }) => {
         api.get('/stages')
             .then(res => setCrmStages(res.data || []))
             .catch(err => console.error('Failed to fetch CRM stages:', err));
+
+        api.get('/auth/my-team?includeManager=true')
+            .then(res => setTeamUsers(Array.isArray(res.data) ? res.data : []))
+            .catch(err => console.error('Failed to fetch team users:', err));
     }, []);
 
     const nodeTypes = useMemo(() => ({
@@ -214,6 +219,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         condition: CompactFlowNode,
         booking_link: CompactFlowNode,
         ai: CompactFlowNode,
+        notify_agent: CompactFlowNode,
         start: CompactFlowNode // Fallback for old custom types
     }), []);
 
@@ -263,6 +269,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
         { type: 'template', icon: '📄', label: 'Template', desc: 'Use message template' },
         { type: 'ai', icon: '🧠', label: 'AI Assistant', desc: 'Auto-reply using AI' },
         { type: 'action', icon: '⚙️', label: 'Lead Action', desc: 'Create lead or update CRM fields' },
+        { type: 'notify_agent', icon: '🔔', label: 'Notify Agent', desc: 'Alert agent & pause for 24h' },
         { type: 'handoff', icon: '👤', label: 'Request Intervention', desc: 'Transfer to agent' },
         { type: 'booking_link', icon: '📅', label: 'Booking Link', desc: 'Send appointment booking link to customer' }
     ];
@@ -506,6 +513,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
             template: { text: 'Send approved template', templateName: '', templateLanguage: 'en' },
             action: { text: 'Action: Create Lead', actionType: 'create_lead', actionData: { source: 'WhatsApp Chatbot', status: 'New' } },
             handoff: { text: 'Connecting you to an agent...' },
+            notify_agent: { text: 'Agent will be notified and chatbot paused for 24 hours.', notifyAgentId: '' },
             booking_link: { text: '📅 Click the link below to book your appointment:' },
             ai: { text: 'Ask our AI Assistant a question', aiSystemPromptOverride: '', aiMaxTurns: 5 }
         };
@@ -1137,6 +1145,40 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                 </div>
                                             </div>
                                         )}
+                                    </div>
+                                )}
+
+                                {selectedNode.data.blockType === 'notify_agent' && (
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-4 space-y-4">
+                                        <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-2">
+                                            <i className="fa-solid fa-triangle-exclamation text-amber-500 mt-0.5 text-xs shrink-0"></i>
+                                            <p className="text-[11px] text-amber-700">
+                                                <strong>Note:</strong> When this node triggers, a WhatsApp notification is sent to the selected agent and the chatbot will automatically pause for 24 hours to allow the agent to converse.
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Select Agent to Notify</label>
+                                            <select
+                                                value={selectedNode.data.notifyAgentId || ''}
+                                                onChange={(e) => updateSelectedNodeData({ notifyAgentId: e.target.value })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                            >
+                                                <option value="">— Select an Agent —</option>
+                                                {teamUsers.map(u => (
+                                                    <option key={u._id} value={u._id}>{u.name} ({u.role})</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Internal Note (Optional)</label>
+                                            <textarea
+                                                value={selectedNode.data.internalNote || ''}
+                                                onChange={(e) => updateSelectedNodeData({ internalNote: e.target.value })}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
+                                                rows="2"
+                                                placeholder="e.g. Needs immediate callback"
+                                            />
+                                        </div>
                                     </div>
                                 )}
 

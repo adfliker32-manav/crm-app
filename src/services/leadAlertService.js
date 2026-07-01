@@ -1,5 +1,6 @@
 const WorkspaceSettings = require('../models/WorkspaceSettings');
-const { sendWhatsAppTextMessage } = require('./whatsappService');
+const User = require('../models/User');
+const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } = require('./whatsappService');
 const { emitToUser } = require('./socketService');
 
 /**
@@ -41,21 +42,15 @@ async function sendLeadArrivalAlert(lead, options = {}) {
     // 3. Process WhatsApp notification
     try {
         const ws = await WorkspaceSettings.findOne({ userId })
-            .select('leadAlertWhatsappEnabled leadAlertWhatsappNumber leadAlertWhatsappSources')
+            .select('leadAlertWhatsappEnabled leadAlertWhatsappNumber leadAlertWhatsappSources leadAlertWhatsappCustomMessage leadAlertWhatsappTemplateName')
             .lean();
 
-        if (!ws?.leadAlertWhatsappEnabled || !ws?.leadAlertWhatsappNumber) {
-            return;
-        }
-
-        const alertPhone = ws.leadAlertWhatsappNumber.trim();
-        if (!alertPhone) {
+        if (!ws?.leadAlertWhatsappEnabled) {
             return;
         }
 
         // Determine if lead source matches the selected list
         const enabledSources = ws.leadAlertWhatsappSources || ['Meta'];
-        
         const normalized = normalizeSource(rawSource);
         
         const isMatched = enabledSources.some(src => {
@@ -70,39 +65,84 @@ async function sendLeadArrivalAlert(lead, options = {}) {
             return;
         }
 
-        const leadEmail = (lead.email && !lead.email.includes('@lead.local')) ? lead.email : '—';
-        
         let now;
         try {
             now = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', hour12: true });
         } catch {
             now = new Date().toUTCString();
         }
+        
+        const leadEmail = (lead.email && !lead.email.includes('@lead.local')) ? lead.email : '—';
 
-        const msg = [
-            `🔔 *New Lead Received!*`,
-            ``,
-            `👤 *Name:* ${leadName}`,
-            `📱 *Phone:* ${leadPhone}`,
-            `✉️ *Email:* ${leadEmail}`,
-            `📋 *Source:* ${rawSource}`,
-            `🕒 *Time:* ${now}`,
-            ``,
-            `Open your CRM to follow up → adfliker.com`
-        ].join('\n');
+        // Helper to send to a specific number
+        const sendAlertToNumber = async (targetPhone, isAgent = false, agentName = '') => {
+            if (!targetPhone) return;
+            targetPhone = targetPhone.trim();
+            if (!targetPhone) return;
 
-        try {
-            await sendWhatsAppTextMessage(alertPhone, msg, userId.toString());
-            console.log(`📲 [LeadAlertService] WA alert sent to ${alertPhone} for lead "${leadName}" (source: ${rawSource})`);
-        } catch (waErr) {
-            const errCode = waErr.response?.data?.error?.code;
-            const errMsg  = waErr.response?.data?.error?.message || waErr.message;
-            if (errCode === 131047 || errCode === 131026) {
-                console.warn(`⚠️ [LeadAlertService] WA session not open for ${alertPhone} (code ${errCode}).`);
+            let customMsgText = ws.leadAlertWhatsappCustomMessage?.trim();
+            const fallbackTemplate = ws.leadAlertWhatsappTemplateName?.trim();
+
+            if (customMsgText) {
+                // Replace variables
+                customMsgText = customMsgText
+                    .replace(/\{\{leadName\}\}/g, leadName)
+                    .replace(/\{\{leadPhone\}\}/g, leadPhone)
+                    .replace(/\{\{leadSource\}\}/g, rawSource);
             } else {
-                console.warn(`⚠️ [LeadAlertService] WA alert failed for lead ${leadId} (code ${errCode || 'N/A'}):`, errMsg);
+                // Default message
+                customMsgText = [
+                    `🔔 *New Lead Received!*`,
+                    ``,
+                    `👤 *Name:* ${leadName}`,
+                    `📱 *Phone:* ${leadPhone}`,
+                    `✉️ *Email:* ${leadEmail}`,
+                    `📋 *Source:* ${rawSource}`,
+                    `🕒 *Time:* ${now}`,
+                    ``,
+                    `Open your CRM to follow up → adfliker.com`
+                ].join('\n');
+            }
+
+            try {
+                // Try sending custom text message first
+                await sendWhatsAppTextMessage(targetPhone, customMsgText, userId.toString());
+                console.log(`📲 [LeadAlertService] WA text alert sent to ${targetPhone} for lead "${leadName}"`);
+            } catch (waErr) {
+                const errCode = waErr.response?.data?.error?.code;
+                
+                // If it fails (e.g. 131047 session outside 24h window), try fallback template
+                if (errCode === 131047 && fallbackTemplate) {
+                    console.log(`⚠️ [LeadAlertService] Session closed for ${targetPhone}. Falling back to template: ${fallbackTemplate}`);
+                    try {
+                        // Assuming the template doesn't require complex dynamic components for now, 
+                        // or requires basic ones. If it does, they'd need to be configured. 
+                        // We will just send it with no components, or you could map variables if needed.
+                        await sendWhatsAppTemplateMessage(targetPhone, fallbackTemplate, 'en', [], userId.toString());
+                        console.log(`📲 [LeadAlertService] WA template alert sent to ${targetPhone} for lead "${leadName}"`);
+                    } catch (tplErr) {
+                        console.warn(`⚠️ [LeadAlertService] Fallback template failed for ${targetPhone}:`, tplErr.response?.data?.error?.message || tplErr.message);
+                    }
+                } else {
+                    console.warn(`⚠️ [LeadAlertService] WA alert failed for lead ${leadId} to ${targetPhone}:`, waErr.response?.data?.error?.message || waErr.message);
+                }
+            }
+        };
+
+        // Send to global number if configured
+        await sendAlertToNumber(ws.leadAlertWhatsappNumber);
+
+        // Send to assigned agent if configured
+        if (lead.assignedTo) {
+            const agent = await User.findById(lead.assignedTo).select('phone name').lean();
+            if (agent && agent.phone) {
+                // Don't send twice if agent phone is same as global phone
+                if (agent.phone.trim() !== ws.leadAlertWhatsappNumber?.trim()) {
+                    await sendAlertToNumber(agent.phone, true, agent.name);
+                }
             }
         }
+
     } catch (alertErr) {
         console.warn(`⚠️ [LeadAlertService] WhatsApp alert dispatch failed for lead ${leadId}:`, alertErr.message);
     }

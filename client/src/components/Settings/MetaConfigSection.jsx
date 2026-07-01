@@ -60,9 +60,6 @@ const MetaConfigSection = () => {
     const [cfmSaving, setCfmSaving] = useState(false);
     const [cfmLoaded, setCfmLoaded] = useState(false);
 
-    // WhatsApp lead arrival alert
-    const [leadAlert, setLeadAlert] = useState({ enabled: false, phone: '', sources: ['Meta'] });
-    const [leadAlertSaving, setLeadAlertSaving] = useState(false);
 
     // Check URL params for OAuth result
     useEffect(() => {
@@ -110,7 +107,6 @@ const MetaConfigSection = () => {
         loadCapiSettings();
         loadStages();
         loadFieldMapping();
-        loadLeadAlertConfig();
         loadCustomFieldMapping();
     }, []);
 
@@ -396,36 +392,6 @@ const MetaConfigSection = () => {
         }
     };
 
-    const loadLeadAlertConfig = async () => {
-        try {
-            const res = await api.get('/meta/lead-alert-config');
-            if (res.data.success) {
-                setLeadAlert({
-                    enabled: res.data.leadAlertWhatsappEnabled || false,
-                    phone: res.data.leadAlertWhatsappNumber || '',
-                    sources: res.data.leadAlertWhatsappSources || ['Meta']
-                });
-            }
-        } catch (e) {
-            console.error('Failed to load lead alert config:', e);
-        }
-    };
-
-    const handleSaveLeadAlertConfig = async () => {
-        try {
-            setLeadAlertSaving(true);
-            await api.post('/meta/lead-alert-config', {
-                leadAlertWhatsappEnabled: leadAlert.enabled,
-                leadAlertWhatsappNumber: leadAlert.phone,
-                leadAlertWhatsappSources: leadAlert.sources
-            });
-            showSuccess('Lead alert settings saved!');
-        } catch (e) {
-            showError('Failed to save lead alert settings');
-        } finally {
-            setLeadAlertSaving(false);
-        }
-    };
 
     const handleToggleSync = async () => {
         try {
@@ -1086,131 +1052,7 @@ const MetaConfigSection = () => {
                     </div>
                 </div>
 
-                {/* ── WhatsApp Lead Arrival Alert ── */}
-                <div className="mt-6 bg-green-50 border border-green-200 rounded-xl p-6" id="lead-arrival-alert">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center shrink-0">
-                            <i className="fa-brands fa-whatsapp text-white text-xl" />
-                        </div>
-                        <div>
-                            <h4 className="font-bold text-green-800">WhatsApp Lead Arrival Alert</h4>
-                            <p className="text-xs text-green-600 mt-0.5">Get a WhatsApp message on your phone the moment a new lead arrives in your CRM.</p>
-                        </div>
-                        {/* Toggle */}
-                        <label className="relative inline-flex items-center cursor-pointer ml-auto shrink-0">
-                            <input
-                                type="checkbox"
-                                id="lead-alert-toggle"
-                                checked={leadAlert.enabled}
-                                onChange={e => setLeadAlert(prev => ({ ...prev, enabled: e.target.checked }))}
-                                className="sr-only peer"
-                            />
-                            <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-500" />
-                        </label>
-                    </div>
 
-                    {leadAlert.enabled && (
-                        <div className="space-y-4">
-                            <div>
-                                <label htmlFor="lead-alert-phone" className="block text-sm font-semibold text-slate-700 mb-1">
-                                    <i className="fa-solid fa-phone mr-1.5 text-green-600" />
-                                    Alert Phone Number
-                                    <span className="text-xs font-normal text-slate-400 ml-2">(with country code, e.g. 919876543210)</span>
-                                </label>
-                                <input
-                                    id="lead-alert-phone"
-                                    type="tel"
-                                    value={leadAlert.phone}
-                                    onChange={e => setLeadAlert(prev => ({ ...prev, phone: e.target.value.replace(/\s/g, '') }))}
-                                    placeholder="919876543210"
-                                    className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-green-500 outline-none font-mono text-sm"
-                                />
-                            </div>
-
-                            {/* Lead Sources Selection */}
-                            <div>
-                                <label className="block text-sm font-semibold text-slate-700 mb-2">
-                                    <i className="fa-solid fa-filter mr-1.5 text-green-600" />
-                                    Select Lead Sources for WhatsApp Alerts
-                                </label>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 bg-white border border-slate-200 rounded-xl p-4">
-                                    {[
-                                        { id: 'Meta', label: 'Meta (Ads)', icon: 'fa-brands fa-facebook text-blue-600' },
-                                        { id: 'Web', label: 'Web (Landing Page)', icon: 'fa-solid fa-globe text-indigo-500' },
-                                        { id: 'Manual', label: 'Manual Entry', icon: 'fa-solid fa-user-plus text-amber-500' },
-                                        { id: 'Booking', label: 'Booking Page', icon: 'fa-solid fa-calendar-check text-green-600' },
-                                        { id: 'Email', label: 'Email Integration', icon: 'fa-solid fa-envelope text-red-500' },
-                                        { id: 'WhatsApp', label: 'WhatsApp Chat', icon: 'fa-brands fa-whatsapp text-emerald-500' },
-                                        { id: 'Google Sheet', label: 'Google Sheet Sync', icon: 'fa-solid fa-table text-teal-600' }
-                                    ].map(src => {
-                                        const isChecked = leadAlert.sources?.includes(src.id);
-                                        return (
-                                            <label
-                                                key={src.id}
-                                                className={`flex items-center gap-2.5 p-3 rounded-lg border-2 cursor-pointer transition select-none hover:bg-slate-50 ${
-                                                    isChecked
-                                                        ? 'border-green-500 bg-green-50/20 text-green-800'
-                                                        : 'border-slate-100 bg-white text-slate-600 hover:border-slate-200'
-                                                }`}
-                                            >
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isChecked}
-                                                    onChange={() => {
-                                                        const current = leadAlert.sources || [];
-                                                        const updated = current.includes(src.id)
-                                                            ? current.filter(x => x !== src.id)
-                                                            : [...current, src.id];
-                                                        setLeadAlert(prev => ({ ...prev, sources: updated }));
-                                                    }}
-                                                    className="w-4 h-4 rounded text-green-600 focus:ring-green-500 border-slate-300"
-                                                />
-                                                <div className="flex items-center gap-1.5 text-xs font-semibold">
-                                                    <i className={src.icon} />
-                                                    <span>{src.label}</span>
-                                                </div>
-                                            </label>
-                                        );
-                                    })}
-                                </div>
-                                <p className="text-xs text-slate-400 mt-2">
-                                    <i className="fa-solid fa-circle-info mr-1" />
-                                    Alerts will only be sent for new leads arriving from the selected sources. Note: Bulk CSV imports do not trigger alerts to avoid spam.
-                                </p>
-                            </div>
-
-                            {/* Message Preview */}
-                            <div className="bg-white border border-green-100 rounded-xl p-4">
-                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-                                    <i className="fa-regular fa-eye mr-1" /> Message Preview
-                                </p>
-                                <div className="bg-[#dcf8c6] rounded-xl rounded-tl-none px-4 py-3 text-sm text-slate-800 font-mono leading-relaxed max-w-xs shadow-sm">
-                                    <p>🔔 <strong>New Lead Received!</strong></p>
-                                    <p className="mt-1">👤 <strong>Name:</strong> Rahul Sharma</p>
-                                    <p>📱 <strong>Phone:</strong> +91 98765 43210</p>
-                                    <p>✉️ <strong>Email:</strong> rahul@gmail.com</p>
-                                    <p>📋 <strong>Source:</strong> Meta (Form: 123…)</p>
-                                    <p>🕒 <strong>Time:</strong> 6:35 PM IST</p>
-                                    <p className="mt-1 text-slate-500 text-xs">Open your CRM to follow up → adfliker.com</p>
-                                </div>
-                                <p className="text-xs text-slate-400 mt-2">
-                                    <i className="fa-solid fa-circle-info mr-1" />
-                                    Sent from your configured WhatsApp Business number. Requires an active WhatsApp session.
-                                </p>
-                            </div>
-                        </div>
-                    )}
-
-                    <button
-                        id="save-lead-alert-btn"
-                        onClick={handleSaveLeadAlertConfig}
-                        disabled={leadAlertSaving}
-                        className="mt-4 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white px-5 py-2 rounded-lg font-bold text-sm transition flex items-center gap-2"
-                    >
-                        <i className={`fa-solid ${leadAlertSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`} />
-                        {leadAlertSaving ? 'Saving...' : 'Save Alert Settings'}
-                    </button>
-                </div>
 
                 {/* ── Lead Drop Log ── */}
                 <div className="mt-6 bg-amber-50 border border-amber-200 rounded-xl p-6" id="meta-lead-drop-log">
