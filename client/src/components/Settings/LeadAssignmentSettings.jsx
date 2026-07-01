@@ -69,7 +69,8 @@ const LeadAssignmentSettings = () => {
         enabled: false,
         customMessage: '',
         templateName: '',
-        globalNumber: ''
+        globalNumber: '',
+        sources: []
     });
     const [leadAlertSaving, setLeadAlertSaving] = useState(false);
 
@@ -102,7 +103,8 @@ const LeadAssignmentSettings = () => {
                     enabled: alertRes.data.leadAlertWhatsappEnabled || false,
                     customMessage: alertRes.data.leadAlertWhatsappCustomMessage || '',
                     templateName: alertRes.data.leadAlertWhatsappTemplateName || '',
-                    globalNumber: alertRes.data.leadAlertWhatsappNumber || ''
+                    globalNumber: alertRes.data.leadAlertWhatsappNumber || '',
+                    sources: alertRes.data.leadAlertWhatsappSources || ['Meta', 'WhatsApp', 'Web', 'Manual', 'Booking', 'Email', 'Google Sheet']
                 });
             }
         } catch (e) {
@@ -165,7 +167,8 @@ const LeadAssignmentSettings = () => {
                 leadAlertWhatsappEnabled: leadAlert.enabled,
                 leadAlertWhatsappCustomMessage: leadAlert.customMessage,
                 leadAlertWhatsappTemplateName: leadAlert.templateName,
-                leadAlertWhatsappNumber: leadAlert.globalNumber
+                leadAlertWhatsappNumber: leadAlert.globalNumber,
+                leadAlertWhatsappSources: leadAlert.sources
             });
             showSuccess('Agent alert settings saved');
         } catch {
@@ -525,6 +528,36 @@ const LeadAssignmentSettings = () => {
                                     value={leadAlert.templateName}
                                     onChange={e => setLeadAlert(prev => ({ ...prev, templateName: e.target.value }))}
                                 />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 mb-1">
+                                    Trigger Sources
+                                </label>
+                                <p className="text-xs text-slate-500 mb-2">
+                                    Select which lead sources should trigger a WhatsApp alert.
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                    {['Meta', 'WhatsApp', 'Web', 'Manual', 'Booking', 'Email', 'Google Sheet'].map(src => (
+                                        <label key={src} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-100 transition">
+                                            <input 
+                                                type="checkbox" 
+                                                className="rounded text-green-500 focus:ring-green-400"
+                                                checked={leadAlert.sources.includes(src)}
+                                                onChange={(e) => {
+                                                    const checked = e.target.checked;
+                                                    setLeadAlert(prev => ({
+                                                        ...prev,
+                                                        sources: checked 
+                                                            ? [...prev.sources, src] 
+                                                            : prev.sources.filter(s => s !== src)
+                                                    }));
+                                                }}
+                                            />
+                                            <span className="text-sm text-slate-700">{src}</span>
+                                        </label>
+                                    ))}
+                                </div>
                             </div>
 
                             <div>
