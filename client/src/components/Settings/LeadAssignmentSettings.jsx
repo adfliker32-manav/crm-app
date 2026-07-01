@@ -68,7 +68,8 @@ const LeadAssignmentSettings = () => {
     const [leadAlert, setLeadAlert] = useState({
         enabled: false,
         customMessage: '',
-        templateName: ''
+        templateName: '',
+        globalNumber: ''
     });
     const [leadAlertSaving, setLeadAlertSaving] = useState(false);
 
@@ -100,7 +101,8 @@ const LeadAssignmentSettings = () => {
                 setLeadAlert({
                     enabled: alertRes.data.leadAlertWhatsappEnabled || false,
                     customMessage: alertRes.data.leadAlertWhatsappCustomMessage || '',
-                    templateName: alertRes.data.leadAlertWhatsappTemplateName || ''
+                    templateName: alertRes.data.leadAlertWhatsappTemplateName || '',
+                    globalNumber: alertRes.data.leadAlertWhatsappNumber || ''
                 });
             }
         } catch (e) {
@@ -162,7 +164,8 @@ const LeadAssignmentSettings = () => {
             await api.post('/meta/lead-alert-config', {
                 leadAlertWhatsappEnabled: leadAlert.enabled,
                 leadAlertWhatsappCustomMessage: leadAlert.customMessage,
-                leadAlertWhatsappTemplateName: leadAlert.templateName
+                leadAlertWhatsappTemplateName: leadAlert.templateName,
+                leadAlertWhatsappNumber: leadAlert.globalNumber
             });
             showSuccess('Agent alert settings saved');
         } catch {
@@ -521,6 +524,22 @@ const LeadAssignmentSettings = () => {
                                     placeholder="e.g. agent_new_lead_alert"
                                     value={leadAlert.templateName}
                                     onChange={e => setLeadAlert(prev => ({ ...prev, templateName: e.target.value }))}
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 mb-1">
+                                    Admin Fallback WhatsApp Number
+                                </label>
+                                <p className="text-xs text-slate-500 mb-2">
+                                    If a lead is <strong>not assigned</strong> to an agent, the notification will be sent to this global admin number instead. Include country code (e.g. 919876543210).
+                                </p>
+                                <input
+                                    type="text"
+                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-green-400 outline-none"
+                                    placeholder="e.g. 919876543210"
+                                    value={leadAlert.globalNumber}
+                                    onChange={e => setLeadAlert(prev => ({ ...prev, globalNumber: e.target.value }))}
                                 />
                             </div>
                         </div>

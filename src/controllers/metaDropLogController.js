@@ -244,7 +244,13 @@ const getLeadAlertConfig = async (req, res) => {
 const saveLeadAlertConfig = async (req, res) => {
     try {
         const userId = req.tenantId;
-        const { leadAlertWhatsappEnabled, leadAlertWhatsappNumber, leadAlertWhatsappSources } = req.body;
+        const { 
+            leadAlertWhatsappEnabled, 
+            leadAlertWhatsappNumber, 
+            leadAlertWhatsappSources,
+            leadAlertWhatsappCustomMessage,
+            leadAlertWhatsappTemplateName 
+        } = req.body;
 
         await WorkspaceSettings.findOneAndUpdate(
             { userId },
@@ -252,7 +258,9 @@ const saveLeadAlertConfig = async (req, res) => {
                 $set: {
                     leadAlertWhatsappEnabled: !!leadAlertWhatsappEnabled,
                     leadAlertWhatsappNumber: leadAlertWhatsappNumber?.trim() || null,
-                    leadAlertWhatsappSources: Array.isArray(leadAlertWhatsappSources) ? leadAlertWhatsappSources : ['Meta']
+                    leadAlertWhatsappSources: Array.isArray(leadAlertWhatsappSources) ? leadAlertWhatsappSources : ['Meta'],
+                    leadAlertWhatsappCustomMessage: leadAlertWhatsappCustomMessage?.trim() || null,
+                    leadAlertWhatsappTemplateName: leadAlertWhatsappTemplateName?.trim() || null
                 }
             },
             { new: true }
