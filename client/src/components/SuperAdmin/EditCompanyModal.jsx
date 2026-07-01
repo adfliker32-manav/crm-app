@@ -100,7 +100,10 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
             }
             // Add explicit AI configuration payload
             featurePayload.aiChatbot = !!formData.planFeatures.aiChatbot;
-            featurePayload.aiModel = formData.planFeatures.aiModel || 'chatmini';
+            featurePayload.aiModel   = formData.planFeatures.aiModel || 'chatmini';
+            // External API access (planFeatures.webhooks gates the External API key feature)
+            featurePayload.webhooks  = !!formData.planFeatures.webhooks;
+
 
             await api.put(`/superadmin/companies/${company._id}`, {
                 companyName: formData.companyName,
@@ -338,6 +341,44 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                                 </div>
                             </div>
                         )}
+
+                        {/* External API Access — SuperAdmin override toggle */}
+                        <div className="pt-4 border-t">
+                            <label className="block text-sm font-bold text-slate-700 mb-1">Developer & API Access</label>
+                            <p className="text-xs text-slate-500 mb-3">
+                                Override API access for this client. When ON, they can generate an API key to connect third-party systems.
+                                When OFF, access is blocked even if their plan would normally allow it.
+                            </p>
+                            <div className={`flex items-center gap-3 p-4 rounded-xl border-2 transition ${
+                                formData.planFeatures.webhooks ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 bg-white hover:border-slate-300'
+                            }`}>
+                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                    formData.planFeatures.webhooks ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/30' : 'bg-slate-100 text-slate-400'
+                                }`}>
+                                    <i className="fa-solid fa-plug" />
+                                </div>
+                                <div className="flex-1">
+                                    <div className="text-sm font-bold text-slate-800">External API Access</div>
+                                    <div className="text-xs font-medium text-slate-500">
+                                        {formData.planFeatures.webhooks
+                                            ? 'Enabled — client can generate & use API keys'
+                                            : 'Disabled — client cannot use the External API'}
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => handleFeatureToggle('webhooks')}
+                                    className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
+                                        formData.planFeatures.webhooks ? 'bg-indigo-600' : 'bg-slate-300'
+                                    }`}
+                                >
+                                    <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-all ${
+                                        formData.planFeatures.webhooks ? 'left-6' : 'left-0.5'
+                                    }`} />
+                                </button>
+                            </div>
+                        </div>
+
                     </div>
 
                     <div className="px-6 py-4 border-t bg-slate-50 flex justify-end gap-3 sticky bottom-0">

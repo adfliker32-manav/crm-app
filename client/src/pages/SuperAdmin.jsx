@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import SuperAdminSidebar from '../components/SuperAdmin/SuperAdminSidebar';
 import DashboardView from '../components/SuperAdmin/DashboardView';
-import AgenciesView from '../components/SuperAdmin/AgenciesView';
+import AgencyManagementModule from '../components/SuperAdmin/AgencyManagementModule';
 import DirectClientsView from '../components/SuperAdmin/DirectClientsView';
 import AccountApprovalsView from '../components/SuperAdmin/AccountApprovalsView';
 import GlobalSettingsView from '../components/SuperAdmin/GlobalSettingsView';
@@ -16,6 +16,7 @@ import WhatsAppInbox from '../components/WhatsApp/WhatsAppInbox';
 import EmailInbox from '../components/Email/EmailInbox';
 import SuperAdminCommSettings from '../components/SuperAdmin/SuperAdminCommSettings';
 
+
 const SuperAdmin = () => {
     const [activeView, setActiveView] = useState('dashboard');
 
@@ -25,8 +26,8 @@ const SuperAdmin = () => {
                 return <DashboardView setActiveView={setActiveView} />;
             case 'approvals':
                 return <AccountApprovalsView />;
-            case 'agencies':
-                return <AgenciesView />;
+            case 'agency-management':
+                return <AgencyManagementModule />;
             case 'direct-clients':
                 return <DirectClientsView />;
             case 'finance':
@@ -37,6 +38,7 @@ const SuperAdmin = () => {
                 return <CouponView />;
             case 'support':
                 return <SupportInboxView />;
+
             case 'wa-inbox':
                 return <WhatsAppInbox />;
             case 'email-inbox':

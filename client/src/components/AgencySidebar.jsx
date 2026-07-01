@@ -91,7 +91,13 @@ const AgencySidebar = () => {
                 )}
                 <NavItem collapsed={collapsed} to="/agency/white-label" icon="fa-solid fa-palette" label="White-Label" />
 
+                {!collapsed && (
+                    <p className="text-[10px] text-slate-500 px-6 mt-6 mb-3 uppercase tracking-widest font-bold">💰 Partner Program</p>
+                )}
+                <NavItem collapsed={collapsed} to="/agency/partner-earnings" icon="fa-solid fa-handshake" label="Partner Earnings" />
+
             </nav>
+
 
             {/* Bottom Profile / Collapse Toggle */}
             <div className="border-t border-slate-800/60 p-4 space-y-2 bg-[#080B13]">

@@ -176,4 +176,29 @@ router.get('/billing-reminder-config',           authMiddleware, requireSuperAdm
 router.put('/billing-reminder-config',           authMiddleware, requireSuperAdmin, saveBillingReminderConfig);
 router.get('/billing-reminder-config/templates', authMiddleware, requireSuperAdmin, getBillingReminderTemplates);
 
-module.exports = router;
+// 🤝 PARTNER REVENUE SHARING — Withdrawals & Commission Tier Management
+const {
+    listWithdrawals,
+    processWithdrawal,
+    getCommissionTiers,
+    updateCommissionTiers,
+    listAgencyPartnerStats,
+    getAgencyManagementAnalytics
+} = require('../controllers/partnerAdminController');
+
+// Agency Management Analytics
+router.get('/partner/analytics', authMiddleware, requireSuperAdmin, getAgencyManagementAnalytics);
+
+// Commission tier configuration
+router.get('/partner/commission-tiers', authMiddleware, requireSuperAdmin, getCommissionTiers);
+router.put('/partner/commission-tiers', authMiddleware, requireSuperAdmin, updateCommissionTiers);
+
+// Agency overview with partner stats
+router.get('/partner/agencies', authMiddleware, requireSuperAdmin, listAgencyPartnerStats);
+
+// Withdrawal request management
+router.get('/partner/withdrawals', authMiddleware, requireSuperAdmin, listWithdrawals);
+router.put('/partner/withdrawals/:id/process', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, processWithdrawal);
+
+module.exports = router;
+

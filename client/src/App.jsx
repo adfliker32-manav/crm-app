@@ -23,6 +23,8 @@ const Register = lazy(() => import('./pages/Register'));
 const AgencyDashboard = lazy(() => import('./pages/Agency/AgencyDashboard'));
 const AgencyClients = lazy(() => import('./pages/Agency/AgencyClients'));
 const AgencyWhiteLabel = lazy(() => import('./pages/Agency/AgencyWhiteLabel'));
+const PartnerEarnings = lazy(() => import('./pages/Agency/PartnerEarnings'));
+
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const EmailManagement = lazy(() => import('./pages/EmailManagement'));
@@ -75,7 +77,9 @@ function App() {
                             <Route path="dashboard" element={<AgencyDashboard />} />
                             <Route path="clients" element={<AgencyClients />} />
                             <Route path="white-label" element={<AgencyWhiteLabel />} />
+                            <Route path="partner-earnings" element={<PartnerEarnings />} />
                           </Route>
+
 
                           {/* Dashboard Layout Routes */}
                           <Route element={<Layout />}>

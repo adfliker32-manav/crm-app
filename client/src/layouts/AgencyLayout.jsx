@@ -12,6 +12,8 @@ const AgencyLayout = () => {
             import('../pages/Agency/AgencyDashboard');
             import('../pages/Agency/AgencyClients');
             import('../pages/Agency/AgencyWhiteLabel');
+            import('../pages/Agency/PartnerEarnings');
+
         };
 
         // Delay pre-fetching for optimized initial dashboard rendering

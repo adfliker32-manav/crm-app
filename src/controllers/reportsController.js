@@ -13,7 +13,7 @@ const getDataScope = (req) => {
     // Standardize data scope to always use companyId (userId in Lead model)
     const scope = { ...(req.dataScope || {}) };
     if (req.tenantId) scope.userId = new mongoose.Types.ObjectId(req.tenantId);
-    
+
     // Ensure assignedTo is cast to ObjectId if present in scope (e.g. from middleware)
     if (scope.assignedTo && typeof scope.assignedTo === 'string') {
         scope.assignedTo = new mongoose.Types.ObjectId(scope.assignedTo);
@@ -54,10 +54,12 @@ const getConversionReport = async (req, res) => {
                                 lostLeads: {
                                     $sum: {
                                         $cond: [
-                                            { $or: [
-                                                { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /lost/i } },
-                                                { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /dead/i } }
-                                            ]}, 1, 0
+                                            {
+                                                $or: [
+                                                    { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /lost/i } },
+                                                    { $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /dead/i } }
+                                                ]
+                                            }, 1, 0
                                         ]
                                     }
                                 }
@@ -90,8 +92,8 @@ const getConversionReport = async (req, res) => {
         ]);
 
         const summary = results.summaryStats[0] || { totalLeads: 0, wonLeads: 0, lostLeads: 0 };
-        const conversionRate = summary.totalLeads > 0 
-            ? ((summary.wonLeads / summary.totalLeads) * 100).toFixed(1) 
+        const conversionRate = summary.totalLeads > 0
+            ? ((summary.wonLeads / summary.totalLeads) * 100).toFixed(1)
             : 0;
 
         // Stage funnel Map
@@ -124,7 +126,7 @@ const getConversionReport = async (req, res) => {
                 const mm = String(d.getMonth() + 1).padStart(2, '0');
                 const dd = String(d.getDate()).padStart(2, '0');
                 const dateKey = `${yyyy}-${mm}-${dd}`;
-                
+
                 const groupData = dailyLookup[dateKey];
                 dailyTrend.push({
                     date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
@@ -185,16 +187,16 @@ const getAgentPerformance = async (req, res) => {
                 $group: {
                     _id: "$assignedTo",
                     totalLeads: { $sum: 1 },
-                    wonLeads: { 
-                        $sum: { 
-                            $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] 
-                        } 
+                    wonLeads: {
+                        $sum: {
+                            $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0]
+                        }
                     },
                     totalDealValue: { $sum: { $ifNull: ["$dealValue", 0] } },
-                    wonDealValue: { 
-                        $sum: { 
-                            $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] 
-                        } 
+                    wonDealValue: {
+                        $sum: {
+                            $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0]
+                        }
                     },
                     followUpsCompleted: { $sum: { $size: { $ifNull: ["$followUpHistory", []] } } }
                 }
@@ -264,209 +266,209 @@ const getRevenueReport = async (req, res) => {
         const [results] = await Lead.aggregate(
             isClosedBasis
                 ? [
-                      { $match: { ...dataScope } },
-                      {
-                          $addFields: {
-                              closeDate: {
-                                  $switch: {
-                                      branches: [
-                                          {
-                                              case: {
-                                                  $regexMatch: {
-                                                      input: { $ifNull: ["$status", ""] },
-                                                      regex: /won/i
-                                                  }
-                                              },
-                                              then: { $ifNull: ["$wonAt", "$updatedAt"] }
-                                          },
-                                          {
-                                              case: {
-                                                  $or: [
-                                                      {
-                                                          $regexMatch: {
-                                                              input: { $ifNull: ["$status", ""] },
-                                                              regex: /lost/i
-                                                          }
-                                                      },
-                                                      {
-                                                          $regexMatch: {
-                                                              input: { $ifNull: ["$status", ""] },
-                                                              regex: /dead/i
-                                                          }
-                                                      }
-                                                  ]
-                                              },
-                                              then: { $ifNull: ["$lostAt", "$updatedAt"] }
-                                          }
-                                      ],
-                                      default: null
-                                  }
-                              }
-                          }
-                      },
-                      { $match: { closeDate: { $gte: start, $lte: end } } },
-                      {
-                          $facet: {
-                              summaryStats: [
-                                  {
-                                      $group: {
-                                          _id: null,
-                                          totalPotential: { $sum: { $ifNull: ["$dealValue", 0] } },
-                                          wonRevenue: {
-                                              $sum: {
-                                                  $cond: [
-                                                      {
-                                                          $regexMatch: {
-                                                              input: { $ifNull: ["$status", ""] },
-                                                              regex: /won/i
-                                                          }
-                                                      },
-                                                      { $ifNull: ["$dealValue", 0] },
-                                                      0
-                                                  ]
-                                              }
-                                          },
-                                          lostRevenue: {
-                                              $sum: {
-                                                  $cond: [
-                                                      {
-                                                          $or: [
-                                                              {
-                                                                  $regexMatch: {
-                                                                      input: { $ifNull: ["$status", ""] },
-                                                                      regex: /lost/i
-                                                                  }
-                                                              },
-                                                              {
-                                                                  $regexMatch: {
-                                                                      input: { $ifNull: ["$status", ""] },
-                                                                      regex: /dead/i
-                                                                  }
-                                                              }
-                                                          ]
-                                                      },
-                                                      { $ifNull: ["$dealValue", 0] },
-                                                      0
-                                                  ]
-                                              }
-                                          }
-                                      }
-                                  }
-                              ],
-                              sourceDistribution: [
-                                  {
-                                      $group: {
-                                          _id: { $ifNull: ["$source", "Unknown"] },
-                                          potential: { $sum: { $ifNull: ["$dealValue", 0] } },
-                                          leads: { $sum: 1 },
-                                          won: {
-                                              $sum: {
-                                                  $cond: [
-                                                      {
-                                                          $regexMatch: {
-                                                              input: { $ifNull: ["$status", ""] },
-                                                              regex: /won/i
-                                                          }
-                                                      },
-                                                      { $ifNull: ["$dealValue", 0] },
-                                                      0
-                                                  ]
-                                              }
-                                          }
-                                      }
-                                  }
-                              ],
-                              topDeals: [
-                                  { $match: { dealValue: { $gt: 0 }, status: { $regex: /won/i } } },
-                                  { $sort: { dealValue: -1 } },
-                                  { $limit: 5 },
-                                  { $project: { name: 1, dealValue: 1, status: 1, source: 1, closeDate: 1 } }
-                              ]
-                          }
-                      }
-                  ]
+                    { $match: { ...dataScope } },
+                    {
+                        $addFields: {
+                            closeDate: {
+                                $switch: {
+                                    branches: [
+                                        {
+                                            case: {
+                                                $regexMatch: {
+                                                    input: { $ifNull: ["$status", ""] },
+                                                    regex: /won/i
+                                                }
+                                            },
+                                            then: { $ifNull: ["$wonAt", "$updatedAt"] }
+                                        },
+                                        {
+                                            case: {
+                                                $or: [
+                                                    {
+                                                        $regexMatch: {
+                                                            input: { $ifNull: ["$status", ""] },
+                                                            regex: /lost/i
+                                                        }
+                                                    },
+                                                    {
+                                                        $regexMatch: {
+                                                            input: { $ifNull: ["$status", ""] },
+                                                            regex: /dead/i
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            then: { $ifNull: ["$lostAt", "$updatedAt"] }
+                                        }
+                                    ],
+                                    default: null
+                                }
+                            }
+                        }
+                    },
+                    { $match: { closeDate: { $gte: start, $lte: end } } },
+                    {
+                        $facet: {
+                            summaryStats: [
+                                {
+                                    $group: {
+                                        _id: null,
+                                        totalPotential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                        wonRevenue: {
+                                            $sum: {
+                                                $cond: [
+                                                    {
+                                                        $regexMatch: {
+                                                            input: { $ifNull: ["$status", ""] },
+                                                            regex: /won/i
+                                                        }
+                                                    },
+                                                    { $ifNull: ["$dealValue", 0] },
+                                                    0
+                                                ]
+                                            }
+                                        },
+                                        lostRevenue: {
+                                            $sum: {
+                                                $cond: [
+                                                    {
+                                                        $or: [
+                                                            {
+                                                                $regexMatch: {
+                                                                    input: { $ifNull: ["$status", ""] },
+                                                                    regex: /lost/i
+                                                                }
+                                                            },
+                                                            {
+                                                                $regexMatch: {
+                                                                    input: { $ifNull: ["$status", ""] },
+                                                                    regex: /dead/i
+                                                                }
+                                                            }
+                                                        ]
+                                                    },
+                                                    { $ifNull: ["$dealValue", 0] },
+                                                    0
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }
+                            ],
+                            sourceDistribution: [
+                                {
+                                    $group: {
+                                        _id: { $ifNull: ["$source", "Unknown"] },
+                                        potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                        leads: { $sum: 1 },
+                                        won: {
+                                            $sum: {
+                                                $cond: [
+                                                    {
+                                                        $regexMatch: {
+                                                            input: { $ifNull: ["$status", ""] },
+                                                            regex: /won/i
+                                                        }
+                                                    },
+                                                    { $ifNull: ["$dealValue", 0] },
+                                                    0
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }
+                            ],
+                            topDeals: [
+                                { $match: { dealValue: { $gt: 0 }, status: { $regex: /won/i } } },
+                                { $sort: { dealValue: -1 } },
+                                { $limit: 5 },
+                                { $project: { name: 1, dealValue: 1, status: 1, source: 1, closeDate: 1 } }
+                            ]
+                        }
+                    }
+                ]
                 : [
-                      { $match: { ...dataScope, createdAt: { $gte: start, $lte: end } } },
-                      {
-                          $facet: {
-                              summaryStats: [
-                                  {
-                                      $group: {
-                                          _id: null,
-                                          totalPotential: { $sum: { $ifNull: ["$dealValue", 0] } },
-                                          wonRevenue: {
-                                              $sum: {
-                                                  $cond: [
-                                                      {
-                                                          $regexMatch: {
-                                                              input: { $ifNull: ["$status", ""] },
-                                                              regex: /won/i
-                                                          }
-                                                      },
-                                                      { $ifNull: ["$dealValue", 0] },
-                                                      0
-                                                  ]
-                                              }
-                                          },
-                                          lostRevenue: {
-                                              $sum: {
-                                                  $cond: [
-                                                      {
-                                                          $or: [
-                                                              {
-                                                                  $regexMatch: {
-                                                                      input: { $ifNull: ["$status", ""] },
-                                                                      regex: /lost/i
-                                                                  }
-                                                              },
-                                                              {
-                                                                  $regexMatch: {
-                                                                      input: { $ifNull: ["$status", ""] },
-                                                                      regex: /dead/i
-                                                                  }
-                                                              }
-                                                          ]
-                                                      },
-                                                      { $ifNull: ["$dealValue", 0] },
-                                                      0
-                                                  ]
-                                              }
-                                          }
-                                      }
-                                  }
-                              ],
-                              sourceDistribution: [
-                                  {
-                                      $group: {
-                                          _id: { $ifNull: ["$source", "Unknown"] },
-                                          potential: { $sum: { $ifNull: ["$dealValue", 0] } },
-                                          leads: { $sum: 1 },
-                                          won: {
-                                              $sum: {
-                                                  $cond: [
-                                                      {
-                                                          $regexMatch: {
-                                                              input: { $ifNull: ["$status", ""] },
-                                                              regex: /won/i
-                                                          }
-                                                      },
-                                                      { $ifNull: ["$dealValue", 0] },
-                                                      0
-                                                  ]
-                                              }
-                                          }
-                                      }
-                                  }
-                              ],
-                              topDeals: [
-                                  { $match: { dealValue: { $gt: 0 } } },
-                                  { $sort: { dealValue: -1 } },
-                                  { $limit: 5 },
-                                  { $project: { name: 1, dealValue: 1, status: 1, source: 1 } }
-                              ]
-                          }
-                      }
-                  ]
+                    { $match: { ...dataScope, createdAt: { $gte: start, $lte: end } } },
+                    {
+                        $facet: {
+                            summaryStats: [
+                                {
+                                    $group: {
+                                        _id: null,
+                                        totalPotential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                        wonRevenue: {
+                                            $sum: {
+                                                $cond: [
+                                                    {
+                                                        $regexMatch: {
+                                                            input: { $ifNull: ["$status", ""] },
+                                                            regex: /won/i
+                                                        }
+                                                    },
+                                                    { $ifNull: ["$dealValue", 0] },
+                                                    0
+                                                ]
+                                            }
+                                        },
+                                        lostRevenue: {
+                                            $sum: {
+                                                $cond: [
+                                                    {
+                                                        $or: [
+                                                            {
+                                                                $regexMatch: {
+                                                                    input: { $ifNull: ["$status", ""] },
+                                                                    regex: /lost/i
+                                                                }
+                                                            },
+                                                            {
+                                                                $regexMatch: {
+                                                                    input: { $ifNull: ["$status", ""] },
+                                                                    regex: /dead/i
+                                                                }
+                                                            }
+                                                        ]
+                                                    },
+                                                    { $ifNull: ["$dealValue", 0] },
+                                                    0
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }
+                            ],
+                            sourceDistribution: [
+                                {
+                                    $group: {
+                                        _id: { $ifNull: ["$source", "Unknown"] },
+                                        potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                                        leads: { $sum: 1 },
+                                        won: {
+                                            $sum: {
+                                                $cond: [
+                                                    {
+                                                        $regexMatch: {
+                                                            input: { $ifNull: ["$status", ""] },
+                                                            regex: /won/i
+                                                        }
+                                                    },
+                                                    { $ifNull: ["$dealValue", 0] },
+                                                    0
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }
+                            ],
+                            topDeals: [
+                                { $match: { dealValue: { $gt: 0 } } },
+                                { $sort: { dealValue: -1 } },
+                                { $limit: 5 },
+                                { $project: { name: 1, dealValue: 1, status: 1, source: 1 } }
+                            ]
+                        }
+                    }
+                ]
         );
 
         const summary = results.summaryStats[0] || { totalPotential: 0, wonRevenue: 0, lostRevenue: 0 };
@@ -491,99 +493,99 @@ const getRevenueReport = async (req, res) => {
         const trendResults = await Lead.aggregate(
             isClosedBasis
                 ? [
-                      { $match: { ...dataScope } },
-                      {
-                          $addFields: {
-                              closeDate: {
-                                  $switch: {
-                                      branches: [
-                                          {
-                                              case: {
-                                                  $regexMatch: {
-                                                      input: { $ifNull: ["$status", ""] },
-                                                      regex: /won/i
-                                                  }
-                                              },
-                                              then: { $ifNull: ["$wonAt", "$updatedAt"] }
-                                          },
-                                          {
-                                              case: {
-                                                  $or: [
-                                                      {
-                                                          $regexMatch: {
-                                                              input: { $ifNull: ["$status", ""] },
-                                                              regex: /lost/i
-                                                          }
-                                                      },
-                                                      {
-                                                          $regexMatch: {
-                                                              input: { $ifNull: ["$status", ""] },
-                                                              regex: /dead/i
-                                                          }
-                                                      }
-                                                  ]
-                                              },
-                                              then: { $ifNull: ["$lostAt", "$updatedAt"] }
-                                          }
-                                      ],
-                                      default: null
-                                  }
-                              }
-                          }
-                      },
-                      { $match: { closeDate: { $gte: sixMonthsAgo } } },
-                      {
-                          $group: {
-                              _id: {
-                                  year: { $year: { date: "$closeDate", timezone: "UTC" } },
-                                  month: { $month: { date: "$closeDate", timezone: "UTC" } }
-                              },
-                              potential: { $sum: { $ifNull: ["$dealValue", 0] } },
-                              won: {
-                                  $sum: {
-                                      $cond: [
-                                          {
-                                              $regexMatch: {
-                                                  input: { $ifNull: ["$status", ""] },
-                                                  regex: /won/i
-                                              }
-                                          },
-                                          { $ifNull: ["$dealValue", 0] },
-                                          0
-                                      ]
-                                  }
-                              },
-                              leads: { $sum: 1 }
-                          }
-                      }
-                  ]
+                    { $match: { ...dataScope } },
+                    {
+                        $addFields: {
+                            closeDate: {
+                                $switch: {
+                                    branches: [
+                                        {
+                                            case: {
+                                                $regexMatch: {
+                                                    input: { $ifNull: ["$status", ""] },
+                                                    regex: /won/i
+                                                }
+                                            },
+                                            then: { $ifNull: ["$wonAt", "$updatedAt"] }
+                                        },
+                                        {
+                                            case: {
+                                                $or: [
+                                                    {
+                                                        $regexMatch: {
+                                                            input: { $ifNull: ["$status", ""] },
+                                                            regex: /lost/i
+                                                        }
+                                                    },
+                                                    {
+                                                        $regexMatch: {
+                                                            input: { $ifNull: ["$status", ""] },
+                                                            regex: /dead/i
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            then: { $ifNull: ["$lostAt", "$updatedAt"] }
+                                        }
+                                    ],
+                                    default: null
+                                }
+                            }
+                        }
+                    },
+                    { $match: { closeDate: { $gte: sixMonthsAgo } } },
+                    {
+                        $group: {
+                            _id: {
+                                year: { $year: { date: "$closeDate", timezone: "UTC" } },
+                                month: { $month: { date: "$closeDate", timezone: "UTC" } }
+                            },
+                            potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                            won: {
+                                $sum: {
+                                    $cond: [
+                                        {
+                                            $regexMatch: {
+                                                input: { $ifNull: ["$status", ""] },
+                                                regex: /won/i
+                                            }
+                                        },
+                                        { $ifNull: ["$dealValue", 0] },
+                                        0
+                                    ]
+                                }
+                            },
+                            leads: { $sum: 1 }
+                        }
+                    }
+                ]
                 : [
-                      { $match: { ...dataScope, createdAt: { $gte: sixMonthsAgo } } },
-                      {
-                          $group: {
-                              _id: {
-                                  year: { $year: { date: "$createdAt", timezone: "UTC" } },
-                                  month: { $month: { date: "$createdAt", timezone: "UTC" } }
-                              },
-                              potential: { $sum: { $ifNull: ["$dealValue", 0] } },
-                              won: {
-                                  $sum: {
-                                      $cond: [
-                                          {
-                                              $regexMatch: {
-                                                  input: { $ifNull: ["$status", ""] },
-                                                  regex: /won/i
-                                              }
-                                          },
-                                          { $ifNull: ["$dealValue", 0] },
-                                          0
-                                      ]
-                                  }
-                              },
-                              leads: { $sum: 1 }
-                          }
-                      }
-                  ]
+                    { $match: { ...dataScope, createdAt: { $gte: sixMonthsAgo } } },
+                    {
+                        $group: {
+                            _id: {
+                                year: { $year: { date: "$createdAt", timezone: "UTC" } },
+                                month: { $month: { date: "$createdAt", timezone: "UTC" } }
+                            },
+                            potential: { $sum: { $ifNull: ["$dealValue", 0] } },
+                            won: {
+                                $sum: {
+                                    $cond: [
+                                        {
+                                            $regexMatch: {
+                                                input: { $ifNull: ["$status", ""] },
+                                                regex: /won/i
+                                            }
+                                        },
+                                        { $ifNull: ["$dealValue", 0] },
+                                        0
+                                    ]
+                                }
+                            },
+                            leads: { $sum: 1 }
+                        }
+                    }
+                ]
         );
 
         const monthlyTrend = [];
@@ -592,9 +594,9 @@ const getRevenueReport = async (req, res) => {
             mDate.setMonth(mDate.getMonth() - i);
             const y = mDate.getFullYear();
             const m = mDate.getMonth() + 1; // 1-12
-            
+
             const stats = trendResults.find(t => t._id.year === y && t._id.month === m) || { potential: 0, won: 0, leads: 0 };
-            
+
             monthlyTrend.push({
                 month: mDate.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
                 potential: stats.potential,
@@ -648,11 +650,11 @@ const getComprehensiveReport = async (req, res) => {
 
         // Fetch both current and previous period stats using a single $facet
         const [results] = await Lead.aggregate([
-            { 
-                $match: { 
+            {
+                $match: {
                     ...dataScope,
                     createdAt: { $gte: prevStart, $lte: end }
-                } 
+                }
             },
             {
                 $facet: {
@@ -693,7 +695,7 @@ const getComprehensiveReport = async (req, res) => {
         const conversionRate = current.totalLeads > 0
             ? ((current.wonLeads / current.totalLeads) * 100).toFixed(1)
             : 0;
-            
+
         const prevConversion = previous.totalLeads > 0
             ? ((previous.wonLeads / previous.totalLeads) * 100).toFixed(1)
             : 0;
@@ -775,30 +777,34 @@ const getAgentDetailedPerformance = async (req, res) => {
         }
 
         const selectedAgentId = new mongoose.Types.ObjectId(agentId);
-        
+
         // 1. AGGREGATION FOR SUMMARY METRICS (Avoids pulling full lead data)
         const [aggSummary] = await Lead.aggregate([
             { $match: { ...dataScope, assignedTo: selectedAgentId, createdAt: { $gte: start, $lte: end } } },
             {
                 $facet: {
                     stats: [
-                        { $group: {
-                            _id: null,
-                            leadsAssigned: { $sum: 1 },
-                            dealsClosed: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] } },
-                            revenueGenerated: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] } },
-                            leadsContacted: {
-                                $sum: {
-                                    $cond: [
-                                        { $or: [
-                                            { $gt: [{ $size: { $ifNull: [ { $filter: { input: { $ifNull: ["$history", []] }, as: "h", cond: { $in: ["$$h.type", ["Email", "WhatsApp", "Follow-up"]] } } }, [] ] } }, 0] },
-                                            { $gt: [{ $size: { $ifNull: ["$followUpHistory", []] } }, 0] },
-                                            { $gt: [{ $size: { $ifNull: [ { $filter: { input: { $ifNull: ["$messages", []] }, as: "m", cond: { $eq: ["$$m.from", "admin"] } } }, [] ] } }, 0] }
-                                        ]}, 1, 0
-                                    ]
+                        {
+                            $group: {
+                                _id: null,
+                                leadsAssigned: { $sum: 1 },
+                                dealsClosed: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, 1, 0] } },
+                                revenueGenerated: { $sum: { $cond: [{ $regexMatch: { input: { $ifNull: ["$status", ""] }, regex: /won/i } }, { $ifNull: ["$dealValue", 0] }, 0] } },
+                                leadsContacted: {
+                                    $sum: {
+                                        $cond: [
+                                            {
+                                                $or: [
+                                                    { $gt: [{ $size: { $ifNull: [{ $filter: { input: { $ifNull: ["$history", []] }, as: "h", cond: { $in: ["$$h.type", ["Email", "WhatsApp", "Follow-up"]] } } }, []] } }, 0] },
+                                                    { $gt: [{ $size: { $ifNull: ["$followUpHistory", []] } }, 0] },
+                                                    { $gt: [{ $size: { $ifNull: [{ $filter: { input: { $ifNull: ["$messages", []] }, as: "m", cond: { $eq: ["$$m.from", "admin"] } } }, []] } }, 0] }
+                                                ]
+                                            }, 1, 0
+                                        ]
+                                    }
                                 }
                             }
-                        }}
+                        }
                     ],
                     stageCounts: [
                         { $group: { _id: { $ifNull: ["$status", "New"] }, count: { $sum: 1 } } }

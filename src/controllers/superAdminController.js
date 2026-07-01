@@ -349,7 +349,7 @@ const updateCompany = async (req, res) => {
         // Sub-permissions: only honor known keys to prevent arbitrary writes
         const SUB_PERMISSION_KEYS = [
             'aiChatbot', 'whatsappAutomation', 'emailAutomation', 'metaSync',
-            'campaigns', 'advancedAnalytics', 'aiModel'
+            'campaigns', 'advancedAnalytics', 'aiModel', 'webhooks'
         ];
 
         if (planFeatures && typeof planFeatures === 'object') {
@@ -1989,7 +1989,7 @@ const approveAccount = async (req, res) => {
         // Sub-permissions: only honor known keys
         const SUB_PERMISSION_KEYS = [
             'aiChatbot', 'whatsappAutomation', 'emailAutomation', 'metaSync',
-            'campaigns', 'advancedAnalytics'
+            'campaigns', 'advancedAnalytics', 'webhooks'
         ];
         if (planFeatures && typeof planFeatures === 'object') {
             for (const key of SUB_PERMISSION_KEYS) {

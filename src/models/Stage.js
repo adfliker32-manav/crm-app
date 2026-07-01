@@ -8,15 +8,15 @@ const stageSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
-    name: { 
-        type: String, 
-        required: true 
+    name: {
+        type: String,
+        required: true
         // Note: Humne 'unique: true' hata diya hai.
         // Kyunki Rahul aur Amit dono ka "New" stage ho sakta hai.
     },
-    order: { 
-        type: Number, 
-        default: 0 
+    order: {
+        type: Number,
+        default: 0
     }
 });
 

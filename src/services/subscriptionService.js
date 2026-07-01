@@ -7,6 +7,11 @@ const WorkspaceSettings = require('../models/WorkspaceSettings');
 const razorpayService = require('./razorpayService');
 const billingEmailService = require('./billingEmailService');
 const auditLogger = require('./auditLogger');
+// Partner revenue sharing
+const CommissionLog = require('../models/CommissionLog');
+const WithdrawalRequest = require('../models/WithdrawalRequest');
+const SystemSetting = require('../models/SystemSetting');
+
 
 // Domain logic shared by the billing controller, webhook handler, and cron
 // sweeps. All Plan ↔ WorkspaceSettings copying happens here so the "what
@@ -356,8 +361,114 @@ const applyChargeSuccess = async (clientId, payload) => {
         })().catch(err => console.error('❌ [BillingWA] Background error:', err.message));
     }
 
+
+    // 🤝 Partner Commission — fire-and-forget (errors must NOT affect the payment flow).
+    // We need the Payment doc that was just inserted. Re-fetch it by dedupKey.
+    Payment.findOne({ razorpayPaymentId: dedupKey })
+        .lean()
+        .then(paymentDoc => {
+            if (paymentDoc) {
+                applyPartnerCommission(clientId, paymentDoc, rzpPaymentId);
+            }
+        })
+        .catch(err => console.error('[Commission] Payment lookup failed:', err.message));
+
     return { subscription: sub, newExpiry };
 };
+
+
+// ─── Partner Commission Engine ─────────────────────────────────────────────
+// Fire-and-forget helper called after every successful subscription charge.
+// Reads the agency's active client count, looks up the matching commission tier
+// from SystemSettings, and credits the agency's commissionBalance.
+//
+// This is STRICTLY event-driven: no payment success = no commission. If a client
+// misses a month, the agency earns nothing for that month.
+//
+// Idempotency: CommissionLog has a unique index on `paymentId`. If this runs
+// twice for the same payment, the second insert is a no-op (E11000).
+const applyPartnerCommission = async (clientId, paymentDoc, rzpPaymentId) => {
+    try {
+        // 1. Check if this client has a parent agency
+        const client = await User.findById(clientId).select('parentId companyName name').lean();
+        if (!client?.parentId) return; // not an agency-referred client
+
+        const agency = await User.findById(client.parentId).select('role commissionBalance totalCommissionEarned companyName name').lean();
+        if (!agency || agency.role !== 'agency') return; // parent is not an agency
+
+        // 2. Count ACTIVE subscribed clients under this agency (determines tier)
+        const activeCount = await User.countDocuments({
+            parentId: client.parentId,
+            role: 'manager',
+            is_active: true,
+            approved_by_admin: true
+        });
+
+        // 3. Load tier configuration from SystemSettings
+        //    Example stored value: [{ minClients: 1, maxClients: 9, percentage: 10 }, ...]
+        const tierSetting = await SystemSetting.findOne({ key: 'AGENCY_COMMISSION_TIERS' }).lean();
+        const tiers = Array.isArray(tierSetting?.value) ? tierSetting.value : [];
+
+        if (tiers.length === 0) {
+            console.warn(`[Commission] ⚠️ AGENCY_COMMISSION_TIERS not configured — skipping commission for agency ${agency._id}. Go to Super Admin → Partner Payouts → Commission Tiers to set up rates.`);
+            return;
+        }
+
+        // 4. Find the matching tier — sort DESC so the highest eligible tier wins.
+        //    Use spread [...] to avoid mutating the original array from SystemSettings.
+        const matchedTier = [...tiers]
+            .sort((a, b) => b.minClients - a.minClients)   // highest first
+            .find(tier => activeCount >= tier.minClients);
+
+        if (!matchedTier || !matchedTier.percentage) {
+            console.warn(`[Commission] ⚠️ No matching tier for activeCount=${activeCount} — skipping commission for agency ${agency._id}. Check Super Admin → Partner Payouts → Commission Tiers.`);
+            return;
+        }
+
+        const commissionRate = matchedTier.percentage;
+        // Round to whole rupees — paise are not used in INR payouts
+        const commissionAmount = Math.round((paymentDoc.amount * commissionRate) / 100);
+
+        if (commissionAmount <= 0) return;
+
+        // 5. Insert the CommissionLog (unique on paymentId — idempotent)
+        try {
+            await CommissionLog.create({
+                agencyId:              agency._id,
+                clientId:              clientId,
+                clientName:            client.companyName || client.name || '',
+                paymentId:             paymentDoc._id,
+                razorpayPaymentId:     rzpPaymentId || null,
+                subscriptionAmount:    paymentDoc.amount,
+                commissionRateApplied: commissionRate,
+                activeClientsAtTime:   activeCount,
+                amount:                commissionAmount,
+                planCode:              paymentDoc.planCode || '',
+                billingCycle:          paymentDoc.durationMonths > 1 ? 'yearly' : 'monthly'
+            });
+        } catch (dupErr) {
+            if (dupErr?.code === 11000) {
+                console.log(`[Commission] Duplicate commission for payment ${paymentDoc._id} — skipped`);
+                return;
+            }
+            throw dupErr;
+        }
+
+        // 6. Atomically increment the agency's balance
+        await User.findByIdAndUpdate(agency._id, {
+            $inc: {
+                commissionBalance:     commissionAmount,
+                totalCommissionEarned: commissionAmount
+            }
+        });
+
+        console.log(`[Commission] ₹${commissionAmount} credited to agency ${agency._id} (${commissionRate}% of ₹${paymentDoc.amount}, activeClients=${activeCount})`);
+    } catch (err) {
+        // Commission errors must NEVER break the main payment flow.
+        console.error('[Commission] applyPartnerCommission failed:', err.message);
+    }
+};
+
 
 // ─── Mandate authorized (subscription.activated) ───────────────────────────
 // Fires the instant the customer completes Razorpay Checkout — BEFORE the first

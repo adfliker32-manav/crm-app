@@ -5,6 +5,7 @@ const {
     impersonateClient, getAgencyClients, getAgencyAnalytics, toggleClientFreeze, createClient, updateClient
 } = require('../controllers/agencyController');
 const { getAgencyBranding, updateAgencyBranding, getUsageStats } = require('../controllers/agencySettingsController');
+const { getPartnerEarnings, updateBankDetails, requestWithdrawal } = require('../controllers/partnerEarningsController');
 const { authMiddleware, requireAgency } = require('../middleware/authMiddleware');
 
 // @route   GET /api/agency/impersonate/:clientId
@@ -34,4 +35,15 @@ router.put('/branding', authMiddleware, requireAgency, updateAgencyBranding);
 // @route   GET /api/agency/usage
 router.get('/usage', authMiddleware, requireAgency, getUsageStats);
 
+// ─── Partner Revenue Sharing ──────────────────────────────────────────────────
+// @route   GET /api/agency/partner/earnings
+router.get('/partner/earnings', authMiddleware, requireAgency, getPartnerEarnings);
+
+// @route   PUT /api/agency/partner/bank-details
+router.put('/partner/bank-details', authMiddleware, requireAgency, updateBankDetails);
+
+// @route   POST /api/agency/partner/withdraw
+router.post('/partner/withdraw', authMiddleware, requireAgency, requestWithdrawal);
+
 module.exports = router;
+

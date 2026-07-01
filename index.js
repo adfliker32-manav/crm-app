@@ -40,6 +40,8 @@ const sequenceRoutes = require('./src/routes/sequenceRoutes'); // Drip Sequences
 const billingRoutes = require('./src/routes/billingRoutes'); // Razorpay Autodebit Subscriptions
 const { router: invoicePublicRoute } = require('./src/routes/invoicePublicRoute'); // Public invoice viewer (HMAC-secured)
 const aiProxyRoutes = require('./src/routes/aiProxyRoutes');
+const extApiRoutes    = require('./src/routes/extApiRoutes');    // Third-party CRM Integration API
+const extApiKeyRoutes = require('./src/routes/extApiKeyRoutes'); // Key management for External API
 
 
 const app = express();
@@ -494,6 +496,13 @@ app.use('/api/activity-logs', require('./src/routes/activityLogRoutes'));
 app.use('/api/reports', reportRoutes); // Reports & Analytics
 app.use('/mcp', mcpRoutes);           // Claude AI MCP server (API-key auth, no JWT)
 app.use('/api/ai', aiProxyRoutes);
+
+// 🔗 Third-Party CRM Integration API (API-key auth, not JWT — for external systems)
+// v1 prefix enables forward-compatible versioning: /api/v2 can be added later without breaking existing integrations
+app.use('/api/v1', extApiRoutes);
+
+// Key management for External API (JWT auth — workspace owner only)
+app.use('/api/ext-api', authMiddleware, extApiKeyRoutes);
 
 
 // Meta Webhook URL: /api/meta/webhook

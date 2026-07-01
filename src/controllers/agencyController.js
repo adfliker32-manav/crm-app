@@ -371,7 +371,8 @@ const createClient = async (req, res) => {
             'emailAutomation',
             'metaSync',
             'campaigns',
-            'advancedAnalytics'
+            'advancedAnalytics',
+            'webhooks'
         ];
         const resolvedPlanFeatures = {};
         if (planFeatures && typeof planFeatures === 'object') {

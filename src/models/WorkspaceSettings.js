@@ -214,6 +214,21 @@ const workspaceSettingsSchema = new mongoose.Schema({
         index: { unique: true, sparse: true }
     },
 
+    // ── Third-Party CRM Integration API ──────────────────────────────────────
+    // Per-tenant API key for external CRM integrations (HubSpot, Salesforce, etc.).
+    // Format: ext_<48 hex chars> = 52 chars total.
+    // Plan-gated: only Growth & Enterprise (planFeatures.webhooks = true).
+    // No `default: null` — same sparse-unique reason as webLeadApiKey above.
+    extApiKey: {
+        type: String,
+        index: { unique: true, sparse: true }
+    },
+    // Master on/off switch. Set to false when key is revoked.
+    extApiEnabled: {
+        type: Boolean,
+        default: false
+    },
+
     createdAt: {
         type: Date,
         default: Date.now

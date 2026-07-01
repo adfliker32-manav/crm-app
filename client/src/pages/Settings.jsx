@@ -11,6 +11,7 @@ import WebLeadSettings from '../components/Settings/WebLeadSettings';
 import ClaudeAISettings from '../components/Settings/ClaudeAISettings';
 import AISettings from '../components/Settings/AISettings';
 import LeadAssignmentSettings from '../components/Settings/LeadAssignmentSettings';
+import ExternalApiSettings from '../components/Settings/ExternalApiSettings';
 
 const Settings = () => {
     const { user, updateUser } = useAuth();
@@ -32,7 +33,7 @@ const Settings = () => {
     // Sync tab with URL search params
     useEffect(() => {
         const tab = searchParams.get('tab');
-        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead', 'claudeAI', 'leadAssignment', 'aiSettings'].includes(tab)) {
+        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead', 'claudeAI', 'leadAssignment', 'aiSettings', 'externalApi'].includes(tab)) {
             setActiveTab(tab);
         }
     }, [searchParams]);
@@ -99,6 +100,7 @@ const Settings = () => {
         { id: 'claudeAI',       label: 'Claude AI',        icon: 'fa-brain' },
         { id: 'aiSettings',     label: 'AI Chatbot',       icon: 'fa-robot' },
         { id: 'leadAssignment', label: 'Lead Assignment',  icon: 'fa-user-tag' },
+        { id: 'externalApi',    label: 'API Access',       icon: 'fa-plug' },
     ];
 
     if (!canAccessSettings) return <Navigate to="/dashboard" replace />;
@@ -291,6 +293,14 @@ const Settings = () => {
                         </div>
                         <div className="p-8">
                             <AISettings />
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'externalApi' && (
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8">
+                            <ExternalApiSettings />
                         </div>
                     </div>
                 )}

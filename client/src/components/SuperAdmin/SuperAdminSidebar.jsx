@@ -9,6 +9,8 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
     const { logout } = useAuth();
     const { socket } = useSocket();
     const [supportUnread, setSupportUnread] = useState(0);
+    const [pendingWithdrawals, setPendingWithdrawals] = useState(0);
+
 
     useEffect(() => {
         const fetchUnread = () => {
@@ -20,6 +22,18 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
         const interval = setInterval(fetchUnread, 60 * 1000);
         return () => clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        const fetchPending = () => {
+            api.get('/superadmin/partner/withdrawals?status=pending&limit=1')
+                .then(r => setPendingWithdrawals(r.data.pendingCount || 0))
+                .catch(() => { });
+        };
+        fetchPending();
+        const interval = setInterval(fetchPending, 120 * 1000);
+        return () => clearInterval(interval);
+    }, []);
+
 
     useEffect(() => {
         if (!socket) return;
@@ -53,7 +67,7 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
             label: 'Business',
             items: [
                 { id: 'approvals', icon: 'fa-shield-check', label: 'Account Approvals', color: 'text-amber-600 font-semibold' },
-                { id: 'agencies', icon: 'fa-network-wired', label: 'Agencies', color: 'text-purple-600' },
+                { id: 'agency-management', icon: 'fa-network-wired', label: 'Agency Management', color: 'text-purple-600 font-bold', badge: pendingWithdrawals },
                 { id: 'direct-clients', icon: 'fa-user-tie', label: 'Direct Clients', color: 'text-emerald-600' },
                 { id: 'finance', icon: 'fa-sack-dollar', label: 'Billing & Finance', color: 'text-emerald-500 font-bold' },
                 { id: 'plans', icon: 'fa-layer-group', label: 'Plan Catalog', color: 'text-indigo-500 font-semibold' },
@@ -61,6 +75,7 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
                 { id: 'support', icon: 'fa-life-ring', label: 'Support Inbox', color: 'text-orange-500', badge: supportUnread },
             ]
         },
+
         {
             label: 'Communication',
             items: [

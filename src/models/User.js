@@ -183,6 +183,24 @@ const userSchema = new mongoose.Schema({
         manageTeam: { type: Boolean, default: false }
     },
 
+    // ─── PARTNER REVENUE SHARING ──────────────────────────────────────────────
+    // Available balance ready to withdraw (₹). Incremented on every successful
+    // client payment; decremented when a withdrawal request is submitted.
+    commissionBalance: { type: Number, default: 0, min: 0 },
+
+    // Lifetime total commissions ever earned (monotonically increasing, never decremented).
+    totalCommissionEarned: { type: Number, default: 0, min: 0 },
+
+    // Bank account details for manual payout processing. Stored as a snapshot
+    // on each WithdrawalRequest so historical records remain accurate.
+    bankDetails: {
+        accountName:   { type: String, default: '' },
+        accountNumber: { type: String, default: '' },
+        ifscCode:      { type: String, default: '' },
+        bankName:      { type: String, default: '' },
+        upiId:         { type: String, default: '' }
+    },
+
     createdAt: {
         type: Date,
         default: Date.now

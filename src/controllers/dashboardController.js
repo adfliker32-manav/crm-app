@@ -50,10 +50,12 @@ const getDashboardSummary = async (req, res) => {
                         leadsToday: {
                             $sum: {
                                 $cond: [
-                                    { $and: [
-                                        { $gte: [{ $ifNull: ["$date", "$createdAt"] }, today] },
-                                        { $lt: [{ $ifNull: ["$date", "$createdAt"] }, tomorrow] }
-                                    ]}, 1, 0
+                                    {
+                                        $and: [
+                                            { $gte: [{ $ifNull: ["$date", "$createdAt"] }, today] },
+                                            { $lt: [{ $ifNull: ["$date", "$createdAt"] }, tomorrow] }
+                                        ]
+                                    }, 1, 0
                                 ]
                             }
                         }
@@ -121,9 +123,9 @@ const getDashboardSummary = async (req, res) => {
                 status: 'Pending',
                 dueDate: { $gte: today, $lt: tomorrow }
             })
-            .populate('leadId', 'name phone email status')
-            .sort({ dueDate: 1 })
-            .lean(),
+                .populate('leadId', 'name phone email status')
+                .sort({ dueDate: 1 })
+                .lean(),
             // 3. Overdue task count (pending, before today)
             Task.countDocuments({
                 userId: ownerId,
