@@ -690,6 +690,76 @@ const changeCompanyPassword = async (req, res) => {
     }
 };
 
+// Get agency sub-clients (managers)
+const getAgencySubClients = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const subClients = await User.aggregate([
+            { $match: { parentId: new mongoose.Types.ObjectId(id), role: 'manager', deletedAt: null } },
+            {
+                $lookup: {
+                    from: 'workspacesettings',
+                    localField: '_id',
+                    foreignField: 'userId',
+                    as: 'workspace'
+                }
+            },
+            { $unwind: { path: '$workspace', preserveNullAndEmptyArrays: true } },
+            // Count agents via lookup
+            {
+                $lookup: {
+                    from: 'users',
+                    let: { companyId: '$_id' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$parentId', '$$companyId'] },
+                                        { $eq: ['$role', 'agent'] }
+                                    ]
+                                }
+                            }
+                        },
+                        { $count: 'count' }
+                    ],
+                    as: '_agents'
+                }
+            },
+            { $sort: { createdAt: -1 } },
+            {
+                $project: {
+                    password: 0,
+                    'workspace._id': 0,
+                    'workspace.userId': 0
+                }
+            },
+            {
+                $addFields: {
+                    agentsCount: { $ifNull: [{ $arrayElemAt: ['$_agents.count', 0] }, 0] },
+                    isFrozen: { $in: ['$accountStatus', ['Frozen', 'Suspended']] },
+                    isSuspended: { $eq: ['$accountStatus', 'Suspended'] }
+                }
+            },
+            { $project: { _agents: 0 } }
+        ]);
+
+        const clientsWithStats = subClients.map(client => {
+            const { workspace, ...userFields } = client;
+            return {
+                ...(workspace || {}),
+                ...userFields
+            };
+        });
+
+        res.json({ success: true, clients: clientsWithStats });
+    } catch (error) {
+        console.error("Get Agency Sub-Clients Error:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
 // Get company agents
 const getCompanyAgents = async (req, res) => {
     try {
@@ -2153,6 +2223,7 @@ module.exports = {
     getCompanyLeads,
     changeCompanyPassword,
     getCompanyAgents,
+    getAgencySubClients,
     createCompanyAgent,
     updateCompanyAgent,
     deleteCompanyAgent,

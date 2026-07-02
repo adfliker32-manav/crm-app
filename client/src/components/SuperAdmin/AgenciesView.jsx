@@ -243,7 +243,7 @@ const AgenciesView = () => {
                                             </div>
                                         </td>
                                         <td className="px-8 py-6">
-                                            <p className="font-semibold text-slate-700 text-sm">{company.contactPerson || 'N/A'}</p>
+                                            <p className="font-semibold text-slate-700 text-sm">{company.contactPerson || company.email}</p>
                                             <p className="text-slate-400 text-xs mt-0.5">{company.phone || 'No Phone'}</p>
                                         </td>
                                         <td className="px-8 py-6">
@@ -331,7 +331,7 @@ const AgenciesView = () => {
             <CreateCompanyModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onSuccess={fetchCompanies} />
             <EditCompanyModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} isAgency={true} />
             <ChangePasswordModal isOpen={isChangePasswordModalOpen} onClose={() => setIsChangePasswordModalOpen(false)} company={selectedCompany} />
-            <ViewAgencyClientsModal isOpen={isViewClientsModalOpen} onClose={() => setIsViewClientsModalOpen(false)} agency={selectedCompany} allCompanies={companies} />
+            <ViewAgencyClientsModal isOpen={isViewClientsModalOpen} onClose={() => setIsViewClientsModalOpen(false)} agency={selectedCompany} />
             <ManageAgencyLimitsModal isOpen={isManageLimitsModalOpen} onClose={() => setIsManageLimitsModalOpen(false)} agency={selectedCompany} onSuccess={fetchCompanies} />
         </div>
     );

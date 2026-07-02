@@ -1,13 +1,23 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import api from '../../services/api';
 
-const ViewAgencyClientsModal = ({ isOpen, onClose, agency, allCompanies }) => {
+const ViewAgencyClientsModal = ({ isOpen, onClose, agency }) => {
+    const [agencyClients, setAgencyClients] = useState([]);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (isOpen && agency) {
+            setLoading(true);
+            api.get(`/superadmin/companies/${agency._id}/sub-clients`)
+                .then(res => setAgencyClients(res.data.clients || []))
+                .catch(err => console.error("Failed to fetch sub-clients:", err))
+                .finally(() => setLoading(false));
+        } else {
+            setAgencyClients([]);
+        }
+    }, [isOpen, agency]);
+
     if (!isOpen || !agency) return null;
-
-    // Filter from the previously fetched global companies list
-    // where role is 'manager' and parentId matches the selected agency
-    const agencyClients = allCompanies.filter(c => 
-        c.role === 'manager' && c.parentId === agency._id
-    );
 
     return (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">

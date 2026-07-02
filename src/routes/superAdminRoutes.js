@@ -12,6 +12,7 @@ const {
     getCompanyLeads,
     changeCompanyPassword,
     getCompanyAgents,
+    getAgencySubClients,
     createCompanyAgent,
     updateCompanyAgent,
     deleteCompanyAgent,
@@ -61,6 +62,9 @@ router.put('/companies/:id/freeze', validateObjectId({ params: ['id'] }), authMi
 
 // Company Leads
 router.get('/companies/:id/leads', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getCompanyLeads);
+
+// Agency Sub-Clients
+router.get('/companies/:id/sub-clients', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getAgencySubClients);
 
 // Agency Resource Limits (Controlled Autonomy)
 router.get('/companies/:id/limits', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getAgencyLimits);

@@ -120,29 +120,18 @@ const AgencyWhiteLabel = () => {
 
                     <div>
                         <div className="flex justify-between items-center mb-2">
-                            <span className="text-sm font-semibold text-slate-700"><i className="fa-brands fa-whatsapp text-green-500 mr-2"></i>WhatsApp Messages</span>
-                            <span className="text-xs font-bold text-slate-500">{usage.whatsappSent || 0} / {limits.whatsappMessagesPerMonth}</span>
+                            <span className="text-sm font-semibold text-slate-700"><i className="fa-solid fa-users text-indigo-500 mr-2"></i>Sub-Clients (Tenants)</span>
+                            <span className="text-xs font-bold text-slate-500">{usage.clients || 0} / {limits.maxClients || '∞'}</span>
                         </div>
                         <div className="w-full bg-slate-100 rounded-full h-2.5">
-                            <div className="h-2.5 rounded-full transition-all" style={{ width: `${pct(usage.whatsappSent, limits.whatsappMessagesPerMonth)}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)' }}></div>
+                            <div className="h-2.5 rounded-full transition-all" style={{ width: `${pct(usage.clients || 0, limits.maxClients || 1)}%`, background: 'linear-gradient(90deg, #6366f1, #4f46e5)' }}></div>
                         </div>
-                        <p className="text-xs text-slate-400 mt-1 text-right">{pct(usage.whatsappSent, limits.whatsappMessagesPerMonth)}% used</p>
+                        <p className="text-xs text-slate-400 mt-1 text-right">{pct(usage.clients || 0, limits.maxClients || 1)}% used</p>
                     </div>
 
-                    <div>
-                        <div className="flex justify-between items-center mb-2">
-                            <span className="text-sm font-semibold text-slate-700"><i className="fa-solid fa-envelope text-blue-500 mr-2"></i>Emails Sent</span>
-                            <span className="text-xs font-bold text-slate-500">{usage.emailsSent || 0} / {limits.emailsPerMonth}</span>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-2.5">
-                            <div className="h-2.5 rounded-full transition-all" style={{ width: `${pct(usage.emailsSent, limits.emailsPerMonth)}%`, background: 'linear-gradient(90deg, #3b82f6, #2563eb)' }}></div>
-                        </div>
-                        <p className="text-xs text-slate-400 mt-1 text-right">{pct(usage.emailsSent, limits.emailsPerMonth)}% used</p>
-                    </div>
-
-                    <div className="bg-slate-50 rounded-xl p-4 text-sm text-slate-600">
+                    <div className="bg-slate-50 rounded-xl p-4 text-sm text-slate-600 mt-4">
                         <i className="fa-solid fa-circle-info text-indigo-500 mr-2"></i>
-                        Usage resets every 30 days from the date your plan was activated.
+                        Your plan allows up to {limits.maxClients || 'unlimited'} sub-clients. Contact Platform Support to upgrade your limits.
                     </div>
                 </div>
             </div>
