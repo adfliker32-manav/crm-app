@@ -230,6 +230,27 @@ const getAllCompanies = async (req, res) => {
                     as: '_leadCount'
                 }
             },
+            // Count sub-clients (managers under this agency, if role=agency)
+            {
+                $lookup: {
+                    from: 'users',
+                    let: { companyId: '$_id' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$parentId', '$$companyId'] },
+                                        { $eq: ['$role', 'manager'] }
+                                    ]
+                                }
+                            }
+                        },
+                        { $count: 'count' }
+                    ],
+                    as: '_subClients'
+                }
+            },
             { $sort: { createdAt: -1 } },
             { $limit: 500 },
             {
@@ -243,13 +264,14 @@ const getAllCompanies = async (req, res) => {
                 $addFields: {
                     agentsCount: { $size: '$_agents' },
                     leadsCount: { $ifNull: [{ $arrayElemAt: ['$_leadCount.count', 0] }, 0] },
+                    registeredClients: { $ifNull: [{ $arrayElemAt: ['$_subClients.count', 0] }, 0] },
                     // Derived flags for frontend — `accountStatus` is the source of truth.
                     // Suspended = SuperAdmin freeze; Frozen = Agency freeze.
                     isFrozen:    { $in: ['$accountStatus', ['Frozen', 'Suspended']] },
                     isSuspended: { $eq: ['$accountStatus', 'Suspended'] }
                 }
             },
-            { $project: { _agents: 0, _leadCount: 0 } }
+            { $project: { _agents: 0, _leadCount: 0, _subClients: 0 } }
         ]);
 
         // Flatten workspace settings for frontend compatibility, but preserve top-level

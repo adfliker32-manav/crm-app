@@ -219,7 +219,7 @@ const AgenciesView = () => {
                             <tr className="bg-slate-50/50">
                                 <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Agency</th>
                                 <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Primary Contact</th>
-                                <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Performance</th>
+                                <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Network &amp; Earnings</th>
                                 <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Wallet Balance</th>
                                 <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Account status</th>
                                 <th className="px-8 py-5 text-right text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Control</th>
@@ -247,12 +247,14 @@ const AgenciesView = () => {
                                             <p className="text-slate-400 text-xs mt-0.5">{company.phone || 'No Phone'}</p>
                                         </td>
                                         <td className="px-8 py-6">
-                                            <div className="flex gap-2">
-                                                <span className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-black rounded-lg border border-blue-100">
-                                                    {company.leadsCount || 0} LEADS
+                                            <div className="flex flex-col gap-1.5">
+                                                <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 text-[10px] font-black rounded-lg border border-indigo-100 inline-flex items-center gap-1.5 w-fit">
+                                                    <i className="fa-solid fa-users text-[9px]" />
+                                                    {company.registeredClients || 0} SUB-CLIENTS
                                                 </span>
-                                                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-black rounded-lg border border-emerald-100">
-                                                    {company.agentsCount || 0} AGENTS
+                                                <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 text-[10px] font-black rounded-lg border border-emerald-100 inline-flex items-center gap-1.5 w-fit">
+                                                    <i className="fa-solid fa-coins text-[9px]" />
+                                                    {fmt(company.totalCommissionEarned || 0)} EARNED
                                                 </span>
                                             </div>
                                         </td>
