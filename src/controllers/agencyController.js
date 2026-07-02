@@ -456,7 +456,6 @@ const createClient = async (req, res) => {
         });
 
         await IntegrationConfig.create({ userId: newClient._id });
-        await AgencySettings.create({ agencyId: newClient._id });
 
         // 7. Audit log
         auditLogger.log({

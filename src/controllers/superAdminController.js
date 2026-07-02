@@ -123,10 +123,16 @@ const createCompany = async (req, res) => {
             ...(isAgency ? {} : { planExpiryDate: new Date(Date.now() + TRIAL_DURATION_MS) })
         };
 
-        await Promise.all([
+        const createPromises = [
             WorkspaceSettings.create(workspacePayload),
             IntegrationConfig.create({ userId: newCompany._id })
-        ]);
+        ];
+
+        if (isAgency) {
+            createPromises.push(AgencySettings.create({ agencyId: newCompany._id }));
+        }
+
+        await Promise.all(createPromises);
 
         res.status(201).json({
             success: true,

@@ -38,9 +38,7 @@ const updateAgencyBranding = async (req, res) => {
 
         const settings = await AgencySettings.findOne({ agencyId });
         
-        let newPlanLimits = settings ? settings.planLimits : {
-            maxClients: 5, whatsappMessagesPerMonth: 1000, emailsPerMonth: 5000
-        };
+        let newPlanLimits = settings ? settings.planLimits : { maxClients: 5 };
 
         // Merge ONLY the retail prices, preserving the mathematical limits set by Super Admin
         newPlanLimits = {
@@ -81,10 +79,10 @@ const getUsageStats = async (req, res) => {
 
         // Default Limits
         const limits = {
-            maxClients: 5,
-            emailsPerMonth: 5000,
-            whatsappMessagesPerMonth: 1000
+            maxClients: 5
         };
+
+        const currentClientCount = await User.countDocuments({ parentId: agencyId, role: 'manager' });
 
         const usage = {
             clients: currentClientCount,
