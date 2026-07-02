@@ -2213,58 +2213,6 @@ const deactivateAccount = async (req, res) => {
     }
 };
 
-const topUpAiCredits = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { amount } = req.body;
-        
-        if (!amount || isNaN(amount) || amount <= 0) {
-            return res.status(400).json({ message: "Valid amount is required." });
-        }
-
-        const user = await User.findById(id);
-        if (!user) {
-            return res.status(404).json({ message: "User not found." });
-        }
-
-        user.aiCreditsBalance = (user.aiCreditsBalance || 0) + parseInt(amount, 10);
-        await user.save();
-        
-        // Log the manual credit addition
-        await auditLogger.logActivity(req.user.id, 'AI_CREDITS_TOPUP', { targetUserId: id, amount: parseInt(amount, 10), newBalance: user.aiCreditsBalance });
-        
-        res.json({ success: true, message: "AI Credits added successfully.", aiCreditsBalance: user.aiCreditsBalance });
-    } catch (err) {
-        console.error("[SuperAdmin] topUpAiCredits error:", err);
-        res.status(500).json({ message: "Failed to top up AI credits." });
-    }
-};
-
-// @desc  Update granular permissions (e.g., AI Voice Access override)
-// @route PUT /api/superadmin/accounts/:id/permissions
-const updateAccountPermissions = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { aiVoiceAccess } = req.body;
-
-        const user = await User.findById(id);
-        if (!user) return res.status(404).json({ message: 'User not found' });
-
-        if (aiVoiceAccess !== undefined) {
-            user.permissions.aiVoiceAccess = aiVoiceAccess;
-        }
-
-        await user.save();
-
-        await auditLogger.logActivity(req.user.id, 'ACCOUNT_PERMISSIONS_UPDATED', { targetUserId: id, newPermissions: user.permissions });
-
-        res.json({ success: true, message: `Permissions updated successfully.`, permissions: user.permissions });
-    } catch (error) {
-        console.error('updateAccountPermissions Error:', error);
-        res.status(500).json({ message: 'Server Error' });
-    }
-};
-
 module.exports = {
     getSaaSAnalytics,
     getAllCompanies,
@@ -2302,8 +2250,6 @@ module.exports = {
     approveAccount,
     rejectAccount,
     deactivateAccount,
-    topUpAiCredits,
-    updateAccountPermissions,
     // 🧹 Maintenance
     cleanupOrphanedAccounts
 };
