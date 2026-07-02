@@ -199,7 +199,6 @@ const DashboardView = ({ setActiveView }) => {
                     title="Approved Accounts"
                     value={stats.approvedAccounts || 0}
                     sub={[
-                        pendingCount > 0 && `${pendingCount} pending`,
                         stats.rejectedAccounts > 0 && `${stats.rejectedAccounts} rejected`,
                         stats.deactivatedAccounts > 0 && `${stats.deactivatedAccounts} inactive`
                     ].filter(Boolean).join(' · ') || 'All accounts active'}
