@@ -22,6 +22,11 @@ const AISettings = () => {
     const [maxTurns, setMaxTurns] = useState(5);
     const [tokensUsed, setTokensUsed] = useState(0);
 
+    // Voice Automation Config
+    const [voiceProvider, setVoiceProvider] = useState('vapi');
+    const [voiceApiKey, setVoiceApiKey] = useState('');
+    const [voiceAgentId, setVoiceAgentId] = useState('');
+
     // Tenants use the global superadmin API key now
     const hasApiKey = true;
 
@@ -62,6 +67,13 @@ const AISettings = () => {
                 setAiSupportEnabled(data.aiSupportEnabled || false);
                 setMaxTurns(data.maxTurns || 5);
                 setTokensUsed(data.tokensUsedThisMonth || 0);
+
+                // Voice Automation
+                if (data.voiceAutomation) {
+                    setVoiceProvider(data.voiceAutomation.provider || 'vapi');
+                    setVoiceApiKey(data.voiceAutomation.apiKey || '');
+                    setVoiceAgentId(data.voiceAutomation.defaultAgentId || '');
+                }
             } catch (error) {
                 console.error('Failed to load AI settings:', error);
                 showError('Failed to load AI Chatbot settings.');
@@ -110,7 +122,12 @@ const AISettings = () => {
                 aiEnabled,
                 aiFallbackEnabled,
                 aiSupportEnabled,
-                maxTurns
+                maxTurns,
+                voiceAutomation: {
+                    provider: voiceProvider,
+                    apiKey: voiceApiKey,
+                    defaultAgentId: voiceAgentId
+                }
             };
             
             await api.put('/ai/settings', payload);
@@ -435,6 +452,49 @@ const AISettings = () => {
                                 <p className="text-xs text-slate-400 font-medium">The system automatically appends strict schema controls instructing the AI to output stages and triggers back to the CRM database.</p>
                                 <span className={`text-xs font-bold ${systemPrompt.length > 900 ? 'text-red-500' : 'text-slate-400'}`}>{systemPrompt.length}/1000</span>
                             </div>
+                        </div>
+                    </div>
+
+                    {/* Voice Automation Settings */}
+                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm space-y-4">
+                        <h3 className="text-base font-bold text-slate-800 border-b border-slate-50 pb-3 flex items-center gap-2">
+                            <i className="fa-solid fa-phone-volume text-indigo-500"></i> Voice Automation (Option B)
+                        </h3>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
+                                <select 
+                                    value={voiceProvider} 
+                                    onChange={(e) => setVoiceProvider(e.target.value)}
+                                    className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm font-bold text-slate-700 bg-white"
+                                >
+                                    <option value="vapi">Vapi.ai (Recommended)</option>
+                                    <option value="retell">Retell AI</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">API Key</label>
+                                <input
+                                    type="password"
+                                    value={voiceApiKey}
+                                    onChange={(e) => setVoiceApiKey(e.target.value)}
+                                    placeholder="Enter secret API Key"
+                                    className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm font-bold text-slate-800"
+                                />
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Default Voice Agent ID</label>
+                            <input
+                                type="text"
+                                value={voiceAgentId}
+                                onChange={(e) => setVoiceAgentId(e.target.value)}
+                                placeholder="e.g. 9b9c9f8a-..."
+                                className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm font-bold text-slate-800"
+                            />
+                            <p className="text-xs text-slate-400 mt-2 font-medium">This Agent ID is used if no specific ID is provided in the automation workflow.</p>
                         </div>
                     </div>
 

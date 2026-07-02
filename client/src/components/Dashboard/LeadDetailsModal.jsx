@@ -14,11 +14,14 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
     const [fullLead, setFullLead] = useState(null);
     const [fullLeadLoading, setFullLeadLoading] = useState(false);
 
-    // Tasks section states
     const [tasks, setTasks] = useState([]);
     const [taskTitle, setTaskTitle] = useState('');
     const [taskDate, setTaskDate] = useState('');
     const [tasksLoading, setTasksLoading] = useState(false);
+
+    // Voice Calls section state
+    const [voiceCalls, setVoiceCalls] = useState([]);
+    const [voiceCallsLoading, setVoiceCallsLoading] = useState(false);
 
     // Email section states
     const [showEmailSection, setShowEmailSection] = useState(false);
@@ -32,6 +35,7 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
             setFullLead(null); // Reset on new open
             fetchCustomFields();
             fetchTasks();
+            fetchVoiceCalls();
             fetchFullLead();
         }
     }, [isOpen, lead]);
@@ -104,6 +108,21 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
             setTasks(res.data || []);
         } catch (err) {
             console.error('Failed to fetch tasks:', err);
+        }
+    };
+
+    const fetchVoiceCalls = async () => {
+        if (!lead?._id) return;
+        setVoiceCallsLoading(true);
+        try {
+            const res = await api.get(`/voice-calls/lead/${lead._id}`);
+            if (res.data.success) {
+                setVoiceCalls(res.data.calls || []);
+            }
+        } catch (err) {
+            console.error('Failed to fetch voice calls:', err);
+        } finally {
+            setVoiceCallsLoading(false);
         }
     };
 
@@ -404,6 +423,81 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                             </div>
                         )}
                     </div>
+
+                    {/* AI Voice Call Logs */}
+                    {voiceCalls.length > 0 && (
+                        <div>
+                            <h4 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
+                                <i className="fa-solid fa-phone-volume text-indigo-500"></i> AI Voice Calls
+                            </h4>
+                            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                                {voiceCalls.map((call, idx) => (
+                                    <div key={call._id} className={`p-5 ${idx > 0 ? 'border-t border-slate-100' : ''}`}>
+                                        <div className="flex justify-between items-start mb-3">
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${
+                                                        call.status === 'completed' ? 'bg-green-100 text-green-700' :
+                                                        call.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                                                    }`}>
+                                                        {call.status}
+                                                    </span>
+                                                    <span className="text-xs text-slate-500 font-medium">
+                                                        {new Date(call.createdAt).toLocaleString()}
+                                                    </span>
+                                                    <span className="text-xs text-indigo-500 font-bold bg-indigo-50 px-2 rounded-full border border-indigo-100 uppercase">
+                                                        {call.executionMode || 'static'} Mode
+                                                    </span>
+                                                    {call.outcome && (
+                                                        <span className={`text-xs font-bold px-2 rounded-full border uppercase flex items-center gap-1 ${
+                                                            call.outcome === 'Appointment Booked' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                                            call.outcome === 'Interested' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                                                            'bg-slate-50 text-slate-700 border-slate-200'
+                                                        }`}>
+                                                            {call.outcome === 'Appointment Booked' && <i className="fa-solid fa-calendar-check"></i>}
+                                                            {call.outcome}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <p className="text-sm font-bold text-slate-800">Call Duration: {call.durationSeconds}s</p>
+                                                    {call.aiCreditsConsumed > 0 && (
+                                                        <p className="text-xs font-semibold text-purple-600 bg-purple-50 px-2 py-0.5 rounded border border-purple-100">
+                                                            <i className="fa-solid fa-coins mr-1"></i> {call.aiCreditsConsumed} AI Credits
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            {call.recordingUrl && (
+                                                <a href={call.recordingUrl} target="_blank" rel="noopener noreferrer" className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-2">
+                                                    <i className="fa-solid fa-play"></i> Play Recording
+                                                </a>
+                                            )}
+                                        </div>
+                                        
+                                        {call.summary && (
+                                            <div className="mt-3 bg-indigo-50/50 rounded-lg p-3 border border-indigo-100">
+                                                <p className="text-xs font-bold text-indigo-800 uppercase tracking-wider mb-1 flex items-center gap-1.5"><i className="fa-solid fa-robot"></i> AI Summary</p>
+                                                <p className="text-sm text-slate-700">{call.summary}</p>
+                                            </div>
+                                        )}
+                                        
+                                        {call.transcript && (
+                                            <details className="mt-3 group cursor-pointer">
+                                                <summary className="text-xs font-bold text-blue-600 hover:text-blue-800 outline-none list-none flex items-center gap-1">
+                                                    <i className="fa-solid fa-chevron-right group-open:rotate-90 transition-transform"></i>
+                                                    View Full Transcript
+                                                </summary>
+                                                <div className="mt-2 bg-slate-50 p-3 rounded-lg border border-slate-200 text-xs text-slate-600 whitespace-pre-wrap max-h-48 overflow-y-auto font-mono">
+                                                    {call.transcript}
+                                                </div>
+                                            </details>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Activity Audit Log */}
                     <div>

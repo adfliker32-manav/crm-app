@@ -1742,6 +1742,250 @@ const getAgencyLimits = async (req, res) => {
     }
 };
 
+const deleteAgency = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const agency = await User.findOne({ _id: id, role: 'agency' });
+        if (!agency) {
+            return res.status(404).json({ message: "Agency not found." });
+        }
+
+        // Delete associated records...
+        // [WARNING: In production, consider soft delete or complex cleanup]
+        await deleteOwnedRecords(id, req.user.id);
+        await User.deleteOne({ _id: id });
+        
+        res.json({ message: "Agency deleted successfully." });
+
+    } catch (err) {
+        console.error("[SuperAdmin] deleteAgency error:", err);
+        res.status(500).json({ message: "Failed to delete agency." });
+    }
+};
+
+const topUpAiCredits = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { amount } = req.body;
+        
+        if (!amount || isNaN(amount) || amount <= 0) {
+            return res.status(400).json({ message: "Valid amount is required." });
+        }
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ message: "User not found." });
+        }
+
+        user.aiCreditsBalance = (user.aiCreditsBalance || 0) + parseInt(amount, 10);
+        await user.save();
+        
+        // Log the manual credit addition
+        await auditLogger.logActivity(req.user.id, 'AI_CREDITS_TOPUP', { targetUserId: id, amount: parseInt(amount, 10), newBalance: user.aiCreditsBalance });
+        
+        res.json({ success: true, message: "AI Credits added successfully.", aiCreditsBalance: user.aiCreditsBalance });
+    } catch (err) {
+        console.error("[SuperAdmin] topUpAiCredits error:", err);
+        res.status(500).json({ message: "Failed to top up AI credits." });
+    }
+};
+
+const updateAgencyLimits = async (req, res) => {
+    try {
+        const { id } = req.params; // The Agency ID
+        const { maxClients, allowNewSignups } = req.body;
+
+        const agency = await User.findOne({ _id: id, role: 'agency' });
+        if (!agency) return res.status(404).json({ message: "Agency not found" });
+
+        const updatedSettings = await AgencySettings.findOneAndUpdate(
+            { agencyId: agency._id },
+            {
+                $set: {
+                    'planLimits.maxClients': maxClients,
+                    'allowNewSignups': allowNewSignups !== undefined ? allowNewSignups : true
+                }
+            },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'SUPERADMIN_ACTION',
+            action: 'AGENCY_LIMITS_UPDATED',
+            targetType: 'Agency',
+            targetId: agency._id,
+            targetName: agency.companyName || agency.email,
+            details: { maxClients },
+            req
+        });
+
+        res.json({ success: true, message: "Agency limits updated successfully", limits: updatedSettings.planLimits });
+    } catch (err) {
+        console.error("Update Agency Limits Error:", err);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+
+// ============================================================
+// 🔭 SUPER ADMIN — WORKSPACE ANALYTICS COCKPIT
+// GET /api/super-admin/workspace-analytics
+// Per-workspace: plan, usage logs, lead count, upgrade pressure
+// ============================================================
+const getWorkspaceAnalytics = async (req, res) => {
+    try {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+
+        // All tenant owners joined with workspace settings
+        const workspaces = await joinWorkspaceSettings({ role: { $in: ['manager', 'agency'] } });
+
+        const results = await Promise.all(workspaces.map(async (ws) => {
+            const wsId = ws._id;
+
+            // Parallel data fetch
+            const [leadCount, agentCount, usageLogs] = await Promise.all([
+                Lead.countDocuments({ userId: wsId }),
+                User.countDocuments({ parentId: wsId, role: 'agent' }),
+                UsageLog.find({ workspaceId: wsId, date: { $gte: thirtyDaysAgoStr } }).lean()
+            ]);
+
+            // Aggregate 30-day usage totals
+            const usage = usageLogs.reduce((acc, day) => ({
+                leadsCreated: acc.leadsCreated + (day.leadsCreated || 0),
+                whatsappSent: acc.whatsappSent + (day.whatsappSent || 0),
+                emailsSent: acc.emailsSent + (day.emailsSent || 0),
+                automationRuns: acc.automationRuns + (day.automationRuns || 0),
+                agentLogins: acc.agentLogins + (day.agentLogins || 0),
+            }), { leadsCreated: 0, whatsappSent: 0, emailsSent: 0, automationRuns: 0, agentLogins: 0 });
+
+            // Upgrade pressure score: more activity = more likely to convert
+            const upgradePressureScore = Math.min(100,
+                Math.round((leadCount * 1.5) + (usage.whatsappSent * 0.5) + (usage.automationRuns * 2))
+            );
+
+            // Days remaining in trial
+            const now = new Date();
+            const daysRemaining = ws.workspace?.planExpiryDate
+                ? Math.max(0, Math.ceil((new Date(ws.workspace.planExpiryDate) - now) / (1000 * 60 * 60 * 24)))
+                : null;
+
+            return {
+                workspaceId: wsId,
+                name: ws.name,
+                email: ws.email,
+                companyName: ws.companyName,
+                accountType: ws.accountType,
+                plan: ws.workspace?.subscriptionPlan,
+                planStatus: ws.workspace?.subscriptionStatus,
+                trialStartedAt: ws.trialActivatedAt,
+                trialExpiresAt: ws.workspace?.planExpiryDate,
+                daysRemainingInTrial: daysRemaining,
+                metaSyncEnabled: ws.workspace?.planFeatures?.metaSync === true,
+                totalLeads: leadCount,
+                leadLimit: ws.workspace?.planFeatures?.leadLimit || 100,
+                totalAgents: agentCount,
+                agentLimit: ws.workspace?.agentLimit || ws.workspace?.planFeatures?.agentLimit || 5,
+                lastLogin: ws.lastLogin,
+                joinedAt: ws.createdAt,
+                usage30Days: usage,
+                upgradePressureScore, // 0-100
+            };
+        }));
+
+        // Sort by upgrade pressure descending (hottest leads first)
+        results.sort((a, b) => b.upgradePressureScore - a.upgradePressureScore);
+
+        res.json({ success: true, total: results.length, workspaces: results });
+    } catch (err) {
+        console.error('getWorkspaceAnalytics error:', err);
+        res.status(500).json({ message: 'Failed to fetch workspace analytics' });
+    }
+};
+
+// ==============================================================
+// ✅ APPROVAL-BASED ACCESS CONTROL (Core System)
+// Replaces all payment/subscription logic.
+// Super Admin manually gates every account.
+// ==============================================================
+
+// @desc  Get all accounts pending Super Admin approval
+// @route GET /api/superadmin/accounts/pending
+//
+// Returns each pending account joined with its WorkspaceSettings so the admin
+// can see exactly what the agency requested (modules, limits, sub-permissions)
+// before approving.
+const getPendingRequests = async (req, res) => {
+    try {
+        const accounts = await User.aggregate([
+            { $match: { role: { $in: ['manager', 'agency'] }, status: 'pending' } },
+            {
+                $lookup: {
+                    from: 'workspacesettings',
+                    localField: '_id',
+                    foreignField: 'userId',
+                    as: 'workspace'
+                }
+            },
+            { $unwind: { path: '$workspace', preserveNullAndEmptyArrays: true } },
+            { $sort: { createdAt: -1 } },
+            { $project: { password: 0 } }
+        ]);
+
+        const parentIds = [...new Set(accounts.filter(a => a.parentId).map(a => a.parentId.toString()))];
+        const agencies = parentIds.length > 0
+            ? await User.find({ _id: { $in: parentIds } }).select('companyName name email').lean()
+            : [];
+        const agencyMap = {};
+        agencies.forEach(a => { agencyMap[a._id.toString()] = a; });
+
+        const enriched = accounts.map(acc => {
+            if (acc.parentId) {
+                const agency = agencyMap[acc.parentId.toString()];
+                acc.agencyName = agency?.companyName || agency?.name || 'Unknown Agency';
+                acc.agencyEmail = agency?.email;
+        // [WARNING: In production, consider soft delete or complex cleanup]
+        await deleteOwnedRecords(id, req.user.id);
+        await User.deleteOne({ _id: id });
+        
+        res.json({ message: "Agency deleted successfully." });
+
+    } catch (err) {
+        console.error("[SuperAdmin] deleteAgency error:", err);
+        res.status(500).json({ message: "Failed to delete agency." });
+    }
+};
+
+const topUpAiCredits = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { amount } = req.body;
+        
+        if (!amount || isNaN(amount) || amount <= 0) {
+            return res.status(400).json({ message: "Valid amount is required." });
+        }
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ message: "User not found." });
+        }
+
+        user.aiCreditsBalance = (user.aiCreditsBalance || 0) + parseInt(amount, 10);
+        await user.save();
+        
+        // Log the manual credit addition
+        await auditLogger.logActivity(req.user.id, 'AI_CREDITS_TOPUP', { targetUserId: id, amount: parseInt(amount, 10), newBalance: user.aiCreditsBalance });
+        
+        res.json({ success: true, message: "AI Credits added successfully.", aiCreditsBalance: user.aiCreditsBalance });
+    } catch (err) {
+        console.error("[SuperAdmin] topUpAiCredits error:", err);
+        res.status(500).json({ message: "Failed to top up AI credits." });
+    }
+};
+
 const updateAgencyLimits = async (req, res) => {
     try {
         const { id } = req.params; // The Agency ID
@@ -2213,6 +2457,31 @@ const deactivateAccount = async (req, res) => {
     }
 };
 
+// @desc  Update granular permissions (e.g., AI Voice Access override)
+// @route PUT /api/superadmin/accounts/:id/permissions
+const updateAccountPermissions = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { aiVoiceAccess } = req.body;
+
+        const user = await User.findById(id);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        if (aiVoiceAccess !== undefined) {
+            user.permissions.aiVoiceAccess = aiVoiceAccess;
+        }
+
+        await user.save();
+
+        await auditLogger.logActivity(req.user.id, 'ACCOUNT_PERMISSIONS_UPDATED', { targetUserId: id, newPermissions: user.permissions });
+
+        res.json({ success: true, message: `Permissions updated successfully.`, permissions: user.permissions });
+    } catch (error) {
+        console.error('updateAccountPermissions Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
 module.exports = {
     getSaaSAnalytics,
     getAllCompanies,
@@ -2250,6 +2519,8 @@ module.exports = {
     approveAccount,
     rejectAccount,
     deactivateAccount,
+    topUpAiCredits,
+    updateAccountPermissions,
     // 🧹 Maintenance
     cleanupOrphanedAccounts
 };

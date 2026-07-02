@@ -21,6 +21,11 @@ const emailLogRoutes = require('./src/routes/emailLogRoutes');
 const whatsappRoutes = require('./src/routes/whatsappRoutes');
 const whatsappTemplateRoutes = require('./src/routes/whatsappTemplateRoutes');
 const whatsAppLogRoutes = require('./src/routes/whatsAppLogRoutes');
+const metaDropLogRoutes = require('./src/routes/metaDropLogRoutes');
+const voiceWebhookRoutes = require('./src/routes/voiceWebhookRoutes');
+const voiceCallRoutes = require('./src/routes/voiceCallRoutes');
+const voiceAnalyticsRoutes = require('./src/routes/voiceAnalyticsRoutes');
+const voiceTemplateRoutes = require('./src/routes/voiceTemplateRoutes');
 const superAdminRoutes = require('./src/routes/superAdminRoutes');
 const agencyRoutes = require('./src/routes/agencyRoutes'); // Reseller actions
 const metaRoutes = require('./src/routes/metaRoutes'); // Meta Lead Sync
@@ -496,6 +501,10 @@ app.use('/api/chatbot/flows', chatbotRoutes);
 
 // 4. Meta Lead Sync
 app.use('/api/meta', metaRoutes);
+app.use('/webhook/voice', voiceWebhookRoutes); // Public webhook for Vapi
+app.use('/api/voice-calls', voiceCallRoutes);
+app.use('/api/voice-analytics', voiceAnalyticsRoutes);
+app.use('/api/voice-templates', voiceTemplateRoutes);
 app.use('/api/activity-logs', require('./src/routes/activityLogRoutes'));
 app.use('/api/reports', reportRoutes); // Reports & Analytics
 app.use('/mcp', mcpRoutes);           // Claude AI MCP server (API-key auth, no JWT)

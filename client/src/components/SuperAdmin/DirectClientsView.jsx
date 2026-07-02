@@ -3,16 +3,19 @@ import React, { useState, useEffect, useMemo } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import { usePrompt } from '../../context/PromptContext';
 import EditCompanyModal from './EditCompanyModal';
 import CreateCompanyModal from './CreateCompanyModal';
 import ViewLeadsModal from './ViewLeadsModal';
 import ManageAgentsModal from './ManageAgentsModal';
 import ChangePasswordModal from './ChangePasswordModal';
 import ManageAgencyModal from './ManageAgencyModal';
+import ManagePermissionsModal from './ManagePermissionsModal';
 
 const DirectClientsView = () => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
+    const { showPrompt } = usePrompt();
     const [companies, setCompanies] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
@@ -25,6 +28,7 @@ const DirectClientsView = () => {
     const [isManageAgentsModalOpen, setIsManageAgentsModalOpen] = useState(false);
     const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
     const [isManageModalOpen, setIsManageModalOpen] = useState(false);
+    const [isManagePermissionsModalOpen, setIsManagePermissionsModalOpen] = useState(false);
 
     useEffect(() => {
         fetchCompanies();
@@ -134,6 +138,26 @@ const DirectClientsView = () => {
     const openManageModal = (company) => {
         setSelectedCompany(company);
         setIsManageModalOpen(true);
+    };
+
+    const handleAddAiCredits = async (company) => {
+        const amountStr = await showPrompt('Top Up AI Credits', 'Enter the amount of AI Credits to add:');
+        if (!amountStr) return;
+        
+        const amount = parseInt(amountStr, 10);
+        if (isNaN(amount) || amount <= 0) {
+            showError('Please enter a valid positive number');
+            return;
+        }
+
+        try {
+            const res = await api.post(`/superadmin/accounts/${company._id}/add-ai-credits`, { amount });
+            showSuccess(`Added ${amount} credits. New balance: ${res.data.aiCreditsBalance}`);
+            fetchCompanies();
+        } catch (error) {
+            console.error('Error adding credits:', error);
+            showError(error.response?.data?.message || 'Failed to add AI credits');
+        }
     };
 
     if (loading) {
@@ -300,6 +324,8 @@ const DirectClientsView = () => {
                 actions={[
                     { label: 'Login as Merchant', icon: 'fa-right-to-bracket', onClick: () => handleImpersonate(selectedCompany) },
                     { label: 'Leads Database', icon: 'fa-users', onClick: () => { setSelectedCompany(selectedCompany); setIsViewLeadsModalOpen(true); } },
+                    { label: 'Manage Access & Limits', icon: 'fa-lock', onClick: () => { setSelectedCompany(selectedCompany); setIsManagePermissionsModalOpen(true); } },
+                    { label: 'Add AI Credits', icon: 'fa-coins', onClick: () => handleAddAiCredits(selectedCompany) },
                     { label: 'Manage Agents', icon: 'fa-user-tie', onClick: () => { setSelectedCompany(selectedCompany); setIsManageAgentsModalOpen(true); } },
                     { label: 'Change Password', icon: 'fa-key', onClick: () => { setSelectedCompany(selectedCompany); setIsChangePasswordModalOpen(true); } },
                     { label: 'Edit Profile', icon: 'fa-edit', onClick: () => { setSelectedCompany(selectedCompany); setIsEditModalOpen(true); } },
@@ -319,6 +345,7 @@ const DirectClientsView = () => {
             <ViewLeadsModal isOpen={isViewLeadsModalOpen} onClose={() => setIsViewLeadsModalOpen(false)} company={selectedCompany} />
             <ManageAgentsModal isOpen={isManageAgentsModalOpen} onClose={() => setIsManageAgentsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
             <ChangePasswordModal isOpen={isChangePasswordModalOpen} onClose={() => setIsChangePasswordModalOpen(false)} company={selectedCompany} />
+            <ManagePermissionsModal isOpen={isManagePermissionsModalOpen} onClose={() => setIsManagePermissionsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
         </div>
     );
 };

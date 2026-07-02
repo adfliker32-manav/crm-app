@@ -176,6 +176,13 @@ const integrationConfigSchema = new mongoose.Schema({
         tokensUsedThisMonth: { type: Number, default: 0 }
     },
 
+    // 📞 AI Voice Automation Configuration
+    voiceAutomation: {
+        provider: { type: String, enum: ['vapi', 'retell'], default: 'vapi' },
+        apiKey: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
+        defaultAgentId: { type: String, default: null }
+    },
+
     createdAt: {
         type: Date,
         default: Date.now

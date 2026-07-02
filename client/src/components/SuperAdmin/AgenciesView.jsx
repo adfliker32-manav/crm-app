@@ -3,16 +3,19 @@ import React, { useState, useEffect, useMemo } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import { usePrompt } from '../../context/PromptContext';
 import EditCompanyModal from './EditCompanyModal';
 import CreateCompanyModal from './CreateCompanyModal';
 import ChangePasswordModal from './ChangePasswordModal';
 import ViewAgencyClientsModal from './ViewAgencyClientsModal';
 import ManageAgencyLimitsModal from './ManageAgencyLimitsModal';
 import ManageAgencyModal from './ManageAgencyModal';
+import ManagePermissionsModal from './ManagePermissionsModal';
 
 const AgenciesView = () => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
+    const { showPrompt } = usePrompt();
     const fmt = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
     const [companies, setCompanies] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
@@ -26,6 +29,7 @@ const AgenciesView = () => {
     const [isViewClientsModalOpen, setIsViewClientsModalOpen] = useState(false);
     const [isManageLimitsModalOpen, setIsManageLimitsModalOpen] = useState(false);
     const [isManageModalOpen, setIsManageModalOpen] = useState(false);
+    const [isManagePermissionsModalOpen, setIsManagePermissionsModalOpen] = useState(false);
 
     useEffect(() => {
         fetchCompanies();
@@ -137,6 +141,26 @@ const AgenciesView = () => {
     const openManageModal = (company) => {
         setSelectedCompany(company);
         setIsManageModalOpen(true);
+    };
+
+    const handleAddAiCredits = async (company) => {
+        const amountStr = await showPrompt('Top Up AI Credits', 'Enter the amount of AI Credits to add:');
+        if (!amountStr) return;
+        
+        const amount = parseInt(amountStr, 10);
+        if (isNaN(amount) || amount <= 0) {
+            showError('Please enter a valid positive number');
+            return;
+        }
+
+        try {
+            const res = await api.post(`/superadmin/accounts/${company._id}/add-ai-credits`, { amount });
+            showSuccess(`Added ${amount} credits. New balance: ${res.data.aiCreditsBalance}`);
+            fetchCompanies();
+        } catch (error) {
+            console.error('Error adding credits:', error);
+            showError(error.response?.data?.message || 'Failed to add AI credits');
+        }
     };
 
     if (loading) {
@@ -314,6 +338,8 @@ const AgenciesView = () => {
                 actions={[
                     { label: 'Login as Affiliate', icon: 'fa-right-to-bracket', onClick: () => handleImpersonate(selectedCompany) },
                     { label: 'Sub-Clients', icon: 'fa-users-rectangle', onClick: () => { setSelectedCompany(selectedCompany); setIsViewClientsModalOpen(true); } },
+                    { label: 'Manage Permission Overrides', icon: 'fa-lock', onClick: () => { setSelectedCompany(selectedCompany); setIsManagePermissionsModalOpen(true); } },
+                    { label: 'Add AI Credits', icon: 'fa-coins', onClick: () => handleAddAiCredits(selectedCompany) },
                     { label: 'Reseller Limits & Controls', icon: 'fa-shield-halved', onClick: () => { setSelectedCompany(selectedCompany); setIsManageLimitsModalOpen(true); } },
                     { label: 'Change Password', icon: 'fa-key', onClick: () => { setSelectedCompany(selectedCompany); setIsChangePasswordModalOpen(true); } },
                     { label: 'Edit Profile', icon: 'fa-edit', onClick: () => { setSelectedCompany(selectedCompany); setIsEditModalOpen(true); } },
@@ -333,6 +359,7 @@ const AgenciesView = () => {
             <ChangePasswordModal isOpen={isChangePasswordModalOpen} onClose={() => setIsChangePasswordModalOpen(false)} company={selectedCompany} />
             <ViewAgencyClientsModal isOpen={isViewClientsModalOpen} onClose={() => setIsViewClientsModalOpen(false)} agency={selectedCompany} />
             <ManageAgencyLimitsModal isOpen={isManageLimitsModalOpen} onClose={() => setIsManageLimitsModalOpen(false)} agency={selectedCompany} onSuccess={fetchCompanies} />
+            <ManagePermissionsModal isOpen={isManagePermissionsModalOpen} onClose={() => setIsManagePermissionsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
         </div>
     );
 };

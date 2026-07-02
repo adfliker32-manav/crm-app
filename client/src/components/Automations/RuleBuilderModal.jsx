@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { useAuth } from '../../context/AuthContext';
 
 const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
     const { showNotification } = useNotification();
+    const { user } = useAuth();
     const [loading, setLoading] = useState(false);
 
     // CRM Context Data for Dropdowns
@@ -20,6 +22,13 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
     };
 
     const [rule, setRule] = useState(defaultRule);
+
+    const hasVoiceModule = () => {
+        if (user?.role === 'superadmin') return true;
+        if (user?.permissions?.aiVoiceAccess === true) return true;
+        if (user?.permissions?.aiVoiceAccess === false) return false;
+        return user?.activeModules?.includes('voice');
+    };
 
     useEffect(() => {
         if (isOpen) {
@@ -147,6 +156,7 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
         CHANGE_STAGE: { label: 'Change Stage', color: 'bg-purple-100 text-purple-700', icon: 'fa-solid fa-right-left' },
         ASSIGN_USER: { label: 'Assign to Agent', color: 'bg-orange-100 text-orange-700', icon: 'fa-solid fa-user-tag' },
         WAIT_FOR_REPLY: { label: 'Wait for Reply', color: 'bg-amber-100 text-amber-800', icon: 'fa-solid fa-hourglass-half' },
+        VOICE_CALL: { label: 'AI Voice Call', color: 'bg-indigo-100 text-indigo-700', icon: 'fa-solid fa-phone-volume' },
     };
 
     return (
@@ -322,6 +332,9 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
                                                     <option value="CHANGE_STAGE">🔄 Move to Stage</option>
                                                     <option value="ASSIGN_USER">👤 Assign to Teammate</option>
                                                     <option value="WAIT_FOR_REPLY">⏳ Wait for Reply (Conditional)</option>
+                                                    {hasVoiceModule() && (
+                                                        <option value="VOICE_CALL">📞 Trigger AI Voice Call</option>
+                                                    )}
                                                 </select>
                                             </div>
 
@@ -333,6 +346,110 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
                                                         <option value="">-- Select Approved Template --</option>
                                                         {whatsappTemplates.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
                                                     </select>
+                                                </div>
+                                            )}
+
+                                            {/* === VOICE_CALL === */}
+                                            {action.type === 'VOICE_CALL' && (
+                                                <div className="space-y-4 bg-indigo-50/50 p-4 rounded-xl border border-indigo-100">
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-indigo-700 mb-1">Execution Mode</label>
+                                                        <select 
+                                                            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500" 
+                                                            value={action.executionMode || 'static'} 
+                                                            onChange={(e) => updateAction(idx, 'executionMode', e.target.value)}
+                                                        >
+                                                            <option value="static">Static Prompt (Default, No AI Cost)</option>
+                                                            <option value="injected">CRM Variable Injection</option>
+                                                            <option value="smart">Smart AI Context (Requires AI Credits)</option>
+                                                        </select>
+                                                        {action.executionMode === 'smart' && (
+                                                            <p className="text-xs text-indigo-600 mt-1.5 flex items-center gap-1"><i className="fa-solid fa-wand-magic-sparkles"></i> The CRM will read chat history and generate a hyper-personalized prompt before calling.</p>
+                                                        )}
+                                                    </div>
+
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-slate-500 mb-1">System Prompt / Instructions</label>
+                                                        <textarea 
+                                                            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
+                                                            rows="4" 
+                                                            value={action.basePrompt || ''} 
+                                                            onChange={(e) => updateAction(idx, 'basePrompt', e.target.value)} 
+                                                            placeholder={action.executionMode === 'smart' ? "e.g. 'You are a sales agent. Use the context to close the deal...'" : "e.g. 'You are calling {{lead.name}} to remind them... (Static instructions)'"}
+                                                        />
+                                                    </div>
+
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-slate-500 mb-1">Override Voice Agent ID (Optional)</label>
+                                                        <input 
+                                                            type="text" 
+                                                            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
+                                                            value={action.agentId || ''} 
+                                                            onChange={(e) => updateAction(idx, 'agentId', e.target.value)} 
+                                                            placeholder="Leave blank to use Global Default Agent" 
+                                                        />
+                                                    </div>
+
+                                                    {/* Voice Outcomes Branching (V2) */}
+                                                    <div className="pt-3 border-t border-indigo-200 mt-4">
+                                                        <h5 className="text-xs font-bold text-indigo-800 mb-3 flex items-center gap-2">
+                                                            <i className="fa-solid fa-code-branch"></i> Automation Continuation (Outcomes)
+                                                        </h5>
+                                                        
+                                                        {/* Appointment Booked */}
+                                                        <div className="flex items-center gap-3 mb-2">
+                                                            <div className="w-1/3 text-xs font-semibold text-slate-600 bg-white px-2 py-1.5 border border-slate-200 rounded text-center">If Appointment Booked</div>
+                                                            <i className="fa-solid fa-arrow-right text-slate-300"></i>
+                                                            <div className="flex-1">
+                                                                <select 
+                                                                    className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs bg-white focus:outline-none focus:border-indigo-400"
+                                                                    value={(action.voiceOutcomes?.['Appointment Booked']?.[0]?.stageName) || ''}
+                                                                    onChange={(e) => {
+                                                                        const val = e.target.value;
+                                                                        const newOutcomes = { ...(action.voiceOutcomes || {}) };
+                                                                        if (val) {
+                                                                            newOutcomes['Appointment Booked'] = [{ type: 'CHANGE_STAGE', stageName: val }];
+                                                                        } else {
+                                                                            delete newOutcomes['Appointment Booked'];
+                                                                        }
+                                                                        updateAction(idx, 'voiceOutcomes', newOutcomes);
+                                                                    }}
+                                                                >
+                                                                    <option value="">Do Nothing</option>
+                                                                    {stages.map(s => <option key={s.name} value={s.name}>Move to: {s.name}</option>)}
+                                                                </select>
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Interested */}
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="w-1/3 text-xs font-semibold text-slate-600 bg-white px-2 py-1.5 border border-slate-200 rounded text-center">If Interested</div>
+                                                            <i className="fa-solid fa-arrow-right text-slate-300"></i>
+                                                            <div className="flex-1">
+                                                                <select 
+                                                                    className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs bg-white focus:outline-none focus:border-indigo-400"
+                                                                    value={(action.voiceOutcomes?.['Interested']?.[0]?.stageName) || ''}
+                                                                    onChange={(e) => {
+                                                                        const val = e.target.value;
+                                                                        const newOutcomes = { ...(action.voiceOutcomes || {}) };
+                                                                        if (val) {
+                                                                            newOutcomes['Interested'] = [{ type: 'CHANGE_STAGE', stageName: val }];
+                                                                        } else {
+                                                                            delete newOutcomes['Interested'];
+                                                                        }
+                                                                        updateAction(idx, 'voiceOutcomes', newOutcomes);
+                                                                    }}
+                                                                >
+                                                                    <option value="">Do Nothing</option>
+                                                                    {stages.map(s => <option key={s.name} value={s.name}>Move to: {s.name}</option>)}
+                                                                </select>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <button className="w-full mt-2 py-1.5 bg-white border border-indigo-200 text-indigo-600 text-xs font-bold rounded shadow-sm hover:bg-indigo-50 transition flex items-center justify-center gap-2">
+                                                        <i className="fa-solid fa-cloud-arrow-down"></i> Load from Template Library
+                                                    </button>
                                                 </div>
                                             )}
 

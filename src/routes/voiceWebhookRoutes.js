@@ -1,0 +1,8 @@
+const express = require('express');
+const router = express.Router();
+const voiceWebhookController = require('../controllers/voiceWebhookController');
+
+// Webhook endpoint for Vapi
+router.post('/vapi', voiceWebhookController.handleVoiceWebhook);
+
+module.exports = router;

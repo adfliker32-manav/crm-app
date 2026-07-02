@@ -25,6 +25,20 @@ const ActionSchema = new mongoose.Schema({
         sendTemplateId: { type: String, default: null }
     },
 
+    // VOICE_CALL: branching based on outcome
+    voiceOutcomes: {
+        // Map of outcome strings to an array of actions. 
+        // e.g. { "Appointment Booked": [{ type: "CHANGE_STAGE", stageName: "Booked" }] }
+        type: Map,
+        of: [mongoose.Schema.Types.Mixed],
+        default: {}
+    },
+
+    // VOICE_CALL: Config
+    executionMode: { type: String }, // 'static', 'injected', 'smart'
+    basePrompt: { type: String },
+    agentId: { type: String },
+
     // Fallback/Custom arbitrary payload mapping for future usage
     payload: { type: mongoose.Schema.Types.Mixed, default: {} }
 }, { _id: false });

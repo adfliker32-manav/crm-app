@@ -40,6 +40,8 @@ const {
     approveAccount,
     rejectAccount,
     deactivateAccount,
+    topUpAiCredits,
+    updateAccountPermissions,
     // 🧹 Maintenance
     cleanupOrphanedAccounts
 } = require('../controllers/superAdminController');
@@ -111,6 +113,12 @@ router.get('/accounts/rejected', authMiddleware, requireSuperAdmin, getRejectedA
 router.put('/accounts/:id/approve', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, approveAccount);
 router.put('/accounts/:id/reject', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, rejectAccount);
 router.put('/accounts/:id/deactivate', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deactivateAccount);
+
+// Add AI Credits
+router.post('/accounts/:id/add-ai-credits', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, topUpAiCredits);
+
+// Update Permissions
+router.put('/accounts/:id/permissions', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updateAccountPermissions);
 
 // 🧹 Cleanup orphan sub-clients (managers whose parent agency was deleted)
 router.post('/cleanup/orphans', authMiddleware, requireSuperAdmin, cleanupOrphanedAccounts);

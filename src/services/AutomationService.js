@@ -4,6 +4,7 @@ const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const User = require('../models/User');
+const VoiceEngineService = require('./VoiceEngineService');
 const { sendEmail } = require('./emailService');
 const { sendWhatsAppMessage } = require('./whatsappService');
 const { logActivity } = require('./auditService');
@@ -115,6 +116,18 @@ const executeRuleActions = async (rule, lead) => {
                             });
                         });
                     }
+                }
+
+            // ── VOICE_CALL ─────────────────────────────────────────
+            } else if (action.type === 'VOICE_CALL') {
+                try {
+                    const success = await VoiceEngineService.executeCallAction(lead._id, lead.userId, action, rule._id);
+                    if (success) {
+                        historyEntries.push({ type: 'System', subType: 'Auto', content: `Initiated AI Voice Call (Mode: ${action.executionMode || 'static'}) (Rule: ${rule.name})`, date: new Date() });
+                        changesMade = true;
+                    }
+                } catch (e) {
+                    console.error(`⚠️ [Automation] Failed to execute VOICE_CALL for rule ${rule.name}:`, e);
                 }
 
             // ── WAIT_FOR_REPLY (New) ───────────────────────────────
@@ -497,9 +510,74 @@ const cancelJobsForRule = async (ruleId) => {
     return { cancelledJobs, cancelledWatchers };
 };
 
+/**
+ * Handles the continuation of an automation workflow based on Voice Call Outcomes.
+ * Called by VoiceEngineService when an outcome webhook is received.
+ */
+const continueWorkflowAfterVoice = async (callLog) => {
+    try {
+        if (!callLog.automationRuleId || !callLog.outcome) return;
+
+        const rule = await AutomationRule.findById(callLog.automationRuleId);
+        if (!rule || !rule.isActive) return;
+
+        const lead = await Lead.findById(callLog.leadId);
+        if (!lead) return;
+
+        // Find the VOICE_CALL action in the rule that triggered this
+        const voiceAction = rule.actions.find(a => a.type === 'VOICE_CALL');
+        if (!voiceAction || !voiceAction.voiceOutcomes) return;
+
+        // Check if there are specific mapped actions for this outcome
+        const mappedActions = voiceAction.voiceOutcomes.get(callLog.outcome);
+        if (!mappedActions || !mappedActions.length) {
+            console.log(`[Automation] No mapped actions for outcome "${callLog.outcome}" on rule ${rule.name}`);
+            return;
+        }
+
+        console.log(`[Automation] Continuing workflow for lead ${lead._id} on outcome: ${callLog.outcome}`);
+        
+        let changesMade = false;
+        let historyEntries = [];
+
+        // Execute mapped branch actions
+        for (const action of mappedActions) {
+            if (action.type === 'CHANGE_STAGE' && action.stageName && lead.stage !== action.stageName) {
+                lead.stage = action.stageName;
+                lead.stageUpdatedAt = new Date();
+                historyEntries.push({ type: 'System', subType: 'Auto', content: `Changed stage to ${action.stageName} due to Voice Outcome: ${callLog.outcome} (Rule: ${rule.name})`, date: new Date() });
+                changesMade = true;
+            } else if (action.type === 'ASSIGN_USER' && action.userId) {
+                // Similar to standard ASSIGN_USER
+                if (!lead.assignedTo || lead.assignedTo.toString() !== action.userId.toString()) {
+                    lead.assignedTo = action.userId;
+                    historyEntries.push({ type: 'System', subType: 'Auto', content: `Assigned user due to Voice Outcome: ${callLog.outcome} (Rule: ${rule.name})`, date: new Date() });
+                    changesMade = true;
+                }
+            }
+        }
+
+        if (changesMade) {
+            if (historyEntries.length > 0) lead.history.push(...historyEntries);
+            await lead.save();
+            await ActivityLog.create({
+                userId: lead.userId,
+                leadId: lead._id,
+                actionType: 'LEAD_EDITED',
+                changes: { source: 'Voice Workflow Continuation', outcome: callLog.outcome },
+                userName: 'System Automation',
+                ipAddress: 'System'
+            });
+        }
+    } catch (err) {
+        console.error(`⚠️ [Automation] Failed to continue workflow after voice call:`, err);
+    }
+};
+
 module.exports = {
     evaluateLead,
     defineAutomationJobs,
     handleWatcherReply,
-    cancelJobsForRule
+    cancelJobsForRule,
+    continueWorkflowAfterVoice
 };

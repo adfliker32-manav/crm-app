@@ -180,7 +180,10 @@ const userSchema = new mongoose.Schema({
         viewBilling: { type: Boolean, default: false },
 
         // Team
-        manageTeam: { type: Boolean, default: false }
+        manageTeam: { type: Boolean, default: false },
+
+        // Voice Engine
+        aiVoiceAccess: { type: Boolean, default: null } // null = use plan limit, true = override enable, false = override disable
     },
 
     // ─── PARTNER REVENUE SHARING ──────────────────────────────────────────────
@@ -200,6 +203,18 @@ const userSchema = new mongoose.Schema({
         bankName:      { type: String, default: '' },
         upiId:         { type: String, default: '' }
     },
+
+    // Meta / Facebook Integrations
+    facebookUserToken: { type: String, default: null },
+    facebookPages: [{
+        pageId: String,
+        pageName: String,
+        pageAccessToken: String
+    }],
+
+    // AI Billing
+    aiCreditsBalance: { type: Number, default: 0 },
+    aiCreditsUsedThisMonth: { type: Number, default: 0 },
 
     createdAt: {
         type: Date,

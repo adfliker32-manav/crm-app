@@ -45,6 +45,7 @@ const NotFound = lazy(() => import('./pages/NotFound'));
 const PaymentRequired = lazy(() => import('./pages/PaymentRequired'));
 const Plans = lazy(() => import('./pages/Plans'));
 const Billing = lazy(() => import('./pages/Billing'));
+const VoiceHub = lazy(() => import('./pages/VoiceHub'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -95,6 +96,7 @@ function App() {
                             <Route path="/settings" element={<Settings />} />
                             <Route path="/reports" element={<Reports />} />
                             <Route path="/billing" element={<Billing />} />
+                            <Route path="/voice-hub" element={<VoiceHub />} />
                           </Route>
                         </Route>
 

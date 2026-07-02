@@ -60,6 +60,13 @@ const Sidebar = () => {
         return user?.activeModules?.length ? user.activeModules.includes(moduleName) : true;
     };
 
+    const hasVoiceModule = () => {
+        if (user?.role === 'superadmin') return true;
+        if (user?.permissions?.aiVoiceAccess === true) return true;
+        if (user?.permissions?.aiVoiceAccess === false) return false;
+        return hasModule('voice');
+    };
+
     const hasWhatsApp = (canManageTeam || user?.permissions?.viewWhatsApp === true) && hasModule('whatsapp');
     const isWhatsAppPage = location.pathname.startsWith('/whatsapp');
 
@@ -182,6 +189,10 @@ const Sidebar = () => {
 
                 {canManageTeam && hasModule('automations') && (
                     <NavItem collapsed={collapsed} to="/automations" icon="fa-solid fa-robot" label="Automations" />
+                )}
+
+                {canManageTeam && hasVoiceModule() && (
+                    <NavItem collapsed={collapsed} to="/voice-hub" icon="fa-solid fa-headset" label="AI Voice Hub" />
                 )}
 
                 {canManageTeam && hasModule('automations') && (
