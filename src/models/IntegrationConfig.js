@@ -171,6 +171,8 @@ const integrationConfigSchema = new mongoose.Schema({
         aiFallbackEnabled: { type: Boolean, default: false },
         aiSupportEnabled: { type: Boolean, default: false },
         maxTurns: { type: Number, default: 5 },
+        // NOTE: Despite the name, this counts AI *messages* (1 per reply), not actual LLM tokens.
+        // Kept for backward compatibility. The monthly limit (planFeatures.aiMessageLimit) is per-message.
         tokensUsedThisMonth: { type: Number, default: 0 }
     },
 

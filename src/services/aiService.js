@@ -80,8 +80,19 @@ Additional Rules:
 /**
  * Invokes Gemini API for chat completion.
  */
+// Cache Gemini client per API key (all tenants share the global key, so this is effectively a singleton)
+const _geminiClientCache = new Map();
+function getGeminiClient(apiKey) {
+    let client = _geminiClientCache.get(apiKey);
+    if (!client) {
+        client = new GoogleGenerativeAI(apiKey);
+        _geminiClientCache.set(apiKey, client);
+    }
+    return client;
+}
+
 async function callGemini(apiKey, modelName, systemPrompt, history, lastUserMessage) {
-    const genAI = new GoogleGenerativeAI(apiKey);
+    const genAI = getGeminiClient(apiKey);
     
     // Format history for Gemini and enforce alternating roles starting with 'user'
     let geminiHistory = [];
@@ -109,7 +120,8 @@ async function callGemini(apiKey, modelName, systemPrompt, history, lastUserMess
         model: modelName || 'gemini-2.5-flash',
         systemInstruction: systemPrompt,
         generationConfig: {
-            responseMimeType: 'application/json'
+            responseMimeType: 'application/json',
+            maxOutputTokens: 500 // Guard: prevents runaway token costs + WhatsApp 4096-char limit
         }
     });
     
@@ -141,7 +153,8 @@ async function callOpenAI(apiKey, modelName, systemPrompt, history, lastUserMess
     const response = await openai.chat.completions.create({
         model: modelName || 'gpt-4o',
         messages,
-        response_format: { type: 'json_object' }
+        response_format: { type: 'json_object' },
+        max_tokens: 500 // Guard: prevents runaway token costs + WhatsApp 4096-char limit
     });
     
     let responseText = response.choices[0].message.content;

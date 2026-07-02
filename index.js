@@ -7,6 +7,7 @@ const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
+const mongoSanitize = require('express-mongo-sanitize');
 const { initSocket } = require('./src/services/socketService');
 
 // Routes Import
@@ -60,6 +61,9 @@ app.use(express.json({
     req.rawBody = buf; // Attach the raw Buffer to req for webhook signature verification
   }
 }));
+// ⚠️ SECURITY: Strip MongoDB operators ($, .) from req.body, req.query, req.params.
+// Without this, an attacker could send { "email": { "$ne": "" } } to match all documents.
+app.use(mongoSanitize());
 // ⚠️ SECURITY: Helmet adds critical HTTP headers (X-Frame-Options, X-Content-Type-Options, HSTS, etc.)
 // Without this, the app is vulnerable to clickjacking, MIME sniffing, and protocol downgrade attacks.
 app.use(helmet({
