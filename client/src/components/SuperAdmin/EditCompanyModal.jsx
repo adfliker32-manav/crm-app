@@ -17,7 +17,7 @@ const SUB_PERMISSIONS = [
     { key: 'advancedAnalytics', label: 'Advanced Analytics', parentModule: 'reports', icon: 'fa-chart-line' }
 ];
 
-const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
+const EditCompanyModal = ({ isOpen, onClose, company, onSuccess, isAgency = false }) => {
     const { showSuccess, showError } = useNotification();
     const [formData, setFormData] = useState({
         companyName: '',
@@ -181,9 +181,9 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
                                 />
                             </div>
-                        </div>
-
-
+                        </div>                        {/* Workspace sections — hidden for agencies (managed via Reseller Limits & Controls) */}
+                        {!isAgency && (
+                        <>
                         {/* Module Access Control */}
                         <div className="pt-4 border-t">
                             <label className="block text-sm font-bold text-slate-700 mb-1">
@@ -303,7 +303,7 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
 
                         {/* External API Access — SuperAdmin override toggle */}
                         <div className="pt-4 border-t">
-                            <label className="block text-sm font-bold text-slate-700 mb-1">Developer & API Access</label>
+                            <label className="block text-sm font-bold text-slate-700 mb-1">Developer &amp; API Access</label>
                             <p className="text-xs text-slate-500 mb-3">
                                 Override API access for this client. When ON, they can generate an API key to connect third-party systems.
                                 When OFF, access is blocked even if their plan would normally allow it.
@@ -337,6 +337,8 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                                 </button>
                             </div>
                         </div>
+                        </> 
+                        )} {/* end !isAgency */}
 
                     </div>
 

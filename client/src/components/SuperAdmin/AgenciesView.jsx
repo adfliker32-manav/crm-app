@@ -327,7 +327,7 @@ const AgenciesView = () => {
 
             {/* Original Modals for logic - Hidden, triggered from Management Window */}
             <CreateCompanyModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onSuccess={fetchCompanies} />
-            <EditCompanyModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
+            <EditCompanyModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} isAgency={true} />
             <ChangePasswordModal isOpen={isChangePasswordModalOpen} onClose={() => setIsChangePasswordModalOpen(false)} company={selectedCompany} />
             <ViewAgencyClientsModal isOpen={isViewClientsModalOpen} onClose={() => setIsViewClientsModalOpen(false)} agency={selectedCompany} allCompanies={companies} />
             <ManageAgencyLimitsModal isOpen={isManageLimitsModalOpen} onClose={() => setIsManageLimitsModalOpen(false)} agency={selectedCompany} onSuccess={fetchCompanies} />
