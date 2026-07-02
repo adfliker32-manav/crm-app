@@ -339,6 +339,27 @@ const createClient = async (req, res) => {
             return res.status(409).json({ message: 'An account with this email already exists.' });
         }
 
+        // 1.5. 🔐 SECURITY: Enforce Agency Limits
+        const agencySettings = await AgencySettings.findOne({ agencyId }).select('planLimits allowNewSignups').lean();
+        if (agencySettings) {
+            if (agencySettings.allowNewSignups === false) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'signups_disabled',
+                    message: 'New client registrations are currently disabled for your agency.'
+                });
+            }
+            const currentSubClients = await User.countDocuments({ parentId: agencyId, role: 'manager' });
+            const maxAllowed = agencySettings.planLimits?.maxClients ?? 5;
+            if (currentSubClients >= maxAllowed) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'limit_reached',
+                    message: `You have reached your maximum allocated limit of ${maxAllowed} clients. Please contact administration to increase your capacity.`
+                });
+            }
+        }
+
         // 2. 🔐 SECURITY: Module inheritance — agency can only request modules they own
         const agencyWorkspace = await WorkspaceSettings.findOne({ userId: agencyId })
             .select('activeModules planFeatures')

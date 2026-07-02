@@ -22,6 +22,9 @@ const agencySettingsSchema = new mongoose.Schema({
         emailsPerMonth: { type: Number, default: 5000 }
     },
 
+    // Allow new client registrations
+    allowNewSignups: { type: Boolean, default: true },
+
     // Usage counters (reset monthly)
     usage: {
         whatsappSent: { type: Number, default: 0 },

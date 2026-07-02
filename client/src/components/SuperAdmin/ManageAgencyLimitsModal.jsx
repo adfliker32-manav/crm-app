@@ -10,9 +10,10 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
     const [limits, setLimits] = useState({
         maxClients: 5,
         whatsappMessagesPerMonth: 1000,
-        emailsPerMonth: 5000
+        emailsPerMonth: 5000,
+        allowNewSignups: true
     });
-    const [usage, setUsage] = useState({ whatsappSent: 0, emailsSent: 0 });
+    const [usage, setUsage] = useState({ whatsappSent: 0, emailsSent: 0, registeredClients: 0 });
 
     useEffect(() => {
         if (isOpen && agency?._id) {
@@ -28,9 +29,10 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
                 setLimits({
                     maxClients: res.data.limits.maxClients ?? 5,
                     whatsappMessagesPerMonth: res.data.limits.whatsappMessagesPerMonth ?? 1000,
-                    emailsPerMonth: res.data.limits.emailsPerMonth ?? 5000
+                    emailsPerMonth: res.data.limits.emailsPerMonth ?? 5000,
+                    allowNewSignups: res.data.limits.allowNewSignups ?? true
                 });
-                setUsage(res.data.usage || { whatsappSent: 0, emailsSent: 0 });
+                setUsage(res.data.usage || { whatsappSent: 0, emailsSent: 0, registeredClients: 0 });
             }
         } catch (err) {
             console.error('Fetch limits error:', err);
@@ -41,7 +43,7 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
     };
 
     const handleChange = (field, value) => {
-        setLimits(prev => ({ ...prev, [field]: Number(value) }));
+        setLimits(prev => ({ ...prev, [field]: typeof value === 'boolean' ? value : Number(value) }));
     };
 
     const handleSave = async () => {
@@ -68,7 +70,7 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
                     <div>
                         <h3 className="text-xl font-black text-white flex items-center gap-2">
                             <i className="fa-solid fa-shield-halved text-emerald-400"></i>
-                            Allocated Plan Limits
+                            Reseller Limits & Controls
                         </h3>
                         <p className="text-slate-400 text-sm mt-1">Configuring capacity for {agency?.companyName}</p>
                     </div>
@@ -85,8 +87,24 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
                         </div>
                     ) : (
                         <>
+                            <div className="flex items-center justify-between p-4 bg-slate-50 border border-slate-200 rounded-xl mb-2">
+                                <div>
+                                    <h4 className="font-bold text-slate-800 text-sm">Allow New Registrations</h4>
+                                    <p className="text-[10px] text-slate-500 mt-0.5">If disabled, agency cannot onboard new clients.</p>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                    <input 
+                                        type="checkbox" 
+                                        className="sr-only peer" 
+                                        checked={limits.allowNewSignups}
+                                        onChange={(e) => handleChange('allowNewSignups', e.target.checked)}
+                                    />
+                                    <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                                </label>
+                            </div>
+
                             <div>
-                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Max Sub-Clients Allowed</label>
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2 mt-4">Max Sub-Clients Allowed</label>
                                 <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-500 shadow-sm">
                                     <span className="px-4 py-3 bg-slate-50 text-slate-500 border-r border-slate-200">
                                         <i className="fa-solid fa-users"></i>
@@ -99,6 +117,12 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
                                         className="flex-1 px-4 py-3 outline-none text-slate-900 font-bold"
                                     />
                                 </div>
+                                <p className="text-[10px] text-slate-400 mt-1">
+                                    Currently registered: <span className="font-bold text-slate-600">{(usage.registeredClients || 0).toLocaleString()}</span>
+                                    {limits.maxClients > 0 && (
+                                        <> · {Math.round(((usage.registeredClients || 0) / limits.maxClients) * 100)}% of limit</>
+                                    )}
+                                </p>
                             </div>
 
                             <div>

@@ -5,8 +5,6 @@ import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import EditCompanyModal from './EditCompanyModal';
 import CreateCompanyModal from './CreateCompanyModal';
-import ViewLeadsModal from './ViewLeadsModal';
-import ManageAgentsModal from './ManageAgentsModal';
 import ChangePasswordModal from './ChangePasswordModal';
 import ViewAgencyClientsModal from './ViewAgencyClientsModal';
 import ManageAgencyLimitsModal from './ManageAgencyLimitsModal';
@@ -23,8 +21,6 @@ const AgenciesView = () => {
     // Modal states
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-    const [isViewLeadsModalOpen, setIsViewLeadsModalOpen] = useState(false);
-    const [isManageAgentsModalOpen, setIsManageAgentsModalOpen] = useState(false);
     const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
     const [isViewClientsModalOpen, setIsViewClientsModalOpen] = useState(false);
     const [isManageLimitsModalOpen, setIsManageLimitsModalOpen] = useState(false);
@@ -306,9 +302,7 @@ const AgenciesView = () => {
                 actions={[
                     { label: 'Login as Affiliate', icon: 'fa-right-to-bracket', onClick: () => handleImpersonate(selectedCompany) },
                     { label: 'Sub-Clients', icon: 'fa-users-rectangle', onClick: () => { setSelectedCompany(selectedCompany); setIsViewClientsModalOpen(true); } },
-                    { label: 'Leads Database', icon: 'fa-users', onClick: () => { setSelectedCompany(selectedCompany); setIsViewLeadsModalOpen(true); } },
-                    { label: 'Manage Agents', icon: 'fa-user-tie', onClick: () => { setSelectedCompany(selectedCompany); setIsManageAgentsModalOpen(true); } },
-                    { label: 'SaaS Plan Limits', icon: 'fa-sliders', onClick: () => { setSelectedCompany(selectedCompany); setIsManageLimitsModalOpen(true); } },
+                    { label: 'Reseller Limits & Controls', icon: 'fa-shield-halved', onClick: () => { setSelectedCompany(selectedCompany); setIsManageLimitsModalOpen(true); } },
                     { label: 'Change Password', icon: 'fa-key', onClick: () => { setSelectedCompany(selectedCompany); setIsChangePasswordModalOpen(true); } },
                     { label: 'Edit Profile', icon: 'fa-edit', onClick: () => { setSelectedCompany(selectedCompany); setIsEditModalOpen(true); } },
                     {
@@ -324,8 +318,6 @@ const AgenciesView = () => {
             {/* Original Modals for logic - Hidden, triggered from Management Window */}
             <CreateCompanyModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onSuccess={fetchCompanies} />
             <EditCompanyModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
-            <ViewLeadsModal isOpen={isViewLeadsModalOpen} onClose={() => setIsViewLeadsModalOpen(false)} company={selectedCompany} />
-            <ManageAgentsModal isOpen={isManageAgentsModalOpen} onClose={() => setIsManageAgentsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
             <ChangePasswordModal isOpen={isChangePasswordModalOpen} onClose={() => setIsChangePasswordModalOpen(false)} company={selectedCompany} />
             <ViewAgencyClientsModal isOpen={isViewClientsModalOpen} onClose={() => setIsViewClientsModalOpen(false)} agency={selectedCompany} allCompanies={companies} />
             <ManageAgencyLimitsModal isOpen={isManageLimitsModalOpen} onClose={() => setIsManageLimitsModalOpen(false)} agency={selectedCompany} onSuccess={fetchCompanies} />

@@ -1629,7 +1629,7 @@ const getAgencyLimits = async (req, res) => {
         const agency = await User.findOne({ _id: id, role: 'agency' });
         if (!agency) return res.status(404).json({ message: "Agency not found" });
 
-        const settings = await AgencySettings.findOne({ agencyId: id }).select('planLimits usage').lean();
+        const settings = await AgencySettings.findOne({ agencyId: id }).select('planLimits usage allowNewSignups').lean();
 
         // If no settings yet, return defaults so the modal still works
         const limits = settings?.planLimits || {
@@ -1637,7 +1637,10 @@ const getAgencyLimits = async (req, res) => {
             whatsappMessagesPerMonth: 1000,
             emailsPerMonth: 5000
         };
+        limits.allowNewSignups = settings?.allowNewSignups ?? true;
+
         const usage = settings?.usage || { whatsappSent: 0, emailsSent: 0 };
+        usage.registeredClients = await User.countDocuments({ parentId: id, role: 'manager' });
 
         res.json({ success: true, limits, usage });
     } catch (err) {
@@ -1649,7 +1652,7 @@ const getAgencyLimits = async (req, res) => {
 const updateAgencyLimits = async (req, res) => {
     try {
         const { id } = req.params; // The Agency ID
-        const { maxClients, whatsappMessagesPerMonth, emailsPerMonth } = req.body;
+        const { maxClients, whatsappMessagesPerMonth, emailsPerMonth, allowNewSignups } = req.body;
 
         const agency = await User.findOne({ _id: id, role: 'agency' });
         if (!agency) return res.status(404).json({ message: "Agency not found" });
@@ -1660,7 +1663,8 @@ const updateAgencyLimits = async (req, res) => {
                 $set: {
                     'planLimits.maxClients': maxClients,
                     'planLimits.whatsappMessagesPerMonth': whatsappMessagesPerMonth,
-                    'planLimits.emailsPerMonth': emailsPerMonth
+                    'planLimits.emailsPerMonth': emailsPerMonth,
+                    'allowNewSignups': allowNewSignups !== undefined ? allowNewSignups : true
                 }
             },
             { new: true, upsert: true, setDefaultsOnInsert: true }
