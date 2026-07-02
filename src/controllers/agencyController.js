@@ -508,7 +508,7 @@ const updateClient = async (req, res) => {
     try {
         const agencyId = req.user.userId || req.user.id;
         const { clientId } = req.params;
-        const { companyName, name, email, phone, activeModules, leadLimit, agentLimit } = req.body;
+        const { companyName, name, email, phone, activeModules } = req.body;
 
         // 1. Verify ownership
         const client = await User.findOne({ _id: clientId, parentId: agencyId, role: 'manager' });
@@ -550,11 +550,9 @@ const updateClient = async (req, res) => {
 
         const updatedUser = await User.findByIdAndUpdate(clientId, { $set: updateData }, { new: true }).select('-password').lean();
 
-        // 4. Update WorkspaceSettings (Modules & Limits)
+        // 4. Update WorkspaceSettings (Modules only - limits are SuperAdmin-controlled)
         const workspaceUpdate = {};
         if (activeModules !== undefined) workspaceUpdate.activeModules = activeModules;
-        if (leadLimit !== undefined) workspaceUpdate['planFeatures.leadLimit'] = parseInt(leadLimit);
-        if (agentLimit !== undefined) workspaceUpdate.agentLimit = parseInt(agentLimit);
 
         if (Object.keys(workspaceUpdate).length > 0) {
             await WorkspaceSettings.findOneAndUpdate(
