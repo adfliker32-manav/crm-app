@@ -501,6 +501,7 @@ app.use('/api/chatbot/flows', chatbotRoutes);
 
 // 4. Meta Lead Sync
 app.use('/api/meta', metaRoutes);
+app.use('/api/meta', metaDropLogRoutes);
 app.use('/webhook/voice', voiceWebhookRoutes); // Public webhook for Vapi
 app.use('/api/voice-calls', voiceCallRoutes);
 app.use('/api/voice-analytics', voiceAnalyticsRoutes);
