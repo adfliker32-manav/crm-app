@@ -66,7 +66,6 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
         {
             label: 'Business',
             items: [
-                { id: 'approvals', icon: 'fa-shield-check', label: 'Account Approvals', color: 'text-amber-600 font-semibold' },
                 { id: 'agency-management', icon: 'fa-network-wired', label: 'Agency Management', color: 'text-purple-600 font-bold', badge: pendingWithdrawals },
                 { id: 'direct-clients', icon: 'fa-user-tie', label: 'Direct Clients', color: 'text-emerald-600' },
                 { id: 'finance', icon: 'fa-sack-dollar', label: 'Billing & Finance', color: 'text-emerald-500 font-bold' },

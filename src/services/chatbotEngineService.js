@@ -1278,7 +1278,12 @@ const continueSession = async (session, userResponse, conversationId, userId, in
         }
 
         // Handle different node types
-        if (currentNode.type === 'question') {
+        if (currentNode.type === 'ai') {
+            // Re-evaluate the AI node with the new incoming message
+            session.lastInteractionAt = new Date();
+            await session.save();
+            return await executeNode(session, flow, currentNode.id, conversation);
+        } else if (currentNode.type === 'question') {
             // FIX: Validate response against expectedType before accepting
             const expectedType = currentNode.data.expectedType || 'any';
             if (expectedType !== 'any' && expectedType !== 'text') {

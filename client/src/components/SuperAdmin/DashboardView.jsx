@@ -64,7 +64,6 @@ const DashboardView = ({ setActiveView }) => {
         );
     }
 
-    const pendingCount = stats.pendingApprovals || 0;
     const supportCount = stats.openSupportTickets || 0;
     const frozenTotal  = (stats.frozenAccounts || 0) + (stats.suspendedAccounts || 0);
     const orphanCount  = stats.orphanedAccounts || 0;
@@ -121,21 +120,8 @@ const DashboardView = ({ setActiveView }) => {
             )}
 
             {/* 🔴 Action-required banner — only shown if anything needs attention */}
-            {(pendingCount > 0 || supportCount > 0 || frozenTotal > 0 || orphanCount > 0) && (
+            {(supportCount > 0 || frozenTotal > 0 || orphanCount > 0) && (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    {pendingCount > 0 && (
-                        <button onClick={() => setActiveView?.('approvals')}
-                            className="bg-amber-50 border-l-4 border-amber-500 rounded-r-xl p-4 flex items-center gap-3 text-left hover:bg-amber-100 transition">
-                            <div className="w-10 h-10 rounded-full bg-amber-500 text-white flex items-center justify-center">
-                                <i className="fa-solid fa-hourglass-half" />
-                            </div>
-                            <div className="flex-1">
-                                <div className="text-xs font-bold uppercase text-amber-700 tracking-wider">Pending approvals</div>
-                                <div className="text-lg font-black text-amber-900">{pendingCount} request{pendingCount === 1 ? '' : 's'} awaiting review</div>
-                            </div>
-                            <i className="fa-solid fa-arrow-right text-amber-500" />
-                        </button>
-                    )}
                     {supportCount > 0 && (
                         <button onClick={() => setActiveView?.('support')}
                             className="bg-orange-50 border-l-4 border-orange-500 rounded-r-xl p-4 flex items-center gap-3 text-left hover:bg-orange-100 transition">

@@ -109,7 +109,7 @@ const AgencyDashboard = () => {
             </div>
 
             {/* Top Metric Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <StatCard
                     label="Total Sub-Clients"
                     value={(stats.totalClients || 0).toLocaleString()}
@@ -122,30 +122,18 @@ const AgencyDashboard = () => {
                 <StatCard
                     label="Active Accounts"
                     value={(stats.activeClients || 0).toLocaleString()}
-                    sub={inactiveCount > 0 ? `${inactiveCount} not yet live` : 'All clients active'}
+                    sub={(stats.totalClients - stats.activeClients) > 0
+                        ? `${stats.totalClients - stats.activeClients} inactive`
+                        : 'All clients active'}
                     icon="fa-solid fa-check-circle"
                     accent="emerald"
                 />
-                <button
-                    type="button"
-                    onClick={() => navigate('/agency/clients?status=Pending')}
-                    className="text-left"
-                >
-                    <StatCard
-                        label="Pending Approval"
-                        value={(stats.pendingClients || 0).toLocaleString()}
-                        sub={stats.pendingClients > 0
-                            ? <><i className="fa-solid fa-hourglass-half mr-1 text-amber-500" />Awaiting Super Admin</>
-                            : 'No pending requests'}
-                        icon="fa-solid fa-hourglass-half"
-                        accent="amber"
-                    />
-                </button>
                 <StatCard
-                    label="Approved Total"
-                    value={(stats.approvedClients || 0).toLocaleString()}
-                    sub="Lifetime approvals"
-                    icon="fa-solid fa-shield-check"
+                    label="New This Week"
+                    value={(stats.newClientsThisWeek || 0).toLocaleString()}
+                    sub="Recent signups"
+                    icon="fa-solid fa-user-plus"
+                    accent="indigo"
                     dark
                 />
             </div>

@@ -3,7 +3,6 @@ import SuperAdminSidebar from '../components/SuperAdmin/SuperAdminSidebar';
 import DashboardView from '../components/SuperAdmin/DashboardView';
 import AgencyManagementModule from '../components/SuperAdmin/AgencyManagementModule';
 import DirectClientsView from '../components/SuperAdmin/DirectClientsView';
-import AccountApprovalsView from '../components/SuperAdmin/AccountApprovalsView';
 import GlobalSettingsView from '../components/SuperAdmin/GlobalSettingsView';
 import AuditLogsView from '../components/SuperAdmin/AuditLogsView';
 import EmergencyControlsView from '../components/SuperAdmin/EmergencyControlsView';
@@ -24,8 +23,6 @@ const SuperAdmin = () => {
         switch (activeView) {
             case 'dashboard':
                 return <DashboardView setActiveView={setActiveView} />;
-            case 'approvals':
-                return <AccountApprovalsView />;
             case 'agency-management':
                 return <AgencyManagementModule />;
             case 'direct-clients':

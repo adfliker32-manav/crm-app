@@ -14,15 +14,13 @@ const ALL_MODULES = [
     { id: 'settings',    name: 'Settings',            icon: 'fa-gear',          desc: 'Workspace configuration' }
 ];
 
-// Sub-permissions surface as toggles only when the parent module is selected.
-// Each links to a planFeatures.<key> on the WorkspaceSettings doc.
 const SUB_PERMISSIONS = [
-    { key: 'aiChatbot',         label: 'AI Chatbot',          desc: 'Auto-reply with chatbot flows on incoming WhatsApp', parentModule: 'whatsapp', icon: 'fa-robot' },
+    { key: 'aiChatbot',          label: 'AI Chatbot',          desc: 'Auto-reply with chatbot flows on incoming WhatsApp', parentModule: 'whatsapp', icon: 'fa-robot' },
     { key: 'whatsappAutomation', label: 'WhatsApp Automation', desc: 'Trigger WhatsApp from automation rules',           parentModule: 'whatsapp', icon: 'fa-bolt-lightning' },
-    { key: 'emailAutomation',   label: 'Email Automation',    desc: 'Trigger emails from automation rules',              parentModule: 'email',    icon: 'fa-envelopes-bulk' },
-    { key: 'campaigns',         label: 'Bulk Campaigns',      desc: 'Send broadcasts to large audiences',                parentModule: 'email',    icon: 'fa-bullhorn' },
-    { key: 'metaSync',          label: 'Meta Lead Ads Sync',  desc: 'Auto-import leads from Facebook/Instagram ads',     parentModule: 'leads',    icon: 'fa-meta' },
-    { key: 'advancedAnalytics', label: 'Advanced Analytics',  desc: 'Cohort, funnel, and revenue dashboards',            parentModule: 'reports',  icon: 'fa-chart-line' }
+    { key: 'emailAutomation',    label: 'Email Automation',    desc: 'Trigger emails from automation rules',              parentModule: 'email',    icon: 'fa-envelopes-bulk' },
+    { key: 'campaigns',          label: 'Bulk Campaigns',      desc: 'Send broadcasts to large audiences',                parentModule: 'email',    icon: 'fa-bullhorn' },
+    { key: 'metaSync',           label: 'Meta Lead Ads Sync',  desc: 'Auto-import leads from Facebook/Instagram ads',     parentModule: 'leads',    icon: 'fa-meta' },
+    { key: 'advancedAnalytics',  label: 'Advanced Analytics',  desc: 'Cohort, funnel, and revenue dashboards',            parentModule: 'reports',  icon: 'fa-chart-line' }
 ];
 
 const passwordStrength = (pw) => {
@@ -51,6 +49,14 @@ const generatePassword = () => {
     return pw;
 };
 
+const STEPS = [
+    { n: 1, label: 'Contact' },
+    { n: 2, label: 'Company' },
+    { n: 3, label: 'Modules' },
+    { n: 4, label: 'Limits' },
+    { n: 5, label: 'Password' }
+];
+
 const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) => {
     const { showError } = useNotification();
     const [step, setStep] = useState(1);
@@ -59,12 +65,17 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
     const [showPassword, setShowPassword] = useState(false);
 
     const [form, setForm] = useState({
-        companyName: '',
+        // Step 1 — Contact (mirrors self-registration)
         adminName: '',
         adminEmail: '',
         phone: '',
-        password: '',
+        // Step 2 — Company (mirrors self-registration)
+        companyName: '',
+        website: '',
+        onboardingNotes: '',
+        // Step 3 — Modules
         activeModules: ['leads', 'team', 'reports', 'settings'],
+        // Step 4 — Limits
         leadLimit: 100,
         agentLimit: 2,
         planFeatures: {
@@ -74,14 +85,15 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
             campaigns: false,
             metaSync: false,
             advancedAnalytics: false
-        }
+        },
+        // Step 5 — Password
+        password: ''
     });
 
-    const agencyModules = agencyWorkspace?.activeModules || [];
+    const agencyModules  = agencyWorkspace?.activeModules || [];
     const agencyFeatures = agencyWorkspace?.planFeatures || {};
-    const maxAgentLimit = agencyWorkspace?.agentLimit || 50;
+    const maxAgentLimit  = agencyWorkspace?.agentLimit || 50;
 
-    // Reset state when modal closes
     useEffect(() => {
         if (!isOpen) {
             setStep(1);
@@ -89,13 +101,15 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
             setSubmitting(false);
             setShowPassword(false);
             setForm({
-                companyName: '', adminName: '', adminEmail: '', phone: '', password: '',
+                adminName: '', adminEmail: '', phone: '',
+                companyName: '', website: '', onboardingNotes: '',
                 activeModules: ['leads', 'team', 'reports', 'settings'],
                 leadLimit: 100, agentLimit: 2,
                 planFeatures: {
                     aiChatbot: false, whatsappAutomation: false, emailAutomation: false,
                     campaigns: false, metaSync: false, advancedAnalytics: false
-                }
+                },
+                password: ''
             });
         }
     }, [isOpen]);
@@ -103,14 +117,13 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
     const pwInfo = useMemo(() => passwordStrength(form.password), [form.password]);
 
     const toggleModule = (modId) => {
-        if (!agencyModules.includes(modId)) return; // Inheritance — locked
+        if (!agencyModules.includes(modId)) return;
         setForm(prev => {
             const has = prev.activeModules.includes(modId);
             const next = { ...prev, activeModules: has
                 ? prev.activeModules.filter(id => id !== modId)
                 : [...prev.activeModules, modId]
             };
-            // If we just removed a module, also disable its sub-permissions
             if (has) {
                 const newFeatures = { ...prev.planFeatures };
                 SUB_PERMISSIONS
@@ -131,12 +144,15 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
 
     const validateStep = (s) => {
         if (s === 1) {
-            if (!form.companyName.trim()) return 'Company name is required.';
             if (!form.adminEmail.trim()) return 'Admin email is required.';
             if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.adminEmail)) return 'Enter a valid email.';
+            if (form.phone.trim().length < 5) return 'Please enter a valid phone number.';
         }
-        if (s === 2 && form.activeModules.length === 0) return 'Select at least one module.';
-        if (s === 4) {
+        if (s === 2) {
+            if (!form.companyName.trim()) return 'Company name is required.';
+        }
+        if (s === 3 && form.activeModules.length === 0) return 'Select at least one module.';
+        if (s === 5) {
             if (!form.password) return 'Password is required.';
             if (form.password.length < 8) return 'Password must be at least 8 characters.';
             if (pwInfo.score < 2) return 'Password is too weak. Use upper-case, numbers, or symbols.';
@@ -147,24 +163,26 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
     const handleNext = () => {
         const err = validateStep(step);
         if (err) return showError(err);
-        setStep(s => Math.min(4, s + 1));
+        setStep(s => Math.min(5, s + 1));
     };
 
     const handleSubmit = async () => {
-        const err = validateStep(1) || validateStep(2) || validateStep(4);
+        const err = validateStep(1) || validateStep(2) || validateStep(3) || validateStep(5);
         if (err) return showError(err);
         setSubmitting(true);
         try {
             const res = await api.post('/agency/clients', {
-                companyName: form.companyName.trim(),
-                adminName: form.adminName.trim(),
-                adminEmail: form.adminEmail.trim().toLowerCase(),
-                phone: form.phone.trim() || null,
-                password: form.password,
-                activeModules: form.activeModules,
-                leadLimit: form.leadLimit,
-                agentLimit: form.agentLimit,
-                planFeatures: form.planFeatures
+                adminName:       form.adminName.trim(),
+                adminEmail:      form.adminEmail.trim().toLowerCase(),
+                phone:           form.phone.trim() || null,
+                companyName:     form.companyName.trim(),
+                website:         form.website.trim() || null,
+                onboardingNotes: form.onboardingNotes.trim() || null,
+                password:        form.password,
+                activeModules:   form.activeModules,
+                leadLimit:       form.leadLimit,
+                agentLimit:      form.agentLimit,
+                planFeatures:    form.planFeatures
             });
             if (res.data?.success) {
                 setCreatedCredentials(res.data.credentials);
@@ -179,18 +197,18 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
 
     if (!isOpen) return null;
 
-    // ─────────────────────────────────────── SUCCESS SCREEN ───────────────────────────────────────
+    // ─────────────────────────────── SUCCESS SCREEN ───────────────────────────
     if (createdCredentials) {
         return (
             <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
                 <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
                     <div className="p-6 text-center">
-                        <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <i className="fa-solid fa-hourglass-half text-amber-600 text-3xl" />
+                        <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <i className="fa-solid fa-circle-check text-emerald-600 text-3xl" />
                         </div>
-                        <h2 className="text-xl font-black text-slate-900">Submitted for Approval</h2>
+                        <h2 className="text-xl font-black text-slate-900">Account Created & Live!</h2>
                         <p className="text-sm text-slate-500 mt-1">
-                            The Super Admin will review your request. Share these credentials only after approval.
+                            The client's 14-day trial has started. Share the credentials below — they can log in right now.
                         </p>
                     </div>
                     <div className="px-6 pb-2 space-y-3">
@@ -204,10 +222,10 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                                 <span className="font-mono text-sm font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{createdCredentials.tempPassword}</span>
                             </div>
                         </div>
-                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
-                            <i className="fa-solid fa-shield-check text-amber-600 mt-0.5 text-xs" />
-                            <p className="text-xs text-amber-700">
-                                The client cannot log in until the Super Admin approves the account. Watch the dashboard for status.
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-start gap-2">
+                            <i className="fa-solid fa-rocket text-emerald-600 mt-0.5 text-xs" />
+                            <p className="text-xs text-emerald-700">
+                                Full access activated. The client gets 14 days to explore all features — no setup required.
                             </p>
                         </div>
                     </div>
@@ -224,7 +242,7 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
         );
     }
 
-    // ─────────────────────────────────────── FORM ───────────────────────────────────────
+    // ─────────────────────────────────── FORM ─────────────────────────────────
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm overflow-y-auto">
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl my-8 animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
@@ -232,7 +250,7 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                 <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-start">
                     <div>
                         <h2 className="text-xl font-black text-slate-900">Create Client Account</h2>
-                        <p className="text-xs text-slate-500 mt-0.5">Configure access — Super Admin will review and approve.</p>
+                        <p className="text-xs text-slate-500 mt-0.5">Set up a new workspace — account goes live immediately with a 14-day trial.</p>
                     </div>
                     <button onClick={onClose} className="w-9 h-9 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 flex items-center justify-center">
                         <i className="fa-solid fa-times" />
@@ -241,12 +259,7 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
 
                 {/* Stepper */}
                 <div className="px-8 pt-5 pb-2 flex items-center gap-2 flex-wrap">
-                    {[
-                        { n: 1, label: 'Company' },
-                        { n: 2, label: 'Modules' },
-                        { n: 3, label: 'Limits' },
-                        { n: 4, label: 'Password' }
-                    ].map((s, idx, arr) => (
+                    {STEPS.map((s, idx, arr) => (
                         <React.Fragment key={s.n}>
                             <button
                                 type="button"
@@ -270,35 +283,20 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
 
                 {/* Body */}
                 <div className="px-8 py-6 overflow-y-auto flex-1">
-                    {/* STEP 1: Company Info */}
+
+                    {/* STEP 1: Contact Information (mirrors self-registration Step 1) */}
                     {step === 1 && (
                         <div className="space-y-4 animate-in fade-in duration-200">
                             <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-2 text-xs text-blue-800">
                                 <i className="fa-solid fa-circle-info text-blue-600 mt-0.5" />
-                                <span>Tell us about the client's business and admin contact.</span>
+                                <span>Enter the client admin's contact details. These will be used for login and communications.</span>
                             </div>
                             <div>
-                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Company Name *</label>
-                                <input type="text" value={form.companyName}
-                                    onChange={e => setForm({ ...form, companyName: e.target.value })}
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Admin Name</label>
+                                <input type="text" value={form.adminName}
+                                    onChange={e => setForm({ ...form, adminName: e.target.value })}
                                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
-                                    placeholder="e.g. Acme Real Estate" />
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Admin Name</label>
-                                    <input type="text" value={form.adminName}
-                                        onChange={e => setForm({ ...form, adminName: e.target.value })}
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
-                                        placeholder="John Doe" />
-                                </div>
-                                <div>
-                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Phone</label>
-                                    <input type="text" value={form.phone}
-                                        onChange={e => setForm({ ...form, phone: e.target.value })}
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
-                                        placeholder="+91 98765 43210" />
-                                </div>
+                                    placeholder="e.g. John Doe" />
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Admin Email (Login ID) *</label>
@@ -307,18 +305,61 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
                                     placeholder="admin@acme.com" />
                             </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Mobile / Contact Number *</label>
+                                <input type="tel" value={form.phone}
+                                    onChange={e => setForm({ ...form, phone: e.target.value })}
+                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
+                                    placeholder="+91 98765 43210" />
+                            </div>
                         </div>
                     )}
 
-                    {/* STEP 2: Modules + Sub-permissions */}
+                    {/* STEP 2: Company Details (mirrors self-registration Step 2) */}
                     {step === 2 && (
+                        <div className="space-y-4 animate-in fade-in duration-200">
+                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-2 text-xs text-blue-800">
+                                <i className="fa-solid fa-building text-blue-600 mt-0.5" />
+                                <span>Tell us about the client's business. This helps personalise their onboarding experience.</span>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Company Name *</label>
+                                <input type="text" value={form.companyName}
+                                    onChange={e => setForm({ ...form, companyName: e.target.value })}
+                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
+                                    placeholder="e.g. Acme Real Estate" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
+                                    Company Website <span className="text-slate-400 normal-case font-normal">(optional)</span>
+                                </label>
+                                <input type="text" value={form.website}
+                                    onChange={e => setForm({ ...form, website: e.target.value })}
+                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
+                                    placeholder="example.com" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
+                                    Onboarding Notes <span className="text-slate-400 normal-case font-normal">(optional)</span>
+                                </label>
+                                <textarea value={form.onboardingNotes}
+                                    onChange={e => setForm({ ...form, onboardingNotes: e.target.value })}
+                                    rows={3} maxLength={2000}
+                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium resize-none"
+                                    placeholder="Tell us about the client's business, goals, or any setup requirements." />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* STEP 3: Modules + Sub-permissions */}
+                    {step === 3 && (
                         <div className="space-y-5 animate-in fade-in duration-200">
                             <div>
                                 <h3 className="text-sm font-black text-slate-900 mb-1">Modules to Grant</h3>
                                 <p className="text-xs text-slate-500 mb-4">Tick the modules this client can access. Greyed modules are locked because your agency doesn't own them.</p>
                                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                                     {ALL_MODULES.map(mod => {
-                                        const owned = agencyModules.includes(mod.id);
+                                        const owned   = agencyModules.includes(mod.id);
                                         const enabled = form.activeModules.includes(mod.id);
                                         return (
                                             <button
@@ -348,7 +389,6 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                                 </div>
                             </div>
 
-                            {/* Sub-permissions — only show those whose parent module is selected */}
                             {(() => {
                                 const visibleSubs = SUB_PERMISSIONS.filter(sp =>
                                     form.activeModules.includes(sp.parentModule)
@@ -357,12 +397,11 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                                 return (
                                     <div className="border-t border-slate-100 pt-5">
                                         <h3 className="text-sm font-black text-slate-900 mb-1">Sub-Permissions</h3>
-                                        <p className="text-xs text-slate-500 mb-4">Fine-grained toggles within the modules you've granted. Locked items aren't enabled on your agency plan.</p>
+                                        <p className="text-xs text-slate-500 mb-4">Fine-grained toggles within the modules you've granted.</p>
                                         <div className="space-y-2">
                                             {visibleSubs.map(sp => {
-                                                const enabled = !!form.planFeatures[sp.key];
-                                                // Inheritance: agency must have the feature themselves
-                                                const agencyHas = agencyFeatures[sp.key] !== false; // undefined = treat as available
+                                                const enabled    = !!form.planFeatures[sp.key];
+                                                const agencyHas  = agencyFeatures[sp.key] !== false;
                                                 return (
                                                     <div key={sp.key}
                                                         className={`flex items-center gap-3 p-3 rounded-xl border transition
@@ -398,12 +437,12 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                         </div>
                     )}
 
-                    {/* STEP 3: Limits */}
-                    {step === 3 && (
+                    {/* STEP 4: Limits */}
+                    {step === 4 && (
                         <div className="space-y-5 animate-in fade-in duration-200">
                             <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-2 text-xs text-blue-800">
                                 <i className="fa-solid fa-circle-info text-blue-600 mt-0.5" />
-                                <span>Set monthly lead intake and number of agent seats. Super Admin can adjust these on approval.</span>
+                                <span>Set the monthly lead intake and number of agent seats for this client workspace.</span>
                             </div>
 
                             <div>
@@ -449,12 +488,12 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                         </div>
                     )}
 
-                    {/* STEP 4: Password */}
-                    {step === 4 && (
+                    {/* STEP 5: Password */}
+                    {step === 5 && (
                         <div className="space-y-5 animate-in fade-in duration-200">
-                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2 text-xs text-amber-800">
-                                <i className="fa-solid fa-key text-amber-600 mt-0.5" />
-                                <span>Set the initial login password. Share with the client only after Super Admin approves the account.</span>
+                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-2 text-xs text-blue-800">
+                                <i className="fa-solid fa-key text-blue-600 mt-0.5" />
+                                <span>Set the initial login password. The client can log in immediately after the account is created.</span>
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Password *</label>
@@ -488,14 +527,15 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
 
                             {/* Final review summary */}
                             <div className="border-t border-slate-100 pt-4">
-                                <h4 className="text-xs font-black uppercase tracking-wider text-slate-500 mb-3">Review Before Submit</h4>
+                                <h4 className="text-xs font-black uppercase tracking-wider text-slate-500 mb-3">Review Before Create</h4>
                                 <div className="bg-slate-50 rounded-xl p-4 space-y-2 text-xs">
-                                    <div className="flex justify-between"><span className="text-slate-500">Company</span><span className="font-bold text-slate-800">{form.companyName}</span></div>
                                     <div className="flex justify-between"><span className="text-slate-500">Admin Email</span><span className="font-bold text-slate-800">{form.adminEmail}</span></div>
+                                    <div className="flex justify-between"><span className="text-slate-500">Company</span><span className="font-bold text-slate-800">{form.companyName}</span></div>
                                     <div className="flex justify-between"><span className="text-slate-500">Modules</span><span className="font-bold text-slate-800">{form.activeModules.length}</span></div>
                                     <div className="flex justify-between"><span className="text-slate-500">Sub-permissions</span><span className="font-bold text-slate-800">{Object.values(form.planFeatures).filter(Boolean).length}</span></div>
                                     <div className="flex justify-between"><span className="text-slate-500">Lead Limit</span><span className="font-bold text-slate-800">{form.leadLimit.toLocaleString()}/mo</span></div>
                                     <div className="flex justify-between"><span className="text-slate-500">Agent Seats</span><span className="font-bold text-slate-800">{form.agentLimit}</span></div>
+                                    <div className="flex justify-between"><span className="text-slate-500">Trial</span><span className="font-bold text-emerald-600">14 days — starts immediately</span></div>
                                 </div>
                             </div>
                         </div>
@@ -512,7 +552,7 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                         <i className={`fa-solid ${step === 1 ? 'fa-times' : 'fa-arrow-left'} text-xs`} />
                         {step === 1 ? 'Cancel' : 'Back'}
                     </button>
-                    {step < 4 ? (
+                    {step < 5 ? (
                         <button
                             type="button"
                             onClick={handleNext}
@@ -529,9 +569,9 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                             className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition flex items-center gap-2 shadow-lg shadow-emerald-600/20 disabled:opacity-60"
                         >
                             {submitting ? (
-                                <><i className="fa-solid fa-spinner fa-spin text-xs" />Submitting...</>
+                                <><i className="fa-solid fa-spinner fa-spin text-xs" />Creating...</>
                             ) : (
-                                <><i className="fa-solid fa-paper-plane text-xs" />Submit for Approval</>
+                                <><i className="fa-solid fa-rocket text-xs" />Create Account</>
                             )}
                         </button>
                     )}

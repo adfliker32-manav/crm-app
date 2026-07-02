@@ -6,7 +6,7 @@ import api from '../../services/api';
 import EditSubClientModal from '../../components/Agency/EditSubClientModal';
 import CreateSubClientModal from '../../components/Agency/CreateSubClientModal';
 
-// ✅ Status badge using the new approval-based fields
+// ✅ Status badge — no approval gate, accounts are live immediately
 const getStatusBadge = (client) => {
     if (client.accountStatus === 'Suspended') return (
         <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-red-100 text-red-700 border border-red-200 flex items-center gap-1 w-fit animate-pulse">
@@ -21,11 +21,6 @@ const getStatusBadge = (client) => {
     if (client.status === 'rejected') return (
         <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-red-100 text-red-700 border border-red-200 flex items-center gap-1 w-fit">
             <i className="fa-solid fa-circle-xmark" />Rejected
-        </span>
-    );
-    if (client.status === 'pending' || !client.approved_by_admin) return (
-        <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200 flex items-center gap-1 w-fit">
-            <i className="fa-solid fa-hourglass-half" />Pending Approval
         </span>
     );
     if (client.is_active) return (
@@ -83,9 +78,6 @@ const AgencyClients = () => {
     };
 
     const handleImpersonate = async (clientId, companyName) => {
-        if (!clients.find(c => c._id === clientId)?.is_active) {
-            return showError("This account has not been approved yet. You cannot access it.");
-        }
         const confirmed = await showDanger(
             `You are about to securely access ${companyName}'s CRM. This action is logged.`,
             "Impersonate Client"
@@ -135,16 +127,14 @@ const AgencyClients = () => {
             c.email?.toLowerCase().includes(searchTerm.toLowerCase());
         const matchStatus =
             statusFilter === 'All' ||
-            (statusFilter === 'Live' && c.is_active) ||
-            (statusFilter === 'Pending' && (c.status === 'pending' || !c.approved_by_admin)) ||
+            (statusFilter === 'Live'   && c.is_active) ||
             (statusFilter === 'Frozen' && c.accountStatus === 'Frozen');
         return matchSearch && matchStatus;
     });
 
     const stats = {
         total: clients.length,
-        live: clients.filter(c => c.is_active).length,
-        pending: clients.filter(c => c.status === 'pending' || !c.approved_by_admin).length,
+        live:  clients.filter(c => c.is_active).length,
     };
 
     return (
@@ -153,7 +143,7 @@ const AgencyClients = () => {
             <div className="flex flex-col md:flex-row md:items-end justify-between mb-8 pb-6 border-b border-slate-200/60">
                 <div>
                     <h1 className="text-4xl font-black text-slate-900 tracking-tight">Client Hub</h1>
-                    <p className="text-slate-500 font-medium mt-2">Create and manage client workspaces. Accounts require Super Admin approval before they go live.</p>
+                    <p className="text-slate-500 font-medium mt-2">Create and manage client workspaces. Accounts go live immediately with a 14-day free trial.</p>
                 </div>
                 <button
                     onClick={() => setIsCreateModalOpen(true)}
@@ -165,11 +155,10 @@ const AgencyClients = () => {
             </div>
 
             {/* Stats Row */}
-            <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="grid grid-cols-2 gap-4 mb-6">
                 {[
-                    { label: 'Total Clients', value: stats.total, icon: 'fa-buildings', color: 'text-slate-700' },
-                    { label: 'Live Accounts', value: stats.live, icon: 'fa-circle-check', color: 'text-emerald-600' },
-                    { label: 'Pending Approval', value: stats.pending, icon: 'fa-hourglass-half', color: 'text-amber-600' },
+                    { label: 'Total Clients',  value: stats.total, icon: 'fa-buildings',    color: 'text-slate-700' },
+                    { label: 'Live Accounts',  value: stats.live,  icon: 'fa-circle-check', color: 'text-emerald-600' },
                 ].map(stat => (
                     <div key={stat.label} className="bg-white border border-slate-200 rounded-2xl p-4">
                         <div className={`text-2xl font-black ${stat.color}`}>{stat.value}</div>
@@ -190,7 +179,7 @@ const AgencyClients = () => {
                         className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all" />
                 </div>
                 <div className="flex gap-2">
-                    {['All', 'Live', 'Pending', 'Frozen'].map(s => (
+                    {['All', 'Live', 'Frozen'].map(s => (
                         <button key={s} onClick={() => setStatusFilter(s)}
                             className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${statusFilter === s ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
                             {s}
@@ -294,10 +283,6 @@ const AgencyClients = () => {
                                                     </button>
                                                 )}
 
-                                                {/* Pending notice */}
-                                                {!client.approved_by_admin && client.status === 'pending' && (
-                                                    <span className="text-xs text-amber-600 font-semibold">Awaiting Super Admin</span>
-                                                )}
                                             </div>
                                         </td>
                                     </tr>
@@ -320,7 +305,7 @@ const AgencyClients = () => {
             />
 
             {/* ============================================
-                CREATE CLIENT MODAL (Sectioned, Approval-Based)
+                CREATE CLIENT MODAL
                 ============================================ */}
             <CreateSubClientModal
                 isOpen={isCreateModalOpen}

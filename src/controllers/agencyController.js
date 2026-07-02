@@ -296,22 +296,22 @@ const toggleClientFreeze = async (req, res) => {
 };
 
 // ==========================================
-// CREATE CLIENT (Approval-Based — Replaces provisionTrial)
+// CREATE CLIENT (Auto-Approved — 14-Day Trial)
 // ==========================================
-// @desc    Agency creates a client account — goes to PENDING until Super Admin approves
+// @desc    Agency creates a client account — immediately live with a 14-day free trial.
+//          No Super Admin approval required. Account is linked to the agency via parentId
+//          (referral/commission program).
 // @route   POST /api/agency/clients
 // @access  Private (Agency Only)
 //
 // Body accepts:
 //   companyName, adminEmail, adminName, phone, password (required-ish)
+//   website: string           — optional company website (mirrors self-registration)
+//   onboardingNotes: string   — optional business notes (mirrors self-registration)
 //   activeModules: string[]   — modules the agency wants to grant (filtered by inheritance)
 //   leadLimit: number         — monthly lead limit
 //   agentLimit: number        — agent seat limit
 //   planFeatures: object      — sub-permissions (e.g. { aiChatbot: true, webhooks: false })
-//
-// Anything the agency requests is stored on the WorkspaceSettings document so that
-// the Super Admin sees exactly what was asked for during approval, and can override
-// before going live.
 const createClient = async (req, res) => {
     try {
         const agencyId = req.user.userId || req.user.id;
@@ -321,6 +321,8 @@ const createClient = async (req, res) => {
             adminName,
             phone,
             password,
+            website,
+            onboardingNotes,
             activeModules,
             leadLimit,
             agentLimit,
@@ -394,31 +396,30 @@ const createClient = async (req, res) => {
         resolvedPlanFeatures.leadLimit = resolvedLeadLimit;
         resolvedPlanFeatures.agentLimit = resolvedAgentLimit;
 
-        // 5. Create sub-client with PENDING status — requires Super Admin approval
+        // 5. Create sub-client — immediately LIVE with 14-day trial.
+        //    parentId links this account to the agency's referral/commission program.
         const newClient = await User.create({
             name: adminName || companyName,
             email: adminEmail.toLowerCase().trim(),
             password: rawPassword,
             phone: phone || null,
+            website: website || null,
+            onboardingNotes: onboardingNotes || null,
             role: 'manager',
             parentId: agencyId,
             companyName: companyName.trim(),
             authProvider: 'local',
             isOnboarded: true,
             accountStatus: 'Active',
-            // ✅ Approval-based fields — MUST be approved by Super Admin before use
-            is_active: false,
-            approved_by_admin: false,
-            status: 'pending'
+            // ✅ Auto-approved — no Super Admin review needed.
+            // Trial starts immediately so the client can log in right away.
+            is_active: true,
+            approved_by_admin: true,
+            status: 'approved'
         });
 
-        // 6. Initialize Workspace with the AGENCY-REQUESTED config (not hardcoded defaults).
-        // The Super Admin will see this on the approval card and can override before approving.
-        //
-        // 14-day free trial — every new sub-client starts with a planExpiryDate set
-        // 14 days from now. They can't actually use the platform until Super Admin
-        // approves, but the clock starts the moment they're approved (see approveAccount
-        // for backfill if the trial has somehow already elapsed before approval).
+        // 6. Initialize Workspace with the AGENCY-REQUESTED config.
+        //    14-day free trial starts NOW — the client can log in immediately.
         const DEFAULT_TRIAL_DAYS = 14;
         const trialExpiry = new Date(Date.now() + DEFAULT_TRIAL_DAYS * 24 * 60 * 60 * 1000);
 
@@ -440,14 +441,15 @@ const createClient = async (req, res) => {
         auditLogger.log({
             actor: req.user,
             actionCategory: 'AGENCY_MANAGEMENT',
-            action: 'AGENCY_CLIENT_CREATED_PENDING',
+            action: 'AGENCY_CLIENT_CREATED',
             targetType: 'Client',
             targetId: newClient._id,
             targetName: newClient.companyName,
             details: {
                 agencyId,
                 adminEmail,
-                status: 'pending',
+                status: 'approved',
+                trialDays: DEFAULT_TRIAL_DAYS,
                 requestedModules,
                 requestedLeadLimit: resolvedLeadLimit,
                 requestedAgentLimit: resolvedAgentLimit,
@@ -458,14 +460,14 @@ const createClient = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: `Account created for ${companyName}. Pending Super Admin approval.`,
+            message: `Account created for ${companyName}. 14-day trial is now live.`,
             client: {
                 _id: newClient._id,
                 companyName: newClient.companyName,
                 email: newClient.email,
-                status: 'pending',
-                is_active: false,
-                approved_by_admin: false,
+                status: 'approved',
+                is_active: true,
+                approved_by_admin: true,
                 activeModules: requestedModules,
                 agentLimit: resolvedAgentLimit,
                 planFeatures: resolvedPlanFeatures
