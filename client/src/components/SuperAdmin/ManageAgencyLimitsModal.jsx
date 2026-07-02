@@ -125,51 +125,6 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
                                 </p>
                             </div>
 
-                            <div>
-                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">WhatsApp Messages / Month</label>
-                                <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-500 shadow-sm">
-                                    <span className="px-4 py-3 bg-slate-50 text-emerald-500 border-r border-slate-200">
-                                        <i className="fa-brands fa-whatsapp flex justify-center text-lg w-4"></i>
-                                    </span>
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        step="1000"
-                                        value={limits.whatsappMessagesPerMonth}
-                                        onChange={(e) => handleChange('whatsappMessagesPerMonth', e.target.value)}
-                                        className="flex-1 px-4 py-3 outline-none text-slate-900 font-bold"
-                                    />
-                                </div>
-                                <p className="text-[10px] text-slate-400 mt-1">
-                                    Used this cycle: <span className="font-bold text-slate-600">{(usage.whatsappSent || 0).toLocaleString()}</span>
-                                    {limits.whatsappMessagesPerMonth > 0 && (
-                                        <> · {Math.round((usage.whatsappSent / limits.whatsappMessagesPerMonth) * 100)}% of allocated</>
-                                    )}
-                                </p>
-                            </div>
-
-                            <div>
-                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Emails / Month</label>
-                                <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-500 shadow-sm">
-                                    <span className="px-4 py-3 bg-slate-50 text-blue-500 border-r border-slate-200">
-                                        <i className="fa-solid fa-envelope flex justify-center w-4"></i>
-                                    </span>
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        step="1000"
-                                        value={limits.emailsPerMonth}
-                                        onChange={(e) => handleChange('emailsPerMonth', e.target.value)}
-                                        className="flex-1 px-4 py-3 outline-none text-slate-900 font-bold"
-                                    />
-                                </div>
-                                <p className="text-[10px] text-slate-400 mt-1">
-                                    Used this cycle: <span className="font-bold text-slate-600">{(usage.emailsSent || 0).toLocaleString()}</span>
-                                    {limits.emailsPerMonth > 0 && (
-                                        <> · {Math.round((usage.emailsSent / limits.emailsPerMonth) * 100)}% of allocated</>
-                                    )}
-                                </p>
-                            </div>
                         </>
                     )}
                 </div>
