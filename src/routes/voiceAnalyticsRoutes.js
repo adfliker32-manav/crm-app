@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const voiceAnalyticsController = require('../controllers/voiceAnalyticsController');
-const { protect } = require('../middleware/authMiddleware');
+const { authMiddleware } = require('../middleware/authMiddleware');
 
-router.use(protect);
+router.use(authMiddleware);
 router.get('/', voiceAnalyticsController.getAnalytics);
 
 module.exports = router;

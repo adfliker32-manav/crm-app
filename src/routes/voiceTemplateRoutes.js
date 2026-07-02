@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const voiceTemplateController = require('../controllers/voiceTemplateController');
-const { protect } = require('../middleware/authMiddleware');
+const { authMiddleware } = require('../middleware/authMiddleware');
 
-router.use(protect);
+router.use(authMiddleware);
 
 router.get('/', voiceTemplateController.getTemplates);
 router.post('/', voiceTemplateController.createTemplate);
