@@ -427,10 +427,14 @@ const AISettings = () => {
                                 value={systemPrompt}
                                 onChange={(e) => setSystemPrompt(e.target.value)}
                                 rows="6"
+                                maxLength={1000}
                                 placeholder="Describe the steps the AI should follow to qualify the lead. E.g. 'Ask the user for budget and requirements. Once provided, update stage to Qualified.'"
                                 className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none shadow-sm text-sm text-slate-700 font-medium leading-relaxed"
                             ></textarea>
-                            <p className="text-xs text-slate-400 mt-2 font-medium">The system automatically appends strict schema controls instructing the AI to output stages and triggers back to the CRM database.</p>
+                            <div className="flex justify-between items-center mt-2">
+                                <p className="text-xs text-slate-400 font-medium">The system automatically appends strict schema controls instructing the AI to output stages and triggers back to the CRM database.</p>
+                                <span className={`text-xs font-bold ${systemPrompt.length > 900 ? 'text-red-500' : 'text-slate-400'}`}>{systemPrompt.length}/1000</span>
+                            </div>
                         </div>
                     </div>
 

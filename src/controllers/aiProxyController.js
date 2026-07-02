@@ -65,7 +65,8 @@ exports.updateSettings = async (req, res) => {
         if (provider) config.ai.provider = provider;
         if (model) config.ai.model = model;
         if (agentName !== undefined) config.ai.agentName = agentName;
-        if (systemPrompt !== undefined) config.ai.systemPrompt = systemPrompt;
+        // Backend enforcement: cap system prompt at 1000 chars to prevent token waste
+        if (systemPrompt !== undefined) config.ai.systemPrompt = String(systemPrompt).substring(0, 1000);
         if (aiEnabled !== undefined) config.ai.aiEnabled = aiEnabled;
         if (aiFallbackEnabled !== undefined) config.ai.aiFallbackEnabled = aiFallbackEnabled;
         if (aiSupportEnabled !== undefined) config.ai.aiSupportEnabled = aiSupportEnabled;

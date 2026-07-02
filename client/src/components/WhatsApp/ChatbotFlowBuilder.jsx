@@ -1655,8 +1655,10 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                 onChange={(e) => updateSelectedNodeData({ aiSystemPromptOverride: e.target.value })}
                                                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-sky-500"
                                                 rows="4"
+                                                maxLength={1000}
                                                 placeholder="Leave blank to use the default AI prompt from Global Settings, or type a specific prompt for this node."
                                             />
+                                            <p className="text-xs text-slate-400 mt-1 text-right">{(selectedNode.data.aiSystemPromptOverride || '').length}/1000</p>
                                         </div>
                                         <div>
                                             <label className="block text-sm font-semibold text-slate-700 mb-2">Max Turns Before Handoff</label>
