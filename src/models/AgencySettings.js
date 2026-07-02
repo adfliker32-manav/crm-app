@@ -17,9 +17,7 @@ const agencySettingsSchema = new mongoose.Schema({
 
     // Plan limits enforced on sub-clients
     planLimits: {
-        maxClients: { type: Number, default: 5 },
-        whatsappMessagesPerMonth: { type: Number, default: 1000 },
-        emailsPerMonth: { type: Number, default: 5000 }
+        maxClients: { type: Number, default: 5 }
     },
 
     // Allow new client registrations
@@ -27,8 +25,6 @@ const agencySettingsSchema = new mongoose.Schema({
 
     // Usage counters (reset monthly)
     usage: {
-        whatsappSent: { type: Number, default: 0 },
-        emailsSent: { type: Number, default: 0 },
         periodStart: { type: Date, default: Date.now }
     }
 }, { timestamps: true });

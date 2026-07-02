@@ -9,11 +9,9 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
 
     const [limits, setLimits] = useState({
         maxClients: 5,
-        whatsappMessagesPerMonth: 1000,
-        emailsPerMonth: 5000,
         allowNewSignups: true
     });
-    const [usage, setUsage] = useState({ whatsappSent: 0, emailsSent: 0, registeredClients: 0 });
+    const [usage, setUsage] = useState({ registeredClients: 0 });
 
     useEffect(() => {
         if (isOpen && agency?._id) {
@@ -28,11 +26,9 @@ const ManageAgencyLimitsModal = ({ isOpen, onClose, agency, onSuccess }) => {
             if (res.data?.success) {
                 setLimits({
                     maxClients: res.data.limits.maxClients ?? 5,
-                    whatsappMessagesPerMonth: res.data.limits.whatsappMessagesPerMonth ?? 1000,
-                    emailsPerMonth: res.data.limits.emailsPerMonth ?? 5000,
                     allowNewSignups: res.data.limits.allowNewSignups ?? true
                 });
-                setUsage(res.data.usage || { whatsappSent: 0, emailsSent: 0, registeredClients: 0 });
+                setUsage(res.data.usage || { registeredClients: 0 });
             }
         } catch (err) {
             console.error('Fetch limits error:', err);

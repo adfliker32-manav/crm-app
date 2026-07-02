@@ -1633,13 +1633,11 @@ const getAgencyLimits = async (req, res) => {
 
         // If no settings yet, return defaults so the modal still works
         const limits = settings?.planLimits || {
-            maxClients: 5,
-            whatsappMessagesPerMonth: 1000,
-            emailsPerMonth: 5000
+            maxClients: 5
         };
         limits.allowNewSignups = settings?.allowNewSignups ?? true;
 
-        const usage = settings?.usage || { whatsappSent: 0, emailsSent: 0 };
+        const usage = settings?.usage || {};
         usage.registeredClients = await User.countDocuments({ parentId: id, role: 'manager' });
 
         res.json({ success: true, limits, usage });
@@ -1652,7 +1650,7 @@ const getAgencyLimits = async (req, res) => {
 const updateAgencyLimits = async (req, res) => {
     try {
         const { id } = req.params; // The Agency ID
-        const { maxClients, whatsappMessagesPerMonth, emailsPerMonth, allowNewSignups } = req.body;
+        const { maxClients, allowNewSignups } = req.body;
 
         const agency = await User.findOne({ _id: id, role: 'agency' });
         if (!agency) return res.status(404).json({ message: "Agency not found" });
@@ -1662,8 +1660,6 @@ const updateAgencyLimits = async (req, res) => {
             {
                 $set: {
                     'planLimits.maxClients': maxClients,
-                    'planLimits.whatsappMessagesPerMonth': whatsappMessagesPerMonth,
-                    'planLimits.emailsPerMonth': emailsPerMonth,
                     'allowNewSignups': allowNewSignups !== undefined ? allowNewSignups : true
                 }
             },
@@ -1677,7 +1673,7 @@ const updateAgencyLimits = async (req, res) => {
             targetType: 'Agency',
             targetId: agency._id,
             targetName: agency.companyName || agency.email,
-            details: { maxClients, whatsappMessagesPerMonth, emailsPerMonth },
+            details: { maxClients },
             req
         });
 
