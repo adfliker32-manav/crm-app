@@ -13,6 +13,7 @@ import ManageAgencyModal from './ManageAgencyModal';
 const AgenciesView = () => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
+    const fmt = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
     const [companies, setCompanies] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
@@ -219,6 +220,7 @@ const AgenciesView = () => {
                                 <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Agency</th>
                                 <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Primary Contact</th>
                                 <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Performance</th>
+                                <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Wallet Balance</th>
                                 <th className="px-8 py-5 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Account status</th>
                                 <th className="px-8 py-5 text-right text-[11px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Control</th>
                             </tr>
@@ -255,6 +257,14 @@ const AgenciesView = () => {
                                             </div>
                                         </td>
                                         <td className="px-8 py-6">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100/50">
+                                                    <i className="fa-solid fa-wallet text-xs"></i>
+                                                </div>
+                                                <span className="font-bold text-slate-700">{fmt(company.commissionBalance || 0)}</span>
+                                            </div>
+                                        </td>
+                                        <td className="px-8 py-6">
                                             {company.isSuspended ? (
                                                 <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-50 text-red-700 text-[10px] font-black uppercase rounded-full border border-red-200">
                                                     <i className="fa-solid fa-ban"></i> Suspended
@@ -286,7 +296,7 @@ const AgenciesView = () => {
                                 ))
                             ) : (
                                 <tr>
-                                    <td colSpan="5" className="px-8 py-20 text-center text-slate-400 italic">No agencies found matching your search.</td>
+                                    <td colSpan="6" className="px-8 py-20 text-center text-slate-400 italic">No agencies found matching your search.</td>
                                 </tr>
                             )}
                         </tbody>
@@ -325,18 +335,18 @@ const AgenciesView = () => {
     );
 };
 
-// Internal Stat Card component to match DashboardView
 const StatCard = ({ title, value, icon, gradient, iconBg }) => (
-    <div className={`bg-gradient-to-br ${gradient} p-8 rounded-[2rem] shadow-xl text-white group hover:-translate-y-1 transition-all duration-300`}>
-        <div className="flex justify-between items-center">
-            <div>
-                <p className="text-white/70 text-xs font-black uppercase tracking-widest mb-1">{title}</p>
-                <h3 className="text-4xl font-black tracking-tighter">{value.toLocaleString()}</h3>
-            </div>
-            <div className={`${iconBg} w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg transition-transform group-hover:rotate-12`}>
-                <i className={`fa-solid ${icon} text-2xl`}></i>
-            </div>
+    <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-sm relative overflow-hidden group">
+        <div className={`absolute -right-4 -top-4 p-4 opacity-[0.03] transform group-hover:scale-110 transition duration-500`}>
+            <i className={`${icon} text-8xl text-slate-900`} />
         </div>
+        <div className="flex items-center gap-3 mb-3 relative z-10">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${iconBg}`}>
+                <i className={`${icon} text-lg`} />
+            </div>
+            <p className="text-sm font-bold tracking-wider uppercase text-slate-500">{title}</p>
+        </div>
+        <h3 className={`text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r relative z-10 ${gradient}`}>{value}</h3>
     </div>
 );
 
