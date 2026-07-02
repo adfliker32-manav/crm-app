@@ -25,9 +25,6 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
         contactPerson: '',
         phone: '',
         activeModules: [],
-        leadLimit: 1000,
-        agentLimit: 5,
-        aiMessageLimit: 1000,
         planFeatures: {}
     });
     const [loading, setLoading] = useState(false);
@@ -40,9 +37,6 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                 contactPerson: company.contactPerson || '',
                 phone: company.phone || '',
                 activeModules: company.activeModules || [],
-                leadLimit: company.planFeatures?.leadLimit || 1000,
-                agentLimit: company.agentLimit || company.planFeatures?.agentLimit || 5,
-                aiMessageLimit: company.planFeatures?.aiMessageLimit || 1000,
                 planFeatures: company.planFeatures || {}
             });
         }
@@ -111,9 +105,6 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                 contactPerson: formData.contactPerson,
                 phone: formData.phone,
                 activeModules: formData.activeModules,
-                leadLimit: formData.leadLimit,
-                agentLimit: formData.agentLimit,
-                aiMessageLimit: formData.aiMessageLimit,
                 planFeatures: featurePayload
             });
             showSuccess('Company updated successfully');
@@ -190,40 +181,8 @@ const EditCompanyModal = ({ isOpen, onClose, company, onSuccess }) => {
                                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
                                 />
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">Monthly Lead Limit</label>
-                                <input
-                                    type="number"
-                                    name="leadLimit"
-                                    value={formData.leadLimit}
-                                    onChange={handleChange}
-                                    min="0"
-                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">Agent Seat Limit</label>
-                                <input
-                                    type="number"
-                                    name="agentLimit"
-                                    value={formData.agentLimit}
-                                    onChange={handleChange}
-                                    min="0"
-                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">AI Message Limit</label>
-                                <input
-                                    type="number"
-                                    name="aiMessageLimit"
-                                    value={formData.aiMessageLimit}
-                                    onChange={handleChange}
-                                    min="0"
-                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
-                                />
-                            </div>
                         </div>
+
 
                         {/* Module Access Control */}
                         <div className="pt-4 border-t">
