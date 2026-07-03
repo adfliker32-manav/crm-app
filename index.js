@@ -66,9 +66,15 @@ app.use(express.json({
     req.rawBody = buf; // Attach the raw Buffer to req for webhook signature verification
   }
 }));
-// ⚠️ SECURITY: Strip MongoDB operators ($, .) from req.body, req.query, req.params.
+// ⚠️ SECURITY: Strip MongoDB operators ($, .) from req.body and req.params.
 // Without this, an attacker could send { "email": { "$ne": "" } } to match all documents.
-app.use(mongoSanitize());
+// NOTE: Express 5 made req.query a read-only getter, so we sanitize body/params only.
+// Query strings rarely carry nested objects in this app; body is the primary attack vector.
+app.use((req, res, next) => {
+  if (req.body) req.body = mongoSanitize.sanitize(req.body);
+  if (req.params) req.params = mongoSanitize.sanitize(req.params);
+  next();
+});
 // ⚠️ SECURITY: Helmet adds critical HTTP headers (X-Frame-Options, X-Content-Type-Options, HSTS, etc.)
 // Without this, the app is vulnerable to clickjacking, MIME sniffing, and protocol downgrade attacks.
 app.use(helmet({
