@@ -4,6 +4,7 @@ const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const User = require('../models/User');
+const ActivityLog = require('../models/ActivityLog'); // Required by continueWorkflowAfterVoice
 const VoiceEngineService = require('./VoiceEngineService');
 const { sendEmail } = require('./emailService');
 const { sendWhatsAppMessage } = require('./whatsappService');

@@ -76,16 +76,30 @@ class VoiceEngineService {
 
     /**
      * Replaces {{variables}} with actual lead data
+     * Supported: {{lead.name}}, {{lead.phone}}, {{lead.email}}, {{lead.stage}},
+     *            {{lead.company}}, {{lead.source}}, {{lead.assignedManager}},
+     *            {{lead.appointmentDate}}
      */
     _injectVariables(prompt, lead) {
         if (!prompt) return '';
         let result = prompt;
+
+        // Core lead fields
         result = result.replace(/{{lead\.name}}/g, lead.name || 'Customer');
-        result = result.replace(/{{lead\.company}}/g, lead.customData?.company || 'Your Company');
-        result = result.replace(/{{lead\.stage}}/g, lead.stage || '');
-        // Expand this later for appointments, etc.
+        result = result.replace(/{{lead\.phone}}/g, lead.phone || '');
+        result = result.replace(/{{lead\.email}}/g, lead.email || '');
+        result = result.replace(/{{lead\.stage}}/g, lead.status || lead.stage || '');
+        result = result.replace(/{{lead\.source}}/g, lead.source || '');
+
+        // Custom data fields
+        result = result.replace(/{{lead\.company}}/g, lead.customData?.company || lead.customData?.Company || '');
+        result = result.replace(/{{lead\.assignedManager}}/g, lead.customData?.assignedManager || '');
+        result = result.replace(/{{lead\.appointmentDate}}/g, lead.customData?.appointmentDate || lead.appointmentDate || '');
+        result = result.replace(/{{lead\.productName}}/g, lead.customData?.productName || lead.customData?.ProductName || '');
+
         return result;
     }
+
 
     /**
      * Calls LLM to generate a hyper-personalized system prompt

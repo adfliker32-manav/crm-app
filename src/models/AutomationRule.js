@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const saasPlugin = require('./plugins/saasPlugin');
 
 const ActionSchema = new mongoose.Schema({
-    type: { type: String, required: true, enum: ['SEND_WHATSAPP', 'SEND_EMAIL', 'CHANGE_STAGE', 'ASSIGN_USER', 'WAIT_FOR_REPLY'] },
+    type: { type: String, required: true, enum: ['SEND_WHATSAPP', 'SEND_EMAIL', 'CHANGE_STAGE', 'ASSIGN_USER', 'WAIT_FOR_REPLY', 'VOICE_CALL'] },
     // Type-specific payload details
     templateId: { type: String }, // For WhatsApp / WAIT_FOR_REPLY
     subject: { type: String },    // For Email
