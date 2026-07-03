@@ -2231,7 +2231,16 @@ const topUpAiCredits = async (req, res) => {
         await user.save();
         
         // Log the manual credit addition
-        await auditLogger.logActivity(req.user.id, 'AI_CREDITS_TOPUP', { targetUserId: id, amount: parseInt(amount, 10), newBalance: user.aiCreditsBalance });
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'SUPERADMIN_ACTION',
+            action: 'AI_CREDITS_TOPUP',
+            targetType: 'User',
+            targetId: id,
+            targetName: user.companyName || user.name || user.email,
+            details: { amount: parseInt(amount, 10), newBalance: user.aiCreditsBalance },
+            req
+        });
         
         res.json({ success: true, message: "AI Credits added successfully.", aiCreditsBalance: user.aiCreditsBalance });
     } catch (err) {
@@ -2256,7 +2265,16 @@ const updateAccountPermissions = async (req, res) => {
 
         await user.save();
 
-        await auditLogger.logActivity(req.user.id, 'ACCOUNT_PERMISSIONS_UPDATED', { targetUserId: id, newPermissions: user.permissions });
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'ACCOUNT_MANAGEMENT',
+            action: 'ACCOUNT_PERMISSIONS_UPDATED',
+            targetType: 'User',
+            targetId: id,
+            targetName: user.companyName || user.name || user.email,
+            details: { newPermissions: user.permissions },
+            req
+        });
 
         res.json({ success: true, message: `Permissions updated successfully.`, permissions: user.permissions });
     } catch (error) {
