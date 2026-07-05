@@ -345,13 +345,29 @@ exports.forgotPassword = async (req, res) => {
         const appName = process.env.APP_NAME || 'Adfliker';
 
         const htmlBody = `
-            <div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#fff;border-radius:12px;border:1px solid #e5e7eb;">
-                <h2 style="margin:0 0 8px;font-size:22px;color:#111827;">Reset your password</h2>
-                <p style="color:#6b7280;margin:0 0 24px;">We received a request to reset the password for your <strong>${appName}</strong> account (<strong>${normalizedEmail}</strong>).</p>
-                <a href="${resetUrl}" style="display:inline-block;padding:12px 28px;background:#16a34a;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:15px;">Reset Password</a>
-                <p style="color:#9ca3af;font-size:13px;margin:24px 0 0;">This link expires in <strong>1 hour</strong>. If you didn't request a reset, you can safely ignore this email — your password won't change.</p>
-                <hr style="border:none;border-top:1px solid #f3f4f6;margin:24px 0 16px;">
-                <p style="color:#d1d5db;font-size:12px;margin:0;">© ${new Date().getFullYear()} ${appName}</p>
+            <div style="background-color: #f9fafb; padding: 40px 20px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <div style="max-width: 520px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+                    <div style="background-color: #10b981; height: 6px; width: 100%;"></div>
+                    <div style="padding: 40px 32px;">
+                        <div style="margin-bottom: 24px;">
+                            <div style="width: 48px; height: 48px; background: #ecfdf5; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center;">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: block; margin: 12px;">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                </svg>
+                            </div>
+                        </div>
+                        <h2 style="margin: 0 0 12px; font-size: 24px; font-weight: 700; color: #111827; letter-spacing: -0.5px;">Reset your password</h2>
+                        <p style="color: #4b5563; margin: 0 0 32px; font-size: 16px; line-height: 1.5;">We received a request to reset the password for your <strong>${appName}</strong> account (<strong>${normalizedEmail}</strong>).</p>
+                        
+                        <a href="${resetUrl}" style="display: block; width: 100%; text-align: center; padding: 14px 0; background-color: #10b981; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);">Reset Password</a>
+                        
+                        <p style="color: #6b7280; font-size: 14px; line-height: 1.5; margin: 32px 0 0;">This link expires in <strong>1 hour</strong>. If you didn't request a reset, you can safely ignore this email — your password won't change.</p>
+                        
+                        <hr style="border: none; border-top: 1px solid #f3f4f6; margin: 32px 0 24px;">
+                        <p style="color: #9ca3af; font-size: 13px; margin: 0; text-align: center;">© ${new Date().getFullYear()} ${appName}. All rights reserved.</p>
+                    </div>
+                </div>
             </div>
         `;
 
