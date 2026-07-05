@@ -220,12 +220,22 @@ const Login = () => {
                 {isLoading ? 'Authenticating...' : 'Access Dashboard'}
               </button>
 
-              {/* Sign up with Google — new users can create account via Google */}
-              <div className="text-center text-sm text-gray-500 mt-1">
-                New here?{' '}
-                <span className="font-semibold text-green-600">Sign in with Google above</span>{' '}
-                to create your free account instantly.
-              </div>
+              {/* New here? → navigate to Register page */}
+              <Link
+                to="/register"
+                className="flex items-start gap-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3 mt-1 cursor-pointer hover:bg-green-100 active:scale-[0.98] transition-all select-none no-underline"
+              >
+                <span className="text-green-500 mt-0.5 flex-shrink-0">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20A10 10 0 0012 2z" />
+                  </svg>
+                </span>
+                <p className="text-sm text-green-800 leading-snug">
+                  <span className="font-bold">New here?</span>{' '}
+                  <span className="font-semibold text-green-700 underline underline-offset-2">Create your free account</span>{' '}
+                  and get started instantly.
+                </p>
+              </Link>
 
               <div className="text-center text-xs text-gray-400 mt-2">
                 By signing in you agree to our{" "}

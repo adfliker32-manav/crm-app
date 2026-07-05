@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
@@ -30,8 +30,13 @@ const ResetPassword = () => {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
 
-  const MIN_LENGTH = 8;
-  const isStrong = password.length >= MIN_LENGTH;
+  const passwordRules = [
+    { label: 'At least 8 characters', ok: password.length >= 8 },
+    { label: 'One uppercase letter',  ok: /[A-Z]/.test(password) },
+    { label: 'One number',            ok: /[0-9]/.test(password) },
+    { label: 'One special character', ok: /[^A-Za-z0-9]/.test(password) },
+  ];
+  const passwordValid = passwordRules.every((r) => r.ok);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -42,8 +47,8 @@ const ResetPassword = () => {
       return;
     }
 
-    if (!isStrong) {
-      setError('Password must be at least 8 characters.');
+    if (!passwordValid) {
+      setError('Password must be at least 8 characters, and include uppercase, lowercase, number, and special character.');
       return;
     }
 
@@ -180,20 +185,16 @@ const ResetPassword = () => {
                           {showPassword ? <EyeOffIcon /> : <EyeIcon />}
                         </button>
                       </div>
-                      {/* Strength bar */}
+                      {/* Password rules checklist */}
                       {password.length > 0 && (
-                        <div className="mt-2 flex gap-1">
-                          {[...Array(4)].map((_, i) => (
-                            <div
-                              key={i}
-                              className={`h-1 flex-1 rounded-full transition-colors ${
-                                password.length >= MIN_LENGTH + i * 2
-                                  ? 'bg-green-500'
-                                  : 'bg-gray-200'
-                              }`}
-                            />
+                        <ul className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5">
+                          {passwordRules.map((r) => (
+                            <li key={r.label} className={`flex items-center gap-1.5 text-xs transition-colors ${r.ok ? 'text-green-600' : 'text-gray-400'}`}>
+                              <span className="w-3 text-center">{r.ok ? '✓' : '○'}</span>
+                              {r.label}
+                            </li>
                           ))}
-                        </div>
+                        </ul>
                       )}
                     </div>
 
