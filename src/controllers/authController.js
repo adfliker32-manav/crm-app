@@ -347,16 +347,10 @@ exports.forgotPassword = async (req, res) => {
         const htmlBody = `
             <div style="background-color: #f9fafb; padding: 40px 20px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
                 <div style="max-width: 520px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
-                    <div style="background-color: #10b981; height: 6px; width: 100%;"></div>
+                    <div style="background-color: #0f172a; padding: 24px; text-align: center; border-bottom: 4px solid #10b981;">
+                        <img src="${frontendUrl}/logo.png" alt="${appName} Logo" style="height: 36px; object-fit: contain;" />
+                    </div>
                     <div style="padding: 40px 32px;">
-                        <div style="margin-bottom: 24px;">
-                            <div style="width: 48px; height: 48px; background: #ecfdf5; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center;">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: block; margin: 12px;">
-                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                                </svg>
-                            </div>
-                        </div>
                         <h2 style="margin: 0 0 12px; font-size: 24px; font-weight: 700; color: #111827; letter-spacing: -0.5px;">Reset your password</h2>
                         <p style="color: #4b5563; margin: 0 0 32px; font-size: 16px; line-height: 1.5;">We received a request to reset the password for your <strong>${appName}</strong> account (<strong>${normalizedEmail}</strong>).</p>
                         

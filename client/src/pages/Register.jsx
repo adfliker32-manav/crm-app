@@ -118,11 +118,8 @@ const Register = () => {
       <div className="hidden lg:flex lg:w-[45%] relative bg-[#0f172a] flex-col justify-between p-16 overflow-hidden">
         <div className="absolute top-[-10%] right-[-10%] w-96 h-96 bg-green-500 rounded-full blur-[120px] opacity-20" />
 
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="w-10 h-10 bg-green-500 rounded-xl flex items-center justify-center">
-            <span className="text-white font-black text-xl">A</span>
-          </div>
-          <span className="text-white font-bold text-xl tracking-tight">Adfliker</span>
+        <div className="relative z-10 flex items-center">
+          <img src="/logo.png" alt="Adfliker Logo" className="h-12 object-contain" />
         </div>
 
         <div className="relative z-10 max-w-md">
@@ -163,11 +160,8 @@ const Register = () => {
         <div className="w-full max-w-[420px]">
 
           {/* Mobile logo */}
-          <div className="lg:hidden flex items-center gap-2 mb-6">
-            <div className="w-8 h-8 bg-green-500 rounded-lg flex items-center justify-center">
-              <span className="text-white font-black text-sm">A</span>
-            </div>
-            <span className="text-gray-900 font-bold text-lg">Adfliker</span>
+          <div className="lg:hidden flex items-center mb-6 bg-[#0f172a] p-3 rounded-xl w-fit">
+            <img src="/logo.png" alt="Adfliker Logo" className="h-8 object-contain" />
           </div>
 
           {/* Progress */}
