@@ -1,0 +1,1 @@
+require('dotenv').config(); const mongoose = require('mongoose'); async function run() { await mongoose.connect(process.env.MONGO_URI); const User = require('./src/models/User'); const sa = await User.find({ role: 'superadmin' }).select('email _id name'); console.log(sa); mongoose.disconnect(); } run().catch(console.error);

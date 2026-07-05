@@ -329,8 +329,17 @@ exports.forgotPassword = async (req, res) => {
         const { getUserEmailCredentials } = require('../utils/emailUtils');
         const { sendEmail } = require('../services/emailService');
 
-        const superAdmin = await User.findOne({ role: 'superadmin' }).select('_id name').lean();
-        const superAdminId = superAdmin?._id?.toString();
+        const superAdmins = await User.find({ role: 'superadmin' }).select('_id').lean();
+        const superAdminIds = superAdmins.map(sa => sa._id);
+        
+        // Find the specific Super Admin who actually configured their email
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const configuredSaConfig = await IntegrationConfig.findOne({
+            userId: { $in: superAdminIds },
+            'email.emailUser': { $ne: null, $exists: true }
+        }).select('userId').lean();
+        
+        const superAdminId = configuredSaConfig ? configuredSaConfig.userId.toString() : superAdminIds[0]?.toString();
 
         const appName = process.env.APP_NAME || 'Adfliker';
 

@@ -83,9 +83,20 @@ const getStatus = () => ({
 const sendEmailAlert = async (eventType, error, rawPayload, failureCount) => {
     try {
         // Fetch the superadmin email
-        const admin = await User.findOne({ role: 'superadmin' })
-            .select('email companyName name')
-            .lean();
+        // Fetch the superadmin who actually configured email
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const superAdmins = await User.find({ role: 'superadmin' }).select('_id email companyName name').lean();
+        const superAdminIds = superAdmins.map(sa => sa._id);
+        
+        const configuredSaConfig = await IntegrationConfig.findOne({
+            userId: { $in: superAdminIds },
+            'email.emailUser': { $ne: null, $exists: true }
+        }).select('userId').lean();
+        
+        const admin = configuredSaConfig 
+            ? superAdmins.find(sa => sa._id.toString() === configuredSaConfig.userId.toString())
+            : superAdmins[0];
+
         if (!admin?.email) {
             console.warn('[WebhookMonitor] No superadmin email found — skipping email alert');
             return;
@@ -133,7 +144,8 @@ const sendEmailAlert = async (eventType, error, rawPayload, failureCount) => {
             to: admin.email,
             subject: `🚨 [${BRAND}] Billing webhook failure — ${eventType || 'unknown event'} (${failureCount} consecutive)`,
             html,
-            transactional: true
+            transactional: true,
+            userId: admin._id.toString()
         });
 
         console.log(`📧 [WebhookMonitor] Alert email sent to ${admin.email}`);
@@ -153,9 +165,20 @@ const sendWhatsAppAlert = async (eventType, error, failureCount) => {
         // This is intentionally optional — email is the primary alert channel.
         if (!templateName) return;
 
-        const admin = await User.findOne({ role: 'superadmin' })
-            .select('_id phone')
-            .lean();
+        // Fetch the superadmin who configured WhatsApp
+        const superAdmins = await User.find({ role: 'superadmin' }).select('_id phone').lean();
+        const superAdminIds = superAdmins.map(sa => sa._id);
+        
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const configuredSaConfig = await IntegrationConfig.findOne({
+            userId: { $in: superAdminIds },
+            'whatsapp.wabaId': { $ne: null, $exists: true }
+        }).select('userId').lean();
+        
+        const admin = configuredSaConfig 
+            ? superAdmins.find(sa => sa._id.toString() === configuredSaConfig.userId.toString())
+            : superAdmins[0];
+
         if (!admin?.phone || !admin?._id) return;
 
         const { sendWhatsAppTemplateMessage } = require('./whatsappService');
