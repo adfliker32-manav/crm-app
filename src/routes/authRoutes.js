@@ -18,6 +18,11 @@ const authLimiter = rateLimit({
 router.post('/login', authLimiter, validate(schemas.login), authController.login);
 router.post('/google', authLimiter, authController.googleLogin);
 
+// 1.3 Forgot / Reset Password (Public)
+router.post('/forgot-password', authLimiter, authController.forgotPassword);
+router.post('/reset-password',  authLimiter, authController.resetPassword);
+
+
 // 1.5 Register (Public) — client self-onboarding, auto-approved 14-day trial.
 // Shares authLimiter (10 attempts / 15 min / IP) to throttle signup spam.
 router.post('/register', authLimiter, validate(schemas.register), authController.register);

@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
+const WhatsAppLog = require('../models/WhatsAppLog');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
@@ -591,16 +592,29 @@ const processStatusUpdate = async (status, userId) => {
             };
         }
 
-        // ── Atomic update returning the OLD document (new: false) ──────────────
+        // ── Atomic update returning the OLD document (returnDocument: 'before') ──────────────
         // Returning the pre-update doc lets us detect first-time status transitions
         // vs duplicate webhooks without any extra DB round-trips.
         let oldMsg = await WhatsAppMessage.findOneAndUpdate(
             { waMessageId: waMessageId },
             updatePayload,
-            { new: false, select: 'conversationId userId automationSource broadcastId content statusTimestamps' }
+            { returnDocument: 'before', select: 'conversationId userId automationSource broadcastId content statusTimestamps' }
         ).lean();
 
         if (!oldMsg) {
+            // Check if it's a system notification logged only in WhatsAppLog
+            const isSystemLog = await WhatsAppLog.findOne({ messageId: waMessageId }).lean();
+            if (isSystemLog) {
+                debug(`✅ Message ${waMessageId} found in WhatsAppLog (system notification). Skipping retry loop.`);
+                if (statusType === 'failed') {
+                    await WhatsAppLog.updateOne(
+                        { messageId: waMessageId },
+                        { $set: { status: 'failed', error: updatePayload.$set.error?.message } }
+                    );
+                }
+                return;
+            }
+
             // RACE CONDITION MITIGATION:
             // Meta webhooks for 'sent' or 'delivered' can arrive faster than our own backend
             // finishes writing the initial message to the DB (especially during batch broadcasts).
@@ -612,7 +626,7 @@ const processStatusUpdate = async (status, userId) => {
                 oldMsg = await WhatsAppMessage.findOneAndUpdate(
                     { waMessageId: waMessageId },
                     updatePayload,
-                    { new: false, select: 'conversationId userId automationSource broadcastId content statusTimestamps' }
+                    { returnDocument: 'before', select: 'conversationId userId automationSource broadcastId content statusTimestamps' }
                 ).lean();
                 retries--;
             }

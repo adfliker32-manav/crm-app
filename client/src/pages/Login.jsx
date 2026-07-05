@@ -7,6 +7,7 @@ const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { login, googleLogin } = useAuth();
@@ -35,18 +36,14 @@ const Login = () => {
   const handleGoogleSuccess = async (credentialResponse) => {
     setError('');
     setIsLoading(true);
-    const result = await googleLogin(credentialResponse.credential, false);
+    const result = await googleLogin(credentialResponse.credential, false, rememberMe);
 
     if (result.success) {
       if (result.role === 'superadmin') navigate('/super-admin');
       else if (result.role === 'agency') navigate('/agency/dashboard');
       else navigate('/dashboard');
     } else {
-      if (result.message?.includes("don't have an account") || result.message?.includes("not have an account")) {
-        setError("No account found with this Google email. Register now to start your free trial.");
-      } else {
-        setError(result.message);
-      }
+      setError(result.message);
       setIsLoading(false);
     }
   };
@@ -166,18 +163,40 @@ const Login = () => {
                   <label className="text-xs font-semibold text-gray-400 uppercase ml-1">
                     Password
                   </label>
-                  <a href="#" className="text-xs font-bold text-green-600 hover:underline">
+                  <Link to="/forgot-password" className="text-xs font-bold text-green-600 hover:underline">
                     Forgot password?
-                  </a>
+                  </Link>
                 </div>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                  placeholder="••••••••"
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    className="w-full px-4 py-3 pr-12 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                    placeholder="••••••••"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute inset-y-0 right-3 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
+                    tabIndex={-1}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? (
+                      /* Eye-off icon */
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-5 0-9-4-9-7a9.77 9.77 0 012.168-5.168M6.343 6.343A8.014 8.014 0 0112 5c5 0 9 4 9 7a9.77 9.77 0 01-1.343 3.657M15 12a3 3 0 11-6 0 3 3 0 016 0zM3 3l18 18" />
+                      </svg>
+                    ) : (
+                      /* Eye icon */
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center gap-2 pt-2">
@@ -201,17 +220,12 @@ const Login = () => {
                 {isLoading ? 'Authenticating...' : 'Access Dashboard'}
               </button>
 
-              {/* Self-serve registration — highlighted CTA */}
-              <Link
-                to="/register"
-                className="mt-5 flex items-center justify-center gap-2 rounded-xl border-2 border-green-500 bg-green-50 px-4 py-3 text-center font-bold text-green-700 transition-all hover:bg-green-100 active:scale-[0.98]"
-              >
-                <span>Don’t have an account? Register here</span>
-                <span aria-hidden="true">→</span>
-              </Link>
-              <p className="text-center text-xs text-gray-400 mt-2">
-                Start your 14-day free trial — no credit card required
-              </p>
+              {/* Sign up with Google — new users can create account via Google */}
+              <div className="text-center text-sm text-gray-500 mt-1">
+                New here?{' '}
+                <span className="font-semibold text-green-600">Sign in with Google above</span>{' '}
+                to create your free account instantly.
+              </div>
 
               <div className="text-center text-xs text-gray-400 mt-2">
                 By signing in you agree to our{" "}

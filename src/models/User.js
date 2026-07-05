@@ -216,10 +216,17 @@ const userSchema = new mongoose.Schema({
     aiCreditsBalance: { type: Number, default: 0 },
     aiCreditsUsedThisMonth: { type: Number, default: 0 },
 
+
+    // ─── PASSWORD RESET ───────────────────────────────────────────────────────
+    // Raw token is only ever sent via email; only the SHA-256 hash is stored here.
+    passwordResetToken:  { type: String, default: null },
+    passwordResetExpiry: { type: Date,   default: null },
+
     createdAt: {
         type: Date,
         default: Date.now
     }
+
 });
 
 // Hash password before saving

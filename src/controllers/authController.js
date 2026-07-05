@@ -298,10 +298,120 @@ exports.login = async (req, res) => {
     }
 };
 
+// 2.3 FORGOT PASSWORD — sends a reset link to the user's email
+exports.forgotPassword = async (req, res) => {
+    // Always return same message to prevent user enumeration
+    const GENERIC_OK = { message: 'If that email exists, a password reset link has been sent.' };
+
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ message: 'Email is required.' });
+
+        const normalizedEmail = normalizeEmail(email);
+        const user = await User.findOne({ email: normalizedEmail });
+
+        // No user — respond generically (no leak)
+        if (!user) return res.json(GENERIC_OK);
+
+        // Generate 32-byte random token; store only the SHA-256 hash in DB
+        const rawToken = require('crypto').randomBytes(32).toString('hex');
+        const hashedToken = require('crypto').createHash('sha256').update(rawToken).digest('hex');
+
+        user.passwordResetToken = hashedToken;
+        user.passwordResetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+        await user.save({ validateBeforeSave: false });
+
+        // Build reset URL using frontend origin
+        const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:5173';
+        const resetUrl = `${frontendUrl}/reset-password?token=${rawToken}`;
+
+        // Use Super Admin's configured SMTP credentials (Option B)
+        const { getUserEmailCredentials } = require('../utils/emailUtils');
+        const { sendEmail } = require('../services/emailService');
+
+        const superAdmin = await User.findOne({ role: 'superadmin' }).select('_id name').lean();
+        const superAdminId = superAdmin?._id?.toString();
+
+        const appName = process.env.APP_NAME || 'Adfliker';
+
+        const htmlBody = `
+            <div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#fff;border-radius:12px;border:1px solid #e5e7eb;">
+                <h2 style="margin:0 0 8px;font-size:22px;color:#111827;">Reset your password</h2>
+                <p style="color:#6b7280;margin:0 0 24px;">We received a request to reset the password for your <strong>${appName}</strong> account (<strong>${normalizedEmail}</strong>).</p>
+                <a href="${resetUrl}" style="display:inline-block;padding:12px 28px;background:#16a34a;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:15px;">Reset Password</a>
+                <p style="color:#9ca3af;font-size:13px;margin:24px 0 0;">This link expires in <strong>1 hour</strong>. If you didn't request a reset, you can safely ignore this email — your password won't change.</p>
+                <hr style="border:none;border-top:1px solid #f3f4f6;margin:24px 0 16px;">
+                <p style="color:#d1d5db;font-size:12px;margin:0;">© ${new Date().getFullYear()} ${appName}</p>
+            </div>
+        `;
+
+        try {
+            await sendEmail({
+                to: normalizedEmail,
+                subject: `Reset your ${appName} password`,
+                html: htmlBody,
+                text: `Reset your password here: ${resetUrl}\n\nThis link expires in 1 hour.`,
+                userId: superAdminId || null,
+                transactional: true, // bypass unsubscribe suppression list
+            });
+        } catch (emailErr) {
+            console.error('Password reset email failed:', emailErr.message);
+            // Clear the token so user isn't locked with a useless token
+            user.passwordResetToken = null;
+            user.passwordResetExpiry = null;
+            await user.save({ validateBeforeSave: false });
+            return res.status(500).json({ message: 'Failed to send reset email. Please try again or contact support.' });
+        }
+
+        return res.json(GENERIC_OK);
+    } catch (err) {
+        console.error('forgotPassword error:', err);
+        res.status(500).json({ message: 'Server error. Please try again.' });
+    }
+};
+
+// 2.4 RESET PASSWORD — validates token and sets a new password
+exports.resetPassword = async (req, res) => {
+    try {
+        const { token, password } = req.body;
+        if (!token || !password) {
+            return res.status(400).json({ message: 'Token and new password are required.' });
+        }
+
+        if (!require('../utils/controllerHelpers').hasStrongPassword(password)) {
+            return res.status(400).json({ message: require('../utils/controllerHelpers').STRONG_PASSWORD_MESSAGE });
+        }
+
+        // Hash the incoming raw token and look it up
+        const hashedToken = require('crypto').createHash('sha256').update(token).digest('hex');
+
+        const user = await User.findOne({
+            passwordResetToken: hashedToken,
+            passwordResetExpiry: { $gt: new Date() }, // not expired
+        });
+
+        if (!user) {
+            return res.status(400).json({ message: 'Reset link is invalid or has expired. Please request a new one.' });
+        }
+
+        // Set new password (bcrypt hashing handled by pre-save hook)
+        user.password = password;
+        user.passwordResetToken = null;
+        user.passwordResetExpiry = null;
+        await user.save();
+
+        return res.json({ message: 'Password updated successfully. You can now log in.' });
+    } catch (err) {
+        console.error('resetPassword error:', err);
+        res.status(500).json({ message: 'Server error. Please try again.' });
+    }
+};
+
 // 2.5 GOOGLE LOGIN (OAuth)
+
 exports.googleLogin = async (req, res) => {
     try {
-        const { credential } = req.body;
+        const { credential, rememberMe } = req.body;
 
         if (!credential) {
             return res.status(400).json({ message: 'Google credential is required' });
@@ -329,10 +439,52 @@ exports.googleLogin = async (req, res) => {
         let user = await User.findOne({ $or: [{ googleId }, { email: normalizedEmail }] });
 
         if (!user) {
-            return res.status(404).json({
-                message: "You don't have an account with this Google email. Please contact the Super Admin to provision your account.",
-                isNewUser: true
+            // Auto-create a new manager account from Google profile
+            const googleName = googlePayload.name || normalizedEmail.split('@')[0];
+            const newUser = await User.create({
+                name: googleName,
+                email: normalizedEmail,
+                googleId,
+                authProvider: 'google',
+                role: 'manager',
+                isOnboarded: true,
+                is_active: true,
+                approved_by_admin: true,
+                status: 'approved'
             });
+
+            // Provision trial workspace + integrations
+            try {
+                await Promise.all([
+                    WorkspaceSettings.create({
+                        userId: newUser._id,
+                        agentLimit: DEFAULT_AGENT_LIMIT,
+                        activeModules: DEFAULT_ACTIVE_MODULES,
+                        subscriptionPlan: 'Free Trial',
+                        subscriptionStatus: 'trial',
+                        billingType: 'trial',
+                        planExpiryDate: new Date(Date.now() + TRIAL_DURATION_MS)
+                    }),
+                    IntegrationConfig.create({ userId: newUser._id })
+                ]);
+            } catch (provisionErr) {
+                await Promise.all([
+                    User.deleteOne({ _id: newUser._id }),
+                    WorkspaceSettings.deleteOne({ userId: newUser._id }),
+                    IntegrationConfig.deleteOne({ userId: newUser._id })
+                ]).catch(() => { });
+                throw provisionErr;
+            }
+
+            auditLogger.log({
+                actor: newUser,
+                actionCategory: 'SECURITY',
+                action: 'CLIENT_REGISTERED',
+                details: { email: normalizedEmail, provider: 'google' },
+                req
+            });
+
+            user = newUser;
         }
 
         let shouldSaveUser = false;
@@ -357,7 +509,7 @@ exports.googleLogin = async (req, res) => {
             return res.status(500).json({ error: 'Server configuration error' });
         }
 
-        const token = signAuthToken(user, true);
+        const token = signAuthToken(user, !!rememberMe);
 
         res.json({
             token,
@@ -542,14 +694,14 @@ exports.getMyTeam = async (req, res) => {
     try {
         const managerId = getRequestUserId(req.user);
         const agents = await User.find({ parentId: managerId, role: 'agent' }).select('-password');
-        
+
         if (req.query.includeManager === 'true') {
             const manager = await User.findById(managerId).select('-password');
             if (manager) {
                 agents.unshift(manager);
             }
         }
-        
+
         res.json(agents);
     } catch (err) {
         console.error(err);

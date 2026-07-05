@@ -88,9 +88,28 @@ export const AuthProvider = ({ children }) => {
         setUser(updatedUser);
     };
 
-    const googleLogin = async (credential, allowNewUser = true) => {
+    const forgotPassword = async (email) => {
         try {
-            const res = await api.post('/auth/google', { credential, allowNewUser });
+            const res = await api.post('/auth/forgot-password', { email });
+            return { success: true, message: res.data.message };
+        } catch (error) {
+            return { success: false, message: error.response?.data?.message || 'Something went wrong.' };
+        }
+    };
+
+    const resetPassword = async (token, password) => {
+        try {
+            const res = await api.post('/auth/reset-password', { token, password });
+            return { success: true, message: res.data.message };
+        } catch (error) {
+            return { success: false, message: error.response?.data?.message || 'Something went wrong.' };
+        }
+    };
+
+    const googleLogin = async (credential, allowNewUser = true, rememberMe = false) => {
+
+        try {
+            const res = await api.post('/auth/google', { credential, allowNewUser, rememberMe });
             const { token, role, user } = res.data;
 
             const userWithRole = { ...user, role: user.role || role };
@@ -109,7 +128,7 @@ export const AuthProvider = ({ children }) => {
     };
 
     return (
-        <AuthContext.Provider value={{ user, login, logout, loginWithToken, updateUser, googleLogin, loading }}>
+        <AuthContext.Provider value={{ user, login, logout, loginWithToken, updateUser, googleLogin, forgotPassword, resetPassword, loading }}>
             {!loading && children}
         </AuthContext.Provider>
     );

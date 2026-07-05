@@ -18,6 +18,9 @@ import ErrorBoundary from './components/ErrorBoundary';
 // Direct import for Login (critical path)
 import Login from './pages/Login';
 const Register = lazy(() => import('./pages/Register'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
+
 
 // Lazy loaded pages
 const AgencyDashboard = lazy(() => import('./pages/Agency/AgencyDashboard'));
@@ -63,6 +66,9 @@ function App() {
                       <Routes>
                         <Route path="/login" element={<Login />} />
                         <Route path="/register" element={<Register />} />
+                        <Route path="/forgot-password" element={<ForgotPassword />} />
+                        <Route path="/reset-password"  element={<ResetPassword />} />
+
                         <Route path="/book/:slug" element={<BookingPage />} />
                         <Route path="/terms" element={<TermsAndConditions />} />
                         <Route path="/privacy" element={<PrivacyPolicy />} />
