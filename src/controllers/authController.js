@@ -321,8 +321,9 @@ exports.forgotPassword = async (req, res) => {
         user.passwordResetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
         await user.save({ validateBeforeSave: false });
 
-        // Build reset URL using frontend origin
-        const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:5173';
+        // Build reset URL using frontend origin (strip trailing slashes to prevent // in the URL)
+        const rawFrontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:5173';
+        const frontendUrl = rawFrontendUrl.replace(/\/+$/, '');
         const resetUrl = `${frontendUrl}/reset-password?token=${rawToken}`;
 
         // Use Super Admin's configured SMTP credentials (Option B)
