@@ -79,7 +79,7 @@ const enqueueNode = async (executionId, nodeId, delayMs = 0, nodeType = undefine
         {
             delay:    delayMs,
             priority,          // ARCH #2: fast nodes (priority 1) run before slow nodes (priority 10)
-            jobId:    `exec:${executionId}:node:${nodeId}:${Date.now()}`
+            jobId:    `exec_${executionId}_node_${nodeId}_${Date.now()}`
         }
     );
     return job;
@@ -96,7 +96,7 @@ const enqueueTimeout = async (executionId, nodeId, signalId, delayMs) => {
         { executionId, nodeId, signalId },
         {
             delay: Math.max(1000, delayMs), // Minimum 1 second
-            jobId: `timeout:${executionId}:node:${nodeId}:${signalId}`
+            jobId: `timeout_${executionId}_node_${nodeId}_${signalId}`
         }
     );
     return job;
