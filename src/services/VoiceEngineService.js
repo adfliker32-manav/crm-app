@@ -15,9 +15,10 @@ class VoiceEngineService {
         try {
             const config = await IntegrationConfig.findOne({ userId: tenantId }).select('+voiceAutomation.apiKey');
             if (!config || !config.voiceAutomation || !config.voiceAutomation.apiKey) {
-                console.warn(`[VoiceEngine] No Vapi API key configured for tenant ${tenantId}`);
+                console.warn(`[VoiceEngine] No Voice API key configured for tenant ${tenantId}`);
                 return false;
             }
+            const provider = config.voiceAutomation.provider || 'vapi';
 
             const lead = await Lead.findById(leadId);
             if (!lead || !lead.phone) {
@@ -52,15 +53,20 @@ class VoiceEngineService {
                 }
             }
 
-            // Dispatch to Vapi
-            const callResponse = await this._dispatchToVapi(lead.phone, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId);
+            // Dispatch to Vapi or Retell
+            let callResponse;
+            if (provider === 'retell') {
+                callResponse = await this._dispatchToRetell(lead.phone, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId);
+            } else {
+                callResponse = await this._dispatchToVapi(lead.phone, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId);
+            }
             
             // Log the call in our DB
             await VoiceCallLog.create({
                 userId: tenantId,
                 leadId: lead._id,
                 automationRuleId: ruleId,
-                externalCallId: callResponse.id,
+                externalCallId: callResponse.id || callResponse.call_id,
                 status: 'queued',
                 executionMode: finalExecutionMode,
                 generatedPrompt: finalPrompt,
@@ -181,6 +187,31 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
     }
 
     /**
+     * Makes the HTTP request to Retell AI
+     */
+    async _dispatchToRetell(phone, systemPrompt, retellApiKey, retellAgentId) {
+        const url = 'https://api.retellai.com/v2/create-phone-call';
+        const payload = {
+            from_number: process.env.TWILIO_PHONE_NUMBER, // Usually platform out-bound number configured in Retell
+            to_number: phone,
+            override_agent_id: retellAgentId,
+            retell_llm_dynamic_variables: {
+                system_prompt: systemPrompt,
+                custom_prompt: systemPrompt
+            }
+        };
+
+        const response = await axios.post(url, payload, {
+            headers: {
+                'Authorization': `Bearer ${retellApiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        return response.data;
+    }
+
+    /**
      * Handles the webhook sent from Vapi when a call ends
      */
     async handleVapiWebhook(webhookData) {
@@ -207,6 +238,50 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
             if (webhookData.message.analysis?.structuredData?.outcome) {
                 callLog.outcome = webhookData.message.analysis.structuredData.outcome;
             } else if (call.status === 'no-answer' || call.status === 'busy' || call.status === 'failed') {
+                callLog.outcome = 'No Answer / Failed';
+            }
+
+            await callLog.save();
+
+            // Trigger Automation Continuation
+            if (callLog.outcome && callLog.automationRuleId) {
+                const AutomationService = require('./AutomationService');
+                await AutomationService.continueWorkflowAfterVoice(callLog);
+            }
+        }
+    }
+
+    /**
+     * Handles the webhook sent from Retell when a call ends or is analyzed
+     */
+    async handleRetellWebhook(webhookData) {
+        // Retell sends events like 'call_analyzed'
+        if (webhookData.event === 'call_analyzed') {
+            const call = webhookData.call;
+            const externalCallId = call.call_id;
+            
+            const callLog = await VoiceCallLog.findOne({ externalCallId });
+            if (!callLog) {
+                console.warn(`[VoiceEngine] Webhook received for unknown Retell call ${externalCallId}`);
+                return;
+            }
+
+            callLog.status = call.call_status === 'ended' || call.call_status === 'completed' ? 'completed' : 'failed';
+            
+            // Retell duration timestamps are unix ms
+            callLog.durationSeconds = call.end_timestamp && call.start_timestamp ? 
+                Math.round((call.end_timestamp - call.start_timestamp) / 1000) : 0;
+            
+            callLog.recordingUrl = call.recording_url || null;
+            callLog.transcript = call.transcript || null;
+            callLog.summary = call.call_analysis?.call_summary || null;
+            
+            // Extract structured outcome if present
+            if (call.call_analysis?.custom_analysis_data?.outcome) {
+                callLog.outcome = call.call_analysis.custom_analysis_data.outcome;
+            } else if (call.disconnection_reason && call.disconnection_reason !== 'user_hangup') {
+                callLog.outcome = `Disconnection: ${call.disconnection_reason}`;
+            } else if (call.call_status === 'no_answer' || call.call_status === 'failed') {
                 callLog.outcome = 'No Answer / Failed';
             }
 
