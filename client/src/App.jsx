@@ -49,6 +49,8 @@ const PaymentRequired = lazy(() => import('./pages/PaymentRequired'));
 const Plans = lazy(() => import('./pages/Plans'));
 const Billing = lazy(() => import('./pages/Billing'));
 const VoiceHub = lazy(() => import('./pages/VoiceHub'));
+const Workflows = lazy(() => import('./pages/Workflows'));
+const WorkflowBuilder = lazy(() => import('./pages/WorkflowBuilder'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -67,7 +69,7 @@ function App() {
                         <Route path="/login" element={<Login />} />
                         <Route path="/register" element={<Register />} />
                         <Route path="/forgot-password" element={<ForgotPassword />} />
-                        <Route path="/reset-password"  element={<ResetPassword />} />
+                        <Route path="/reset-password" element={<ResetPassword />} />
 
                         <Route path="/book/:slug" element={<BookingPage />} />
                         <Route path="/terms" element={<TermsAndConditions />} />
@@ -78,6 +80,8 @@ function App() {
 
                         <Route element={<ProtectedRoute />}>
                           <Route path="/super-admin" element={<SuperAdmin />} />
+                          {/* Workflow Builder — fullscreen, no sidebar layout */}
+                          <Route path="/workflows/:id/builder" element={<WorkflowBuilder />} />
 
                           {/* Agency Reseller Layout Routes */}
                           <Route path="/agency" element={<AgencyLayout />}>
@@ -97,6 +101,7 @@ function App() {
                             <Route path="/whatsapp" element={<WhatsAppManagement />} />
                             <Route path="/team" element={<Team />} />
                             <Route path="/automations" element={<Automations />} />
+                            <Route path="/workflows" element={<Workflows />} />
                             <Route path="/sequences" element={<Sequences />} />
                             <Route path="/appointments" element={<Appointments />} />
                             <Route path="/settings" element={<Settings />} />

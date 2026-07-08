@@ -48,6 +48,7 @@ const { router: invoicePublicRoute } = require('./src/routes/invoicePublicRoute'
 const aiProxyRoutes = require('./src/routes/aiProxyRoutes');
 const extApiRoutes    = require('./src/routes/extApiRoutes');    // Third-party CRM Integration API
 const extApiKeyRoutes = require('./src/routes/extApiKeyRoutes'); // Key management for External API
+const workflowRoutes  = require('./src/routes/workflowRoutes');  // Workflow Engine (n8n-style)
 
 
 const app = express();
@@ -342,6 +343,23 @@ mongoose.connect(MONGO_URI, {
       setAgenda(agenda); // Register for graceful shutdown
       console.log('✅ Agenda Job Queue Started (Automations, WhatsApp, Email)');
 
+    // ── Workflow Engine: Node Registration + BullMQ Worker ────────────────
+    try {
+      // Register all node types into the NodeRegistry (must happen before engine runs)
+      require('./src/workflow-engine/registerAllNodes');
+
+      if (!process.env.REDIS_URL) {
+        console.warn('⚠️  REDIS_URL not set — Workflow Engine worker will not start. Workflows will not execute.');
+      } else {
+        const { startWorkflowWorker, initializeScheduledTriggers } = require('./src/workflow-engine/WorkflowQueue');
+        startWorkflowWorker();
+        initializeScheduledTriggers();
+        console.log('✅ Workflow Engine Worker started');
+      }
+    } catch (err) {
+      console.error('⚠️  Failed to start Workflow Engine:', err.message);
+    }
+
       // Purge stale jobs older than 7 days to prevent DB bloat
       try {
         const jobsCollection = mongoose.connection.db.collection('agendaJobs');
@@ -462,6 +480,7 @@ app.use('/api/tasks', authMiddleware, taskRoutes);
 // not a separate module). Mirrors the email/whatsapp/chatbot gates so a Basic-tier
 // user can't reach these APIs directly even if the nav is hidden.
 app.use('/api/automations', authMiddleware, requireModule('automations'), automationRoutes);
+app.use('/api/workflows',   authMiddleware, workflowRoutes); // New Workflow Engine
 app.use('/api/sequences', authMiddleware, requireModule('automations'), sequenceRoutes);
 app.use('/api/appointments', authMiddleware, appointmentRoutes);
 
@@ -541,8 +560,15 @@ if (process.env.REDIS_URL && process.env.BULL_BOARD_SECRET) {
     const serverAdapter = new ExpressAdapter();
     serverAdapter.setBasePath('/admin/queues');
 
+    // Also add the Workflow Engine queue to Bull Board
+    let workflowQueueAdapter = null;
+    try {
+      const { getWorkflowQueue } = require('./src/workflow-engine/WorkflowQueue');
+      workflowQueueAdapter = new BullMQAdapter(getWorkflowQueue());
+    } catch (e) { /* Workflow queue not started */ }
+
     createBullBoard({
-      queues: [new BullMQAdapter(getBroadcastQueue())],
+      queues: [new BullMQAdapter(getBroadcastQueue()), ...(workflowQueueAdapter ? [workflowQueueAdapter] : [])],
       serverAdapter
     });
 

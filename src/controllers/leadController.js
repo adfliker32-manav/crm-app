@@ -13,6 +13,7 @@ const { sendEmail } = require('../services/emailService');
 const { logActivity } = require('../services/auditService');
 const { findDuplicates, findAllDuplicateGroups, normalizePhone } = require('../services/duplicateService');
 const { evaluateLead } = require('../services/AutomationService');
+const WorkflowEngine    = require('../workflow-engine/WorkflowEngine'); // New Workflow Engine
 const { logUsage } = require('../services/usageLogger');
 const {
     getRequestUserId,
@@ -129,6 +130,10 @@ const queueLeadCreatedEffects = (lead, ownerId) => {
     runInBackground('Automation Service Error (LEAD_CREATED):', () =>
         evaluateLead(lead, 'LEAD_CREATED')
     );
+    // New Workflow Engine — runs in parallel, non-blocking
+    runInBackground('Workflow Engine Error (LEAD_CREATED):', () =>
+        WorkflowEngine.fireTrigger('LEAD_CREATED', { lead })
+    );
 
     runInBackground('Sequence enrollment error (LEAD_CREATED):', () => {
         const { enrollLeadInSequences } = require('../services/sequenceService');
@@ -142,6 +147,10 @@ const queueLeadCreatedEffects = (lead, ownerId) => {
 
 const queueLeadStageChangeEffects = (lead) => {
     runInBackground('Auto Error (STAGE_CHANGED):', () => evaluateLead(lead, 'STAGE_CHANGED'));
+    // New Workflow Engine — runs in parallel, non-blocking
+    runInBackground('Workflow Engine Error (STAGE_CHANGED):', () =>
+        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead })
+    );
     // NOTE: TIME_IN_STAGE removed - it is time-based, not event-based. Needs a cron/Agenda job.
 
     runInBackground('Sequence enrollment error (STAGE_CHANGED):', () => {

@@ -133,6 +133,76 @@ const blockUnapprovedLogin = (user, res) => {
 const findManagedAgent = (managerId, agentId) =>
     User.findOne({ _id: agentId, parentId: managerId, role: 'agent' });
 
+const sendWelcomeEmail = async (user) => {
+    try {
+        const { sendEmail } = require('../services/emailService');
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const User = require('../models/User');
+
+        const superAdmins = await User.find({ role: 'superadmin' }).select('_id').lean();
+        const superAdminIds = superAdmins.map(sa => sa._id);
+        
+        const configuredSaConfig = await IntegrationConfig.findOne({
+            userId: { $in: superAdminIds },
+            'email.emailUser': { $ne: null, $exists: true }
+        }).select('userId').lean();
+        
+        const superAdminId = configuredSaConfig ? configuredSaConfig.userId.toString() : superAdminIds[0]?.toString();
+        
+        const appName = process.env.APP_NAME || 'Adfliker';
+        const rawFrontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:5173';
+        const frontendUrl = rawFrontendUrl.replace(/\/+$/, '');
+
+        const demoVideoLink = "https://www.youtube.com/watch?v=YOUR_VIDEO_ID_HERE"; // TODO: Update with actual YouTube link
+
+        const htmlBody = `
+            <div style="background-color: #f9fafb; padding: 40px 20px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+                    <div style="background-color: #0f172a; padding: 30px; text-align: center; border-bottom: 4px solid #10b981;">
+                        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: bold;">Welcome to ${appName}! 🚀</h1>
+                    </div>
+                    <div style="padding: 40px 32px;">
+                        <h2 style="margin: 0 0 16px; font-size: 22px; font-weight: 700; color: #111827;">Hello ${user.name || 'there'},</h2>
+                        <p style="color: #4b5563; margin: 0 0 20px; font-size: 16px; line-height: 1.6;">
+                            We are absolutely thrilled to have you on board! You've just unlocked the true power of <strong>${appName}</strong>.
+                            Get ready to streamline your operations, engage with your customers seamlessly, and grow your business like never before.
+                        </p>
+                        
+                        <div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin-bottom: 24px; border-radius: 0 8px 8px 0;">
+                            <h3 style="margin: 0 0 8px; color: #065f46; font-size: 18px;">Getting Started is Easy</h3>
+                            <p style="color: #064e3b; margin: 0 0 12px; font-size: 15px; line-height: 1.5;">
+                                We've put together a quick demo and setup guide to help you configure everything perfectly.
+                            </p>
+                            <a href="${demoVideoLink}" target="_blank" style="display: inline-block; padding: 10px 20px; background-color: #10b981; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px;">Watch Demo & Setup Video</a>
+                        </div>
+                        
+                        <p style="color: #4b5563; margin: 0 0 24px; font-size: 16px; line-height: 1.6;">
+                            <strong>Need guidance or have questions?</strong><br>
+                            For more info and dedicated support, connect with the ${appName} Support Team anytime. We are always here to help you succeed!
+                        </p>
+                        
+                        <a href="${frontendUrl}" style="display: block; width: 100%; text-align: center; padding: 14px 0; background-color: #111827; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);">Log In to Your Dashboard</a>
+                        
+                        <hr style="border: none; border-top: 1px solid #f3f4f6; margin: 32px 0 24px;">
+                        <p style="color: #9ca3af; font-size: 13px; margin: 0; text-align: center;">© ${new Date().getFullYear()} ${appName}. All rights reserved.</p>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        await sendEmail({
+            to: user.email,
+            subject: \`Welcome to \${appName}! 🚀\`,
+            html: htmlBody,
+            text: \`Welcome to \${appName}!\n\nWe are thrilled to have you on board. Check out our setup video here: \${demoVideoLink}\n\nFor more info connect with \${appName} support.\n\nLog in here: \${frontendUrl}\`,
+            userId: superAdminId || null,
+            transactional: true,
+        });
+    } catch (err) {
+        console.error('Failed to send welcome email:', err.message);
+    }
+};
+
 // 1.5. GET ME — returns fresh user + workspace data (used to refresh cached permissions)
 exports.getMe = async (req, res) => {
     try {
@@ -223,6 +293,9 @@ exports.register = async (req, res) => {
             details: { email: normalizedEmail, companyName },
             req
         });
+
+        // Send welcome email asynchronously
+        sendWelcomeEmail(newUser);
 
         res.status(201).json({
             success: true,
@@ -503,6 +576,9 @@ exports.googleLogin = async (req, res) => {
                 details: { email: normalizedEmail, provider: 'google' },
                 req
             });
+
+            // Send welcome email asynchronously
+            sendWelcomeEmail(newUser);
 
             user = newUser;
         }

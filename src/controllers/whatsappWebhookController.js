@@ -524,11 +524,24 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // Previously these ran in separate setImmediate blocks causing a race condition.
         setImmediate(async () => {
             try {
-                // Step 1: Check if this inbound message resolves a pending WAIT_FOR_REPLY watcher
+                // Step 1: Check if this inbound message resolves a pending WAIT_FOR_REPLY watcher (legacy engine)
                 const { handleWatcherReply } = require('../services/AutomationService');
                 await handleWatcherReply(conversation._id);
             } catch (err) {
                 console.error('❌ handleWatcherReply error:', err);
+            }
+
+            try {
+                // Step 1b: Resolve any pending Workflow Engine WHATSAPP_REPLY wait signal (new engine)
+                const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                await WorkflowEngine.resolveWaitSignal({
+                    signalType:   'WHATSAPP_REPLY',
+                    channelId:    conversation._id,
+                    payload:      { message: inboundMessage?.body || '' },
+                    resolvedPort: 'replied'
+                });
+            } catch (err) {
+                console.error('❌ WorkflowEngine resolveWaitSignal error:', err);
             }
 
             try {

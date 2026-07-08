@@ -191,6 +191,10 @@ const Sidebar = () => {
                     <NavItem collapsed={collapsed} to="/automations" icon="fa-solid fa-robot" label="Automations" />
                 )}
 
+                {canManageTeam && hasModule('automations') && (
+                    <NavItem collapsed={collapsed} to="/workflows" icon="fa-solid fa-bolt" label="Workflows" />
+                )}
+
                 {canManageTeam && hasVoiceModule() && (
                     <NavItem collapsed={collapsed} to="/voice-hub" icon="fa-solid fa-headset" label="AI Voice Hub" />
                 )}

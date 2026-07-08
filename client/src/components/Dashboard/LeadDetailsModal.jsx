@@ -13,6 +13,11 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
     // Lazy loaded full lead details
     const [fullLead, setFullLead] = useState(null);
     const [fullLeadLoading, setFullLeadLoading] = useState(false);
+    
+    // Workflows
+    const [manualWorkflows, setManualWorkflows] = useState([]);
+    const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
+    const [workflowTriggering, setWorkflowTriggering] = useState(false);
 
     const [tasks, setTasks] = useState([]);
     const [taskTitle, setTaskTitle] = useState('');
@@ -37,6 +42,7 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
             fetchTasks();
             fetchVoiceCalls();
             fetchFullLead();
+            fetchManualWorkflows();
         }
     }, [isOpen, lead]);
 
@@ -49,6 +55,16 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
             console.error('Failed to fetch full lead details:', error);
         } finally {
             setFullLeadLoading(false);
+        }
+    };
+
+    const fetchManualWorkflows = async () => {
+        try {
+            const res = await api.get('/workflows');
+            const manual = (res.data.workflows || []).filter(w => w.trigger === 'MANUAL_TRIGGER' && w.status === 'published');
+            setManualWorkflows(manual);
+        } catch (err) {
+            console.error('Failed to fetch manual workflows:', err);
         }
     };
 
@@ -191,6 +207,20 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
         return dataSource[key] || '-';
     };
 
+    const handleRunWorkflow = async (workflowId) => {
+        setWorkflowTriggering(true);
+        setShowWorkflowMenu(false);
+        try {
+            await api.post(`/workflows/${workflowId}/manual-trigger`, { leadId: lead._id });
+            showSuccess('Workflow triggered successfully');
+        } catch (err) {
+            console.error('Failed to run workflow:', err);
+            showError(err.response?.data?.message || 'Failed to trigger workflow');
+        } finally {
+            setWorkflowTriggering(false);
+        }
+    };
+
     return (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 animate-fade-in-up backdrop-blur-sm">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -247,9 +277,42 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                             )}
                         </div>
                     </div>
-                    <button onClick={onClose} className="text-white hover:text-red-400 text-2xl transition">
-                        &times;
-                    </button>
+                    <div className="flex items-center gap-4 relative">
+                        {manualWorkflows.length > 0 && (
+                            <div className="relative">
+                                <button 
+                                    onClick={() => setShowWorkflowMenu(!showWorkflowMenu)}
+                                    disabled={workflowTriggering}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-md transition flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    {workflowTriggering ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-play"></i>}
+                                    Run Workflow
+                                </button>
+                                
+                                {showWorkflowMenu && (
+                                    <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden z-50">
+                                        <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                            Select Workflow
+                                        </div>
+                                        <div className="max-h-60 overflow-y-auto">
+                                            {manualWorkflows.map(wf => (
+                                                <button 
+                                                    key={wf._id}
+                                                    onClick={() => handleRunWorkflow(wf._id)}
+                                                    className="w-full text-left px-4 py-3 text-sm font-medium text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 border-b border-slate-100 last:border-0 transition"
+                                                >
+                                                    {wf.name}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        <button onClick={onClose} className="text-white hover:text-red-400 text-2xl transition">
+                            &times;
+                        </button>
+                    </div>
                 </div>
 
                 <div className="p-6 bg-slate-50 flex-1 overflow-y-auto space-y-6">
