@@ -2300,7 +2300,7 @@ const getGlobalVoiceTemplates = async (req, res) => {
 
 const createGlobalVoiceTemplate = async (req, res) => {
     try {
-        const tenantId = req.user.id; // Super admin's ID
+        const tenantId = req.user.userId || req.user.id; // Super admin's ID
         const templateData = { 
             ...req.body, 
             tenantId,
