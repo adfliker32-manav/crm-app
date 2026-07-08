@@ -30,7 +30,13 @@ exports.getSettings = async (req, res) => {
             aiFallbackEnabled: config.ai?.aiFallbackEnabled || false,
             aiSupportEnabled: config.ai?.aiSupportEnabled || false,
             maxTurns: config.ai?.maxTurns || 5,
-            tokensUsedThisMonth: config.ai?.tokensUsedThisMonth || 0
+            tokensUsedThisMonth: config.ai?.tokensUsedThisMonth || 0,
+            voiceAutomation: {
+                provider:       config.voiceAutomation?.provider || 'vapi',
+                defaultAgentId: config.voiceAutomation?.defaultAgentId || '',
+                fromNumber:     config.voiceAutomation?.fromNumber || '',
+                apiKey:         '' // never expose the raw key; frontend only needs to know if it's set
+            }
         };
         
         return res.status(200).json(settings);
@@ -71,6 +77,18 @@ exports.updateSettings = async (req, res) => {
         if (aiFallbackEnabled !== undefined) config.ai.aiFallbackEnabled = aiFallbackEnabled;
         if (aiSupportEnabled !== undefined) config.ai.aiSupportEnabled = aiSupportEnabled;
         if (maxTurns !== undefined) config.ai.maxTurns = maxTurns;
+
+        // Voice Automation settings from the same page
+        const voicePayload = req.body.voiceAutomation;
+        if (voicePayload) {
+            if (voicePayload.provider)       config.voiceAutomation.provider       = voicePayload.provider;
+            if (voicePayload.defaultAgentId !== undefined) config.voiceAutomation.defaultAgentId = voicePayload.defaultAgentId || null;
+            if (voicePayload.fromNumber !== undefined)     config.voiceAutomation.fromNumber     = voicePayload.fromNumber || null;
+            // Only update API key if a real value was sent (not empty/masked)
+            if (voicePayload.apiKey && !voicePayload.apiKey.startsWith('•')) {
+                config.voiceAutomation.apiKey = voicePayload.apiKey;
+            }
+        }
 
         await config.save();
 

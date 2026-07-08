@@ -30,7 +30,8 @@ exports.getVoiceConfig = async (req, res) => {
                 // Mask key — show last 6 chars only
                 apiKeyMasked: apiKey ? `••••••••${apiKey.slice(-6)}` : null,
                 hasApiKey: !!apiKey,
-                defaultAgentId: voiceAutomation.defaultAgentId || ''
+                defaultAgentId: voiceAutomation.defaultAgentId || '',
+                fromNumber: voiceAutomation.fromNumber || ''
             }
         });
     } catch (error) {
@@ -42,11 +43,12 @@ exports.getVoiceConfig = async (req, res) => {
 // PUT /api/voice-calls/config — save voice integration settings
 exports.saveVoiceConfig = async (req, res) => {
     try {
-        const { provider, apiKey, defaultAgentId } = req.body;
+        const { provider, apiKey, defaultAgentId, fromNumber } = req.body;
 
         const updateFields = {
             'voiceAutomation.provider': provider || 'vapi',
-            'voiceAutomation.defaultAgentId': defaultAgentId || null
+            'voiceAutomation.defaultAgentId': defaultAgentId || null,
+            'voiceAutomation.fromNumber': fromNumber || null
         };
 
         // Only update the key if the user actually sent a new one (not a masked placeholder)
