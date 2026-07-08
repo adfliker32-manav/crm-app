@@ -55,10 +55,15 @@ class VoiceEngineService {
 
             // Dispatch to Vapi or Retell
             let callResponse;
+            const fromNumber = config.voiceAutomation.fromNumber || process.env.TWILIO_PHONE_NUMBER || null;
+            if (!fromNumber) {
+                console.warn(`[VoiceEngine] No outbound phone number configured for tenant ${tenantId}. Set 'From Number' in Settings → Voice Automation.`);
+                return false;
+            }
             if (provider === 'retell') {
-                callResponse = await this._dispatchToRetell(lead.phone, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId);
+                callResponse = await this._dispatchToRetell(lead.phone, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId, fromNumber);
             } else {
-                callResponse = await this._dispatchToVapi(lead.phone, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId);
+                callResponse = await this._dispatchToVapi(lead.phone, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId, fromNumber);
             }
             
             // Log the call in our DB
@@ -144,11 +149,11 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
     /**
      * Makes the HTTP request to Vapi.ai
      */
-    async _dispatchToVapi(phone, systemPrompt, vapiApiKey, vapiAgentId) {
+    async _dispatchToVapi(phone, systemPrompt, vapiApiKey, vapiAgentId, fromNumber) {
         const url = 'https://api.vapi.ai/call/phone';
         const payload = {
             phoneNumber: {
-                twilioPhoneNumber: process.env.TWILIO_PHONE_NUMBER, // Platform out-bound number
+                twilioPhoneNumber: fromNumber, // Outbound number from config
             },
             customer: {
                 number: phone,
@@ -189,11 +194,11 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
     /**
      * Makes the HTTP request to Retell AI
      */
-    async _dispatchToRetell(phone, systemPrompt, retellApiKey, retellAgentId) {
+    async _dispatchToRetell(phone, systemPrompt, retellApiKey, retellAgentId, fromNumber) {
         const url = 'https://api.retellai.com/v2/create-phone-call';
         const payload = {
-            from_number: process.env.TWILIO_PHONE_NUMBER, // Usually platform out-bound number configured in Retell
-            to_number: phone,
+            from_number: fromNumber,  // Retell phone number from integration config
+            to_number:   phone,
             override_agent_id: retellAgentId,
             retell_llm_dynamic_variables: {
                 system_prompt: systemPrompt,

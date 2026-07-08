@@ -178,9 +178,10 @@ const integrationConfigSchema = new mongoose.Schema({
 
     // 📞 AI Voice Automation Configuration
     voiceAutomation: {
-        provider: { type: String, enum: ['vapi', 'retell'], default: 'vapi' },
-        apiKey: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
-        defaultAgentId: { type: String, default: null }
+        provider:       { type: String, enum: ['vapi', 'retell'], default: 'vapi' },
+        apiKey:         { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
+        defaultAgentId: { type: String, default: null },
+        fromNumber:     { type: String, default: null }  // Outbound phone number (Retell or Twilio)
     },
 
     createdAt: {
