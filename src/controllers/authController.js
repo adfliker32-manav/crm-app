@@ -192,9 +192,9 @@ const sendWelcomeEmail = async (user) => {
 
         await sendEmail({
             to: user.email,
-            subject: \`Welcome to \${appName}! 🚀\`,
+            subject: `Welcome to ${appName}! 🚀`,
             html: htmlBody,
-            text: \`Welcome to \${appName}!\n\nWe are thrilled to have you on board. Check out our setup video here: \${demoVideoLink}\n\nFor more info connect with \${appName} support.\n\nLog in here: \${frontendUrl}\`,
+            text: `Welcome to ${appName}!\n\nWe are thrilled to have you on board. Check out our setup video here: ${demoVideoLink}\n\nFor more info connect with ${appName} support.\n\nLog in here: ${frontendUrl}`,
             userId: superAdminId || null,
             transactional: true,
         });
