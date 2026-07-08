@@ -57,13 +57,26 @@ class VoiceEngineService {
             let callResponse;
             const fromNumber = config.voiceAutomation.fromNumber || process.env.TWILIO_PHONE_NUMBER || null;
             if (!fromNumber) {
-                console.warn(`[VoiceEngine] No outbound phone number configured for tenant ${tenantId}. Set 'From Number' in Settings → Voice Automation.`);
+                console.warn(`[VoiceEngine] No outbound phone number configured for tenant ${tenantId}. Set 'From Number' in AI Voice Hub → Integration.`);
                 return false;
             }
+
+            // Normalise to E.164 format — Retell & Vapi both require numbers starting with +
+            const toE164 = (num) => {
+                if (!num) return num;
+                const digits = String(num).trim().replace(/\s+/g, '');
+                return digits.startsWith('+') ? digits : `+${digits}`;
+            };
+
+            const normalizedFrom = toE164(fromNumber);
+            const normalizedTo   = toE164(lead.phone);
+
+            console.log(`[VoiceEngine] Dispatching call: from=${normalizedFrom} → to=${normalizedTo} via ${provider}`);
+
             if (provider === 'retell') {
-                callResponse = await this._dispatchToRetell(lead.phone, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId, fromNumber);
+                callResponse = await this._dispatchToRetell(normalizedTo, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId, normalizedFrom);
             } else {
-                callResponse = await this._dispatchToVapi(lead.phone, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId, fromNumber);
+                callResponse = await this._dispatchToVapi(normalizedTo, finalPrompt, config.voiceAutomation.apiKey, agentId || config.voiceAutomation.defaultAgentId, normalizedFrom);
             }
             
             // Log the call in our DB
