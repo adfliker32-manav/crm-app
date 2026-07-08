@@ -26,7 +26,6 @@ const AISettings = () => {
     const [voiceProvider, setVoiceProvider] = useState('vapi');
     const [voiceApiKey, setVoiceApiKey] = useState('');
     const [voiceAgentId, setVoiceAgentId] = useState('');
-    const [voiceFromNumber, setVoiceFromNumber] = useState('');
 
     // Tenants use the global superadmin API key now
     const hasApiKey = true;
@@ -74,7 +73,6 @@ const AISettings = () => {
                     setVoiceProvider(data.voiceAutomation.provider || 'vapi');
                     setVoiceApiKey(data.voiceAutomation.apiKey || '');
                     setVoiceAgentId(data.voiceAutomation.defaultAgentId || '');
-                    setVoiceFromNumber(data.voiceAutomation.fromNumber || '');
                 }
             } catch (error) {
                 console.error('Failed to load AI settings:', error);
@@ -128,8 +126,7 @@ const AISettings = () => {
                 voiceAutomation: {
                     provider: voiceProvider,
                     apiKey: voiceApiKey,
-                    defaultAgentId: voiceAgentId,
-                    fromNumber: voiceFromNumber
+                    defaultAgentId: voiceAgentId
                 }
             };
             
@@ -498,22 +495,6 @@ const AISettings = () => {
                                 className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm font-bold text-slate-800"
                             />
                             <p className="text-xs text-slate-400 mt-2 font-medium">This Agent ID is used if no specific ID is provided in the automation workflow.</p>
-                        </div>
-
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">From Number (Outbound Caller ID)</label>
-                            <input
-                                type="text"
-                                value={voiceFromNumber}
-                                onChange={(e) => setVoiceFromNumber(e.target.value)}
-                                placeholder="e.g. +14155551234"
-                                className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm font-bold text-slate-800"
-                            />
-                            <p className="text-xs text-slate-400 mt-2 font-medium">
-                                {voiceProvider === 'retell'
-                                    ? 'Your Retell AI phone number — get it from Retell Dashboard → Phone Numbers.'
-                                    : 'Your Twilio outbound number linked to Vapi — e.g. +14155551234.'}
-                            </p>
                         </div>
                     </div>
 

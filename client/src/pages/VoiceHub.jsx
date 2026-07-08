@@ -13,7 +13,8 @@ const VoiceHub = () => {
     const [config, setConfig] = useState({
         provider: 'vapi',
         apiKey: '',
-        defaultAgentId: ''
+        defaultAgentId: '',
+        fromNumber: ''
     });
     const [configLoading, setConfigLoading] = useState(false);
     const [configSaving, setConfigSaving] = useState(false);
@@ -62,7 +63,8 @@ const VoiceHub = () => {
                 setConfig({
                     provider: c.provider || 'vapi',
                     apiKey: c.hasApiKey ? c.apiKeyMasked : '',
-                    defaultAgentId: c.defaultAgentId || ''
+                    defaultAgentId: c.defaultAgentId || '',
+                    fromNumber: c.fromNumber || ''
                 });
                 setConnectionStatus(c.hasApiKey ? 'success' : null);
             }
@@ -83,7 +85,8 @@ const VoiceHub = () => {
             await api.put('/voice-calls/config', {
                 provider: config.provider,
                 apiKey: config.apiKey,
-                defaultAgentId: config.defaultAgentId
+                defaultAgentId: config.defaultAgentId,
+                fromNumber: config.fromNumber
             });
             showSuccess('Voice integration settings saved!');
             setHasExistingKey(true);
@@ -103,7 +106,8 @@ const VoiceHub = () => {
             await api.put('/voice-calls/config', {
                 provider: config.provider,
                 apiKey: config.apiKey,
-                defaultAgentId: config.defaultAgentId
+                defaultAgentId: config.defaultAgentId,
+                fromNumber: config.fromNumber
             });
             // If save succeeds, assume connection is valid
             setConnectionStatus('success');
@@ -399,6 +403,26 @@ const VoiceHub = () => {
                                     />
                                     <p className="text-[11px] text-slate-400 mt-1.5">
                                         The default agent/assistant that will handle calls unless overridden per automation.
+                                    </p>
+                                </div>
+
+                                {/* From Number */}
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                                        From Number
+                                        <span className="ml-1 text-red-400">*</span>
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={config.fromNumber}
+                                        onChange={e => setConfig(prev => ({ ...prev, fromNumber: e.target.value }))}
+                                        placeholder={config.provider === 'retell' ? '+14155551234 (Retell phone number)' : '+14155551234 (Twilio number)'}
+                                        className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-slate-50"
+                                    />
+                                    <p className="text-[11px] text-slate-400 mt-1.5">
+                                        {config.provider === 'retell'
+                                            ? <>Get it from <span className="font-semibold">Retell Dashboard → Phone Numbers</span>. This is the number your AI calls FROM.</>                                            
+                                            : <>Your Twilio outbound number linked to Vapi. Get it from <span className="font-semibold">Vapi Dashboard → Phone Numbers</span>.</>}
                                     </p>
                                 </div>
                             </div>
