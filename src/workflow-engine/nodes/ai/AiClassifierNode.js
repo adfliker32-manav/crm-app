@@ -1,11 +1,18 @@
 const NodeRegistry = require('../../NodeRegistry');
-const OpenAI = require('openai');
+// WEAK #1 FIX: Use singleton OpenAI client instead of creating a new instance per execution
+const { getGlobalOpenAIClient } = require('../../../utils/openaiClient');
+// RATE #2 FIX: Per-tenant AI request rate limiting
+const { checkAIRate } = require('../../../utils/workflowRateLimiter');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AiClassifierNode
 // Uses the AI service to classify the lead into one of the configured categories.
 // The classification result is stored in 'ai.classification' variable and
 // used to route to the appropriate output port.
+//
+// FIXES:
+//   WEAK #1 — Singleton OpenAI client via openaiClient.js (no more per-execution instantiation)
+//   RATE #2 — Per-tenant rate limit check before calling OpenAI API
 // ─────────────────────────────────────────────────────────────────────────────
 const AiClassifierNode = {
     type: 'ai_classifier',
@@ -42,37 +49,63 @@ const AiClassifierNode = {
                 required:    true,
                 placeholder: 'e.g. Hot Lead, Cold Lead, Not Interested',
                 description: 'Each category becomes an output port on the canvas'
+            },
+            {
+                key:         'model',
+                label:       'AI Model',
+                type:        'select',
+                defaultValue: 'gpt-3.5-turbo',
+                options: [
+                    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo (Fast, Low Cost)' },
+                    { value: 'gpt-4o-mini',   label: 'GPT-4o Mini (Better, Moderate Cost)' }
+                ]
             }
         ]
     }),
 
     validate: (data) => {
         const errors = [];
-        if (!data.prompt?.trim())           errors.push('Prompt is required');
-        if (!data.categories?.length)       errors.push('At least one category is required');
+        if (!data.prompt?.trim())     errors.push('Prompt is required');
+        if (!data.categories?.length) errors.push('At least one category is required');
         return { valid: errors.length === 0, errors };
     },
 
     execute: async (context, data) => {
-        const lead       = context.getLead();
         const categories = (data.categories || []).map(c => c.trim());
 
-        // Build context-aware prompt
+        // RATE #2 FIX: Check per-tenant AI rate limit before calling OpenAI.
+        // Prevents one high-volume tenant from consuming the entire TPM quota
+        // and causing AI classification failures for all other tenants.
+        const tenantId = context.tenantId.toString();
+        const rateCheck = await checkAIRate(tenantId);
+        if (!rateCheck.allowed) {
+            console.warn(`[AiClassifierNode] Tenant ${tenantId} exceeded AI rate limit (${rateCheck.count}/${rateCheck.limit}/min). Routing to default.`);
+            context.set('ai.classification', 'default');
+            context.set('ai.rateLimited', true);
+            return {
+                nextPort: 'default',
+                output: { 'ai.classification': 'default', 'ai.rateLimited': true }
+            };
+        }
+
+        // Build context-aware prompt with variable interpolation
         const vars = context.getAll();
         let prompt = (data.prompt || '').replace(/\{\{([^}]+)\}\}/g, (_, key) => vars[key.trim()] ?? '');
-
         prompt += `\n\nAvailable categories: ${categories.join(', ')}\nRespond with ONLY the category name, nothing else.`;
 
         let classification = 'default';
         try {
-            if (!process.env.OPENAI_API_KEY) {
-                console.warn('[AiClassifierNode] OPENAI_API_KEY not set. Skipping classification.');
+            // WEAK #1 FIX: Get the shared singleton client — no new instance per call
+            const openai = getGlobalOpenAIClient();
+            if (!openai) {
+                console.warn('[AiClassifierNode] OPENAI_API_KEY not set. Routing to default.');
             } else {
-                const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+                const model = data.model || 'gpt-3.5-turbo';
                 const completion = await openai.chat.completions.create({
-                    model:      'gpt-3.5-turbo',
+                    model,
                     max_tokens: 50,
-                    messages:   [{ role: 'user', content: prompt }]
+                    temperature: 0,  // Deterministic — we want exact category matching
+                    messages: [{ role: 'user', content: prompt }]
                 });
                 const rawText = completion.choices?.[0]?.message?.content?.trim() || '';
                 const matched = categories.find(c => rawText.toLowerCase().includes(c.toLowerCase()));
@@ -80,6 +113,7 @@ const AiClassifierNode = {
             }
         } catch (err) {
             console.error('[AiClassifierNode] AI call failed:', err.message);
+            // On API failure, route to default — don't crash the execution
         }
 
         context.set('ai.classification', classification);

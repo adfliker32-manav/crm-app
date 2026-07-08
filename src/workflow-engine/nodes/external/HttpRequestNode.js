@@ -1,5 +1,7 @@
 const NodeRegistry = require('../../NodeRegistry');
 const axios = require('axios');
+// WEAK #3 FIX: Import SSRF guard to block requests to private/internal addresses
+const { validateOutboundUrl } = require('../../../utils/ssrfGuard');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HttpRequestNode
@@ -95,6 +97,11 @@ const HttpRequestNode = {
         }
 
         try {
+            // WEAK #3 FIX: Validate the resolved URL against SSRF rules before making
+            // any network request. This blocks private IPs, localhost, cloud metadata
+            // endpoints (169.254.x.x), and non-HTTP protocols.
+            await validateOutboundUrl(url);
+
             const response = await axios({ method, url, headers, data: body, timeout });
             const responseData = typeof response.data === 'object' ? response.data : { raw: response.data };
 

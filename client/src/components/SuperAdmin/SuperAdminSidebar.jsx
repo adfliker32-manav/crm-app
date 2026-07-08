@@ -81,6 +81,7 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
                 { id: 'wa-inbox', icon: 'fa-brands fa-whatsapp', label: 'WhatsApp Inbox', color: 'text-green-400' },
                 { id: 'email-inbox', icon: 'fa-envelope', label: 'Email Inbox', color: 'text-blue-400' },
                 { id: 'comm-settings', icon: 'fa-satellite-dish', label: 'Communication Setup', color: 'text-violet-400' },
+                { id: 'voice-templates', icon: 'fa-microphone-lines', label: 'AI Voice Templates', color: 'text-indigo-400' },
             ]
         },
         {

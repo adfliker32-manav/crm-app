@@ -53,6 +53,14 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     // Old executions continue running their original version even if the workflow is republished.
     workflowVersion: { type: Number, required: true },
 
+    // ARCH #3 FIX: Full snapshot of the workflow graph (nodes + connections) at the
+    // moment this execution was created. The engine uses this snapshot instead of
+    // re-fetching the live workflow, so edits/republishes don't break in-flight runs.
+    workflowSnapshot: {
+        nodes:       { type: mongoose.Schema.Types.Mixed, default: null },
+        connections: { type: mongoose.Schema.Types.Mixed, default: null }
+    },
+
     // The CRM contact this execution is for
     contactId: {
         type: mongoose.Schema.Types.ObjectId,

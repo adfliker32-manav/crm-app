@@ -658,6 +658,14 @@ server.listen(PORT, () => {
     setInterval(reloadWebsite, 600000); // 10 minutes
   }
 
+  // Start the Workflow Timeout Enforcer (ARCH #4 Fix)
+  try {
+    const { startTimeoutEnforcer } = require('./src/workflow-engine/WorkflowTimeoutEnforcer');
+    startTimeoutEnforcer();
+  } catch (e) {
+    console.error('⚠️ Could not start Workflow Timeout Enforcer:', e.message);
+  }
+
   const verifyToken = process.env.WA_WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN;
   console.log("👉 WA Verify Token:", verifyToken ? "✅ Loaded" : "❌ Missing");
   console.log("📡 WhatsApp Webhook URL (configure in Meta):");
@@ -719,6 +727,14 @@ const gracefulShutdown = async (signal, exitCode = 0) => {
     }
   } catch (e) {
     // Agenda may not be initialized
+  }
+
+  // 4b. Stop Workflow Timeout Enforcer
+  try {
+    const { stopTimeoutEnforcer } = require('./src/workflow-engine/WorkflowTimeoutEnforcer');
+    stopTimeoutEnforcer();
+  } catch (e) {
+    // May not be initialized
   }
 
   // 5. Close MongoDB connection

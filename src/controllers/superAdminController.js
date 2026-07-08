@@ -23,6 +23,7 @@ const SystemSetting = require('../models/SystemSetting');
 const UsageLog = require('../models/UsageLog');
 const { invalidateConfigCache } = require('../utils/systemConfig');
 const auditLogger = require('../services/auditLogger');
+const VoiceTemplate = require('../models/VoiceTemplate');
 const mongoose = require('mongoose');
 const os = require('os');
 const telemetryService = require('../services/telemetryService');
@@ -2283,6 +2284,76 @@ const updateAccountPermissions = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🎙️ GLOBAL VOICE TEMPLATES
+// ==========================================
+
+const getGlobalVoiceTemplates = async (req, res) => {
+    try {
+        const templates = await VoiceTemplate.find({ isGlobal: true }).sort({ createdAt: -1 });
+        res.json({ success: true, templates });
+    } catch (error) {
+        console.error('[SuperAdmin] Error fetching global voice templates:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch global templates' });
+    }
+};
+
+const createGlobalVoiceTemplate = async (req, res) => {
+    try {
+        const tenantId = req.user.id; // Super admin's ID
+        const templateData = { 
+            ...req.body, 
+            tenantId,
+            isGlobal: true // Force to global
+        };
+        
+        const template = await VoiceTemplate.create(templateData);
+        
+        // Log action
+        await auditLogger.log({
+            actor: req.user,
+            actionCategory: 'SYSTEM_SETTINGS',
+            action: 'GLOBAL_VOICE_TEMPLATE_CREATED',
+            targetType: 'VoiceTemplate',
+            targetId: template._id,
+            targetName: template.name,
+            req
+        });
+
+        res.status(201).json({ success: true, template });
+    } catch (error) {
+        console.error('[SuperAdmin] Error creating global voice template:', error);
+        res.status(500).json({ success: false, error: 'Failed to create global template' });
+    }
+};
+
+const deleteGlobalVoiceTemplate = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const template = await VoiceTemplate.findOneAndDelete({ _id: id, isGlobal: true });
+        if (!template) {
+            return res.status(404).json({ success: false, error: 'Global template not found' });
+        }
+
+        // Log action
+        await auditLogger.log({
+            actor: req.user,
+            actionCategory: 'SYSTEM_SETTINGS',
+            action: 'GLOBAL_VOICE_TEMPLATE_DELETED',
+            targetType: 'VoiceTemplate',
+            targetId: template._id,
+            targetName: template.name,
+            req
+        });
+
+        res.json({ success: true, message: 'Global template deleted' });
+    } catch (error) {
+        console.error('[SuperAdmin] Error deleting global voice template:', error);
+        res.status(500).json({ success: false, error: 'Failed to delete global template' });
+    }
+};
+
 module.exports = {
     getSaaSAnalytics,
     getAllCompanies,
@@ -2323,5 +2394,9 @@ module.exports = {
     topUpAiCredits,
     updateAccountPermissions,
     // 🧹 Maintenance
-    cleanupOrphanedAccounts
+    cleanupOrphanedAccounts,
+    // 🎙️ Global Voice Templates
+    getGlobalVoiceTemplates,
+    createGlobalVoiceTemplate,
+    deleteGlobalVoiceTemplate
 };

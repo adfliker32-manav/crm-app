@@ -21,11 +21,15 @@ const WaitNode = {
     }),
 
     ports: () => ({
-        inputs:  [{ id: 'input',    label: 'In' }],
+        inputs:  [{ id: 'input',             label: 'In' }],
         outputs: [
-            { id: 'output',   label: 'Resumed' },
-            { id: 'replied',  label: 'Replied (WhatsApp)' },
-            { id: 'timeout',  label: 'Timed Out' }
+            { id: 'output',          label: 'Resumed' },
+            { id: 'replied',         label: 'Replied (WhatsApp)' },
+            { id: 'timeout',         label: 'Timed Out' },
+            // WEAK #5 FIX: Added explicit port for when no active WhatsApp
+            // conversation exists — previously this was silently mapped to 'timeout'
+            // which caused false timeout branch execution.
+            { id: 'no_conversation', label: 'No Active Conversation' }
         ]
     }),
 
@@ -96,8 +100,15 @@ const WaitNode = {
             }).lean();
 
             if (!conversation) {
-                console.warn(`[WaitNode] No active WhatsApp conversation for lead ${lead._id}. Skipping wait.`);
-                return { nextPort: 'timeout', output: { 'wait.skipped': true } };
+                // WEAK #5 FIX: Route to dedicated 'no_conversation' port instead of 'timeout'.
+                // The 'timeout' port implies a wait happened and expired — but here the wait
+                // never even started. Using 'timeout' silently would cause downstream
+                // "you didn't reply" logic to fire incorrectly.
+                console.warn(`[WaitNode] No active WhatsApp conversation for lead ${lead._id}. Routing to 'no_conversation' port.`);
+                return {
+                    nextPort: 'no_conversation',
+                    output: { 'wait.skipped': true, 'wait.reason': 'no_active_conversation' }
+                };
             }
 
             const waitHours = Number(data.replyTimeoutHours) || 24;

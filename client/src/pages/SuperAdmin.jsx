@@ -14,6 +14,7 @@ import CouponView from '../components/SuperAdmin/CouponView';
 import WhatsAppInbox from '../components/WhatsApp/WhatsAppInbox';
 import EmailInbox from '../components/Email/EmailInbox';
 import SuperAdminCommSettings from '../components/SuperAdmin/SuperAdminCommSettings';
+import SuperAdminVoiceTemplates from '../components/SuperAdmin/SuperAdminVoiceTemplates';
 
 
 const SuperAdmin = () => {
@@ -42,6 +43,8 @@ const SuperAdmin = () => {
                 return <EmailInbox />;
             case 'comm-settings':
                 return <SuperAdminCommSettings />;
+            case 'voice-templates':
+                return <SuperAdminVoiceTemplates />;
             case 'system-health':
                 return <SystemHealthView />;
             case 'audit-logs':

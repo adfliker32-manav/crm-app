@@ -7,12 +7,36 @@
 // Job types:
 //   EXECUTE_NODE    — run a specific node in an execution
 //   TIMEOUT_SIGNAL  — fired when a wait node's deadline expires
+//
+// ARCH #2 FIX: Jobs are assigned BullMQ priorities based on node type.
+// Slow/external nodes (HTTP request, voice call, AI, email, WhatsApp) get
+// priority 10 (lower priority number = processed first in BullMQ).
+// Fast CRM/logic nodes get priority 1. This ensures a flood of slow external
+// jobs cannot starve fast internal operations for other tenants.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { Queue, Worker, QueueEvents } = require('bullmq');
 const { getRedisConnection } = require('../services/redisConnection');
 
 const QUEUE_NAME = 'workflow-engine';
+
+// Nodes that involve external API calls or significant wait times.
+// These get lower BullMQ priority so they don't block fast internal nodes.
+const SLOW_NODE_TYPES = new Set([
+    'http_request',
+    'voice_call',
+    'ai_classifier',
+    'send_email',
+    'send_whatsapp'
+]);
+
+/**
+ * Determine BullMQ job priority for a given node type.
+ * Lower number = higher priority in BullMQ.
+ * @param {string|undefined} nodeType
+ * @returns {number}
+ */
+const getJobPriority = (nodeType) => SLOW_NODE_TYPES.has(nodeType) ? 10 : 1;
 
 let _queue  = null;
 let _worker = null;
@@ -41,15 +65,21 @@ const getWorkflowQueue = () => {
 
 /**
  * Enqueue a node for immediate execution.
+ * @param {string} executionId
+ * @param {string} nodeId
+ * @param {number} [delayMs=0]
+ * @param {string} [nodeType] — used to determine job priority (ARCH #2)
  */
-const enqueueNode = async (executionId, nodeId, delayMs = 0) => {
+const enqueueNode = async (executionId, nodeId, delayMs = 0, nodeType = undefined) => {
     const q = getWorkflowQueue();
+    const priority = getJobPriority(nodeType);
     const job = await q.add(
         'EXECUTE_NODE',
         { executionId, nodeId },
         {
-            delay: delayMs,
-            jobId: `exec:${executionId}:node:${nodeId}:${Date.now()}`
+            delay:    delayMs,
+            priority,          // ARCH #2: fast nodes (priority 1) run before slow nodes (priority 10)
+            jobId:    `exec:${executionId}:node:${nodeId}:${Date.now()}`
         }
     );
     return job;

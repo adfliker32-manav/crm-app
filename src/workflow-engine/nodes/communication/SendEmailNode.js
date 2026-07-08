@@ -1,12 +1,18 @@
-const NodeRegistry = require('../../NodeRegistry');
-const User = require('../../../models/User');
+const NodeRegistry  = require('../../NodeRegistry');
+const User          = require('../../../models/User');
 const { sendEmail } = require('../../../services/emailService');
 const { replaceVariables, wrapEmailHtml } = require('../../../utils/emailTemplateUtils');
+// RATE #3 FIX: Per-tenant daily email limit tracking
+const { checkEmailDailyLimit } = require('../../../utils/workflowRateLimiter');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SendEmailNode
 // Sends a plain-text or HTML email to the lead's email address.
 // Subject and body support variable interpolation using {{variable.name}} syntax.
+//
+// RATE #3 FIX: Daily email limit added — Gmail SMTP allows ~500 emails/day
+// per account. We track per-tenant daily send count in Redis and cap at 300
+// to leave headroom. Exceeding the limit routes to 'limit_reached' port.
 // ─────────────────────────────────────────────────────────────────────────────
 const SendEmailNode = {
     type: 'send_email',
@@ -21,8 +27,12 @@ const SendEmailNode = {
     }),
 
     ports: () => ({
-        inputs:  [{ id: 'input',  label: 'In' }],
-        outputs: [{ id: 'output', label: 'Sent' }, { id: 'error', label: 'Failed' }]
+        inputs:  [{ id: 'input',         label: 'In' }],
+        outputs: [
+            { id: 'output',        label: 'Sent' },
+            { id: 'limit_reached', label: 'Daily Limit Reached' },
+            { id: 'error',         label: 'Failed' }
+        ]
     }),
 
     schema: () => ({
@@ -54,13 +64,33 @@ const SendEmailNode = {
     },
 
     execute: async (context, data) => {
-        const lead = context.getLead();
+        const lead     = context.getLead();
+        const tenantId = context.tenantId.toString();
+
         if (!lead?.email) {
-            console.warn(`[SendEmailNode] Lead has no email address. Skipping.`);
+            console.warn('[SendEmailNode] Lead has no email address. Skipping.');
             return { nextPort: 'output', output: { 'email.skipped': true, 'email.reason': 'no_email' } };
         }
 
-        const tenantId = context.tenantId.toString();
+        // RATE #3 FIX: Check per-tenant daily email send limit before sending.
+        // Gmail SMTP and most SMTP providers cap sending at a few hundred/day.
+        // Exceeding this causes delivery failures and SMTP account blocks.
+        const dailyCheck = await checkEmailDailyLimit(tenantId);
+        if (!dailyCheck.allowed) {
+            console.warn(
+                `[SendEmailNode] Tenant ${tenantId} daily email limit reached ` +
+                `(${dailyCheck.count}/${dailyCheck.limit}). Email to ${lead.email} skipped.`
+            );
+            return {
+                nextPort: 'limit_reached',
+                output: {
+                    'email.limitReached': true,
+                    'email.dailyCount':   dailyCheck.count,
+                    'email.dailyLimit':   dailyCheck.limit
+                }
+            };
+        }
+
         const user = await User.findById(tenantId).select('name companyName').lean();
 
         // Build template data from execution variables
@@ -78,10 +108,10 @@ const SendEmailNode = {
         const body    = replaceVariables(data.body || '', templateData);
 
         await sendEmail({
-            to:      lead.email,
+            to:     lead.email,
             subject,
-            html:    wrapEmailHtml(body),
-            userId:  tenantId
+            html:   wrapEmailHtml(body),
+            userId: tenantId
         });
 
         return {

@@ -104,8 +104,12 @@ const VoiceCallNode = {
         const waitHours = data.waitForOutcomeHours || 2;
         const waitUntil = new Date(Date.now() + waitHours * 60 * 60 * 1000);
 
+        // BUG #4 FIX: nextPort should NOT be 'waiting' — that is not a real canvas port.
+        // The WorkflowEngine pauses execution purely based on the presence of waitSignal.
+        // Setting nextPort to null prevents the engine from looking for a non-existent
+        // 'waiting' connection and incorrectly marking the execution as completed.
         return {
-            nextPort: 'waiting',
+            nextPort: null,
             output:  { 'voice.callInitiated': true, 'voice.initiatedAt': new Date().toISOString() },
             waitSignal: {
                 signalType: 'VOICE_OUTCOME',

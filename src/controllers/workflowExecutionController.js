@@ -69,6 +69,38 @@ exports.cancelExecution = async (req, res) => {
             return res.status(400).json({ message: `Cannot cancel an execution with status: ${execution.status}` });
         }
 
+        // WEAK #8 FIX: If this execution is in 'waiting' state, it has a pending
+        // BullMQ timeout job. We must cancel it here to prevent the orphaned timeout
+        // job from firing after we've already cancelled the execution.
+        // Previously, the job would still fire 2-24h later, try to resume an already-
+        // cancelled execution, and waste Redis/worker resources.
+        if (execution.status === 'waiting') {
+            try {
+                const WorkflowWaitSignal = require('../models/WorkflowWaitSignal');
+                const WorkflowQueue      = require('../workflow-engine/WorkflowQueue');
+
+                // Find the pending wait signal for this execution
+                const pendingSignal = await WorkflowWaitSignal.findOne({
+                    executionId: execution._id,
+                    status:      'pending'
+                });
+
+                if (pendingSignal) {
+                    // Cancel the BullMQ timeout job
+                    if (pendingSignal.timeoutBullJobId) {
+                        await WorkflowQueue.cancelJob(pendingSignal.timeoutBullJobId);
+                    }
+                    // Mark the signal as cancelled so it doesn't ghost-match future events
+                    await WorkflowWaitSignal.findByIdAndUpdate(pendingSignal._id, {
+                        $set: { status: 'cancelled', receivedAt: new Date() }
+                    });
+                }
+            } catch (signalErr) {
+                // Non-critical — still proceed with cancelling the execution
+                console.warn('[workflowExecutionController] Could not cancel wait signal/job:', signalErr.message);
+            }
+        }
+
         execution.status      = 'cancelled';
         execution.completedAt = new Date();
         await execution.save();

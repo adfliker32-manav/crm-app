@@ -10,14 +10,22 @@
 //   - The engine NEVER executes nodes recursively. Every step is queued.
 //   - The engine NEVER knows the internal logic of any node. It delegates to NodeRegistry.
 //   - The engine NEVER stores React Flow data or positions.
+//
+// FIXES APPLIED:
+//   BUG #1  — Safe null access on lead.name throughout (lead may be null for WEBHOOK triggers)
+//   BUG #2  — Cross-tenant signal leak fixed: channelId null guard + tenantId scope added
+//   BUG #3  — History entry tracked by _id, not by linear nodeId+status search (loop-safe)
+//   ARCH #1 — Per-tenant execution burst rate limit added in fireTrigger()
+//   ARCH #3 — Workflow graph snapshotted into execution on creation; executeNode uses snapshot
 // ─────────────────────────────────────────────────────────────────────────────
 
-const Workflow         = require('../models/Workflow');
+const Workflow          = require('../models/Workflow');
 const WorkflowExecution = require('../models/WorkflowExecution');
 const WorkflowWaitSignal = require('../models/WorkflowWaitSignal');
-const Lead             = require('../models/Lead');
-const NodeRegistry     = require('./NodeRegistry');
+const Lead              = require('../models/Lead');
+const NodeRegistry      = require('./NodeRegistry');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { checkWorkflowExecutionRate } = require('../utils/workflowRateLimiter');
 
 // WorkflowQueue is lazy-loaded to avoid circular dependency on startup
 let _queue = null;
@@ -31,14 +39,16 @@ const getQueue = () => {
 // Passed to every node's execute() call. Nodes read/write variables here.
 // ─────────────────────────────────────────────────────────────────────────────
 class ExecutionContext {
-    constructor(execution, workflow, lead) {
+    constructor(execution, workflowGraph, lead) {
         this.executionId = execution._id;
-        this.workflowId  = workflow._id;
+        this.workflowId  = execution.workflowId;
         this.tenantId    = execution.tenantId;
         this.contactId   = execution.contactId;
         this.variables   = { ...(execution.variables || {}) };
         this._lead       = lead;
-        this._workflow   = workflow;
+        // ARCH #3: Use the snapshotted graph stored on the execution doc,
+        // so in-flight executions are not affected by workflow edits.
+        this._workflow   = workflowGraph;
         this._execution  = execution;
     }
 
@@ -95,6 +105,8 @@ const buildInitialVariables = (lead) => ({
 
 /**
  * Append a node log entry to the execution history.
+ * Returns the _id of the newly appended entry for later reference.
+ * (BUG #3 FIX: We track by _id, not by nodeId+status search)
  */
 const appendHistory = (execution, logEntry) => {
     // Cap history at 500 entries to prevent document bloat
@@ -102,6 +114,8 @@ const appendHistory = (execution, logEntry) => {
         execution.history.shift();
     }
     execution.history.push(logEntry);
+    // Return the _id of the just-pushed entry (Mongoose auto-assigns it)
+    return execution.history[execution.history.length - 1]._id;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -129,6 +143,16 @@ const fireTrigger = async (triggerType, payload) => {
         const tenantId = payload.tenantId || (lead && lead.userId);
         if (!tenantId) {
             console.warn(`[WorkflowEngine] Cannot fire trigger ${triggerType} without a tenantId.`);
+            return;
+        }
+
+        // ── ARCH #1: Per-tenant execution burst rate limit ─────────────────
+        const rateCheck = await checkWorkflowExecutionRate(tenantId.toString());
+        if (!rateCheck.allowed) {
+            console.warn(
+                `[WorkflowEngine] Tenant ${tenantId} exceeded execution burst limit ` +
+                `(${rateCheck.count}/${rateCheck.limit} in last 10 min). Trigger ${triggerType} dropped.`
+            );
             return;
         }
 
@@ -167,7 +191,8 @@ const fireTrigger = async (triggerType, payload) => {
                     status:     { $in: ['running', 'waiting'] }
                 });
                 if (activeCount >= maxExec) {
-                    console.log(`[WorkflowEngine] Workflow "${workflow.name}" already has ${activeCount} active execution(s) for lead "${lead.name}". Skipping.`);
+                    // BUG #1 FIX: lead?.name — lead can be null for WEBHOOK_RECEIVED trigger
+                    console.log(`[WorkflowEngine] Workflow "${workflow.name}" already has ${activeCount} active execution(s) for lead "${lead?.name ?? 'N/A'}". Skipping.`);
                     continue;
                 }
             }
@@ -180,28 +205,38 @@ const fireTrigger = async (triggerType, payload) => {
                 variables = { 'tenant.id': tenantId.toString() };
             }
 
+            // ARCH #3: Snapshot the workflow graph into the execution document.
+            // This prevents in-flight executions from breaking when the workflow
+            // is edited and republished while they are running.
+            const workflowSnapshot = {
+                nodes:       workflow.nodes,
+                connections: workflow.connections
+            };
+
             // Create execution document
             const execution = await WorkflowExecution.create({
                 tenantId,
-                workflowId:      workflow._id,
-                workflowVersion: workflow.version,
-                contactId:       lead?._id || null,
-                status:          'running',
-                currentNodeId:   startNodes[0].id,
+                workflowId:       workflow._id,
+                workflowVersion:  workflow.version,
+                workflowSnapshot,                    // ARCH #3: stored snapshot
+                contactId:        lead?._id || null,
+                status:           'running',
+                currentNodeId:    startNodes[0].id,
                 variables,
-                startedBy:       payload.startedBy || 'trigger'
+                startedBy:        payload.startedBy || 'trigger'
             });
 
             // Enqueue all start nodes (parallel support)
             for (const startNode of startNodes) {
-                const job = await queue.enqueueNode(execution._id.toString(), startNode.id);
+                const job = await queue.enqueueNode(execution._id.toString(), startNode.id, 0, startNode.type);
                 // Store the first job ID for external reference
                 if (startNodes.indexOf(startNode) === 0) {
                     await WorkflowExecution.findByIdAndUpdate(execution._id, {
                         $set: { bullJobId: job.id }
                     });
                 }
-                console.log(`[WorkflowEngine] Queued start node "${startNode.id}" for workflow "${workflow.name}" / lead "${lead.name}"`);
+                // BUG #1 FIX: lead?.name — lead can be null for WEBHOOK_RECEIVED trigger
+                console.log(`[WorkflowEngine] Queued start node "${startNode.id}" for workflow "${workflow.name}" / lead "${lead?.name ?? 'N/A'}"`);
             }
 
             // Increment workflow execution count
@@ -209,6 +244,10 @@ const fireTrigger = async (triggerType, payload) => {
                 $inc: { executionCount: 1 },
                 $set: { lastExecutedAt: new Date() }
             });
+
+            // Return the execution ID so callers (e.g. testWorkflow) can use it
+            // (only meaningful when a single workflow matched the trigger)
+            execution._returnedId = execution._id;
         }
     } catch (err) {
         console.error('[WorkflowEngine] fireTrigger error:', err.message);
@@ -225,8 +264,8 @@ const fireTrigger = async (triggerType, payload) => {
  * @param {string} nodeId
  */
 const executeNode = async (executionId, nodeId) => {
-    let execution = null;
-    let logEntry  = null;
+    let execution  = null;
+    let histEntryId = null; // BUG #3 FIX: track exact history entry by _id
 
     try {
         // Load execution + workflow in parallel
@@ -240,28 +279,38 @@ const executeNode = async (executionId, nodeId) => {
             return;
         }
 
-        const workflow = await Workflow.findById(execution.workflowId).lean();
-        if (!workflow) {
-            await WorkflowExecution.findByIdAndUpdate(executionId, {
-                $set: { status: 'failed', errorMessage: 'Workflow definition not found' }
-            });
-            return;
+        // ARCH #3: Use the snapshotted graph stored on the execution, so edits
+        // to the live workflow don't break in-flight executions.
+        let workflowGraph = execution.workflowSnapshot;
+        if (!workflowGraph || !workflowGraph.nodes?.length) {
+            // Fallback to live workflow for older executions without a snapshot
+            const liveWorkflow = await Workflow.findById(execution.workflowId).lean();
+            if (!liveWorkflow) {
+                await WorkflowExecution.findByIdAndUpdate(executionId, {
+                    $set: { status: 'failed', errorMessage: 'Workflow definition not found' }
+                });
+                return;
+            }
+            workflowGraph = { nodes: liveWorkflow.nodes, connections: liveWorkflow.connections };
         }
 
-        const node = workflow.nodes.find(n => n.id === nodeId);
+        const node = workflowGraph.nodes.find(n => n.id === nodeId);
         if (!node) {
-            console.error(`[WorkflowEngine] Node "${nodeId}" not found in workflow "${workflow.name}"`);
+            console.error(`[WorkflowEngine] Node "${nodeId}" not found in workflow graph for execution ${executionId}`);
             return;
         }
 
-        // Load lead for context
-        const lead = await Lead.findById(execution.contactId).lean();
+        // Load lead for context (may be null for webhook-triggered executions)
+        const lead = execution.contactId
+            ? await Lead.findById(execution.contactId).lean()
+            : null;
 
         // Build execution context
-        const context = new ExecutionContext(execution, workflow, lead);
+        const context = new ExecutionContext(execution, workflowGraph, lead);
 
-        // Mark this node as running in history
-        logEntry = {
+        // BUG #3 FIX: Track the history entry by its Mongoose _id, not by
+        // linear search (which breaks when the same node appears in a loop).
+        const logEntry = {
             nodeId,
             nodeType:  node.type,
             nodeName:  node.name || node.type,
@@ -269,7 +318,7 @@ const executeNode = async (executionId, nodeId) => {
             startedAt: new Date(),
             input:     context.getAll()
         };
-        appendHistory(execution, logEntry);
+        histEntryId = appendHistory(execution, logEntry);
         execution.currentNodeId = nodeId;
         await execution.save();
 
@@ -286,8 +335,10 @@ const executeNode = async (executionId, nodeId) => {
         // Merge any output variables back into the execution
         Object.assign(execution.variables, context.getAll(), outputData);
 
-        // Update history log entry
-        const historyEntry = execution.history.find(h => h.nodeId === nodeId && h.status === 'running');
+        // BUG #3 FIX: Find history entry by its _id (exact reference, loop-safe)
+        const historyEntry = histEntryId
+            ? execution.history.find(h => h._id?.equals(histEntryId))
+            : null;
         if (historyEntry) {
             historyEntry.status     = 'completed';
             historyEntry.finishedAt = new Date();
@@ -321,9 +372,9 @@ const executeNode = async (executionId, nodeId) => {
             });
 
             // Pause the execution
-            execution.status         = 'waiting';
-            execution.waitingUntil   = waitUntil;
-            execution.waitSignalType  = signalType;
+            execution.status        = 'waiting';
+            execution.waitingUntil  = waitUntil;
+            execution.waitSignalType = signalType;
             await execution.save();
 
             console.log(`[WorkflowEngine] Execution ${executionId} paused at node "${nodeId}" waiting for ${signalType} until ${waitUntil}`);
@@ -331,20 +382,20 @@ const executeNode = async (executionId, nodeId) => {
         }
 
         // ── DETERMINE NEXT NODES ──────────────────────────────────────────
-        const connections = workflow.connections.filter(
+        const connections = workflowGraph.connections.filter(
             c => c.sourceNodeId === nodeId && c.sourcePort === outputPort
         );
 
         // If no connections from this port, also try the default 'output' port
         const finalConns = connections.length > 0 ? connections :
-            workflow.connections.filter(c => c.sourceNodeId === nodeId && (!c.sourcePort || c.sourcePort === 'output'));
+            workflowGraph.connections.filter(c => c.sourceNodeId === nodeId && (!c.sourcePort || c.sourcePort === 'output'));
 
         // Mark execution as completed if this is a terminal node
         if (finalConns.length === 0) {
             execution.status      = 'completed';
             execution.completedAt = new Date();
             await execution.save();
-            console.log(`[WorkflowEngine] Execution ${executionId} completed. Workflow: "${workflow.name}"`);
+            console.log(`[WorkflowEngine] Execution ${executionId} completed.`);
             return;
         }
 
@@ -354,29 +405,36 @@ const executeNode = async (executionId, nodeId) => {
 
         const queue = getQueue();
         for (const conn of finalConns) {
-            await queue.enqueueNode(executionId, conn.targetNodeId);
+            // ARCH #2: Pass the target node type so the queue can prioritize
+            const targetNode = workflowGraph.nodes.find(n => n.id === conn.targetNodeId);
+            await queue.enqueueNode(executionId, conn.targetNodeId, 0, targetNode?.type);
             console.log(`[WorkflowEngine] Queued next node "${conn.targetNodeId}" for execution ${executionId}`);
         }
 
     } catch (err) {
         console.error(`[WorkflowEngine] executeNode failed (exec: ${executionId}, node: ${nodeId}):`, err.message);
 
-        // Update the history log entry to failed
         if (execution) {
-            const historyEntry = execution.history.find(h => h.nodeId === nodeId && h.status === 'running');
+            // BUG #3 FIX: Find history entry by _id
+            const historyEntry = histEntryId
+                ? execution.history.find(h => h._id?.equals(histEntryId))
+                : null;
             if (historyEntry) {
-                historyEntry.status = 'failed';
+                historyEntry.status     = 'failed';
                 historyEntry.finishedAt = new Date();
-                historyEntry.error = err.message;
+                historyEntry.error      = err.message;
             }
 
             // Check if we should continue or halt the workflow
-            const workflow = await Workflow.findById(execution.workflowId).lean();
-            const continueOnError = workflow?.settings?.continueOnError ?? false;
+            let workflowGraph = execution.workflowSnapshot;
+            if (!workflowGraph) {
+                const liveWf = await Workflow.findById(execution.workflowId).lean().catch(() => null);
+                workflowGraph = liveWf ? { nodes: liveWf.nodes, connections: liveWf.connections, settings: liveWf.settings } : null;
+            }
+            const continueOnError = workflowGraph?.settings?.continueOnError ?? false;
 
             if (continueOnError) {
-                // Continue with next nodes from 'error' port or default port
-                const errorConns = (workflow?.connections || []).filter(
+                const errorConns = (workflowGraph?.connections || []).filter(
                     c => c.sourceNodeId === nodeId && c.sourcePort === 'error'
                 );
                 if (errorConns.length > 0) {
@@ -406,23 +464,37 @@ const executeNode = async (executionId, nodeId) => {
  * Uses atomic findOneAndUpdate to prevent race conditions (two concurrent
  * webhook deliveries both claiming the same signal).
  *
+ * BUG #2 FIX: channelId null fallback previously used { $exists: true } which
+ * could match signals from ANY tenant for the same signalType. Fixed by:
+ *   - Using explicit `channelId: null` when no channelId is provided
+ *   - Scoping query to tenantId when provided
+ *
  * @param {object} params
  * @param {string} params.signalType  — e.g. 'WHATSAPP_REPLY'
  * @param {string} params.channelId   — ObjectId of conversation / call log
  * @param {object} params.payload     — raw data (message, outcome, etc.)
  * @param {string} [params.resolvedPort] — which branch to follow (optional, nodes can set it)
+ * @param {string} [params.tenantId]  — tenant scope for additional safety (optional but recommended)
  */
-const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort }) => {
+const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort, tenantId }) => {
     try {
         if (await isFeatureDisabled('DISABLE_WORKFLOW_ENGINE')) return;
 
+        // BUG #2 FIX: Build a precise query that never accidentally matches signals
+        // from other tenants or channels.
+        const signalQuery = {
+            signalType,
+            // When channelId is null/undefined, explicitly query for null — not { $exists: true }
+            // This prevents cross-tenant signal leakage.
+            channelId: channelId || null,
+            status:    'pending'
+        };
+        // Optional extra safety: scope to tenant if caller provides it
+        if (tenantId) signalQuery.tenantId = tenantId;
+
         // Atomically claim the signal — prevents double-processing
         const signal = await WorkflowWaitSignal.findOneAndUpdate(
-            {
-                signalType,
-                channelId: channelId ? channelId : { $exists: true },
-                status:    'pending'
-            },
+            signalQuery,
             { $set: { status: 'received', receivedAt: new Date(), payload, resolvedPort: resolvedPort || 'output' } },
             { new: false, sort: { createdAt: 1 } } // Oldest pending signal first
         );
@@ -460,16 +532,20 @@ const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort 
         // Resolve the port to follow
         const port = resolvedPort || signal.resolvedPort || 'output';
 
-        // Find the workflow to determine next nodes
-        const workflow = await Workflow.findById(execution.workflowId).lean();
-        if (!workflow) return;
+        // ARCH #3: Use the snapshotted graph for resume routing
+        let workflowGraph = execution.workflowSnapshot;
+        if (!workflowGraph) {
+            const liveWf = await Workflow.findById(execution.workflowId).lean();
+            if (!liveWf) return;
+            workflowGraph = { nodes: liveWf.nodes, connections: liveWf.connections };
+        }
 
-        const nextConns = workflow.connections.filter(
+        const nextConns = workflowGraph.connections.filter(
             c => c.sourceNodeId === signal.nodeId && c.sourcePort === port
         );
 
-        execution.status       = 'running';
-        execution.waitingUntil = null;
+        execution.status        = 'running';
+        execution.waitingUntil  = null;
         execution.waitSignalType = null;
         await execution.save();
 
@@ -483,7 +559,8 @@ const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort 
 
         const queue = getQueue();
         for (const conn of nextConns) {
-            await queue.enqueueNode(execution._id.toString(), conn.targetNodeId);
+            const targetNode = workflowGraph.nodes.find(n => n.id === conn.targetNodeId);
+            await queue.enqueueNode(execution._id.toString(), conn.targetNodeId, 0, targetNode?.type);
         }
 
     } catch (err) {
@@ -513,12 +590,17 @@ const resolveTimeoutSignal = async (executionId, nodeId, signalId) => {
         const execution = await WorkflowExecution.findById(executionId);
         if (!execution || execution.status !== 'waiting') return;
 
-        const workflow = await Workflow.findById(execution.workflowId).lean();
-        if (!workflow) return;
+        // ARCH #3: Use snapshot
+        let workflowGraph = execution.workflowSnapshot;
+        if (!workflowGraph) {
+            const liveWf = await Workflow.findById(execution.workflowId).lean();
+            if (!liveWf) return;
+            workflowGraph = { nodes: liveWf.nodes, connections: liveWf.connections };
+        }
 
         // Follow resolvedPort, or fallback to 'timeout'/'no_reply'
         const resolvedPort = signal.resolvedPort;
-        const timeoutConns = workflow.connections.filter(
+        const timeoutConns = workflowGraph.connections.filter(
             c => c.sourceNodeId === nodeId && (
                 (resolvedPort && c.sourcePort === resolvedPort) ||
                 (!resolvedPort && (c.sourcePort === 'timeout' || c.sourcePort === 'no_reply'))
@@ -539,7 +621,8 @@ const resolveTimeoutSignal = async (executionId, nodeId, signalId) => {
 
         const queue = getQueue();
         for (const conn of timeoutConns) {
-            await queue.enqueueNode(executionId, conn.targetNodeId);
+            const targetNode = workflowGraph.nodes.find(n => n.id === conn.targetNodeId);
+            await queue.enqueueNode(executionId, conn.targetNodeId, 0, targetNode?.type);
         }
 
         console.log(`[WorkflowEngine] Timeout fired for execution ${executionId} at node "${nodeId}"`);

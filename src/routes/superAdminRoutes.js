@@ -43,7 +43,11 @@ const {
     topUpAiCredits,
     updateAccountPermissions,
     // 🧹 Maintenance
-    cleanupOrphanedAccounts
+    cleanupOrphanedAccounts,
+    // 🎙️ Global Voice Templates
+    getGlobalVoiceTemplates,
+    createGlobalVoiceTemplate,
+    deleteGlobalVoiceTemplate
 } = require('../controllers/superAdminController');
 
 
@@ -122,6 +126,11 @@ router.put('/accounts/:id/permissions', validateObjectId({ params: ['id'] }), au
 
 // 🧹 Cleanup orphan sub-clients (managers whose parent agency was deleted)
 router.post('/cleanup/orphans', authMiddleware, requireSuperAdmin, cleanupOrphanedAccounts);
+
+// 🎙️ GLOBAL VOICE TEMPLATES
+router.get('/voice-templates', authMiddleware, requireSuperAdmin, getGlobalVoiceTemplates);
+router.post('/voice-templates', authMiddleware, requireSuperAdmin, createGlobalVoiceTemplate);
+router.delete('/voice-templates/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deleteGlobalVoiceTemplate);
 
 // 💰 FINANCE MANAGER — payments, expenses, summary
 const {

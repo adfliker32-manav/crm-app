@@ -180,7 +180,10 @@ exports.publishWorkflow = async (req, res) => {
 
         workflow.status      = 'published';
         workflow.publishedAt = new Date();
-        workflow.version     = (workflow.version || 1);
+        // WEAK #7 FIX: Increment version on each publish so workflowVersion
+        // in execution logs accurately reflects which version ran.
+        // Previously this was `version = version || 1` which never incremented.
+        workflow.version     = (workflow.version || 0) + 1;
         await workflow.save();
 
         if (workflow.trigger === 'SCHEDULED_TRIGGER' && workflow.triggerConfig?.cronExpression) {
@@ -366,14 +369,27 @@ exports.testWorkflow = async (req, res) => {
             startedBy:  'test'
         });
 
-        // Return the execution ID for the debugger to poll
-        const execution = await WorkflowExecution.findOne({
-            workflowId: workflow._id,
-            contactId:  lead._id,
-            startedBy:  'test'
-        }).sort({ createdAt: -1 }).lean();
+        // BUG #5 FIX: fireTrigger enqueues jobs into BullMQ asynchronously.
+        // The WorkflowExecution document is created inside fireTrigger before
+        // enqueueing, so polling for up to 3 seconds is sufficient to find it.
+        // Previously the findOne ran immediately and almost always returned null.
+        let execution = null;
+        const maxAttempts = 6;
+        for (let i = 0; i < maxAttempts; i++) {
+            execution = await WorkflowExecution.findOne({
+                workflowId: workflow._id,
+                contactId:  lead._id,
+                startedBy:  'test'
+            }).sort({ createdAt: -1 }).lean();
+            if (execution) break;
+            // Wait 500ms between attempts (total max wait: 3 seconds)
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
 
-        res.json({ message: 'Test run started', executionId: execution?._id });
+        res.json({
+            message:     'Test run started',
+            executionId: execution?._id || null
+        });
     } catch (err) {
         console.error('[workflowController] testWorkflow:', err);
         res.status(500).json({ message: 'Failed to start test run' });

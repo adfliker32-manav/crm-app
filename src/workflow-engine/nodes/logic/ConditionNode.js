@@ -1,31 +1,12 @@
-const NodeRegistry = require('../../NodeRegistry');
+const NodeRegistry     = require('../../NodeRegistry');
+// WEAK #6 FIX: Use shared operators module instead of duplicating logic
+const { evaluateCondition } = require('./operators');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ConditionNode (If / Else)
 // Evaluates multiple conditions on the execution variables.
 // Outputs to 'true' port if conditions match based on matchType, 'false' otherwise.
 // ─────────────────────────────────────────────────────────────────────────────
-
-// Helper to safely cast values for comparison
-const parseValue = (val) => {
-    if (val === null || val === undefined) return '';
-    if (!isNaN(val) && String(val).trim() !== '') return Number(val);
-    const d = new Date(val);
-    if (!isNaN(d.getTime()) && String(val).match(/^\d{4}-\d{2}-\d{2}/)) return d.getTime();
-    return String(val).toLowerCase();
-};
-
-const OPERATORS = {
-    equals:         (a, b) => String(a).toLowerCase() === String(b).toLowerCase(),
-    not_equals:     (a, b) => String(a).toLowerCase() !== String(b).toLowerCase(),
-    contains:       (a, b) => String(a).toLowerCase().includes(String(b).toLowerCase()),
-    not_contains:   (a, b) => !String(a).toLowerCase().includes(String(b).toLowerCase()),
-    starts_with:    (a, b) => String(a).toLowerCase().startsWith(String(b).toLowerCase()),
-    greater_than:   (a, b) => parseValue(a) > parseValue(b),
-    less_than:      (a, b) => parseValue(a) < parseValue(b),
-    is_empty:       (a)    => !a || String(a).trim() === '',
-    is_not_empty:   (a)    => !!a && String(a).trim() !== ''
-};
 
 const ConditionNode = {
     type: 'condition',
@@ -77,7 +58,7 @@ const ConditionNode = {
         } else {
             data.conditions.forEach((cond, index) => {
                 if (!cond.variable?.trim()) errors.push(`Condition ${index + 1}: Variable is required`);
-                if (!cond.operator) errors.push(`Condition ${index + 1}: Operator is required`);
+                if (!cond.operator)         errors.push(`Condition ${index + 1}: Operator is required`);
             });
         }
         return { valid: errors.length === 0, errors };
@@ -85,38 +66,23 @@ const ConditionNode = {
 
     execute: async (context, data) => {
         const conditions = data.conditions || [];
-        const matchType = data.matchType || 'ALL';
-        
-        let finalResult = matchType === 'ALL' ? true : false;
-        const results = [];
+        const matchType  = data.matchType || 'ALL';
+
+        // WEAK #6 FIX: Use shared evaluateCondition() from operators.js
+        // Previously parseValue + OPERATORS were copy-pasted from SwitchNode.
+        let finalResult = matchType === 'ALL';
+        const results   = [];
 
         for (const cond of conditions) {
-            // Support variable vs variable comparison if the compare value looks like a variable
-            let compareValue = cond.value ?? '';
-            if (typeof compareValue === 'string' && (compareValue.startsWith('lead.') || compareValue.startsWith('webhook.'))) {
-                compareValue = context.get(compareValue) ?? compareValue;
-            }
-
-            const variableValue = context.get(cond.variable) ?? '';
-            const operator = cond.operator;
-            
-            const evalFn = OPERATORS[operator];
-            let result = false;
-            
-            if (evalFn) {
-                result = evalFn(variableValue, compareValue);
-            } else {
-                console.warn(`[ConditionNode] Unknown operator: ${operator}`);
-            }
-
-            results.push({ variable: cond.variable, operator, value: compareValue, result });
+            const result = evaluateCondition(cond, context);
+            results.push({ variable: cond.variable, operator: cond.operator, result });
 
             if (matchType === 'ALL') {
                 finalResult = finalResult && result;
                 if (!finalResult) break; // Short-circuit AND
             } else {
                 finalResult = finalResult || result;
-                if (finalResult) break; // Short-circuit OR
+                if (finalResult) break;  // Short-circuit OR
             }
         }
 
@@ -125,7 +91,7 @@ const ConditionNode = {
         return {
             nextPort: finalResult ? 'true' : 'false',
             output:  {
-                'condition.result': finalResult,
+                'condition.result':  finalResult,
                 'condition.details': results
             }
         };
