@@ -173,8 +173,15 @@ const fireTrigger = async (triggerType, payload) => {
         const queue = getQueue();
 
         for (const workflow of workflows) {
-            // Find the first node (node with no incoming connections)
-            const nodeIdsWithIncomingEdge = new Set(workflow.connections.map(c => c.targetNodeId));
+            // Find the first node (node with no incoming connections).
+            // PHANTOM-NODE FIX: The canvas saves a connection with sourceNodeId='trigger'
+            // (a virtual trigger handle) but never adds a real node with id='trigger'
+            // into the nodes array. Without this fix, every real node appears to have
+            // an incoming edge, so startNodes is always [] and the workflow is silently
+            // skipped. We strip connections whose source does not exist in the node list.
+            const realNodeIds = new Set(workflow.nodes.map(n => n.id));
+            const realConnections = workflow.connections.filter(c => realNodeIds.has(c.sourceNodeId));
+            const nodeIdsWithIncomingEdge = new Set(realConnections.map(c => c.targetNodeId));
             const startNodes = workflow.nodes.filter(n => !nodeIdsWithIncomingEdge.has(n.id));
 
             if (startNodes.length === 0) {
