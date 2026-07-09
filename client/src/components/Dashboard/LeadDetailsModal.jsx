@@ -38,6 +38,7 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
     useEffect(() => {
         if (isOpen && lead) {
             setFullLead(null); // Reset on new open
+            setShowWorkflowMenu(false); // Reset menu on reopen
             fetchCustomFields();
             fetchTasks();
             fetchVoiceCalls();
@@ -45,6 +46,17 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
             fetchManualWorkflows();
         }
     }, [isOpen, lead]);
+
+    useEffect(() => {
+        if (!showWorkflowMenu) return;
+        const handleOutsideClick = (e) => {
+            if (!e.target.closest('.workflow-menu-container')) {
+                setShowWorkflowMenu(false);
+            }
+        };
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => document.removeEventListener('mousedown', handleOutsideClick);
+    }, [showWorkflowMenu]);
 
     const fetchFullLead = async () => {
         setFullLeadLoading(true);
@@ -279,7 +291,7 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                     </div>
                     <div className="flex items-center gap-4 relative">
                         {manualWorkflows.length > 0 && (
-                            <div className="relative">
+                            <div className="relative workflow-menu-container">
                                 <button 
                                     onClick={() => setShowWorkflowMenu(!showWorkflowMenu)}
                                     disabled={workflowTriggering}
