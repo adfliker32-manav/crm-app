@@ -103,6 +103,51 @@ const buildInitialVariables = (lead) => ({
     'tenant.id':       lead.userId?.toString() || ''
 });
 
+const flattenVariables = (prefix, value, output) => {
+    if (value === null || value === undefined) {
+        output[prefix] = '';
+        return;
+    }
+
+    if (Array.isArray(value)) {
+        output[prefix] = JSON.stringify(value);
+        return;
+    }
+
+    if (typeof value === 'object') {
+        output[prefix] = JSON.stringify(value);
+        for (const [key, nestedValue] of Object.entries(value)) {
+            flattenVariables(`${prefix}.${key}`, nestedValue, output);
+        }
+        return;
+    }
+
+    output[prefix] = value;
+};
+
+const buildPayloadVariables = (payload) => {
+    const variables = {};
+
+    if (payload.variables && typeof payload.variables === 'object') {
+        Object.assign(variables, payload.variables);
+    }
+
+    if (payload.webhook && typeof payload.webhook === 'object') {
+        const { body = {}, query = {} } = payload.webhook;
+        variables['webhook.body'] = JSON.stringify(body);
+        variables['webhook.query'] = JSON.stringify(query);
+
+        for (const [key, value] of Object.entries(body)) {
+            flattenVariables(`webhook.${key}`, value, variables);
+        }
+        for (const [key, value] of Object.entries(query)) {
+            flattenVariables(`webhook.query.${key}`, value, variables);
+        }
+    }
+
+    return variables;
+};
+
 /**
  * Append a node log entry to the execution history.
  * Returns the _id of the newly appended entry for later reference.
@@ -140,7 +185,11 @@ const fireTrigger = async (triggerType, payload) => {
         const { lead, workflowId } = payload;
         
         // tenantId can come from payload directly, or fallback to lead.userId
-        const tenantId = payload.tenantId || (lead && lead.userId);
+        let tenantId = payload.tenantId || (lead && lead.userId);
+        if (!tenantId && workflowId) {
+            const workflowForTenant = await Workflow.findById(workflowId).select('tenantId').lean();
+            tenantId = workflowForTenant?.tenantId;
+        }
         if (!tenantId) {
             console.warn(`[WorkflowEngine] Cannot fire trigger ${triggerType} without a tenantId.`);
             return;
@@ -159,9 +208,11 @@ const fireTrigger = async (triggerType, payload) => {
         // Find published workflows matching the trigger
         const query = {
             tenantId,
-            status: 'published',
             trigger: triggerType
         };
+        if (payload.startedBy !== 'test') {
+            query.status = 'published';
+        }
         if (workflowId) {
             query._id = workflowId;
         }
@@ -171,6 +222,7 @@ const fireTrigger = async (triggerType, payload) => {
         if (!workflows || workflows.length === 0) return;
 
         const queue = getQueue();
+        const createdExecutionIds = [];
 
         for (const workflow of workflows) {
             // Find the first node (node with no incoming connections).
@@ -191,7 +243,7 @@ const fireTrigger = async (triggerType, payload) => {
 
             // Check if there's already an active execution for this lead + workflow
             const maxExec = workflow.settings?.maxExecutionsPerLead ?? 1;
-            if (maxExec > 0 && lead) {
+            if (maxExec > 0 && lead && payload.startedBy !== 'test') {
                 const activeCount = await WorkflowExecution.countDocuments({
                     workflowId: workflow._id,
                     contactId:  lead._id,
@@ -205,12 +257,13 @@ const fireTrigger = async (triggerType, payload) => {
             }
 
             // Build initial variables
-            let variables = {};
+            let variables = { ...(workflow.variables || {}) };
             if (lead) {
-                variables = buildInitialVariables(lead);
+                variables = { ...variables, ...buildInitialVariables(lead) };
             } else {
-                variables = { 'tenant.id': tenantId.toString() };
+                variables = { ...variables, 'tenant.id': tenantId.toString() };
             }
+            variables = { ...variables, ...buildPayloadVariables(payload) };
 
             // ARCH #3: Snapshot the workflow graph into the execution document.
             // This prevents in-flight executions from breaking when the workflow
@@ -255,7 +308,10 @@ const fireTrigger = async (triggerType, payload) => {
             // Return the execution ID so callers (e.g. testWorkflow) can use it
             // (only meaningful when a single workflow matched the trigger)
             execution._returnedId = execution._id;
+            createdExecutionIds.push(execution._id);
         }
+
+        return createdExecutionIds;
     } catch (err) {
         console.error('[WorkflowEngine] fireTrigger error:', err.message);
     }
@@ -356,7 +412,7 @@ const executeNode = async (executionId, nodeId) => {
         // ── WAIT SIGNAL ───────────────────────────────────────────────────
         // If the node needs to wait for an external signal, pause the execution
         if (result?.waitSignal) {
-            const { signalType, channelId, waitUntil } = result.waitSignal;
+            const { signalType, channelId, waitUntil, resolvedPort } = result.waitSignal;
 
             // Create the wait signal document
             const signal = await WorkflowWaitSignal.create({
@@ -367,6 +423,7 @@ const executeNode = async (executionId, nodeId) => {
                 signalType,
                 channelId:   channelId || null,
                 expectedBy:  waitUntil,
+                resolvedPort: resolvedPort || null,
                 status:      'pending'
             });
 

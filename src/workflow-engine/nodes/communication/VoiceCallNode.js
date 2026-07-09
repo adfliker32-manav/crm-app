@@ -114,7 +114,8 @@ const VoiceCallNode = {
             waitSignal: {
                 signalType: 'VOICE_OUTCOME',
                 channelId:  lead._id,  // VoiceCallLog references leadId
-                waitUntil
+                waitUntil,
+                resolvedPort: 'No Answer' // Default outcome if the webhook never arrives within the deadline
             }
         };
     }

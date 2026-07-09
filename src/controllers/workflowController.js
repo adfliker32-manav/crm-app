@@ -363,7 +363,7 @@ exports.testWorkflow = async (req, res) => {
         if (!lead) return res.status(404).json({ message: 'Lead not found' });
 
         // Fire the trigger with 'test' mode — executions started as test are labeled separately
-        await WorkflowEngine.fireTrigger(workflow.trigger, {
+        const executionIds = await WorkflowEngine.fireTrigger(workflow.trigger, {
             lead:       { ...lead, userId: tenantId },
             workflowId: workflow._id,
             startedBy:  'test'
@@ -388,7 +388,7 @@ exports.testWorkflow = async (req, res) => {
 
         res.json({
             message:     'Test run started',
-            executionId: execution?._id || null
+            executionId: executionIds?.[0] || execution?._id || null
         });
     } catch (err) {
         console.error('[workflowController] testWorkflow:', err);
@@ -490,7 +490,8 @@ exports.webhookTrigger = async (req, res) => {
         await WorkflowEngine.fireTrigger('WEBHOOK_RECEIVED', {
             tenantId: workflow.tenantId,
             workflowId: workflow._id,
-            lead: lead,
+            lead,
+            webhook: { body, query },
             startedBy: 'webhook'
         });
 

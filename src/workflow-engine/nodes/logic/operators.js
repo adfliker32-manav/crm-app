@@ -7,15 +7,26 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Helper to safely convert values to string, mapping null/undefined to empty string
+ * instead of returning "null" or "undefined".
+ */
+const safeString = (val) => {
+    if (val === null || val === undefined) return '';
+    return String(val);
+};
+
+/**
  * Safely parse a value for numeric/date comparison.
  * Returns Number if the value looks numeric, Date if it looks like a date,
  * otherwise lowercased string.
  */
 const parseValue = (val) => {
     if (val === null || val === undefined) return '';
-    if (!isNaN(val) && String(val).trim() !== '') return Number(val);
+    if (typeof val === 'boolean') return val ? 1 : 0;
+    if (typeof val === 'number') return val;
+    if (typeof val === 'string' && val.trim() !== '' && !isNaN(val)) return Number(val);
     const d = new Date(val);
-    if (!isNaN(d.getTime()) && String(val).match(/^\d{4}-\d{2}-\d{2}/)) return d.getTime();
+    if (!isNaN(d.getTime()) && typeof val === 'string' && val.match(/^\d{4}-\d{2}-\d{2}/)) return d.getTime();
     return String(val).toLowerCase();
 };
 
@@ -25,18 +36,18 @@ const parseValue = (val) => {
  * Value: evaluation function (a, b) => boolean
  */
 const OPERATORS = {
-    equals:         (a, b) => String(a).toLowerCase() === String(b).toLowerCase(),
-    not_equals:     (a, b) => String(a).toLowerCase() !== String(b).toLowerCase(),
-    contains:       (a, b) => String(a).toLowerCase().includes(String(b).toLowerCase()),
-    not_contains:   (a, b) => !String(a).toLowerCase().includes(String(b).toLowerCase()),
-    starts_with:    (a, b) => String(a).toLowerCase().startsWith(String(b).toLowerCase()),
-    ends_with:      (a, b) => String(a).toLowerCase().endsWith(String(b).toLowerCase()),
+    equals:         (a, b) => safeString(a).toLowerCase() === safeString(b).toLowerCase(),
+    not_equals:     (a, b) => safeString(a).toLowerCase() !== safeString(b).toLowerCase(),
+    contains:       (a, b) => safeString(a).toLowerCase().includes(safeString(b).toLowerCase()),
+    not_contains:   (a, b) => !safeString(a).toLowerCase().includes(safeString(b).toLowerCase()),
+    starts_with:    (a, b) => safeString(a).toLowerCase().startsWith(safeString(b).toLowerCase()),
+    ends_with:      (a, b) => safeString(a).toLowerCase().endsWith(safeString(b).toLowerCase()),
     greater_than:   (a, b) => parseValue(a) > parseValue(b),
     less_than:      (a, b) => parseValue(a) < parseValue(b),
     greater_equal:  (a, b) => parseValue(a) >= parseValue(b),
     less_equal:     (a, b) => parseValue(a) <= parseValue(b),
-    is_empty:       (a)    => !a || String(a).trim() === '',
-    is_not_empty:   (a)    => !!a && String(a).trim() !== ''
+    is_empty:       (a)    => a === null || a === undefined || safeString(a).trim() === '',
+    is_not_empty:   (a)    => a !== null && a !== undefined && safeString(a).trim() !== ''
 };
 
 /**

@@ -227,15 +227,21 @@ export const WaitNode = ({ data, selected }) => {
                 </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-                <span style={{ fontSize: 10, color: '#22C55E', fontWeight: 700 }}>↩ Resumed</span>
-                <span style={{ fontSize: 10, color: '#94A3B8', fontWeight: 700 }}>⏰ Timeout</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, marginTop: 8, textAlign: 'center' }}>
+                <span style={{ fontSize: 9, color: '#22C55E', fontWeight: 700 }}>↩ Resume</span>
+                <span style={{ fontSize: 9, color: '#16A34A', fontWeight: 700 }}>💬 Reply</span>
+                <span style={{ fontSize: 9, color: '#94A3B8', fontWeight: 700 }}>⏰ Timeout</span>
+                <span style={{ fontSize: 9, color: '#F97316', fontWeight: 700 }}>Ø Chat</span>
             </div>
 
             <Handle type="source" position={Position.Bottom} id="output"
-                style={{ background: '#22C55E', width: 10, height: 10, border: '2px solid #fff', left: '25%' }} />
+                style={{ background: '#22C55E', width: 10, height: 10, border: '2px solid #fff', left: '20%' }} />
+            <Handle type="source" position={Position.Bottom} id="replied"
+                style={{ background: '#16A34A', width: 10, height: 10, border: '2px solid #fff', left: '40%' }} />
             <Handle type="source" position={Position.Bottom} id="timeout"
-                style={{ background: '#94A3B8', width: 10, height: 10, border: '2px solid #fff', left: '75%' }} />
+                style={{ background: '#94A3B8', width: 10, height: 10, border: '2px solid #fff', left: '60%' }} />
+            <Handle type="source" position={Position.Bottom} id="no_conversation"
+                style={{ background: '#F97316', width: 10, height: 10, border: '2px solid #fff', left: '80%' }} />
         </div>
     );
 };

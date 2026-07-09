@@ -3,7 +3,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     ReactFlow, Controls, MiniMap, Background,
     applyNodeChanges, applyEdgeChanges, addEdge,
-    ReactFlowProvider, BaseEdge, EdgeLabelRenderer, getSmoothStepPath
+    ReactFlowProvider, BaseEdge, EdgeLabelRenderer, getSmoothStepPath,
+    useUpdateNodeInternals
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -96,6 +97,7 @@ function WorkflowBuilderInner() {
     const navigate = useNavigate();
     const { showNotification } = useNotification();
     const reactFlowWrapper = useRef(null);
+    const updateNodeInternals = useUpdateNodeInternals();
 
     const [workflow, setWorkflow] = useState(null);
     const [nodeTypes, setNodeTypes] = useState([]);
@@ -264,7 +266,8 @@ function WorkflowBuilderInner() {
             if (label !== undefined) newData.label = label;
             return { ...n, data: newData };
         }));
-    }, []);
+        setTimeout(() => updateNodeInternals(nodeId), 0);
+    }, [updateNodeInternals]);
 
     const handleDeleteNode = useCallback((nodeId) => {
         if (nodeId === 'trigger') return; // Cannot delete trigger node
@@ -322,14 +325,16 @@ function WorkflowBuilderInner() {
                 savedWorkflow = res.data.workflow;
                 navigate(`/workflows/${savedWorkflow._id}/builder`, { replace: true });
             } else {
-                await api.put(`/workflows/${workflow._id}`, payload);
+                const res = await api.put(`/workflows/${workflow._id}`, payload);
                 await api.put(`/workflows/${workflow._id}/layout`, { nodePositions: positions, viewport });
-                savedWorkflow = { ...workflow, ...payload };
+                savedWorkflow = res.data.workflow || { ...workflow, ...payload };
             }
             setWorkflow(w => ({ ...w, ...savedWorkflow }));
             showNotification('success', 'Workflow saved');
+            return savedWorkflow;
         } catch (err) {
             showNotification('error', err.response?.data?.message || 'Failed to save workflow');
+            throw err;
         } finally {
             setSaving(false);
         }
@@ -337,14 +342,16 @@ function WorkflowBuilderInner() {
 
     // ── Publish ─────────────────────────────────────────────────────────────
     const handlePublish = async () => {
-        await handleSave();
         setPublishing(true);
         try {
-            await api.post(`/workflows/${workflow._id}/publish`);
-            setWorkflow(w => ({ ...w, status: 'published' }));
+            const savedWorkflow = await handleSave();
+            const workflowId = savedWorkflow?._id || workflow?._id;
+            if (!workflowId) throw new Error('Save workflow before publishing');
+            const res = await api.post(`/workflows/${workflowId}/publish`);
+            setWorkflow(w => ({ ...w, ...(res.data.workflow || savedWorkflow), status: 'published' }));
             showNotification('success', 'Workflow published! It will now execute automatically.');
         } catch (err) {
-            showNotification('error', err.response?.data?.message || 'Publish failed');
+            showNotification('error', err.response?.data?.message || err.message || 'Publish failed');
         } finally {
             setPublishing(false);
         }
@@ -354,14 +361,16 @@ function WorkflowBuilderInner() {
     const handleTestRun = async () => {
         if (!testLeadId.trim()) return showNotification('error', 'Enter a Lead ID to test with');
         try {
-            await handleSave();
-            const res = await api.post(`/workflows/${workflow._id}/test`, { leadId: testLeadId });
+            const savedWorkflow = workflow?.status === 'published' ? workflow : await handleSave();
+            const workflowId = savedWorkflow?._id || workflow?._id;
+            if (!workflowId) throw new Error('Save workflow before testing');
+            const res = await api.post(`/workflows/${workflowId}/test`, { leadId: testLeadId });
             setTestExecutionId(res.data.executionId);
             setTestMode(true);
             setShowTestModal(false);
             showNotification('success', 'Test run started — watch the debugger below');
         } catch (err) {
-            showNotification('error', err.response?.data?.message || 'Test run failed');
+            showNotification('error', err.response?.data?.message || err.message || 'Test run failed');
         }
     };
 

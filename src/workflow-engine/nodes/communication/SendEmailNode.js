@@ -107,12 +107,24 @@ const SendEmailNode = {
         const subject = replaceVariables(data.subject || '', templateData);
         const body    = replaceVariables(data.body || '', templateData);
 
-        await sendEmail({
-            to:     lead.email,
-            subject,
-            html:   wrapEmailHtml(body),
-            userId: tenantId
-        });
+        try {
+            await sendEmail({
+                to:     lead.email,
+                subject,
+                html:   wrapEmailHtml(body),
+                userId: tenantId
+            });
+        } catch (err) {
+            console.error(`[SendEmailNode] Failed to send email to ${lead.email}:`, err.message);
+            return {
+                nextPort: 'error',
+                output: {
+                    'email.sent':    false,
+                    'email.error':   err.message,
+                    'email.sentAt':  new Date().toISOString()
+                }
+            };
+        }
 
         return {
             nextPort: 'output',

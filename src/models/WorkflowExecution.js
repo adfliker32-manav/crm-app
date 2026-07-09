@@ -106,8 +106,8 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     bullJobId:    { type: String, default: null },
 
     // ── METADATA ──────────────────────────────────────────────────────────
-    // How this execution was started: 'trigger' | 'manual' | 'test'
-    startedBy:   { type: String, enum: ['trigger', 'manual', 'test'], default: 'trigger' },
+    // How this execution was started: 'trigger' | 'manual' | 'test' | 'webhook' | 'cron'
+    startedBy:   { type: String, enum: ['trigger', 'manual', 'test', 'webhook', 'cron'], default: 'trigger' },
     completedAt: { type: Date, default: null },
     errorMessage:{ type: String, default: null }
 

@@ -109,8 +109,13 @@ const enqueueScheduledTrigger = async (workflowId, cronExpression) => {
     const q = getWorkflowQueue();
     const jobId = `cron:${workflowId}`;
     
-    // Remove existing if any
-    await q.removeRepeatableByKey(jobId);
+    // Remove existing repeatable schedule for this workflow before adding a new one.
+    const repeatableJobs = await q.getRepeatableJobs();
+    for (const job of repeatableJobs) {
+        if (job.id === jobId) {
+            await q.removeRepeatableByKey(job.key);
+        }
+    }
     
     if (cronExpression) {
         await q.add(

@@ -30,11 +30,12 @@ const WorkflowWaitSignalSchema = new mongoose.Schema({
     // The node inside the workflow that created this wait
     nodeId: { type: String, required: true },
 
-    // The contact this wait is for
+    // The contact this wait is for. Optional because webhook/scheduled executions may be contactless.
     contactId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Lead',
-        required: true,
+        required: false,
+        default: null,
         index: true
     },
 

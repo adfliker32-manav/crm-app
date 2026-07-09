@@ -46,15 +46,50 @@ const UpdateStageNode = {
 
         const stageName = data.stageName;
 
-        // Only update if the stage is actually changing
-        if (lead.status !== stageName) {
-            await Lead.findByIdAndUpdate(lead._id, {
-                $set:  { status: stageName, stageEnteredAt: new Date() },
-                $push: {
-                    history: {
-                        $each:  [{ type: 'System', subType: 'WorkflowEngine', content: `Stage changed to "${stageName}" by Workflow`, date: new Date() }],
-                        $slice: -100
+        const leadDoc = await Lead.findById(lead._id);
+        if (leadDoc && leadDoc.status !== stageName) {
+            const oldStatus = leadDoc.status;
+            leadDoc.status = stageName;
+            leadDoc.stageEnteredAt = new Date();
+            leadDoc.history.push({
+                type: 'System',
+                subType: 'Stage Change',
+                content: `Stage changed to "${stageName}" by Workflow`,
+                date: new Date()
+            });
+
+            await leadDoc.save();
+
+            // Run post-stage-change effects in background, just like leadController
+            const { runInBackground } = require('../../../utils/controllerHelpers');
+            const IntegrationConfig = require('../../../models/IntegrationConfig');
+            const { sendMetaEvent } = require('../../../services/metaConversionService');
+            const { enrollLeadInSequences } = require('../../../services/sequenceService');
+            const { updateLeadScore } = require('../../../services/leadScoringService');
+
+            runInBackground('Workflow Engine Error (STAGE_CHANGED):', () => {
+                const WorkflowEngine = require('../../WorkflowEngine');
+                return WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc });
+            });
+
+            runInBackground('Sequence enrollment error (STAGE_CHANGED):', () => {
+                return enrollLeadInSequences(leadDoc, 'STAGE_CHANGED', stageName);
+            });
+
+            runInBackground('Score update error (STAGE_CHANGED):', () => {
+                const isLost = /lost|dead/i.test(stageName || '');
+                return updateLeadScore(leadDoc._id, isLost ? 'STAGE_LOST' : 'STAGE_FORWARD');
+            });
+
+            runInBackground('Meta CAPI error (non-blocking):', async () => {
+                try {
+                    const config = await IntegrationConfig.findOne({ userId: leadDoc.userId })
+                        .select('+meta.metaCapiAccessToken +meta.metaCapiEnabled +meta.metaPixelId +meta.metaStageMapping +meta.metaTestEventCode');
+                    if (config && config.meta?.metaCapiEnabled) {
+                        await sendMetaEvent(config, leadDoc, stageName, oldStatus);
                     }
+                } catch (err) {
+                    console.error('Error fetching config for Meta CAPI (non-blocking):', err);
                 }
             });
         }

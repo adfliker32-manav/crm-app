@@ -132,7 +132,8 @@ const WaitNode = {
                 waitSignal: {
                     signalType: 'WHATSAPP_REPLY',
                     channelId:  conversation._id,
-                    waitUntil
+                    waitUntil,
+                    resolvedPort: 'timeout' // Default if the lead doesn't reply within the time limit
                 }
             };
         }
