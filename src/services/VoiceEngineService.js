@@ -93,7 +93,13 @@ class VoiceEngineService {
 
             return true;
         } catch (error) {
-            console.error(`[VoiceEngine] Failed to execute call action:`, error);
+            // Print the exact API error message (Retell/Vapi response body) — not the full axios object
+            const apiError = error.response?.data;
+            if (apiError) {
+                console.error(`[VoiceEngine] Call API rejected (${error.response.status}):`, JSON.stringify(apiError));
+            } else {
+                console.error(`[VoiceEngine] Failed to execute call action:`, error.message);
+            }
             return false;
         }
     }
