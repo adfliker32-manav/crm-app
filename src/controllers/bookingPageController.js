@@ -246,8 +246,33 @@ const submitBooking = async (req, res) => {
                 if (Object.keys(setOps).length > 0) updateOps.$set = setOps;
 
                 await Lead.findByIdAndUpdate(leadId, updateOps);
+
+                // Fetch the updated lead doc to pass to the workflow engine
+                const leadDoc = await Lead.findById(leadId);
+                if (leadDoc) {
+                    const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+
+                    // 1. If lead was created, fire LEAD_CREATED
+                    if (leadWasCreated) {
+                        WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: leadDoc }).catch(err =>
+                            console.error('[Booking Page] WorkflowEngine LEAD_CREATED error:', err.message)
+                        );
+                    } else if (stageNameToSet && lead.status !== stageNameToSet) {
+                        // 2. If stage changed, fire STAGE_CHANGED
+                        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc }).catch(err =>
+                            console.error('[Booking Page] WorkflowEngine STAGE_CHANGED error:', err.message)
+                        );
+                    }
+
+                    // 3. Fire APPOINTMENT_BOOKED
+                    WorkflowEngine.fireTrigger('APPOINTMENT_BOOKED', { lead: leadDoc, appointment: appt }).catch(err =>
+                        console.error('[Booking Page] WorkflowEngine APPOINTMENT_BOOKED error:', err.message)
+                    );
+                }
             }
-        } catch (_) { /* non-critical */ }
+        } catch (err) {
+            console.error('[Booking Page] confirmBooking lead sync error:', err.message);
+        }
 
         // Send WhatsApp + email confirmations in parallel (independent operations)
         if (page.sendConfirmation) {

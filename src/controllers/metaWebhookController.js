@@ -635,6 +635,16 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             evaluateLead(newLead, 'LEAD_CREATED')
                 .catch(err => console.error(`❌ [Lead:${newLead._id}] AutomationService (LEAD_CREATED) failed:`, err.message));
 
+            // Fire new Workflow Engine trigger
+            try {
+                const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: newLead }).catch(err =>
+                    console.error(`❌ [Lead:${newLead._id}] WorkflowEngine LEAD_CREATED failed:`, err.message)
+                );
+            } catch (wfErr) {
+                console.error(`❌ [Lead:${newLead._id}] WorkflowEngine import error:`, wfErr.message);
+            }
+
             // FIX: Enroll Meta leads in drip sequences (was missing — only manual leads were enrolled)
             try {
                 const { enrollLeadInSequences } = require('../services/sequenceService');

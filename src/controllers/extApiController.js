@@ -106,6 +106,12 @@ exports.createLead = async (req, res) => {
         // ✅ Fire automations (same as Meta webhook + webLead)
         runInBackground('Automation (LEAD_CREATED)', () => evaluateLead(lead, 'LEAD_CREATED'));
 
+        // Fire new Workflow Engine trigger
+        runInBackground('Workflow Engine (LEAD_CREATED)', () => {
+            const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+            return WorkflowEngine.fireTrigger('LEAD_CREATED', { lead });
+        });
+
         if (lead.email) {
             runInBackground('Email automation (LEAD_CREATED)', async () => {
                 await sendAutomatedEmailOnLeadCreate(lead, req.tenantId);
@@ -259,6 +265,10 @@ exports.updateLead = async (req, res) => {
         // Fire stage-change automations if stage changed
         if (status && status !== prevStatus) {
             runInBackground('Automation (STAGE_CHANGED)', () => evaluateLead(lead, 'STAGE_CHANGED'));
+            runInBackground('Workflow Engine (STAGE_CHANGED)', () => {
+                const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                return WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead });
+            });
         }
 
         res.json({

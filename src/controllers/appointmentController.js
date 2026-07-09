@@ -87,19 +87,26 @@ const createAppointment = async (req, res) => {
         await appt.save();
 
         if (leadId) {
-            await Lead.findOneAndUpdate({ _id: leadId, userId }, {
-                $push: {
-                    history: {
-                        $each: [{
-                            type: 'Appointment',
-                            subType: 'Booked',
-                            content: `Appointment booked: ${serviceType} on ${new Date(appointmentDate).toLocaleDateString()} at ${appointmentTime}`,
-                            date: new Date()
-                        }],
-                        $slice: -100
-                    }
+            const lead = await Lead.findOne({ _id: leadId, userId });
+            if (lead) {
+                lead.history.push({
+                    type: 'Appointment',
+                    subType: 'Booked',
+                    content: `Appointment booked: ${serviceType} on ${new Date(appointmentDate).toLocaleDateString()} at ${appointmentTime}`,
+                    date: new Date()
+                });
+                await lead.save();
+
+                // Fire Workflow Engine trigger
+                try {
+                    const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                    WorkflowEngine.fireTrigger('APPOINTMENT_BOOKED', { lead, appointment: appt }).catch(err =>
+                        console.error('[Appointment] WorkflowEngine APPOINTMENT_BOOKED error:', err.message)
+                    );
+                } catch (wfErr) {
+                    console.error('[Appointment] WorkflowEngine import error:', wfErr.message);
                 }
-            });
+            }
         }
 
         res.status(201).json(appt);

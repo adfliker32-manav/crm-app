@@ -310,6 +310,16 @@ exports.captureLead = async (req, res) => {
             console.error('[WebLead] automation trigger error:', e.message)
         );
 
+        // Fire new Workflow Engine trigger
+        try {
+            const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+            WorkflowEngine.fireTrigger('LEAD_CREATED', { lead }).catch(e =>
+                console.error('[WebLead] Workflow Engine LEAD_CREATED error:', e.message)
+            );
+        } catch (wfErr) {
+            console.error('[WebLead] Workflow Engine import error:', wfErr.message);
+        }
+
         // FIX: Enroll Web leads in drip sequences (was missing — only manual leads were enrolled)
         try {
             const { enrollLeadInSequences } = require('../services/sequenceService');

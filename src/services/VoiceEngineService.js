@@ -292,8 +292,19 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
                         recordingUrl: callLog.recordingUrl
                     }
                 });
+
+                // Fire VOICE_CALL_FINISHED trigger
+                const Lead = require('../models/Lead');
+                const lead = await Lead.findById(callLog.leadId);
+                if (lead) {
+                    await WorkflowEngine.fireTrigger('VOICE_CALL_FINISHED', {
+                        lead,
+                        tenantId: callLog.userId,
+                        callLog
+                    });
+                }
             } catch (wfErr) {
-                console.error('[VoiceEngine] WorkflowEngine.resolveWaitSignal (Vapi) error:', wfErr.message);
+                console.error('[VoiceEngine] WorkflowEngine VOICE_CALL_FINISHED (Vapi) error:', wfErr.message);
             }
         }
     }
@@ -359,8 +370,19 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
                         recordingUrl: callLog.recordingUrl
                     }
                 });
+
+                // Fire VOICE_CALL_FINISHED trigger
+                const Lead = require('../models/Lead');
+                const lead = await Lead.findById(callLog.leadId);
+                if (lead) {
+                    await WorkflowEngine.fireTrigger('VOICE_CALL_FINISHED', {
+                        lead,
+                        tenantId: callLog.userId,
+                        callLog
+                    });
+                }
             } catch (wfErr) {
-                console.error('[VoiceEngine] WorkflowEngine.resolveWaitSignal (Retell) error:', wfErr.message);
+                console.error('[VoiceEngine] WorkflowEngine VOICE_CALL_FINISHED (Retell) error:', wfErr.message);
             }
         }
     }

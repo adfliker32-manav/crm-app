@@ -541,8 +541,15 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                     payload:      { message: inboundMessage?.body || '' },
                     resolvedPort: 'replied'
                 });
+
+                // Step 1c: Fire new Workflow Engine WHATSAPP_REPLY start trigger
+                await WorkflowEngine.fireTrigger('WHATSAPP_REPLY', {
+                    lead,
+                    tenantId: conversation.userId,
+                    message
+                });
             } catch (err) {
-                console.error('❌ WorkflowEngine resolveWaitSignal error:', err);
+                console.error('❌ WorkflowEngine WHATSAPP_REPLY error:', err);
             }
 
             try {
