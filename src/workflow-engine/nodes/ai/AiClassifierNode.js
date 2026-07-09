@@ -54,10 +54,10 @@ const AiClassifierNode = {
                 key:         'model',
                 label:       'AI Model',
                 type:        'select',
-                defaultValue: 'gpt-3.5-turbo',
+                defaultValue: 'gpt-4o-mini',
                 options: [
-                    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo (Fast, Low Cost)' },
-                    { value: 'gpt-4o-mini',   label: 'GPT-4o Mini (Better, Moderate Cost)' }
+                    { value: 'gpt-4o-mini',   label: 'GPT-4o Mini (Better, Fast, Low Cost)' },
+                    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo (Legacy)' }
                 ]
             }
         ]
@@ -90,8 +90,7 @@ const AiClassifierNode = {
 
         // Build context-aware prompt with variable interpolation
         const vars = context.getAll();
-        let prompt = (data.prompt || '').replace(/\{\{([^}]+)\}\}/g, (_, key) => vars[key.trim()] ?? '');
-        prompt += `\n\nAvailable categories: ${categories.join(', ')}\nRespond with ONLY the category name, nothing else.`;
+        const prompt = (data.prompt || '').replace(/\{\{([^}]+)\}\}/g, (_, key) => vars[key.trim()] ?? '');
 
         let classification = 'default';
         try {
@@ -100,16 +99,37 @@ const AiClassifierNode = {
             if (!openai) {
                 console.warn('[AiClassifierNode] OPENAI_API_KEY not set. Routing to default.');
             } else {
-                const model = data.model || 'gpt-3.5-turbo';
+                const model = data.model || 'gpt-4o-mini';
                 const completion = await openai.chat.completions.create({
                     model,
                     max_tokens: 50,
                     temperature: 0,  // Deterministic — we want exact category matching
-                    messages: [{ role: 'user', content: prompt }]
+                    messages: [
+                        {
+                            role: 'system',
+                            content: `You are a strict data classifier. Your task is to output exactly one of these allowed categories: ${categories.join(', ')}.\nDo not add any punctuation, explanation, quotes, prefix, or extra words. Output ONLY the exact category name.`
+                        },
+                        { role: 'user', content: prompt }
+                    ]
                 });
+
                 const rawText = completion.choices?.[0]?.message?.content?.trim() || '';
-                const matched = categories.find(c => rawText.toLowerCase().includes(c.toLowerCase()));
-                if (matched) classification = matched;
+                
+                // Clean the response (strip quotes, common punctuation, wrapper spaces)
+                const cleanResponse = rawText.replace(/^["'`.?!,\s]+|["'`.?!,\s]+$/g, '').trim().toLowerCase();
+                const lowercaseCategories = categories.map(c => c.toLowerCase());
+
+                // 1. Try exact match first to prevent substring collision (e.g. matching "Sales" when the output is "Pre-Sales")
+                const exactIdx = lowercaseCategories.indexOf(cleanResponse);
+                if (exactIdx !== -1) {
+                    classification = categories[exactIdx];
+                } else {
+                    // 2. Fallback to substring matching
+                    const matched = categories.find(c => cleanResponse.includes(c.toLowerCase()));
+                    if (matched) {
+                        classification = matched;
+                    }
+                }
             }
         } catch (err) {
             console.error('[AiClassifierNode] AI call failed:', err.message);
