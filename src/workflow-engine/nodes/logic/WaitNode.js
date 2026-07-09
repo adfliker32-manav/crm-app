@@ -93,6 +93,18 @@ const WaitNode = {
 
         if (waitType === 'whatsapp_reply') {
             const lead = context.getLead();
+
+            // BUG #2 FIX: Guard against null lead.
+            // WEBHOOK_RECEIVED triggers may have no associated lead — accessing lead._id
+            // without this guard throws TypeError and crashes the execution.
+            if (!lead) {
+                console.warn('[WaitNode] No lead in execution context. Cannot wait for WhatsApp reply. Routing to no_conversation.');
+                return {
+                    nextPort: 'no_conversation',
+                    output: { 'wait.skipped': true, 'wait.reason': 'no_lead_in_context' }
+                };
+            }
+
             // Find the lead's active WhatsApp conversation
             const conversation = await WhatsAppConversation.findOne({
                 leadId: lead._id,

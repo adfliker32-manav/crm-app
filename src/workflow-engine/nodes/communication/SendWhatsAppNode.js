@@ -84,11 +84,29 @@ const SendWhatsAppNode = {
         const template = await WhatsAppTemplate.findOne({ userId: tenantId, name: templateName }).lean();
         if (!template || template.status !== 'APPROVED') {
             const reason = !template ? 'template_not_found' : 'template_not_approved';
-            console.warn(`[SendWhatsAppNode] Template "${templateName}" is not approved. Skipping.`);
-            return { nextPort: 'output', output: { 'whatsapp.skipped': true, 'whatsapp.reason': reason } };
+            console.warn(`[SendWhatsAppNode] Template "${templateName}" is not approved (reason: ${reason}). Routing to 'error' port.`);
+            // BUG #4 FIX: Was returning 'output' (Sent) port — downstream "Wait for Reply" nodes
+            // would then wait forever for a reply to a message that was never actually sent.
+            return { nextPort: 'error', output: { 'whatsapp.error': reason, 'whatsapp.skipped': true } };
         }
 
-        await sendWhatsAppMessage(lead.phone, templateName, tenantId);
+        // BUG #1 FIX: Wrap Meta API call in try/catch.
+        // sendWhatsAppMessage() throws on ANY failure (expired token, wrong number, etc.).
+        // Without this, BullMQ catches the throw, retries 3x, then marks the execution 'failed'.
+        // The 'error' port on the canvas is never used. Now failures route there instead.
+        try {
+            await sendWhatsAppMessage(lead.phone, templateName, tenantId);
+        } catch (err) {
+            console.error(`[SendWhatsAppNode] Meta API send failed:`, err.message);
+            return {
+                nextPort: 'error',
+                output: {
+                    'whatsapp.error':   err.message,
+                    'whatsapp.sent':    false,
+                    'whatsapp.sentAt':  new Date().toISOString()
+                }
+            };
+        }
 
         return {
             nextPort: 'output',

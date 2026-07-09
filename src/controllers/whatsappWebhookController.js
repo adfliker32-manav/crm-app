@@ -537,6 +537,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                 await WorkflowEngine.resolveWaitSignal({
                     signalType:   'WHATSAPP_REPLY',
                     channelId:    conversation._id,
+                    tenantId:     conversation.userId,   // BUG #3 FIX: scope to this tenant
                     payload:      { message: inboundMessage?.body || '' },
                     resolvedPort: 'replied'
                 });
