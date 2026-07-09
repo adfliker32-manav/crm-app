@@ -252,10 +252,13 @@ const submitBooking = async (req, res) => {
                 if (leadDoc) {
                     const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
 
-                    // 1. If lead was created, fire LEAD_CREATED
+                    // 1. If lead was created, fire LEAD_CREATED & STAGE_CHANGED
                     if (leadWasCreated) {
                         WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: leadDoc }).catch(err =>
                             console.error('[Booking Page] WorkflowEngine LEAD_CREATED error:', err.message)
+                        );
+                        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc }).catch(err =>
+                            console.error('[Booking Page] WorkflowEngine STAGE_CHANGED error:', err.message)
                         );
                     } else if (stageNameToSet && lead.status !== stageNameToSet) {
                         // 2. If stage changed, fire STAGE_CHANGED
