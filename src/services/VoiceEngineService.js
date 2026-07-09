@@ -267,10 +267,33 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
 
             await callLog.save();
 
-            // Trigger Automation Continuation
+            // ── OLD Automation Engine continuation ─────────────────────────────────
             if (callLog.outcome && callLog.automationRuleId) {
                 const AutomationService = require('./AutomationService');
                 await AutomationService.continueWorkflowAfterVoice(callLog);
+            }
+
+            // ── NEW Workflow Engine: resolve VOICE_OUTCOME wait signal ──────────────
+            // VoiceCallNode sets channelId = lead._id when creating the WorkflowWaitSignal.
+            // The outcome string (e.g. 'Interested') maps directly to the canvas port name.
+            // BUG FIX: This was missing — VoiceCallNode executions stayed stuck in 'waiting' forever.
+            try {
+                const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                await WorkflowEngine.resolveWaitSignal({
+                    signalType:   'VOICE_OUTCOME',
+                    channelId:    callLog.leadId,         // VoiceCallNode uses lead._id as channelId
+                    tenantId:     callLog.userId,         // Bug #3 fix: scope query to this tenant
+                    resolvedPort: callLog.outcome || 'No Answer',
+                    payload: {
+                        outcome:      callLog.outcome,
+                        duration:     callLog.durationSeconds,
+                        summary:      callLog.summary,
+                        transcript:   callLog.transcript,
+                        recordingUrl: callLog.recordingUrl
+                    }
+                });
+            } catch (wfErr) {
+                console.error('[VoiceEngine] WorkflowEngine.resolveWaitSignal (Vapi) error:', wfErr.message);
             }
         }
     }
@@ -311,10 +334,33 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
 
             await callLog.save();
 
-            // Trigger Automation Continuation
+            // ── OLD Automation Engine continuation ─────────────────────────────────
             if (callLog.outcome && callLog.automationRuleId) {
                 const AutomationService = require('./AutomationService');
                 await AutomationService.continueWorkflowAfterVoice(callLog);
+            }
+
+            // ── NEW Workflow Engine: resolve VOICE_OUTCOME wait signal ──────────────
+            // VoiceCallNode sets channelId = lead._id when creating the WorkflowWaitSignal.
+            // The outcome string (e.g. 'Interested') maps directly to the canvas port name.
+            // BUG FIX: This was missing — VoiceCallNode executions stayed stuck in 'waiting' forever.
+            try {
+                const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                await WorkflowEngine.resolveWaitSignal({
+                    signalType:   'VOICE_OUTCOME',
+                    channelId:    callLog.leadId,         // VoiceCallNode uses lead._id as channelId
+                    tenantId:     callLog.userId,         // Bug #3 fix: scope query to this tenant
+                    resolvedPort: callLog.outcome || 'No Answer',
+                    payload: {
+                        outcome:      callLog.outcome,
+                        duration:     callLog.durationSeconds,
+                        summary:      callLog.summary,
+                        transcript:   callLog.transcript,
+                        recordingUrl: callLog.recordingUrl
+                    }
+                });
+            } catch (wfErr) {
+                console.error('[VoiceEngine] WorkflowEngine.resolveWaitSignal (Retell) error:', wfErr.message);
             }
         }
     }

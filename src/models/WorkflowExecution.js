@@ -61,11 +61,13 @@ const WorkflowExecutionSchema = new mongoose.Schema({
         connections: { type: mongoose.Schema.Types.Mixed, default: null }
     },
 
-    // The CRM contact this execution is for
+    // The CRM contact this execution is for.
+    // NOTE: required:false because WEBHOOK_RECEIVED triggers may have no associated lead.
     contactId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Lead',
-        required: true,
+        required: false,  // BUG #2 FIX: was true — caused Mongoose error for webhook workflows with no lead
+        default: null,
         index: true
     },
 
