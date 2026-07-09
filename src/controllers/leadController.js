@@ -131,9 +131,10 @@ const queueLeadCreatedEffects = (lead, ownerId) => {
         evaluateLead(lead, 'LEAD_CREATED')
     );
     // New Workflow Engine — runs in parallel, non-blocking
-    runInBackground('Workflow Engine Error (LEAD_CREATED):', () =>
-        WorkflowEngine.fireTrigger('LEAD_CREATED', { lead })
-    );
+    runInBackground('Workflow Engine Error (LEAD_CREATED/STAGE_CHANGED):', () => {
+        WorkflowEngine.fireTrigger('LEAD_CREATED', { lead });
+        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead });
+    });
 
     runInBackground('Sequence enrollment error (LEAD_CREATED):', () => {
         const { enrollLeadInSequences } = require('../services/sequenceService');

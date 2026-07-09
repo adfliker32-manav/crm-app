@@ -109,7 +109,8 @@ exports.createLead = async (req, res) => {
         // Fire new Workflow Engine trigger
         runInBackground('Workflow Engine (LEAD_CREATED)', () => {
             const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-            return WorkflowEngine.fireTrigger('LEAD_CREATED', { lead });
+            WorkflowEngine.fireTrigger('LEAD_CREATED', { lead });
+            WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead });
         });
 
         if (lead.email) {
@@ -540,12 +541,32 @@ exports.createAppointment = async (req, res) => {
             source:          'manual'
         };
 
+        let leadDoc = null;
         if (leadId && isValidId(leadId)) {
-            const lead = await Lead.findOne({ _id: leadId, userId: req.tenantId }).select('_id').lean();
-            if (lead) apptData.leadId = lead._id;
+            leadDoc = await Lead.findOne({ _id: leadId, userId: req.tenantId });
+            if (leadDoc) apptData.leadId = leadDoc._id;
         }
 
         const appointment = await Appointment.create(apptData);
+
+        if (leadDoc) {
+            leadDoc.history.push({
+                type: 'Appointment',
+                subType: 'Booked',
+                content: `Appointment booked: ${apptData.serviceType} on ${d.toLocaleDateString()} at ${apptData.appointmentTime} (via API)`,
+                date: new Date()
+            });
+            await leadDoc.save();
+
+            try {
+                const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                WorkflowEngine.fireTrigger('APPOINTMENT_BOOKED', { lead: leadDoc, appointment }).catch(err =>
+                    console.error('[ExtAPI] WorkflowEngine APPOINTMENT_BOOKED error:', err.message)
+                );
+            } catch (wfErr) {
+                console.error('[ExtAPI] WorkflowEngine import error:', wfErr.message);
+            }
+        }
 
         res.status(201).json({
             success: true,

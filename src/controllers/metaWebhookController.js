@@ -641,6 +641,9 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
                 WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: newLead }).catch(err =>
                     console.error(`❌ [Lead:${newLead._id}] WorkflowEngine LEAD_CREATED failed:`, err.message)
                 );
+                WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: newLead }).catch(err =>
+                    console.error(`❌ [Lead:${newLead._id}] WorkflowEngine STAGE_CHANGED failed:`, err.message)
+                );
             } catch (wfErr) {
                 console.error(`❌ [Lead:${newLead._id}] WorkflowEngine import error:`, wfErr.message);
             }

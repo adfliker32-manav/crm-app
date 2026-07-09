@@ -220,6 +220,9 @@ const receiveSheetPush = async (req, res) => {
                         WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: newLead }).catch(err =>
                             console.error('[Sheet Push] WorkflowEngine LEAD_CREATED error:', err.message)
                         );
+                        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: newLead }).catch(err =>
+                            console.error('[Sheet Push] WorkflowEngine STAGE_CHANGED error:', err.message)
+                        );
                     } catch (wfErr) {
                         console.error('[Sheet Push] WorkflowEngine import error:', wfErr.message);
                     }

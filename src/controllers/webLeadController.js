@@ -316,6 +316,9 @@ exports.captureLead = async (req, res) => {
             WorkflowEngine.fireTrigger('LEAD_CREATED', { lead }).catch(e =>
                 console.error('[WebLead] Workflow Engine LEAD_CREATED error:', e.message)
             );
+            WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead }).catch(e =>
+                console.error('[WebLead] Workflow Engine STAGE_CHANGED error:', e.message)
+            );
         } catch (wfErr) {
             console.error('[WebLead] Workflow Engine import error:', wfErr.message);
         }
