@@ -82,6 +82,13 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     // The node currently being executed (or about to be executed after a wait)
     currentNodeId: { type: String, default: null },
 
+    // BUG #7 FIX (join/diamond dedup): the set of nodeIds that have already been
+    // claimed for execution in this run. Used as an atomic guard so a merge node
+    // reached by multiple incoming branches (e.g. A→B, A→C, B→D, C→D) runs ONCE
+    // instead of once per incoming edge. A node's claim is released if it fails,
+    // so BullMQ retries and legitimate re-arrivals can still re-run it.
+    claimedNodeIds: { type: [String], default: [] },
+
     // When waiting, this is the resume timestamp. BullMQ delayed job fires at this time.
     waitingUntil:   { type: Date, default: null, index: true },
     // The type of wait signal that can also resolve this execution (e.g. 'WHATSAPP_REPLY')
@@ -91,6 +98,11 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     // Holds all variables for this execution. Nodes read and write to this.
     // Pre-populated with lead fields on creation.
     variables: { type: mongoose.Schema.Types.Mixed, default: {} },
+
+    // BUG #9 FIX: optimistic-concurrency counter for atomic variable merges.
+    // Parallel fork branches merge only their own delta into `variables` using a
+    // compare-and-swap on this revision, so no branch overwrites another's writes.
+    varRev: { type: Number, default: 0 },
 
     // ── NODE EXECUTION HISTORY ─────────────────────────────────────────────
     // Capped at 500 entries — sufficient for virtually any workflow depth.

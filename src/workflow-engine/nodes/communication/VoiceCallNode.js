@@ -1,6 +1,10 @@
 const NodeRegistry = require('../../NodeRegistry');
 const VoiceEngineService = require('../../../services/VoiceEngineService');
 const WorkflowWaitSignal = require('../../../models/WorkflowWaitSignal');
+// BUG #8 FIX: canonical outcome port ids shared with VoiceEngineService's
+// resolvedPort mapping, so the ports the canvas renders and the ports the
+// webhook resolves to can never drift apart.
+const { VOICE_OUTCOME_PORTS } = require('./voiceOutcomePorts');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VoiceCallNode
@@ -22,15 +26,10 @@ const VoiceCallNode = {
     }),
 
     ports: () => ({
-        inputs:  [{ id: 'input',             label: 'In' }],
-        outputs: [
-            { id: 'Appointment Booked', label: 'Appointment Booked' },
-            { id: 'Interested',         label: 'Interested' },
-            { id: 'Not Interested',     label: 'Not Interested' },
-            { id: 'Busy',               label: 'Busy / Retry' },
-            { id: 'No Answer',          label: 'No Answer' },
-            { id: 'error',              label: 'Call Failed' }
-        ]
+        inputs:  [{ id: 'input', label: 'In' }],
+        // BUG #8 FIX: sourced from the shared canonical list so the canvas ports
+        // stay in lockstep with the ports VoiceEngineService resolves outcomes to.
+        outputs: VOICE_OUTCOME_PORTS
     }),
 
     schema: () => ({

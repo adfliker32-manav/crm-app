@@ -6,6 +6,9 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 const VoiceCallLog = require('../models/VoiceCallLog');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const OpenAI = require('openai');
+// BUG #8 FIX: normalise raw call outcomes into canonical VoiceCallNode ports so
+// the workflow's outcome branches (No Answer / Busy / Call Failed) actually fire.
+const { mapVoiceOutcomeToPort } = require('../workflow-engine/nodes/communication/voiceOutcomePorts');
 
 class VoiceEngineService {
     /**
@@ -283,7 +286,7 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
                     signalType:   'VOICE_OUTCOME',
                     channelId:    callLog.leadId,         // VoiceCallNode uses lead._id as channelId
                     tenantId:     callLog.userId,         // Bug #3 fix: scope query to this tenant
-                    resolvedPort: callLog.outcome || 'No Answer',
+                    resolvedPort: mapVoiceOutcomeToPort(callLog.outcome),
                     payload: {
                         outcome:      callLog.outcome,
                         duration:     callLog.durationSeconds,
@@ -361,7 +364,7 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
                     signalType:   'VOICE_OUTCOME',
                     channelId:    callLog.leadId,         // VoiceCallNode uses lead._id as channelId
                     tenantId:     callLog.userId,         // Bug #3 fix: scope query to this tenant
-                    resolvedPort: callLog.outcome || 'No Answer',
+                    resolvedPort: mapVoiceOutcomeToPort(callLog.outcome),
                     payload: {
                         outcome:      callLog.outcome,
                         duration:     callLog.durationSeconds,

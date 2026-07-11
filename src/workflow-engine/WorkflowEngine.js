@@ -19,6 +19,7 @@
 //   ARCH #3 — Workflow graph snapshotted into execution on creation; executeNode uses snapshot
 // ─────────────────────────────────────────────────────────────────────────────
 
+const mongoose          = require('mongoose');
 const Workflow          = require('../models/Workflow');
 const WorkflowExecution = require('../models/WorkflowExecution');
 const WorkflowWaitSignal = require('../models/WorkflowWaitSignal');
@@ -50,6 +51,10 @@ class ExecutionContext {
         // so in-flight executions are not affected by workflow edits.
         this._workflow   = workflowGraph;
         this._execution  = execution;
+        // BUG #9 FIX: track only the keys THIS node mutates, so we can persist a
+        // minimal delta atomically instead of rewriting the whole variables blob
+        // (which would clobber a concurrent sibling branch's writes).
+        this._dirty      = {};
     }
 
     get(key) {
@@ -58,6 +63,12 @@ class ExecutionContext {
 
     set(key, value) {
         this.variables[key] = value;
+        this._dirty[key]    = value;
+    }
+
+    // The subset of variables this node created/changed (for atomic persistence).
+    getDelta() {
+        return { ...this._dirty };
     }
 
     getAll() {
@@ -163,6 +174,46 @@ const appendHistory = (execution, logEntry) => {
     return execution.history[execution.history.length - 1]._id;
 };
 
+/**
+ * BUG #9 FIX: Atomically merge a node's variable delta into the execution's
+ * `variables` object without clobbering concurrent sibling-branch writes.
+ *
+ * The `variables` keys literally contain dots (e.g. 'lead.status'), so MongoDB
+ * dot-path $set can't target individual keys. Instead we use a compare-and-swap
+ * loop on `varRev`: read the current variables+revision, merge our delta on top,
+ * and write only if the revision is unchanged. A concurrent writer bumps varRev,
+ * so the loser re-reads (now seeing the winner's keys) and merges again — the
+ * union of both branches' writes is always preserved. Works on every MongoDB
+ * version and needs no aggregation-pipeline / dotted-key gymnastics.
+ *
+ * @param {string} executionId
+ * @param {object} delta — only the keys this node created/changed
+ */
+const mergeVariablesAtomic = async (executionId, delta) => {
+    if (!delta || Object.keys(delta).length === 0) return;
+
+    for (let attempt = 0; attempt < 6; attempt++) {
+        const cur = await WorkflowExecution.findById(executionId).select('variables varRev').lean();
+        if (!cur) return; // execution vanished (e.g. TTL) — nothing to write
+        const rev = cur.varRev || 0;
+        const merged = { ...(cur.variables || {}), ...delta };
+
+        // On the very first write the field may be 0 (new doc) or missing (legacy
+        // in-flight doc) — accept both so the CAS can bootstrap.
+        const revMatch = rev === 0 ? { $in: [0, null] } : rev;
+
+        const res = await WorkflowExecution.updateOne(
+            { _id: executionId, varRev: revMatch },
+            { $set: { variables: merged, varRev: rev + 1 } }
+        );
+        if (res.matchedCount === 1) return; // won the CAS
+
+        // Lost the race to a sibling branch — small backoff, then re-read & retry.
+        await new Promise(r => setTimeout(r, 10 * (attempt + 1)));
+    }
+    console.warn(`[WorkflowEngine] mergeVariablesAtomic gave up after retries for execution ${executionId}`);
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN ENGINE METHODS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -241,9 +292,14 @@ const fireTrigger = async (triggerType, payload) => {
                 continue;
             }
 
-            // Check if there's already an active execution for this lead + workflow
+            // Check if there's already an active execution for this lead + workflow.
+            // NOTE: this is a cheap FAST-PATH only — it is NOT race-safe on its own
+            // (two concurrent identical triggers can both read activeCount=0). The
+            // authoritative cap enforcement is the post-create reconcile below
+            // (BUG #10 FIX).
             const maxExec = workflow.settings?.maxExecutionsPerLead ?? 1;
-            if (maxExec > 0 && lead && payload.startedBy !== 'test') {
+            const capEnforced = maxExec > 0 && lead && payload.startedBy !== 'test';
+            if (capEnforced) {
                 const activeCount = await WorkflowExecution.countDocuments({
                     workflowId: workflow._id,
                     contactId:  lead._id,
@@ -285,6 +341,33 @@ const fireTrigger = async (triggerType, payload) => {
                 variables,
                 startedBy:        payload.startedBy || 'trigger'
             });
+
+            // ── BUG #10 FIX: race-safe maxExecutionsPerLead enforcement ─────────
+            // The pre-check above is only a fast-path (count-then-create is a TOCTOU
+            // race: two concurrent identical triggers — e.g. a duplicated webhook
+            // delivery — both see 0 and both create). Instead we create first, then
+            // reconcile: if more than maxExec executions are now active for this
+            // (workflow, lead), the newest ones beyond the cap remove themselves.
+            // The keep-set is deterministic (oldest createdAt, then _id) so every
+            // concurrent creator agrees on exactly which maxExec executions survive.
+            if (capEnforced) {
+                const actives = await WorkflowExecution.find({
+                    workflowId: workflow._id,
+                    contactId:  lead._id,
+                    status:     { $in: ['running', 'waiting'] }
+                }).select('_id').sort({ createdAt: 1, _id: 1 }).lean();
+
+                if (actives.length > maxExec) {
+                    const keep = new Set(actives.slice(0, maxExec).map(a => String(a._id)));
+                    if (!keep.has(String(execution._id))) {
+                        // This execution is over the cap — undo it and skip. It never
+                        // ran a node, so deleting keeps analytics/history clean.
+                        await WorkflowExecution.deleteOne({ _id: execution._id });
+                        console.log(`[WorkflowEngine] Workflow "${workflow.name}" hit maxExecutionsPerLead (${maxExec}) for lead "${lead?.name ?? 'N/A'}" (concurrent duplicate). Dropped.`);
+                        continue;
+                    }
+                }
+            }
 
             // Enqueue all start nodes (parallel support)
             for (const startNode of startNodes) {
@@ -342,6 +425,27 @@ const executeNode = async (executionId, nodeId) => {
             return;
         }
 
+        // ── BUG #7 FIX: atomic per-node run guard (join / diamond dedup) ────────
+        // Atomically claim this (execution, node) pair before doing any work.
+        // In a fan-in graph (A→B, A→C, B→D, C→D) node D is enqueued once per
+        // incoming edge, so without this guard D would execute twice — doubling
+        // side effects (two emails, two stage changes, two HTTP calls).
+        // findOneAndUpdate on a single document is atomic: the condition
+        // `claimedNodeIds: { $ne: nodeId }` only matches while the node is unclaimed,
+        // so exactly one of two concurrent arrivals wins. The claim is released in
+        // the catch block on failure so BullMQ retries can re-run the node.
+        const claimed = await WorkflowExecution.findOneAndUpdate(
+            { _id: executionId, claimedNodeIds: { $ne: nodeId } },
+            { $addToSet: { claimedNodeIds: nodeId } },
+            { new: true }
+        );
+        if (!claimed) {
+            console.log(`[WorkflowEngine] Node "${nodeId}" already claimed for execution ${executionId} (duplicate join arrival). Skipping.`);
+            return;
+        }
+        // Use the freshly-updated document (it carries the claim + latest variables).
+        execution = claimed;
+
         // ARCH #3: Use the snapshotted graph stored on the execution, so edits
         // to the live workflow don't break in-flight executions.
         let workflowGraph = execution.workflowSnapshot;
@@ -368,22 +472,37 @@ const executeNode = async (executionId, nodeId) => {
             ? await Lead.findById(execution.contactId).lean()
             : null;
 
-        // Build execution context
+        // Build execution context (variables here are a snapshot copy; the context
+        // records only the keys this node mutates so we persist a minimal delta).
         const context = new ExecutionContext(execution, workflowGraph, lead);
 
-        // BUG #3 FIX: Track the history entry by its Mongoose _id, not by
-        // linear search (which breaks when the same node appears in a loop).
-        const logEntry = {
-            nodeId,
-            nodeType:  node.type,
-            nodeName:  node.name || node.type,
-            status:    'running',
-            startedAt: new Date(),
-            input:     context.getAll()
-        };
-        histEntryId = appendHistory(execution, logEntry);
-        execution.currentNodeId = nodeId;
-        await execution.save();
+        // BUG #9 FIX: persist state with ATOMIC operators, never full-document
+        // .save(). Concurrent fork branches of one execution used to read-modify-
+        // write the whole document, so the last .save() wiped sibling branches'
+        // variables and history entries. History is appended with an additive
+        // $push (self-assigned _id) which can never clobber a sibling entry.
+        histEntryId = new mongoose.Types.ObjectId();
+        const startedAt = new Date();
+        await WorkflowExecution.updateOne(
+            { _id: executionId },
+            {
+                $set:  { currentNodeId: nodeId },
+                $push: {
+                    history: {
+                        $each: [{
+                            _id:       histEntryId,
+                            nodeId,
+                            nodeType:  node.type,
+                            nodeName:  node.name || node.type,
+                            status:    'running',
+                            startedAt,
+                            input:     context.getAll()
+                        }],
+                        $slice: -500   // cap history at the most recent 500 entries
+                    }
+                }
+            }
+        );
 
         // Get the node implementation from registry
         const nodeImpl = NodeRegistry.get(node.type);
@@ -395,19 +514,23 @@ const executeNode = async (executionId, nodeId) => {
         const outputPort = result?.nextPort || 'output';
         const outputData = result?.output || {};
 
-        // Merge any output variables back into the execution
-        Object.assign(execution.variables, context.getAll(), outputData);
+        // BUG #9 FIX: merge ONLY this node's delta (its context.set() mutations +
+        // its output) into `variables` via an atomic compare-and-swap, so a
+        // concurrent sibling branch's variable writes are never overwritten.
+        const nodeDelta = { ...context.getDelta(), ...outputData };
+        await mergeVariablesAtomic(executionId, nodeDelta);
 
-        // BUG #3 FIX: Find history entry by its _id (exact reference, loop-safe)
-        const historyEntry = histEntryId
-            ? execution.history.find(h => h._id?.equals(histEntryId))
-            : null;
-        if (historyEntry) {
-            historyEntry.status     = 'completed';
-            historyEntry.finishedAt = new Date();
-            historyEntry.durationMs = Date.now() - new Date(historyEntry.startedAt).getTime();
-            historyEntry.output     = outputData;
-        }
+        // Mark this node's history entry completed with a positional $set — targets
+        // exactly this entry by _id, so it can't clobber sibling entries either.
+        await WorkflowExecution.updateOne(
+            { _id: executionId, 'history._id': histEntryId },
+            { $set: {
+                'history.$.status':     'completed',
+                'history.$.finishedAt': new Date(),
+                'history.$.durationMs': Date.now() - startedAt.getTime(),
+                'history.$.output':     outputData
+            } }
+        );
 
         // ── WAIT SIGNAL ───────────────────────────────────────────────────
         // If the node needs to wait for an external signal, pause the execution
@@ -435,37 +558,54 @@ const executeNode = async (executionId, nodeId) => {
                 $set: { timeoutBullJobId: timeoutJob.id }
             });
 
-            // Pause the execution
-            execution.status        = 'waiting';
-            execution.waitingUntil  = waitUntil;
-            execution.waitSignalType = signalType;
-            await execution.save();
+            // Pause the execution (atomic $set — no full-document save).
+            await WorkflowExecution.updateOne(
+                { _id: executionId },
+                { $set: { status: 'waiting', waitingUntil: waitUntil, waitSignalType: signalType } }
+            );
 
             console.log(`[WorkflowEngine] Execution ${executionId} paused at node "${nodeId}" waiting for ${signalType} until ${waitUntil}`);
             return;
         }
 
         // ── DETERMINE NEXT NODES ──────────────────────────────────────────
-        const connections = workflowGraph.connections.filter(
-            c => c.sourceNodeId === nodeId && c.sourcePort === outputPort
-        );
+        // BUG #6 FIX (port-fallback misrouting): match ONLY connections leaving
+        // the port the node actually emitted. A connection saved with no explicit
+        // sourcePort defaults to 'output', so when the node emits 'output' we also
+        // accept connections whose sourcePort is missing (legacy data).
+        //
+        // We must NEVER fall back to the 'output' port for any other emitted port
+        // (e.g. 'error', 'false', 'rate_limit', 'timeout', a Switch/AI category).
+        // The previous code did exactly that, so a failed WhatsApp/email send whose
+        // 'error' port was left unwired was silently routed down the 'output' (Sent)
+        // success branch — causing downstream "wait for reply" nodes to wait forever
+        // for a reply to a message that was never sent. When an alternate/error port
+        // is unwired, this branch is simply terminal (matches ConditionNode behavior).
+        const finalConns = workflowGraph.connections.filter(c => {
+            if (c.sourceNodeId !== nodeId) return false;
+            if (outputPort === 'output') return c.sourcePort === 'output' || !c.sourcePort;
+            return c.sourcePort === outputPort;
+        });
 
-        // If no connections from this port, also try the default 'output' port
-        const finalConns = connections.length > 0 ? connections :
-            workflowGraph.connections.filter(c => c.sourceNodeId === nodeId && (!c.sourcePort || c.sourcePort === 'output'));
-
-        // Mark execution as completed if this is a terminal node
+        // Mark execution as completed if this is a terminal node (atomic $set,
+        // guarded so an already failed/cancelled execution isn't revived).
+        // NOTE: with a non-rejoining parallel fan-out this still completes the whole
+        // execution when the FIRST tail ends; correct fork/join lifecycle tracking is
+        // a separate concern from the lost-write race fixed here.
         if (finalConns.length === 0) {
-            execution.status      = 'completed';
-            execution.completedAt = new Date();
-            await execution.save();
+            await WorkflowExecution.updateOne(
+                { _id: executionId, status: { $nin: ['failed', 'cancelled'] } },
+                { $set: { status: 'completed', completedAt: new Date() } }
+            );
             console.log(`[WorkflowEngine] Execution ${executionId} completed.`);
             return;
         }
 
-        // Save updated variables + history, then enqueue next nodes
-        execution.status = 'running';
-        await execution.save();
+        // Keep the execution 'running', then enqueue next nodes (atomic $set).
+        await WorkflowExecution.updateOne(
+            { _id: executionId, status: { $nin: ['failed', 'cancelled', 'completed'] } },
+            { $set: { status: 'running' } }
+        );
 
         const queue = getQueue();
         for (const conn of finalConns) {
@@ -478,15 +618,26 @@ const executeNode = async (executionId, nodeId) => {
     } catch (err) {
         console.error(`[WorkflowEngine] executeNode failed (exec: ${executionId}, node: ${nodeId}):`, err.message);
 
+        // BUG #7 FIX: release this node's claim so BullMQ can retry it (and any
+        // legitimate re-arrival can re-run it). Without releasing, the retry would
+        // hit the dedup guard above and be silently skipped, swallowing the retry.
+        await WorkflowExecution.updateOne(
+            { _id: executionId },
+            { $pull: { claimedNodeIds: nodeId } }
+        ).catch(() => { /* best-effort; original error is re-thrown below */ });
+
         if (execution) {
-            // BUG #3 FIX: Find history entry by _id
-            const historyEntry = histEntryId
-                ? execution.history.find(h => h._id?.equals(histEntryId))
-                : null;
-            if (historyEntry) {
-                historyEntry.status     = 'failed';
-                historyEntry.finishedAt = new Date();
-                historyEntry.error      = err.message;
+            // BUG #9 FIX: mark this node's history entry failed with a positional
+            // $set (atomic, targets exactly this entry — no full-document save).
+            if (histEntryId) {
+                await WorkflowExecution.updateOne(
+                    { _id: executionId, 'history._id': histEntryId },
+                    { $set: {
+                        'history.$.status':     'failed',
+                        'history.$.finishedAt': new Date(),
+                        'history.$.error':      err.message
+                    } }
+                ).catch(() => { /* best-effort */ });
             }
 
             // Check if we should continue or halt the workflow
@@ -508,11 +659,17 @@ const executeNode = async (executionId, nodeId) => {
                     }
                 }
             } else {
-                execution.status       = 'failed';
-                execution.errorMessage = `Node "${nodeId}" failed: ${err.message}`;
-                execution.completedAt  = new Date();
+                // Fail the execution (atomic $set, guarded so we don't overwrite a
+                // terminal state a sibling branch may have set).
+                await WorkflowExecution.updateOne(
+                    { _id: executionId, status: { $nin: ['completed', 'cancelled'] } },
+                    { $set: {
+                        status:       'failed',
+                        errorMessage: `Node "${nodeId}" failed: ${err.message}`,
+                        completedAt:  new Date()
+                    } }
+                );
             }
-            await execution.save();
         }
 
         // Re-throw so BullMQ can handle retry logic
@@ -556,47 +713,77 @@ const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort,
         // Optional extra safety: scope to tenant if caller provides it
         if (tenantId) signalQuery.tenantId = tenantId;
 
-        // Atomically claim the signal — prevents double-processing
-        const signal = await WorkflowWaitSignal.findOneAndUpdate(
-            signalQuery,
-            { $set: { status: 'received', receivedAt: new Date(), payload, resolvedPort: resolvedPort || 'output' } },
-            { new: false, sort: { createdAt: 1 } } // Oldest pending signal first
-        );
+        // ── BUG #11 FIX: resume ALL workflows waiting on this channel ───────────
+        // Previously this claimed only the OLDEST pending signal, so if several
+        // workflows were paused on the same conversation, one inbound reply resumed
+        // just one of them and the rest stayed stuck until their own timeout. We now
+        // loop, atomically claiming (pending → received) and resuming each pending
+        // signal in turn. The atomic findOneAndUpdate still guarantees concurrent
+        // webhook deliveries can never resume the SAME workflow twice; every DISTINCT
+        // waiting workflow is resumed exactly once. Each claim removes one signal
+        // from the pending set, so the loop terminates; a hard cap guards edge cases.
+        const MAX_SIGNALS = 100;
+        let resumedCount = 0;
+        for (let i = 0; i < MAX_SIGNALS; i++) {
+            const signal = await WorkflowWaitSignal.findOneAndUpdate(
+                signalQuery,
+                { $set: { status: 'received', receivedAt: new Date(), payload, resolvedPort: resolvedPort || 'output' } },
+                { new: false, sort: { createdAt: 1 } } // Oldest pending signal first
+            );
+            if (!signal) break; // No (more) waiting signals — normal traffic.
 
-        if (!signal) return; // No waiting signal for this event — normal traffic
+            // Resume each workflow in isolation so a failure on one does not stop
+            // the others from resuming.
+            await resumeFromSignal(signal, { payload, resolvedPort });
+            resumedCount++;
+        }
 
-        console.log(`[WorkflowEngine] Signal received: ${signalType} → execution ${signal.executionId}`);
+        if (resumedCount > 0) {
+            console.log(`[WorkflowEngine] ${signalType} resolved ${resumedCount} waiting workflow(s) on channel ${channelId || 'null'}.`);
+        }
+    } catch (err) {
+        console.error('[WorkflowEngine] resolveWaitSignal error:', err.message);
+    }
+};
 
-        // Cancel the BullMQ timeout job
+/**
+ * Resume a single execution from a claimed wait signal: cancel its timeout job,
+ * inject the signal payload, and enqueue the node(s) after the wait node.
+ * Isolated per-signal (BUG #11) so resuming one workflow can't block the others.
+ */
+const resumeFromSignal = async (signal, { payload, resolvedPort }) => {
+    try {
+        console.log(`[WorkflowEngine] Signal received: ${signal.signalType} → execution ${signal.executionId}`);
+
+        // Cancel the BullMQ timeout job (best-effort — it may have already fired).
         if (signal.timeoutBullJobId) {
             try {
-                const queue = getQueue();
-                await queue.cancelJob(signal.timeoutBullJobId);
+                await getQueue().cancelJob(signal.timeoutBullJobId);
             } catch (e) {
                 // Non-critical — timeout job may have already fired
             }
         }
 
-        // Resume the execution from the next node(s) after the wait node
+        // Resume the execution from the next node(s) after the wait node.
         const execution = await WorkflowExecution.findById(signal.executionId);
         if (!execution || execution.status !== 'waiting') {
             console.warn(`[WorkflowEngine] Execution ${signal.executionId} is not in 'waiting' state. Ignoring signal.`);
             return;
         }
 
-        // Inject signal payload into execution variables
+        // Inject signal payload into execution variables (atomic merge — BUG #9).
         if (payload) {
             const prefixedPayload = {};
             for (const [k, v] of Object.entries(payload)) {
                 prefixedPayload[`signal.${k}`] = v;
             }
-            Object.assign(execution.variables, prefixedPayload);
+            await mergeVariablesAtomic(execution._id.toString(), prefixedPayload);
         }
 
-        // Resolve the port to follow
+        // Resolve the port to follow.
         const port = resolvedPort || signal.resolvedPort || 'output';
 
-        // ARCH #3: Use the snapshotted graph for resume routing
+        // ARCH #3: Use the snapshotted graph for resume routing.
         let workflowGraph = execution.workflowSnapshot;
         if (!workflowGraph) {
             const liveWf = await Workflow.findById(execution.workflowId).lean();
@@ -608,16 +795,18 @@ const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort,
             c => c.sourceNodeId === signal.nodeId && c.sourcePort === port
         );
 
-        execution.status        = 'running';
-        execution.waitingUntil  = null;
-        execution.waitSignalType = null;
-        await execution.save();
+        // Resume (atomic $set — no full-document save; BUG #9).
+        await WorkflowExecution.updateOne(
+            { _id: execution._id },
+            { $set: { status: 'running', waitingUntil: null, waitSignalType: null } }
+        );
 
         if (nextConns.length === 0) {
-            // No next node — execution is complete
-            await WorkflowExecution.findByIdAndUpdate(execution._id, {
-                $set: { status: 'completed', completedAt: new Date() }
-            });
+            // No next node — execution is complete.
+            await WorkflowExecution.updateOne(
+                { _id: execution._id, status: { $nin: ['failed', 'cancelled'] } },
+                { $set: { status: 'completed', completedAt: new Date() } }
+            );
             return;
         }
 
@@ -626,9 +815,8 @@ const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort,
             const targetNode = workflowGraph.nodes.find(n => n.id === conn.targetNodeId);
             await queue.enqueueNode(execution._id.toString(), conn.targetNodeId, 0, targetNode?.type);
         }
-
     } catch (err) {
-        console.error('[WorkflowEngine] resolveWaitSignal error:', err.message);
+        console.error(`[WorkflowEngine] resumeFromSignal error (exec ${signal?.executionId}):`, err.message);
     }
 };
 
