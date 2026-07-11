@@ -55,6 +55,13 @@ const workspaceSettingsSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    // Idempotency stamp for the trial-expiry reminder cron (T-5 / T-2 / T0 /
+    // every-7-days-after). Prevents duplicate sends if the server restarts
+    // mid-sweep. See cronJobs.runTrialExpiryReminder.
+    lastTrialReminderSentAt: {
+        type: Date,
+        default: null
+    },
     monthlyRevenue: {
         type: Number,
         default: 0

@@ -468,6 +468,73 @@ const runRenewalReminder = async () => {
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Trial expiry reminder — runs daily at 9 AM.
+// Nudges trial workspaces (billingType === 'trial', i.e. never started a paid
+// subscription) toward subscribing: T-5 / T-2 before planExpiryDate, on the day
+// it lapses, then every 7 days after while they remain unsubscribed. Stops
+// automatically once they subscribe, since billingType flips away from
+// 'trial' (see subscriptionService.initiateSubscription).
+// ──────────────────────────────────────────────────────────────────────────────
+const runTrialExpiryReminder = async () => {
+    try {
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
+        const User = require('../models/User');
+        const billingEmailService = require('./billingEmailService');
+
+        const now = Date.now();
+        const DAY = 24 * 3600 * 1000;
+
+        // { daysLeft, kind } — negative daysLeft = days SINCE expiry.
+        const windows = [
+            { daysLeft: 5, kind: 'ending_soon' },
+            { daysLeft: 2, kind: 'ending_soon' },
+            { daysLeft: 0, kind: 'expired' },
+            { daysLeft: -7, kind: 'expired' },
+            { daysLeft: -14, kind: 'expired' },
+            { daysLeft: -21, kind: 'expired' },
+            { daysLeft: -28, kind: 'expired' }
+        ];
+
+        let totalSent = 0;
+        for (const { daysLeft, kind } of windows) {
+            // planExpiryDate for this window sits `daysLeft` days from now (negative = in the past).
+            const windowStart = new Date(now + (daysLeft - 0.5) * DAY);
+            const windowEnd = new Date(now + (daysLeft + 0.5) * DAY);
+
+            const workspaces = await WorkspaceSettings.find({
+                billingType: 'trial',
+                planExpiryDate: { $gte: windowStart, $lte: windowEnd }
+            }).select('userId planExpiryDate lastTrialReminderSentAt').lean();
+
+            for (const ws of workspaces) {
+                // Idempotency: skip if a reminder was already sent in the last 20h.
+                if (ws.lastTrialReminderSentAt && (now - new Date(ws.lastTrialReminderSentAt).getTime()) < 20 * 3600 * 1000) {
+                    continue;
+                }
+
+                const client = await User.findById(ws.userId).select('email name companyName').lean();
+                if (!client?.email) continue;
+
+                const send = kind === 'ending_soon'
+                    ? billingEmailService.sendTrialEndingSoon(client, { daysLeft, trialEndDate: ws.planExpiryDate })
+                    : billingEmailService.sendTrialExpired(client, { daysSinceExpiry: -daysLeft });
+
+                // Fire-and-forget so a slow SMTP doesn't stall the whole sweep.
+                send.catch(err => console.error(`[TrialReminder] email failed for ${client.email}:`, err.message));
+
+                await WorkspaceSettings.findByIdAndUpdate(ws._id, { $set: { lastTrialReminderSentAt: new Date() } });
+                totalSent++;
+            }
+        }
+        if (totalSent > 0) {
+            console.log(`📣 [TrialReminder] ${totalSent} reminder email(s) dispatched`);
+        }
+    } catch (err) {
+        console.error('❌ [TrialReminder] Cron error:', err.message);
+    }
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Drift reconciliation — runs daily at 2 AM.
 // For every active subscription, fetch the latest state from Razorpay and
 // repair local drift (catches the rare missed webhook). Safe to run as it
@@ -741,6 +808,10 @@ const startCronJobs = () => {
     cron.schedule('0 9 * * *', runRenewalReminder);
     console.log('[CronJobs] Renewal reminders scheduled (daily 09:00)');
 
+    // Trial expiry reminders T-5 / T-2 / T0 / every 7 days after — daily at 09:00
+    cron.schedule('0 9 * * *', runTrialExpiryReminder);
+    console.log('[CronJobs] Trial expiry reminders scheduled (daily 09:00)');
+
     // Drift reconciliation against Razorpay — daily at 02:00
     cron.schedule('0 2 * * *', runSubscriptionReconcile);
     console.log('[CronJobs] Subscription drift reconcile scheduled (daily 02:00)');
@@ -1009,6 +1080,7 @@ module.exports = {
     runScoreDecay,
     runSubscriptionStatusSweep,
     runRenewalReminder,
+    runTrialExpiryReminder,
     runSubscriptionReconcile,
     runAgencyClientBillingSweep,
     runBroadcastStatsAutoRecalculate
