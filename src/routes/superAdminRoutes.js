@@ -26,7 +26,6 @@ const {
     updateSettings,
     getSystemSettings,
     updateSystemSettings,
-    getSystemHealth,
     impersonateUser,
     getCloudUsage,
     getAuditLogs,
@@ -98,8 +97,26 @@ router.post('/impersonate', authMiddleware, requireSuperAdmin, impersonateUser);
 router.get('/system-settings', authMiddleware, requireSuperAdmin, getSystemSettings);
 router.put('/system-settings', authMiddleware, requireSuperAdmin, updateSystemSettings);
 
-// System Health Telemetry
-router.get('/system-health', authMiddleware, requireSuperAdmin, getSystemHealth);
+// System Health Telemetry — Tabbed Sub-Endpoints
+const {
+    getHealthOverview,
+    getHealthApi,
+    getHealthDatabase,
+    getHealthRedis,
+    getHealthQueues,
+    getHealthWebhooks,
+    getHealthLogs,
+    getHealthSystemInfo
+} = require('../controllers/systemHealthController');
+
+router.get('/system-health',             authMiddleware, requireSuperAdmin, getHealthOverview);
+router.get('/system-health/api',         authMiddleware, requireSuperAdmin, getHealthApi);
+router.get('/system-health/database',    authMiddleware, requireSuperAdmin, getHealthDatabase);
+router.get('/system-health/redis',       authMiddleware, requireSuperAdmin, getHealthRedis);
+router.get('/system-health/queues',      authMiddleware, requireSuperAdmin, getHealthQueues);
+router.get('/system-health/webhooks',    authMiddleware, requireSuperAdmin, getHealthWebhooks);
+router.get('/system-health/logs',        authMiddleware, requireSuperAdmin, getHealthLogs);
+router.get('/system-health/system-info', authMiddleware, requireSuperAdmin, getHealthSystemInfo);
 
 // Audit Logs (Command Center)
 router.get('/audit-logs', authMiddleware, requireSuperAdmin, getAuditLogs);

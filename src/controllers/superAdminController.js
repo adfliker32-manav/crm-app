@@ -1524,186 +1524,14 @@ const updateSystemSettings = async (req, res) => {
 };
 
 // ==========================================
-// 🚨 CORE CRITICAL MONITORING (ALERT LOGIC)
-// ==========================================
-const analyzeHealthStatus = (metrics) => {
-    // Return Format: { level: 'healthy' | 'warning' | 'critical' | 'outage', triggers: [] }
-    let level = 'healthy';
-    const triggers = [];
-
-    const escalate = (newLevel, reason) => {
-        const levels = { 'healthy': 0, 'warning': 1, 'critical': 2, 'outage': 3 };
-        if (levels[newLevel] > levels[level]) level = newLevel;
-        triggers.push(reason);
-    };
-
-    // 1️⃣ API Failure Rate
-    if (metrics.api.errorRatePercent > 3) escalate('critical', `API Error Rate > 3% (${metrics.api.errorRatePercent}%)`);
-    else if (metrics.api.errorRatePercent > 1) escalate('warning', `Elevated API Errors (${metrics.api.errorRatePercent}%)`);
-    if (metrics.api.authFailurePercent > 20) escalate('critical', `Auth Spike > 20% (${metrics.api.authFailurePercent}%)`);
-
-    // 2️⃣ Webhook Processing
-    if (metrics.webhook.successRatePercent < 95) escalate('critical', `Webhook Success Dropped < 95% (${metrics.webhook.successRatePercent}%)`);
-    if (metrics.webhook.avgLatencyMs > 10000) escalate('critical', `Webhook Delay Over 10s (${metrics.webhook.avgLatencyMs}ms)`);
-
-    // 3️⃣ Automation Engine & Queue Backlog
-    const q = metrics.queue.agenda;
-    if (q.automationFailures > 5) escalate('warning', `Automation Failures Detected (${q.automationFailures})`);
-    if (q.automationFailures > 25) escalate('critical', `High Automation Malfunctions (${q.automationFailures})`);
-    if (q.pending > 100 && q.active === 0) escalate('critical', `Queue Deadlock! ${q.pending} pending but 0 active workers.`);
-
-    // 4️⃣ Database Performance
-    const maxConnectionsAllowed = 500; // Assuming typical Mongo pool
-    if (metrics.database.connections > (maxConnectionsAllowed * 0.85)) escalate('critical', `DB Connections saturated (>85%)`);
-
-    if (metrics.database.storageLimitBytes > 0) {
-        const storageUsagePercent = (metrics.database.totalUsedBytes / metrics.database.storageLimitBytes) * 100;
-        if (storageUsagePercent > 95) escalate('critical', `DB Storage Critically Low (>95%)`);
-        else if (storageUsagePercent > 80) escalate('warning', `DB Storage Filling Up (>80%)`);
-    }
-
-
-    // 5️⃣ Messaging Delivery Health
-    const wa = metrics.delivery.whatsapp;
-    if (wa.successRate < 93 && wa.totalAttempts > 10) escalate('critical', `WhatsApp Deliverability Failing (${wa.successRate}%)`);
-
-    // 6️⃣ Infrastructure Crashes
-    const memoryUsagePercent = (metrics.server.memoryUsageMB / metrics.server.totalMemoryMB) * 100;
-    if (memoryUsagePercent > 90) escalate('critical', `Memory Saturation > 90% (${Math.round(memoryUsagePercent)}%)`);
-
-    // CPU Load check — uses per-core load ratio to avoid false positives on low-core servers.
-    // Rule: warn only if 1-min load average exceeds 1.5× the core count (genuinely busy),
-    //       critical if it exceeds 3× core count (severely overloaded).
-    // A ratio of 1.0 means every core is fully utilized — 0.85 fires on virtually every server.
-    const cpuCores = os.cpus().length || 1;
-    const cpuRatio = metrics.server.loadAverage[0] / cpuCores;
-    if (cpuRatio > 3.0) escalate('critical', `CPU Critically Overloaded (${cpuRatio.toFixed(1)}× cores)`);
-    else if (cpuRatio > 1.5) escalate('warning', `Sustained High CPU Load (${cpuRatio.toFixed(1)}× cores)`);
-
-    // 7️⃣ Abuse Detection
-    if (metrics.topTenant && metrics.topTenant.requestCount > 5000) {
-        escalate('warning', `Abnormal Traffic Spike from Tenant ${metrics.topTenant.tenantId}`);
-    }
-
-    return { level, triggers };
-};
-
-// ==========================================
 // 🩺 SYSTEM HEALTH TELEMETRY
 // ==========================================
-const getSystemHealth = async (req, res) => {
-    try {
-        const health = {};
+// Moved to src/controllers/systemHealthController.js
+// All tab-specific handlers (Overview, API, Database, Redis, Queues,
+// Workers, Webhooks, Logs, Alerts, SystemInfo) are now in that file.
+// Routes are registered in superAdminRoutes.js.
+// ==========================================
 
-        // In-Memory Red Alert Stats
-        health.api = telemetryService.getApiStats();
-        health.webhook = telemetryService.getWebhookStats();
-        health.topTenant = telemetryService.getTopTenantUsage();
-
-        // 1. Server Memory & Load
-        health.server = {
-            uptimeSeconds: process.uptime(),
-            memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-            totalMemoryMB: Math.round(os.totalmem() / 1024 / 1024),
-            freeMemoryMB: Math.round(os.freemem() / 1024 / 1024),
-            loadAverage: os.loadavg(), // [1-min, 5-min, 15-min]
-            apiLatencyMs: health.api.avgLatencyMs
-        };
-
-        // 2. Database Telemetry
-        try {
-            const serverStatus = await mongoose.connection.db.admin().serverStatus();
-            const dbStats = await mongoose.connection.db.stats();
-
-            const totalUsedBytes = (dbStats.dataSize || 0) + (dbStats.indexSize || 0);
-
-            health.database = {
-                connections: serverStatus.connections?.current || 0,
-                activeQueries: serverStatus.globalLock?.activeClients?.total || 0,
-                documentQueries: serverStatus.opcounters?.query || 0,
-                inserts: serverStatus.opcounters?.insert || 0,
-                updates: serverStatus.opcounters?.update || 0,
-
-                // Storage Stats
-                dataSize: dbStats.dataSize || 0,
-                indexSize: dbStats.indexSize || 0,
-                totalUsedBytes: totalUsedBytes,
-                storageLimitBytes: 536870912 // 512 MB (M0 Free Tier limit)
-            };
-        } catch (dbErr) {
-            console.error("DB Stat Error:", dbErr.message);
-            health.database = { connections: 0, error: "Unable to retrieve DB stats: " + dbErr.message };
-        }
-
-        // 3. Queue Health (Agenda)
-        try {
-            const jobsCollection = mongoose.connection.db.collection('agendaJobs');
-            const totalJobs = await jobsCollection.countDocuments();
-            const failedJobs = await jobsCollection.countDocuments({ failedAt: { $exists: true } });
-            const pendingJobs = await jobsCollection.countDocuments({
-                nextRunAt: { $exists: true, $ne: null },
-                lockedAt: null
-            });
-            const activeJobs = await jobsCollection.countDocuments({ lockedAt: { $exists: true, $ne: null } });
-
-            const automationFailures = await jobsCollection.countDocuments({
-                name: 'EXECUTE_AUTOMATION_ACTION',
-                failedAt: { $exists: true }
-            });
-
-            health.queue = {
-                agenda: {
-                    total: totalJobs,
-                    failed: failedJobs,
-                    pending: pendingJobs,
-                    active: activeJobs,
-                    automationFailures
-                }
-            };
-        } catch (qErr) {
-            health.queue = { agenda: { failed: 0, pending: 0, active: 0, automationFailures: 0 }, error: "Failed to read Agenda collection." };
-        }
-
-        // 4. Message Delivery Health
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1); // Only check last 24h
-
-        const whatsappSentPromise = WhatsAppLog.countDocuments({ status: 'sent', createdAt: { $gte: yesterday } });
-        const whatsappFailedPromise = WhatsAppLog.countDocuments({ status: 'failed', createdAt: { $gte: yesterday } });
-
-        const emailSentPromise = EmailLog.countDocuments({ status: 'sent', createdAt: { $gte: yesterday } });
-        const emailFailedPromise = EmailLog.countDocuments({ status: 'failed', createdAt: { $gte: yesterday } });
-
-        const [waSent, waFailed, emSent, emFailed] = await Promise.all([
-            whatsappSentPromise, whatsappFailedPromise,
-            emailSentPromise, emailFailedPromise
-        ]);
-
-        health.delivery = {
-            whatsapp: {
-                sent24h: waSent,
-                failed24h: waFailed,
-                totalAttempts: waSent + waFailed,
-                successRate: waSent + waFailed === 0 ? 100 : Math.round((waSent / (waSent + waFailed)) * 100)
-            },
-            email: {
-                sent24h: emSent,
-                failed24h: emFailed,
-                totalAttempts: emSent + emFailed,
-                successRate: emSent + emFailed === 0 ? 100 : Math.round((emSent / (emSent + emFailed)) * 100)
-            }
-        };
-
-        // Execute Intelligence Analysis
-        health.alertStatus = analyzeHealthStatus(health);
-
-        res.json({ success: true, health });
-
-    } catch (error) {
-        console.error("Health Check Error:", error);
-        res.status(500).json({ success: false, message: "Failed to gather system health telemetry" });
-    }
-};
 
 // ==========================================
 // 🏢 AGENCY GOVERNANCE: Allocate Plan Limits
@@ -2377,7 +2205,6 @@ module.exports = {
     updateSettings,
     getSystemSettings,
     updateSystemSettings,
-    getSystemHealth,
     impersonateUser,
     getCloudUsage,
     getAuditLogs,

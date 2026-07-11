@@ -442,7 +442,24 @@ app.use((req, res, next) => {
     // Extract tenant ID if auth middleware set it (for abuse tracking)
     const tenantId = req.tenantId || req.user?.id || null;
 
-    telemetryService.recordApiRequest(res.statusCode, tenantId, timeInMs);
+    // Build a normalized route label for per-route latency tracking
+    // Uses Express matched route pattern (e.g. "/api/leads/:id") to avoid
+    // unbounded cardinality from dynamic URL segments.
+    const routePattern = req.route?.path || req.path;
+    const route = `${req.method} ${routePattern}`;
+
+    telemetryService.recordApiRequest(res.statusCode, tenantId, timeInMs, route);
+
+    // Record error/warning logs for Live Logs tab
+    if (res.statusCode >= 500) {
+      telemetryService.recordLog('error', `${res.statusCode} ${req.method} ${req.originalUrl}`, {
+        statusCode: res.statusCode, method: req.method, url: req.originalUrl, latencyMs: Math.round(timeInMs)
+      });
+    } else if (res.statusCode >= 400) {
+      telemetryService.recordLog('warning', `${res.statusCode} ${req.method} ${req.originalUrl}`, {
+        statusCode: res.statusCode, method: req.method, url: req.originalUrl
+      });
+    }
   });
 
   next();
