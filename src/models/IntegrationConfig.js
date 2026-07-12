@@ -48,7 +48,7 @@ const integrationConfigSchema = new mongoose.Schema({
         emailServiceType: { type: String, enum: ['gmail', 'smtp'], default: 'gmail' },
         emailUser: { type: String, default: null },
         // FIX 4.3: Gmail app password must never be exposed in API responses
-        emailPassword: { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
+        emailPassword: { type: String, default: null, select: false },
         emailFromName: { type: String, default: null },
         emailSignature: { type: String, default: null },
         smtpHost: { type: String, default: null },

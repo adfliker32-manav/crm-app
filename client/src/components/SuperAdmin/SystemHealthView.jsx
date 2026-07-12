@@ -150,7 +150,10 @@ const OverviewTab = ({ activeTab }) => {
     const theme = THEMES[alert.level] || THEMES.healthy;
 
     const cpuPercent = h.cpu?.percentOfMachine || 0;
-    const ramPercent = h.server?.totalMemoryMB > 0 ? Math.round((h.server.memoryUsageMB / h.server.totalMemoryMB) * 100) : 0;
+    // Use RSS (true process footprint) for the RAM %, not heapUsed which only
+    // reflects the V8 heap and understates real memory pressure.
+    const rssMB = h.server?.rssMB || h.server?.memoryUsageMB || 0;
+    const ramPercent = h.server?.totalMemoryMB > 0 ? Math.round((rssMB / h.server.totalMemoryMB) * 100) : 0;
 
     return (
         <div className="space-y-6 animate-fade-in-up">
@@ -201,7 +204,7 @@ const OverviewTab = ({ activeTab }) => {
                     sub={`${h.cpu?.cores || '?'} cores`} />
                 <MetricCard label="RAM" value={`${ramPercent}%`} icon="fa-memory"
                     status={ramPercent > 90 ? 'critical' : ramPercent > 75 ? 'warning' : 'good'}
-                    sub={`${h.server?.memoryUsageMB || 0} / ${h.server?.totalMemoryMB || 0} MB`} />
+                    sub={`RSS ${rssMB} / ${h.server?.totalMemoryMB || 0} MB · heap ${h.server?.memoryUsageMB || 0}`} />
                 <MetricCard label="Mongo Status" icon="fa-database"
                     value={h.mongoStatus === 'connected' ? 'Online' : h.mongoStatus?.toUpperCase()}
                     status={h.mongoStatus === 'connected' ? 'good' : 'critical'}

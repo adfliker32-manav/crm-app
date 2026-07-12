@@ -427,6 +427,20 @@ mongoose.connect(MONGO_URI, {
 // ===========================
 const telemetryService = require('./src/services/telemetryService');
 
+// Normalize a raw URL path into a low-cardinality route label by collapsing
+// dynamic segments (Mongo ObjectIds, UUIDs, numeric ids, long opaque tokens)
+// into placeholders. At app-level middleware req.route is usually undefined, so
+// without this the per-route telemetry would explode with one slot per lead/user
+// id — e.g. "/api/leads/687ab..." — and the "Slowest APIs" tab would be useless.
+const normalizeRoutePath = (p) => p.split('/').map((seg) => {
+  if (!seg) return seg;
+  if (/^[0-9a-fA-F]{24}$/.test(seg)) return ':id';                                  // Mongo ObjectId
+  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(seg)) return ':uuid';
+  if (/^\d+$/.test(seg)) return ':n';                                               // numeric id
+  if (seg.length >= 32) return ':token';                                           // api key / long token
+  return seg;
+}).join('/');
+
 app.use((req, res, next) => {
   // Only track actual API calls
   if (!req.path.startsWith('/api/') && !req.path.startsWith('/webhook/')) {
@@ -442,10 +456,11 @@ app.use((req, res, next) => {
     // Extract tenant ID if auth middleware set it (for abuse tracking)
     const tenantId = req.tenantId || req.user?.id || null;
 
-    // Build a normalized route label for per-route latency tracking
-    // Uses Express matched route pattern (e.g. "/api/leads/:id") to avoid
-    // unbounded cardinality from dynamic URL segments.
-    const routePattern = req.route?.path || req.path;
+    // Build a normalized route label for per-route latency tracking.
+    // Prefer Express's matched route pattern when available; at app-level it
+    // usually isn't, so fall back to a normalized path (ids → placeholders)
+    // instead of the raw path, keeping route cardinality bounded.
+    const routePattern = req.route?.path || normalizeRoutePath(req.path);
     const route = `${req.method} ${routePattern}`;
 
     telemetryService.recordApiRequest(res.statusCode, tenantId, timeInMs, route);

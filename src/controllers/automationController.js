@@ -48,7 +48,7 @@ const updateRule = async (req, res) => {
         }
         // ⚠️ SECURITY: Whitelist allowed fields to prevent mass assignment.
         // Previously req.body was passed directly to $set, allowing users to
-        // overwrite tenantId, executionCount, currentlyProcessingLeadId, etc.
+        // overwrite tenantId, executionCount, etc.
         const { name, trigger, delayMinutes, conditions, actions, isActive } = req.body;
         const safeUpdates = {};
         if (name !== undefined) safeUpdates.name = name;
@@ -84,9 +84,13 @@ const deleteRule = async (req, res) => {
 
         if (!rule) return res.status(404).json({ message: 'Automation rule not found' });
 
-        // Cancel any in-flight Agenda jobs and pending watchers that reference this
-        // rule, so deleting a rule actually stops it from firing.
+        // Cancel any in-flight Agenda jobs, pending watchers, and held locks that
+        // reference this rule, so deleting a rule actually stops it from firing
+        // and doesn't leave orphaned rows behind.
         try {
+            const AutomationLock = require('../models/AutomationLock');
+            await AutomationLock.deleteMany({ ruleId: id });
+
             const { cancelJobsForRule } = require('../services/AutomationService');
             const result = await cancelJobsForRule(id);
             console.log(`🧹 [Automation] Rule ${id} deleted — cancelled ${result.cancelledJobs} job(s), ${result.cancelledWatchers} watcher(s)`);
@@ -110,26 +114,23 @@ const toggleRule = async (req, res) => {
         }
         const { isActive } = req.body;
 
-        const updateFields = { isActive };
-        // When deactivating, also release any held lock so the rule doesn't
-        // appear "stuck" when re-activated later.
-        if (!isActive) {
-            updateFields.currentlyProcessingLeadId = null;
-            updateFields.lockAcquiredAt = null;
-        }
-
         const rule = await AutomationRule.findOneAndUpdate(
             { _id: id, tenantId: req.tenantId },
-            { $set: updateFields },
+            { $set: { isActive } },
             { new: true }
         );
 
         if (!rule) return res.status(404).json({ message: 'Automation rule not found' });
 
         // FIX: When deactivating, cancel any in-flight Agenda jobs and pending watchers
-        // so they don't fire after the user explicitly paused the rule.
+        // so they don't fire after the user explicitly paused the rule, and release
+        // any held per-(rule, lead) locks so the rule doesn't appear "stuck" for any
+        // lead when re-activated later.
         if (!isActive) {
             try {
+                const AutomationLock = require('../models/AutomationLock');
+                await AutomationLock.deleteMany({ ruleId: id });
+
                 const { cancelJobsForRule } = require('../services/AutomationService');
                 const result = await cancelJobsForRule(id);
                 if (result.cancelledJobs > 0 || result.cancelledWatchers > 0) {

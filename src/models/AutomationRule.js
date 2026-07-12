@@ -64,11 +64,11 @@ const AutomationRuleSchema = new mongoose.Schema({
     conditions: [ConditionSchema],
     actions: [ActionSchema],
 
-    // ONE-AT-A-TIME LOCK: prevents multiple automations from firing in parallel for same lead
-    currentlyProcessingLeadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead', default: null },
-    // Timestamp when the lock was acquired — used for stale lock recovery (not lastFiredAt,
-    // which is only set on successful completion and is wrong on the first-ever run).
-    lockAcquiredAt: { type: Date, default: null },
+    // Per-(rule, lead) execution locking now lives in the AutomationLock collection
+    // (see models/AutomationLock.js) — locking here on the rule itself serialized
+    // ALL leads through a rule instead of just guarding against the same lead
+    // double-firing, silently dropping automation for any lead that arrived while
+    // another lead's execution was in flight.
 
     // Audit logs
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

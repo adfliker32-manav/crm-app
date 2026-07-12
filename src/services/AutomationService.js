@@ -1,4 +1,5 @@
 const AutomationRule = require('../models/AutomationRule');
+const AutomationLock = require('../models/AutomationLock');
 const Lead = require('../models/Lead');
 const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
@@ -22,11 +23,28 @@ const resolveField = (obj, path) => {
     }, obj);
 };
 
-// Condition Evaluator — returns false if the lead field is missing/undefined
+// Condition Evaluator
 const evaluateCondition = (condition, leadValue) => {
-    if (leadValue === undefined || leadValue === null) return false;
-
     const { operator, value } = condition;
+
+    // A missing field is inherently "not equal to" any concrete value — every
+    // other operator (equals/contains/etc) correctly has nothing to match against.
+    if (leadValue === undefined || leadValue === null) {
+        return operator === 'not_equals';
+    }
+
+    // Array fields (e.g. tags): match by membership, not string comparison.
+    if (Array.isArray(leadValue)) {
+        const target = typeof value === 'string' ? value.toLowerCase() : value;
+        const normalized = leadValue.map(v => typeof v === 'string' ? v.toLowerCase() : v);
+        switch (operator) {
+            case 'equals':
+            case 'contains':    return normalized.includes(target);
+            case 'not_equals':  return !normalized.includes(target);
+            default:            return false;
+        }
+    }
+
     const s1 = typeof leadValue === 'string' ? leadValue.toLowerCase() : leadValue;
     const s2 = typeof value === 'string' ? value.toLowerCase() : value;
 
@@ -149,17 +167,30 @@ const executeRuleActions = async (rule, lead) => {
                 const waitHours = action.waitForReplyHours || 24;
                 const deadline = new Date(Date.now() + waitHours * 60 * 60 * 1000);
 
-                // Create the watcher document
-                const watcher = await LeadAutomationWatcher.create({
-                    tenantId: lead.userId,
-                    leadId: lead._id,
-                    conversationId: conversation._id,
-                    ruleId: rule._id,
-                    waitForReplyUntil: deadline,
-                    ifRepliedAction: action.ifRepliedAction || {},
-                    ifNoReplyAction: action.ifNoReplyAction || {},
-                    status: 'pending'
-                });
+                // Create the watcher document. The partial unique index on
+                // { conversationId, status: 'pending' } is the real guard against
+                // two watchers stacking on the same conversation — the app-level
+                // check in evaluateLead is only a fast-path and can lose a race
+                // when two different WAIT_FOR_REPLY rules fire concurrently.
+                let watcher;
+                try {
+                    watcher = await LeadAutomationWatcher.create({
+                        tenantId: lead.userId,
+                        leadId: lead._id,
+                        conversationId: conversation._id,
+                        ruleId: rule._id,
+                        waitForReplyUntil: deadline,
+                        ifRepliedAction: action.ifRepliedAction || {},
+                        ifNoReplyAction: action.ifNoReplyAction || {},
+                        status: 'pending'
+                    });
+                } catch (createErr) {
+                    if (createErr.code === 11000) {
+                        console.warn(`⚠️ [Automation] WAIT_FOR_REPLY: Lead ${lead._id} already has a pending watcher on this conversation (race). Skipping.`);
+                        continue;
+                    }
+                    throw createErr;
+                }
 
                 // Schedule the "no reply" timeout job via Agenda
                 if (globalAgendaInstance) {
@@ -198,21 +229,19 @@ const executeRuleActions = async (rule, lead) => {
             await Lead.findByIdAndUpdate(lead._id, updates);
         }
 
-        // Increment rule execution counter and release the one-at-a-time lock
+        // Increment rule execution counter and release the per-(rule, lead) lock.
+        // The lock only guards this synchronous execution burst — a WAIT_FOR_REPLY
+        // watcher (if created above) is guarded separately by the existingWatcher
+        // check in evaluateLead, so it's safe to release here immediately.
         await AutomationRule.findByIdAndUpdate(rule._id, {
             $inc: { executionCount: 1 },
-            $set: {
-                lastFiredAt: new Date(),
-                currentlyProcessingLeadId: null,
-                lockAcquiredAt: null
-            }
+            $set: { lastFiredAt: new Date() }
         });
+        await AutomationLock.deleteOne({ ruleId: rule._id, leadId: lead._id });
 
     } catch (err) {
         // Always release lock even if execution failed
-        await AutomationRule.findByIdAndUpdate(rule._id, {
-            $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
-        });
+        await AutomationLock.deleteOne({ ruleId: rule._id, leadId: lead._id });
         console.error(`❌ [Automation] Execution Error on Rule (${rule.name}):`, err);
     }
 };
@@ -234,49 +263,34 @@ const evaluateLead = async (lead, triggerType) => {
         if (!rules || rules.length === 0) return;
 
         for (const rule of rules) {
-            // ─── STALE LOCK RECOVERY ──────────────────────────────
-            // Use lockAcquiredAt (set at lock time) not lastFiredAt (set only on success).
-            // Without this, a rule that has never fired would never auto-recover.
-            if (rule.currentlyProcessingLeadId) {
-                const lockAge = rule.lockAcquiredAt
-                    ? Date.now() - new Date(rule.lockAcquiredAt).getTime()
-                    : Infinity; // No timestamp → definitely stale
-                const ONE_HOUR = 60 * 60 * 1000;
-                if (lockAge > ONE_HOUR) {
-                    console.warn(`⚠️ [Automation] Stale lock on rule "${rule.name}" (held ${Math.round(lockAge / 60000)}min). Releasing.`);
-                    await AutomationRule.findByIdAndUpdate(rule._id, {
-                        $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
-                    });
-                } else {
-                    console.log(`⏭️ [Automation] Rule "${rule.name}" locked (acquired ${Math.round(lockAge / 60000)}min ago). Skipping.`);
+            // Only WAIT_FOR_REPLY rules can create a competing watcher on this lead's
+            // conversation — skip the check entirely for rules that can't conflict,
+            // so unrelated automations (assign, tag, stage change, etc.) still fire
+            // even while this lead has an unrelated pending watcher open.
+            const rulePendsOnReply = rule.actions.some(a => a.type === 'WAIT_FOR_REPLY');
+            if (rulePendsOnReply) {
+                const existingWatcher = await LeadAutomationWatcher.findOne({
+                    leadId: lead._id,
+                    status: 'pending'
+                });
+                if (existingWatcher) {
+                    console.log(`⏭️ [Automation] Lead "${lead.name}" already has a pending watcher. Skipping rule "${rule.name}".`);
                     continue;
                 }
             }
 
-            // ALSO: if there's already an active watcher for this LEAD, skip —
-            // we don't stack multiple automations on the same lead simultaneously.
-            const existingWatcher = await LeadAutomationWatcher.findOne({
-                leadId: lead._id,
-                status: 'pending'
-            });
-            if (existingWatcher) {
-                console.log(`⏭️ [Automation] Lead "${lead.name}" already has a pending watcher. Skipping rule "${rule.name}".`);
-                continue;
-            }
-
-            // ⚠️ RACE CONDITION FIX: Acquire lock ATOMICALLY.
-            // Previously the check (if locked) and acquire (set lock) were separate operations.
-            // Two concurrent requests could both pass the check and both acquire the lock.
-            // Now uses findOneAndUpdate with a "not locked" condition — only one wins.
-            const lockAcquired = await AutomationRule.findOneAndUpdate(
-                { _id: rule._id, currentlyProcessingLeadId: null },
-                { $set: { currentlyProcessingLeadId: lead._id, lockAcquiredAt: new Date() } },
-                { new: true }
-            );
-
-            if (!lockAcquired) {
-                console.log(`⏭️ [Automation] Rule "${rule.name}" lock busy. Skipping.`);
-                continue;
+            // Acquire a per-(rule, lead) lock ATOMICALLY via a unique index — this only
+            // blocks the SAME lead from double-firing the SAME rule concurrently (e.g.
+            // duplicate webhook deliveries). It does NOT serialize different leads
+            // through the same rule. A TTL index auto-recovers crashed/hung locks.
+            try {
+                await AutomationLock.create({ ruleId: rule._id, leadId: lead._id });
+            } catch (lockErr) {
+                if (lockErr.code === 11000) {
+                    console.log(`⏭️ [Automation] Rule "${rule.name}" already processing lead "${lead.name}". Skipping.`);
+                    continue;
+                }
+                throw lockErr;
             }
 
             // Check AND conditions
@@ -303,18 +317,14 @@ const evaluateLead = async (lead, triggerType) => {
                         // Note: lock will be released when the scheduled job fires
                     } catch (scheduleErr) {
                         console.error(`❌ [Automation] Failed to schedule Rule "${rule.name}":`, scheduleErr.message);
-                        await AutomationRule.findByIdAndUpdate(rule._id, {
-                            $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
-                        });
+                        await AutomationLock.deleteOne({ ruleId: rule._id, leadId: lead._id });
                     }
                 } else {
                     // Execute immediately and release lock inside
                     await executeRuleActions(rule, lead);
                 }
             } else {
-                await AutomationRule.findByIdAndUpdate(rule._id, {
-                    $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
-                });
+                await AutomationLock.deleteOne({ ruleId: rule._id, leadId: lead._id });
             }
         }
     } catch (err) {
@@ -355,16 +365,12 @@ const defineAutomationJobs = (agenda) => {
                 if (stillMet) {
                     await executeRuleActions(rule, lead);
                 } else {
-                    await AutomationRule.findByIdAndUpdate(ruleId, {
-                        $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
-                    });
+                    await AutomationLock.deleteOne({ ruleId, leadId });
                     console.log(`⏱️ [Automation] Skipped Job: Lead no longer meets criteria for Rule "${rule.name}"`);
                 }
             } else {
                 console.log(`⏱️ [Automation] Job skipped: rule ${ruleId} inactive or lead ${leadId} missing.`);
-                await AutomationRule.findByIdAndUpdate(ruleId, {
-                    $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
-                });
+                await AutomationLock.deleteOne({ ruleId, leadId });
             }
         } catch (error) {
             console.error(`❌ [Automation] Background Job FAILED (attempt ${attempt}/${MAX_RETRIES}):`, error.message);
@@ -377,9 +383,7 @@ const defineAutomationJobs = (agenda) => {
             }
 
             // Max retries exhausted — release lock permanently and clean up
-            await AutomationRule.findByIdAndUpdate(ruleId, {
-                $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
-            });
+            await AutomationLock.deleteOne({ ruleId, leadId });
             console.error(`🚨 [Automation] Job PERMANENTLY FAILED after ${MAX_RETRIES} attempts. Rule: ${ruleId}, Lead: ${leadId}`);
             await job.remove();
         }
@@ -451,10 +455,8 @@ const handleWatcherReply = async (conversationId) => {
             await sendWhatsAppMessage(lead.phone, watcher.ifRepliedAction.sendTemplateId, lead.userId.toString());
         }
 
-        // Release the one-at-a-time rule lock
-        await AutomationRule.findByIdAndUpdate(watcher.ruleId, {
-            $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
-        });
+        // Release the per-(rule, lead) lock, in case it's still held
+        await AutomationLock.deleteOne({ ruleId: watcher.ruleId, leadId: watcher.leadId });
 
         // Apply human handoff — pause chatbot for 24hrs since a human or reply happened
         const { cancelActiveChatbots } = require('./chatbotEngineService');
@@ -543,9 +545,9 @@ const continueWorkflowAfterVoice = async (callLog) => {
 
         // Execute mapped branch actions
         for (const action of mappedActions) {
-            if (action.type === 'CHANGE_STAGE' && action.stageName && lead.stage !== action.stageName) {
-                lead.stage = action.stageName;
-                lead.stageUpdatedAt = new Date();
+            if (action.type === 'CHANGE_STAGE' && action.stageName && lead.status !== action.stageName) {
+                lead.status = action.stageName;
+                lead.stageEnteredAt = new Date();
                 historyEntries.push({ type: 'System', subType: 'Auto', content: `Changed stage to ${action.stageName} due to Voice Outcome: ${callLog.outcome} (Rule: ${rule.name})`, date: new Date() });
                 changesMade = true;
             } else if (action.type === 'ASSIGN_USER' && action.userId) {

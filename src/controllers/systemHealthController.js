@@ -211,9 +211,11 @@ const analyzeHealthStatus = (overview) => {
     if (cpuPercent > 90) escalate('critical', '🔴', `CPU > 90% (${cpuPercent}%)`);
     else if (cpuPercent > 70) escalate('warning', '🟡', `CPU > 70% (${cpuPercent}%)`);
 
-    // RAM
+    // RAM — measured against RSS (true process footprint), not heapUsed which
+    // only tracks the V8 heap and would keep this alert from ever firing.
+    const ramUsedMB = overview.server?.rssMB || overview.server?.memoryUsageMB || 0;
     const ramPercent = overview.server?.totalMemoryMB > 0
-        ? (overview.server.memoryUsageMB / overview.server.totalMemoryMB) * 100 : 0;
+        ? (ramUsedMB / overview.server.totalMemoryMB) * 100 : 0;
     if (ramPercent > 90) escalate('critical', '🔴', `RAM > 90% (${Math.round(ramPercent)}%)`);
     else if (ramPercent > 75) escalate('warning', '🟡', `RAM > 75% (${Math.round(ramPercent)}%)`);
 
@@ -321,10 +323,13 @@ const getHealthOverview = async (req, res) => {
         const topTenant    = telemetryService.getTopTenantUsage();
         const cpu          = sampleProcessCpu();
 
-        // Server info
+        // Server info. rss (resident set size) is the true process RAM footprint;
+        // heapUsed is only the V8 heap and badly understates real memory pressure.
+        const mem = process.memoryUsage();
         const server = {
             uptimeSeconds:  process.uptime(),
-            memoryUsageMB:  Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+            memoryUsageMB:  Math.round(mem.heapUsed / 1024 / 1024),
+            rssMB:          Math.round(mem.rss / 1024 / 1024),
             totalMemoryMB:  Math.round(os.totalmem() / 1024 / 1024),
             freeMemoryMB:   Math.round(os.freemem() / 1024 / 1024),
             loadAverage:    os.loadavg()

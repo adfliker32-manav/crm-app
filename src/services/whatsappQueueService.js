@@ -118,7 +118,7 @@ const defineWhatsAppJobs = (agenda) => {
         try {
             const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
             const Lead = require('../models/Lead');
-            const AutomationRule = require('../models/AutomationRule');
+            const AutomationLock = require('../models/AutomationLock');
             const { sendWhatsAppMessage } = require('./whatsappService');
 
             const watcher = await LeadAutomationWatcher.findById(watcherId);
@@ -202,10 +202,8 @@ const defineWhatsAppJobs = (agenda) => {
                 }
             }
 
-            // Release the one-at-a-time automation lock
-            await AutomationRule.findByIdAndUpdate(watcher.ruleId, {
-                $set: { currentlyProcessingLeadId: null, lockAcquiredAt: null }
-            });
+            // Release the per-(rule, lead) automation lock
+            await AutomationLock.deleteOne({ ruleId: watcher.ruleId, leadId: watcher.leadId });
 
             console.log(`⏱️ [Timeout] Watcher expired → lead "${lead.name}" → stage "${watcher.ifNoReplyAction?.changeStage}"`);
         } catch (err) {

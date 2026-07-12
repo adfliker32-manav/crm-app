@@ -74,6 +74,16 @@ const LeadAutomationWatcherSchema = new mongoose.Schema({
 // Fast lookup: is there a pending watcher for this conversation?
 LeadAutomationWatcherSchema.index({ conversationId: 1, status: 1 });
 
+// ATOMIC GUARD: at most one 'pending' watcher per conversation. Without this,
+// two different WAIT_FOR_REPLY rules (different triggers) evaluating the same
+// lead concurrently could both pass the app-level "existing watcher?" check
+// before either has written its row, and both create one. This index makes the
+// DB itself reject the second insert (E11000) instead of relying on timing.
+LeadAutomationWatcherSchema.index(
+    { conversationId: 1 },
+    { unique: true, partialFilterExpression: { status: 'pending' } }
+);
+
 // Auto-delete watchers after 30 days to prevent DB bloat
 LeadAutomationWatcherSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
 
