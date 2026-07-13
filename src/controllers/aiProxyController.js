@@ -23,7 +23,7 @@ exports.getSettings = async (req, res) => {
         // Prepare settings for frontend (masking API key)
         const settings = {
             provider: config.ai?.provider || 'gemini',
-            model: config.ai?.model || 'gemini-1.5-flash',
+            model: config.ai?.model || 'gemini-2.5-flash',
             agentName: config.ai?.agentName || 'AI Assistant',
             systemPrompt: config.ai?.systemPrompt || '',
             aiEnabled: config.ai?.aiEnabled || false,

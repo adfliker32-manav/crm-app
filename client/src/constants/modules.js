@@ -6,9 +6,10 @@
 // intentionally excluded — they must never appear in a manager's plan, the
 // superadmin module pickers, or the customer Billing page.
 //
-// Drip "Sequences" are part of the Automations module (not a separate module),
-// and "Chatbot" access is governed by the planFeatures.aiChatbot flag under
-// WhatsApp — neither is a standalone module here.
+// Drip "Sequences" are part of the Automations module (not a separate module).
+// The WhatsApp "Chatbot" / visual flow builder is FREE and rides on the WhatsApp
+// module (anyone with WhatsApp gets it), so it is not a standalone toggle here.
+// Only the premium *AI* (LLM) layer is gated separately, via planFeatures.aiChatbot.
 export const WORKSPACE_MODULES = [
     { id: 'leads',       name: 'Leads',       icon: 'fa-address-book' },
     { id: 'whatsapp',    name: 'WhatsApp',    icon: 'fa-whatsapp', isBrand: true },

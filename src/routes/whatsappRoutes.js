@@ -75,8 +75,17 @@ router.put('/conversations/:id/resume-chatbot', authMiddleware, requireModule('w
 // Send media in conversation (file upload via multer)
 router.post('/conversations/:id/send-media', authMiddleware, requireModule('whatsapp'), upload.single('file'), validateObjectId('id'), whatsappConversationController.sendMediaMessage);
 
-// Download media proxy (frontend can't call Meta API directly)
-router.get('/media/:mediaId', authMiddleware, requireModule('whatsapp'), whatsappConversationController.downloadMediaProxy);
+// Download media proxy (frontend can't call Meta API directly).
+// <img>/<audio>/<video>/download tags cannot set an Authorization header, so the
+// media proxy also accepts the JWT via ?token=. We copy it into the header and
+// delegate to the normal auth pipeline (which keeps tenant + module checks intact).
+const mediaQueryAuth = (req, res, next) => {
+    if (!req.header('Authorization') && req.query.token) {
+        req.headers.authorization = `Bearer ${req.query.token}`;
+    }
+    return authMiddleware(req, res, next);
+};
+router.get('/media/:mediaId', mediaQueryAuth, requireModule('whatsapp'), whatsappConversationController.downloadMediaProxy);
 
 // ============================================
 // Upload media for template headers

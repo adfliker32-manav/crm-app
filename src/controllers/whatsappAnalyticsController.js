@@ -21,7 +21,12 @@ exports.getDashboardStats = async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(userId)) {
             return res.status(400).json({ success: false, message: 'Invalid user ID' });
         }
-        const objectId = new mongoose.Types.ObjectId(userId);
+        // Scope analytics to the whole company (manager + agents sharing the WhatsApp
+        // number). Messages/broadcasts/conversations can be owned by any agent's userId, so a
+        // single-user filter would silently undercount. Matches how the rest of the module scopes.
+        const { getCompanyUserIds } = require('../utils/whatsappUtils');
+        const companyUserIds = await getCompanyUserIds(userId);
+        const userScope = { $in: companyUserIds };
         
         const { days } = req.query;
         if (days && days !== 'all' && isNaN(parseInt(days))) {
@@ -29,22 +34,68 @@ exports.getDashboardStats = async (req, res) => {
         }
         const dateFrom = buildDateFilter(days);
 
-        // 1. Conversation Metrics (all-time — conversations persist)
-        const [convStats = { totalReceived: 0, totalManualSent: 0, activeChats: 0, unreadChats: 0 }] = await WhatsAppConversation.aggregate([
-            { $match: { userId: objectId } },
+        // 1. Conversation snapshot (current state — active/unread are point-in-time, not period)
+        const [convStats = { activeChats: 0, unreadChats: 0 }] = await WhatsAppConversation.aggregate([
+            { $match: { userId: userScope } },
             {
                 $group: {
                     _id: null,
-                    totalReceived: { $sum: { $ifNull: ['$metadata.totalInbound', 0] } },
-                    totalManualSent: { $sum: { $ifNull: ['$metadata.totalOutbound', 0] } },
                     activeChats: { $sum: { $cond: [{ $eq: [{ $toLower: { $ifNull: ['$status', ''] } }, 'active'] }, 1, 0] } },
                     unreadChats: { $sum: { $cond: [{ $gt: [{ $ifNull: ['$unreadCount', 0] }, 0] }, 1, 0] } }
                 }
             }
         ]);
 
+        // 1b. Message-level metrics — counted ONCE per message from WhatsAppMessage, and
+        // properly date-filtered by timestamp. This replaces the old conversation counters,
+        // which were all-time (ignored the date filter) AND double-counted broadcasts.
+        //   • CRM-sent      = outbound messages the CRM sent (manual + automated + broadcast)
+        //   • Customer-sent = inbound messages customers sent
+        //   • Unique senders = distinct customers who sent ≥ 1 message in the period
+        const messageMatch = { userId: userScope };
+        if (dateFrom) messageMatch.timestamp = { $gte: dateFrom };
+
+        const [msgAgg = { counts: [], uniqueSenders: [] }] = await WhatsAppMessage.aggregate([
+            { $match: messageMatch },
+            {
+                $facet: {
+                    counts: [
+                        {
+                            $group: {
+                                _id: null,
+                                inbound:  { $sum: { $cond: [{ $eq: ['$direction', 'inbound'] }, 1, 0] } },
+                                outbound: { $sum: { $cond: [{ $eq: ['$direction', 'outbound'] }, 1, 0] } },
+                                automatedSent: { $sum: { $cond: [{ $and: [{ $eq: ['$direction', 'outbound'] }, { $eq: ['$isAutomated', true] }] }, 1, 0] } },
+                                outboundDelivered: { $sum: { $cond: [{ $and: [{ $eq: ['$direction', 'outbound'] }, { $ifNull: ['$statusTimestamps.delivered', false] }] }, 1, 0] } },
+                                outboundRead:      { $sum: { $cond: [{ $and: [{ $eq: ['$direction', 'outbound'] }, { $ifNull: ['$statusTimestamps.read', false] }] }, 1, 0] } },
+                                outboundFailed:    { $sum: { $cond: [{ $and: [{ $eq: ['$direction', 'outbound'] }, { $eq: ['$status', 'failed'] }] }, 1, 0] } }
+                            }
+                        }
+                    ],
+                    uniqueSenders: [
+                        { $match: { direction: 'inbound' } },
+                        { $group: { _id: '$conversationId' } },
+                        { $count: 'count' }
+                    ]
+                }
+            }
+        ]);
+
+        const m = msgAgg.counts[0] || { inbound: 0, outbound: 0, automatedSent: 0, outboundDelivered: 0, outboundRead: 0, outboundFailed: 0 };
+        const crmSent         = m.outbound;
+        const customerSent    = m.inbound;
+        const uniqueCustomers = msgAgg.uniqueSenders[0]?.count || 0;
+        const automatedSent   = m.automatedSent;
+        const manualSent      = Math.max(0, m.outbound - m.automatedSent);
+        // A read message was, by definition, delivered — clamp to keep the funnel monotonic.
+        const msgDelivered    = Math.max(m.outboundDelivered, m.outboundRead);
+        const msgRead         = m.outboundRead;
+        const msgFailed       = m.outboundFailed;
+        const msgDeliveryRate = crmSent > 0 ? Math.round((msgDelivered / crmSent) * 100) : 0;
+        const msgReadRate     = msgDelivered > 0 ? Math.round((msgRead / msgDelivered) * 100) : 0;
+
         // 2. Broadcast Metrics (filtered by date if applicable)
-        const broadcastMatchStage = { userId: objectId, status: { $in: ['COMPLETED', 'PROCESSING', 'FAILED', 'SCHEDULED'] } };
+        const broadcastMatchStage = { userId: userScope, status: { $in: ['COMPLETED', 'PROCESSING', 'FAILED', 'SCHEDULED'] } };
         if (dateFrom) broadcastMatchStage.createdAt = { $gte: dateFrom };
 
         const [bcStats = { totalBroadcastSent: 0, totalBroadcastDelivered: 0, totalBroadcastRead: 0, totalBroadcastFailed: 0 }] = await WhatsAppBroadcast.aggregate([
@@ -61,7 +112,7 @@ exports.getDashboardStats = async (req, res) => {
         ]);
 
         // 3. Recent Campaigns
-        const recentCampaignsQuery = { userId: objectId, status: 'COMPLETED' };
+        const recentCampaignsQuery = { userId: userScope, status: 'COMPLETED' };
         if (dateFrom) recentCampaignsQuery.createdAt = { $gte: dateFrom };
         const recentCampaignsRaw = await WhatsAppBroadcast.find(recentCampaignsQuery)
             .sort({ createdAt: -1 }).limit(5)
@@ -72,14 +123,15 @@ exports.getDashboardStats = async (req, res) => {
             name: bc.name,
             date: bc.completedAt || bc.createdAt,
             sent: bc.stats?.sent || 0,
-            delivered: bc.stats?.delivered || 0,
+            // A read message was also delivered — clamp so the table's read-rate can't exceed 100%.
+            delivered: Math.max(bc.stats?.delivered || 0, bc.stats?.read || 0),
             read: bc.stats?.read || 0,
             failed: bc.stats?.failed || 0
         }));
 
         // 3b. Time-Series Broadcast Analytics (daily granularity)
         // Groups broadcast messages by day to power line/bar charts.
-        const timeSeriesMatch = { userId: objectId, automationSource: 'broadcast' };
+        const timeSeriesMatch = { userId: userScope, automationSource: 'broadcast' };
         if (dateFrom) timeSeriesMatch.timestamp = { $gte: dateFrom };
 
         const broadcastTimeSeries = await WhatsAppMessage.aggregate([
@@ -100,12 +152,12 @@ exports.getDashboardStats = async (req, res) => {
         ]);
 
         // 4. Chatbot Flow Analytics (date-filtered via session data)
-        const flowsRaw = await ChatbotFlow.find({ userId: objectId })
+        const flowsRaw = await ChatbotFlow.find({ userId: userScope })
             .select('name isActive triggerType triggerKeywords analytics')
             .lean();
 
         // Build session aggregates for date range
-        const sessionMatchStage = { userId: objectId };
+        const sessionMatchStage = { userId: userScope };
         if (dateFrom) sessionMatchStage.createdAt = { $gte: dateFrom };
 
         const sessionStats = await ChatbotSession.aggregate([
@@ -165,43 +217,54 @@ exports.getDashboardStats = async (req, res) => {
             totalQualified: chatbotFlows.reduce((a, f) => a + f.qualified, 0),
         };
 
-        // 6. Compute main KPIs
-        const totalSent = convStats.totalManualSent + bcStats.totalBroadcastSent;
-        const totalMessages = totalSent + convStats.totalReceived;
+        // 6. Compute KPIs
+        const totalMessages = crmSent + customerSent;
+        // Broadcast delivery/read rate (broadcast-only — used on the Broadcasts tab).
+        const bcDelivered  = Math.max(bcStats.totalBroadcastDelivered, bcStats.totalBroadcastRead);
         const deliveryRate = bcStats.totalBroadcastSent > 0
-            ? Math.round((bcStats.totalBroadcastDelivered / bcStats.totalBroadcastSent) * 100) : 0;
-        const readRate = bcStats.totalBroadcastDelivered > 0
-            ? Math.round((bcStats.totalBroadcastRead / bcStats.totalBroadcastDelivered) * 100) : 0;
+            ? Math.round((bcDelivered / bcStats.totalBroadcastSent) * 100) : 0;
+        const readRate = bcDelivered > 0
+            ? Math.round((bcStats.totalBroadcastRead / bcDelivered) * 100) : 0;
 
         res.json({
             success: true,
             data: {
                 kpi: {
-                    totalSent,
-                    totalBroadcastSent: bcStats.totalBroadcastSent,
-                    totalReceived: convStats.totalReceived,
+                    // ── Messaging (period-scoped, message-level, no double counting) ──
+                    crmSent,              // outbound messages the CRM sent
+                    customerSent,         // inbound messages customers sent
+                    uniqueCustomers,      // distinct customers who sent ≥1 message
+                    manualSent,           // outbound sent by a human agent
+                    automatedSent,        // outbound sent by chatbot / broadcast / auto-reply
                     totalMessages,
-                    deliveryRate,
-                    readRate,
-                    totalDelivered: bcStats.totalBroadcastDelivered,
+                    // Overall outbound delivery quality
+                    msgDelivered, msgRead, msgFailed, msgDeliveryRate, msgReadRate,
+                    // ── Current snapshot ──
+                    activeChats: convStats.activeChats,
+                    unreadChats: convStats.unreadChats,
+                    // ── Broadcast (date-filtered) — consumed by the Broadcasts tab ──
+                    totalBroadcastSent: bcStats.totalBroadcastSent,
+                    totalDelivered: bcDelivered,
                     totalRead: bcStats.totalBroadcastRead,
                     totalFailed: bcStats.totalBroadcastFailed,
-                    activeChats: convStats.activeChats,
-                    unreadChats: convStats.unreadChats
+                    deliveryRate,
+                    readRate
                 },
                 volume: {
-                    inboundPercentage: totalMessages > 0 ? Math.round((convStats.totalReceived / totalMessages) * 100) : 0,
-                    outboundPercentage: totalMessages > 0 ? Math.round((totalSent / totalMessages) * 100) : 0
+                    outbound: crmSent,
+                    inbound: customerSent,
+                    inboundPercentage: totalMessages > 0 ? Math.round((customerSent / totalMessages) * 100) : 0,
+                    outboundPercentage: totalMessages > 0 ? Math.round((crmSent / totalMessages) * 100) : 0
                 },
                 recentCampaigns,
                 broadcastTimeSeries,
                 chatbotKpi,
                 chatbotFlows,
-                // FIX #114: Tell frontend which metrics are time-filtered vs all-time
                 _meta: {
                     dateFilter: days || 'all',
                     scopes: {
-                        conversations: 'all-time',
+                        messaging: dateFrom ? `last ${days} days` : 'all-time',
+                        chats: 'current',
                         broadcasts: dateFrom ? `last ${days} days` : 'all-time',
                         chatbotSessions: dateFrom ? `last ${days} days` : 'all-time',
                         chatbotLeads: 'all-time'

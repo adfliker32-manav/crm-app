@@ -15,7 +15,7 @@ const ALL_MODULES = [
 ];
 
 const SUB_PERMISSIONS = [
-    { key: 'aiChatbot',          label: 'AI Chatbot',          desc: 'Auto-reply with chatbot flows on incoming WhatsApp', parentModule: 'whatsapp', icon: 'fa-robot' },
+    { key: 'aiChatbot',          label: 'AI Chatbot',          desc: 'Premium AI (LLM) replies & lead qualification (visual flow builder is free)', parentModule: 'whatsapp', icon: 'fa-robot' },
     { key: 'whatsappAutomation', label: 'WhatsApp Automation', desc: 'Trigger WhatsApp from automation rules',           parentModule: 'whatsapp', icon: 'fa-bolt-lightning' },
     { key: 'emailAutomation',    label: 'Email Automation',    desc: 'Trigger emails from automation rules',              parentModule: 'email',    icon: 'fa-envelopes-bulk' },
     { key: 'campaigns',          label: 'Bulk Campaigns',      desc: 'Send broadcasts to large audiences',                parentModule: 'email',    icon: 'fa-bullhorn' },

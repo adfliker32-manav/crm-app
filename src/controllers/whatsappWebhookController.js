@@ -770,6 +770,13 @@ const extractMessageContent = (message) => {
         } else if (interactive.list_reply) {
             content.text = interactive.list_reply.title;
         }
+    } else if (message.contacts) {
+        content.contacts = (message.contacts || []).map(c => ({
+            name: c.name?.formatted_name
+                || [c.name?.first_name, c.name?.last_name].filter(Boolean).join(' ')
+                || 'Contact',
+            phones: (c.phones || []).map(p => p.phone).filter(Boolean)
+        }));
     } else if (message.button) {
         content.text = message.button.text;
     } else if (message.reaction) {

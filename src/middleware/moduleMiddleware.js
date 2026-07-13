@@ -25,16 +25,15 @@ const requireModule = (moduleName) => {
             // Check if moduleName exists in the tenant's allowed features array
             let hasAccess = activeModules.includes(moduleName);
 
-            // Chatbot is a WhatsApp-dependent PAID add-on: it needs the explicit
-            // aiChatbot plan feature AND a connected WhatsApp module to run on.
-            // (An explicit 'chatbot' entry in activeModules also grants it, for any
-            // plan that lists it directly.) Previously `|| hasWhatsApp` leaked chatbot
-            // to every plan that merely had WhatsApp, which made the aiChatbot upsell
-            // meaningless (e.g. a Basic/WhatsApp-only plan would get chatbot for free).
+            // The WhatsApp chatbot / visual flow builder is a FREE, WhatsApp-dependent
+            // capability: anyone with the WhatsApp module can build and run flows. The
+            // premium upsell is the *AI* (LLM) layer, which is gated SEPARATELY by
+            // planFeatures.aiChatbot at the AI settings + runtime AI-node/fallback level —
+            // NOT here. So chatbot access requires only the WhatsApp module (or an explicit
+            // 'chatbot' entry in activeModules). This intentionally decouples the free
+            // flow builder from the paid AI so disabling AI no longer hides the builder.
             if (moduleName === 'chatbot') {
-                const hasPlanFeature = req.workspace?.planFeatures?.aiChatbot;
-                const hasWhatsApp    = activeModules.includes('whatsapp');
-                hasAccess = hasAccess || (hasPlanFeature && hasWhatsApp);
+                hasAccess = hasAccess || activeModules.includes('whatsapp');
             }
 
             if (!hasAccess) {

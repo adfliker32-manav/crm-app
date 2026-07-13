@@ -171,6 +171,19 @@ const emitToUser = (userId, event, data) => {
 };
 
 /**
+ * Emit an event to every user in a company (manager + agents) so a shared inbox
+ * updates live for the whole team, not just the acting user.
+ *
+ * @param {Array<string|ObjectId>} userIds - company user ids
+ * @param {string} event
+ * @param {object} data
+ */
+const emitToUsers = (userIds, event, data) => {
+    if (!io || !Array.isArray(userIds)) return;
+    for (const uid of userIds) io.to(`user:${String(uid)}`).emit(event, data);
+};
+
+/**
  * Emit an event to all sockets watching a specific conversation.
  * 
  * @param {string} conversationId - The conversation's MongoDB _id
@@ -182,4 +195,4 @@ const emitToConversation = (conversationId, event, data) => {
     io.to(`conversation:${conversationId}`).emit(event, data);
 };
 
-module.exports = { initSocket, getIO, emitToUser, emitToConversation };
+module.exports = { initSocket, getIO, emitToUser, emitToUsers, emitToConversation };

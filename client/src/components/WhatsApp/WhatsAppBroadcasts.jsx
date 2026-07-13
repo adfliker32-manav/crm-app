@@ -24,6 +24,11 @@ const progressPct = (stats) => {
     return Math.min(100, Math.round(((stats.sent + stats.failed) / stats.totalTargets) * 100));
 };
 
+// A "read" message was, by definition, also delivered — but Meta sometimes sends the
+// read webhook without a preceding delivered one, which would make Delivered < Read.
+// Clamp so the funnel (Sent ≥ Delivered ≥ Read) always reads correctly.
+const deliveredCount = (stats) => Math.max(stats?.delivered || 0, stats?.read || 0);
+
 const WhatsAppBroadcasts = () => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
@@ -539,7 +544,7 @@ const WhatsAppBroadcasts = () => {
                                         </div>
                                         <div className="bg-emerald-50 rounded-lg p-3">
                                             <div className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Delivered</div>
-                                            <div className="text-xl font-bold text-emerald-700">{broadcast.stats?.delivered || 0}</div>
+                                            <div className="text-xl font-bold text-emerald-700">{deliveredCount(broadcast.stats)}</div>
                                         </div>
                                         <div className="bg-purple-50 rounded-lg p-3">
                                             <div className="text-[10px] font-bold text-purple-600 uppercase mb-1">Read</div>
@@ -968,8 +973,13 @@ const WhatsAppBroadcasts = () => {
                                 {(() => {
                                     let count = 0;
                                     const st = newBroadcast.targetAudience.selectionType;
-                                    if (st === 'ALL') count = leads.filter(l => l.phone).length;
-                                    else if (st === 'STAGES') count = leads.filter(l => newBroadcast.targetAudience.stages.includes(l.status) && l.phone).length;
+                                    // Use DB-provided per-stage counts (accurate) rather than the client `leads`
+                                    // array, which is only the first paginated page and would undercount.
+                                    const stageSum = (names) => stages
+                                        .filter(x => !names || names.includes(x.name))
+                                        .reduce((s, x) => s + (x.leadCountWithPhone || 0), 0);
+                                    if (st === 'ALL') count = stageSum(null);
+                                    else if (st === 'STAGES') count = stageSum(newBroadcast.targetAudience.stages);
                                     else if (st === 'CSV') count = csvContactCount;
                                     if (!count) return null;
                                     return (
@@ -1042,7 +1052,7 @@ const WhatsAppBroadcasts = () => {
                             </div>
                             <div className="bg-white rounded-xl p-3 border border-slate-100 shadow-xs text-center">
                                 <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Delivered</p>
-                                <p className="text-lg font-black text-emerald-600 mt-0.5">{detailBroadcast.stats?.delivered || 0}</p>
+                                <p className="text-lg font-black text-emerald-600 mt-0.5">{deliveredCount(detailBroadcast.stats)}</p>
                             </div>
                             <div className="bg-white rounded-xl p-3 border border-slate-100 shadow-xs text-center">
                                 <p className="text-[10px] font-bold text-teal-400 uppercase tracking-wider">Read</p>

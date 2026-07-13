@@ -445,6 +445,19 @@ const submitTemplateToMeta = async (userId, template) => {
     }
 };
 
+// Meta's template status/quality values don't all match our schema enums.
+// Coerce them so template.save() never throws a ValidationError on sync.
+const META_STATUS_MAP = {
+    APPROVED: 'APPROVED', PENDING: 'PENDING', REJECTED: 'REJECTED',
+    PAUSED: 'PAUSED', DISABLED: 'DISABLED',
+    IN_APPEAL: 'PENDING', PENDING_DELETION: 'DISABLED', DELETED: 'DISABLED',
+    REINSTATED: 'APPROVED', FLAGGED: 'PAUSED', LIMIT_EXCEEDED: 'PAUSED'
+};
+const META_QUALITY_MAP = {
+    GREEN: 'HIGH', YELLOW: 'MEDIUM', RED: 'LOW',
+    HIGH: 'HIGH', MEDIUM: 'MEDIUM', LOW: 'LOW', UNKNOWN: 'UNKNOWN'
+};
+
 const syncTemplateFromMeta = async (userId, metaTemplateId) => {
     try {
         const { accessToken } = await getCredentials(userId);
@@ -455,14 +468,40 @@ const syncTemplateFromMeta = async (userId, metaTemplateId) => {
             params: { fields: 'name,status,quality_score,rejected_reason,category' }
         });
 
+        const rawStatus = (response.data.status || '').toUpperCase();
+        const rawQuality = (response.data.quality_score?.score || '').toUpperCase();
+        if (rawStatus && !META_STATUS_MAP[rawStatus]) {
+            console.warn(`⚠️ Unmapped Meta template status "${rawStatus}" — defaulting to PENDING`);
+        }
+
         return {
             success: true,
-            status: response.data.status,
-            quality: response.data.quality_score?.score || 'UNKNOWN',
+            status: META_STATUS_MAP[rawStatus] || 'PENDING',
+            quality: META_QUALITY_MAP[rawQuality] || 'UNKNOWN',
             rejectionReason: response.data.rejected_reason || null
         };
     } catch (error) {
         console.error('❌ Failed to sync template:', error.response?.data || error.message);
+        return { success: false, error: error.response?.data?.error?.message || error.message };
+    }
+};
+
+// Delete a template from Meta (by name — removes all languages of that template).
+const deleteTemplateFromMeta = async (userId, templateName) => {
+    try {
+        const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
+        const creds = await getUserWhatsAppCredentials(userId);
+        if (!creds?.businessId) {
+            return { success: false, error: 'WhatsApp Business Account not configured' };
+        }
+        const url = `https://graph.facebook.com/v25.0/${creds.businessId}/message_templates`;
+        await axios.delete(url, {
+            headers: { 'Authorization': `Bearer ${creds.accessToken}` },
+            params: { name: templateName }
+        });
+        return { success: true };
+    } catch (error) {
+        console.error('❌ Failed to delete template from Meta:', error.response?.data || error.message);
         return { success: false, error: error.response?.data?.error?.message || error.message };
     }
 };
@@ -531,6 +570,7 @@ module.exports = {
     downloadMedia,
     submitTemplateToMeta,
     syncTemplateFromMeta,
+    deleteTemplateFromMeta,
     uploadMediaForTemplate,
     uploadMediaForSending,
     sendWhatsAppTemplateMessage

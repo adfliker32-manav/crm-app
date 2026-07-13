@@ -3,7 +3,8 @@ const ChatbotSession = require('../models/ChatbotSession');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } = require('./whatsappService');
-const { emitToUser } = require('./socketService');
+const { emitToUsers, emitToConversation } = require('./socketService');
+const { getCompanyUserIds } = require('../utils/whatsappUtils');
 
 // Chatbot Follow-up Service
 // Runs every 10 minutes via cron.
@@ -121,11 +122,11 @@ const initializeFollowupService = () => {
                             }
                         });
 
-                        // Push to frontend via Socket.IO
-                        emitToUser(session.userId, 'whatsapp:newMessage', {
-                            conversationId: conversation._id,
-                            message: messageDoc.toObject()
-                        });
+                        // Push to the whole team via Socket.IO (shared inbox)
+                        const followupCompanyUserIds = await getCompanyUserIds(session.userId);
+                        const followupPayload = { conversationId: conversation._id, message: messageDoc.toObject() };
+                        emitToUsers(followupCompanyUserIds, 'whatsapp:newMessage', followupPayload);
+                        emitToConversation(String(conversation._id), 'whatsapp:newMessage', followupPayload);
                     } catch (saveErr) {
                         console.error(`⚠️  Follow-up message sent but failed to save to DB:`, saveErr.message);
                     }

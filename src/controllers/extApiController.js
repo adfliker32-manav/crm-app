@@ -103,6 +103,12 @@ exports.createLead = async (req, res) => {
 
         await lead.save();
 
+        // Meta CAPI 'Lead' event (was missing — external-API leads never reached Meta)
+        runInBackground('Meta CAPI (LEAD_CREATED)', () => {
+            const { sendMetaEventForLead } = require('../services/metaConversionService');
+            return sendMetaEventForLead(lead, lead.status, null);
+        });
+
         // ✅ Fire automations (same as Meta webhook + webLead)
         runInBackground('Automation (LEAD_CREATED)', () => evaluateLead(lead, 'LEAD_CREATED'));
 
@@ -269,6 +275,11 @@ exports.updateLead = async (req, res) => {
             runInBackground('Workflow Engine (STAGE_CHANGED)', () => {
                 const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
                 return WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead });
+            });
+            // Meta CAPI stage-change event (was missing on the External API path)
+            runInBackground('Meta CAPI (STAGE_CHANGED)', () => {
+                const { sendMetaEventForLead } = require('../services/metaConversionService');
+                return sendMetaEventForLead(lead, status, prevStatus);
             });
         }
 

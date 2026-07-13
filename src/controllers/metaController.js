@@ -843,8 +843,16 @@ const updateCapiSettings = async (req, res) => {
             updateData['meta.metaCapiAccessToken'] = String(capiAccessToken).trim();
         }
         if (testEventCode !== undefined) updateData['meta.metaTestEventCode'] = String(testEventCode).trim();
-        if (capiEnabled !== undefined) updateData['meta.metaCapiEnabled'] = capiEnabled;
-        if (stageMapping !== undefined) updateData['meta.metaStageMapping'] = stageMapping;
+        if (capiEnabled !== undefined) updateData['meta.metaCapiEnabled'] = !!capiEnabled;
+        // Whitelist the 4 known keys and coerce to trimmed strings — a malformed
+        // body would otherwise CastError (500) or store junk shapes in the config.
+        if (stageMapping !== undefined && typeof stageMapping === 'object' && stageMapping !== null) {
+            const sm = {};
+            for (const key of ['first', 'middle', 'qualified', 'dead']) {
+                if (stageMapping[key] !== undefined) sm[key] = String(stageMapping[key]).trim();
+            }
+            updateData['meta.metaStageMapping'] = sm;
+        }
 
         await IntegrationConfig.findOneAndUpdate(
             { userId: ownerId },

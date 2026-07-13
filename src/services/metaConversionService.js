@@ -47,7 +47,19 @@ function hashValue(value, type = 'text') {
             cleaned = lower.replace(/[\d\s!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, '');
             break;
         case 'city':
+        case 'state':
+            // Meta spec (ct/st): lowercase, no punctuation, no special characters,
+            // no spaces — "New Delhi" → "newdelhi", "Uttar Pradesh" → "uttarpradesh".
+            // (US 2-letter state codes pass through unchanged.)
             cleaned = lower.replace(/[^a-z]/g, '');
+            break;
+        case 'zip':
+            // Meta spec (zp): lowercase, no spaces — covers IN pincodes, UK postcodes.
+            cleaned = lower.replace(/\s/g, '');
+            break;
+        case 'gender':
+            // Meta spec (ge): single char 'm' | 'f'. Coerce "Male"/"female" etc.
+            cleaned = lower.startsWith('m') ? 'm' : lower.startsWith('f') ? 'f' : '';
             break;
         default:
             cleaned = lower;
@@ -98,11 +110,11 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
             ph:          normalizedPhone  ? [hashValue(normalizedPhone, 'phone')]      : null,
             fn:          firstName        ? [hashValue(firstName, 'name')]             : null,
             ln:          lastName         ? [hashValue(lastName, 'name')]              : null,
-            ge:          lead.gender      ? [hashValue(lead.gender)]                   : null, // 'm' or 'f', hashed
+            ge:          lead.gender      ? [hashValue(lead.gender, 'gender')]         : null, // 'm' or 'f', hashed
             db:          lead.dateOfBirth ? [hashValue(lead.dateOfBirth)]              : null, // YYYYMMDD, hashed
             ct:          lead.city        ? [hashValue(lead.city, 'city')]             : null,
-            st:          lead.state       ? [hashValue(lead.state)]                    : null,
-            zp:          lead.zipCode     ? [hashValue(lead.zipCode)]                  : null,
+            st:          lead.state       ? [hashValue(lead.state, 'state')]           : null,
+            zp:          lead.zipCode     ? [hashValue(lead.zipCode, 'zip')]           : null,
             country:     [hashValue(defaultCountry)],
             external_id: [lead._id.toString()],
             // fbc/fbp are browser cookies — never hashed, bare string values
@@ -133,7 +145,10 @@ async function sendMetaEvent(config, lead, newStatus, oldStatus = null) {
         // Only include monetary fields for Purchase (true conversion with value)
         if (eventName === 'Purchase') {
             customData.currency = 'INR';
-            customData.value = lead.value || 0;
+            // FIX: the Lead schema field is `dealValue` — `lead.value` does not exist,
+            // so every Purchase event was sent with value: 0, breaking value-based
+            // (ROAS) optimization. Keep `lead.value` as a legacy fallback.
+            customData.value = lead.dealValue || lead.value || 0;
         }
 
         const eventData = {
@@ -204,6 +219,51 @@ function determineEventName(user, status) {
     return null;
 }
 
+/**
+ * Convenience wrapper used by stage-change call sites across the codebase:
+ * fetches the tenant's CAPI config (by lead.userId), checks the enabled flag,
+ * and sends the event. Never throws — always resolves to a result object.
+ *
+ * If lead.userId belongs to an AGENT (e.g. a lead created by an agent-owned
+ * chatbot flow), the agent has no IntegrationConfig of their own — so we fall
+ * back to the agent's parent (the tenant owner) before giving up.
+ *
+ * @param {Object} lead - Lead document (or plain object with the same fields)
+ * @param {string} newStatus - New lead status
+ * @param {string|null} oldStatus - Previous status
+ */
+async function sendMetaEventForLead(lead, newStatus, oldStatus = null) {
+    try {
+        if (!lead || !lead.userId) return { success: false, reason: 'No lead/owner' };
+
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const CAPI_SELECT = '+meta.metaCapiAccessToken +meta.metaCapiEnabled +meta.metaPixelId +meta.metaStageMapping +meta.metaTestEventCode';
+
+        let config = await IntegrationConfig.findOne({ userId: lead.userId }).select(CAPI_SELECT);
+
+        // Agent-owned lead → config lives on the parent tenant owner.
+        // STRICTLY agents only: a manager's parentId points to their AGENCY (reseller),
+        // and falling through would send events to the agency's pixel — wrong tenant.
+        if (!config?.meta?.metaCapiEnabled) {
+            const User = require('../models/User');
+            const owner = await User.findById(lead.userId).select('role parentId').lean();
+            if (owner?.role === 'agent' && owner.parentId) {
+                config = await IntegrationConfig.findOne({ userId: owner.parentId }).select(CAPI_SELECT);
+            }
+        }
+
+        if (!config?.meta?.metaCapiEnabled) {
+            return { success: false, reason: 'CAPI not enabled' };
+        }
+
+        return await sendMetaEvent(config, lead, newStatus, oldStatus);
+    } catch (err) {
+        console.error('❌ Meta CAPI (sendMetaEventForLead) error:', err.message);
+        return { success: false, error: err.message };
+    }
+}
+
 module.exports = {
-    sendMetaEvent
+    sendMetaEvent,
+    sendMetaEventForLead
 };

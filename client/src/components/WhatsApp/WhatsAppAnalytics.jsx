@@ -315,20 +315,20 @@ const WhatsAppAnalytics = () => {
             {activeTab === 'overview' && (
                 <div className="space-y-6">
 
-                    {/* KPI row 1 — messaging */}
+                    {/* KPI row 1 — who is talking (customers vs CRM) */}
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                        <KpiCard label="Messages Sent"     value={kpi.totalSent}     icon="fa-paper-plane"  iconBg="bg-blue-50"    iconColor="text-blue-500" />
-                        <KpiCard label="Messages Received" value={kpi.totalReceived}  icon="fa-reply"        iconBg="bg-violet-50"  iconColor="text-violet-500" />
-                        <KpiCard label="Active Chats"      value={kpi.activeChats}    icon="fa-comments"     iconBg="bg-green-50"   iconColor="text-green-500" />
-                        <KpiCard label="Awaiting Reply"    value={kpi.unreadChats}    icon="fa-bell"         iconBg="bg-amber-50"   iconColor="text-amber-500" />
+                        <KpiCard label="Customers Messaged" value={kpi.uniqueCustomers} icon="fa-users"       iconBg="bg-violet-50"  iconColor="text-violet-500" sub={`${(kpi.customerSent || 0).toLocaleString()} messages received`} />
+                        <KpiCard label="CRM Sent"           value={kpi.crmSent}          icon="fa-paper-plane" iconBg="bg-blue-50"    iconColor="text-blue-500"   sub={`${(kpi.manualSent || 0).toLocaleString()} manual · ${(kpi.automatedSent || 0).toLocaleString()} automated`} />
+                        <KpiCard label="Active Chats"       value={kpi.activeChats}      icon="fa-comments"    iconBg="bg-green-50"   iconColor="text-green-500" />
+                        <KpiCard label="Awaiting Reply"     value={kpi.unreadChats}      icon="fa-bell"        iconBg="bg-amber-50"   iconColor="text-amber-500" />
                     </div>
 
-                    {/* KPI row 2 — broadcast + chatbot */}
+                    {/* KPI row 2 — outbound quality + chatbot */}
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                        <KpiCard label="Broadcast Sent"   value={kpi.totalBroadcastSent || 0}  icon="fa-bullhorn"     iconBg="bg-indigo-50"  iconColor="text-indigo-500" badge="Broadcast" />
-                        <KpiCard label="Delivery Rate"    value={`${kpi.deliveryRate}%`}        icon="fa-check-double" iconBg="bg-emerald-50" iconColor="text-emerald-500" badge="Broadcast" />
-                        <KpiCard label="Read Rate"        value={`${kpi.readRate}%`}            icon="fa-eye"          iconBg="bg-teal-50"    iconColor="text-teal-500"   badge="Broadcast" />
-                        <KpiCard label="Chatbot Leads"    value={chatbotKpi.totalLeads}         icon="fa-user-check"   iconBg="bg-pink-50"    iconColor="text-pink-500"   sub={`${botConvRate}% conversion`} />
+                        <KpiCard label="Delivery Rate" value={`${kpi.msgDeliveryRate}%`} icon="fa-check-double" iconBg="bg-emerald-50" iconColor="text-emerald-500" badge="Outbound" sub={`${(kpi.msgDelivered || 0).toLocaleString()} delivered`} />
+                        <KpiCard label="Read Rate"     value={`${kpi.msgReadRate}%`}     icon="fa-eye"          iconBg="bg-teal-50"    iconColor="text-teal-500"    badge="Outbound" sub={`${(kpi.msgRead || 0).toLocaleString()} read`} />
+                        <KpiCard label="Broadcast Sent" value={kpi.totalBroadcastSent || 0} icon="fa-bullhorn"  iconBg="bg-indigo-50"  iconColor="text-indigo-500"  badge="Broadcast" />
+                        <KpiCard label="Chatbot Leads"  value={chatbotKpi.totalLeads}       icon="fa-user-check" iconBg="bg-pink-50"    iconColor="text-pink-500"    sub={`${botConvRate}% conversion`} />
                     </div>
 
                     {/* Message flow + chatbot summary */}
@@ -351,13 +351,13 @@ const WhatsAppAnalytics = () => {
                                     <div className="grid grid-cols-2 gap-3 mb-5">
                                         <div className="bg-[#00a884]/5 rounded-xl p-3 text-center">
                                             <p className="text-xl font-black text-[#00a884]">{volume.outboundPercentage}%</p>
-                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider mt-0.5">Outbound</p>
-                                            <p className="text-xs text-slate-500 font-semibold mt-1">{kpi.totalSent.toLocaleString()} msgs</p>
+                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider mt-0.5">CRM Sent</p>
+                                            <p className="text-xs text-slate-500 font-semibold mt-1">{(kpi.crmSent || 0).toLocaleString()} msgs</p>
                                         </div>
                                         <div className="bg-blue-50 rounded-xl p-3 text-center">
                                             <p className="text-xl font-black text-blue-600">{volume.inboundPercentage}%</p>
-                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider mt-0.5">Inbound</p>
-                                            <p className="text-xs text-slate-500 font-semibold mt-1">{kpi.totalReceived.toLocaleString()} msgs</p>
+                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider mt-0.5">Customer</p>
+                                            <p className="text-xs text-slate-500 font-semibold mt-1">{(kpi.customerSent || 0).toLocaleString()} msgs</p>
                                         </div>
                                     </div>
                                 </>

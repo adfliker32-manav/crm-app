@@ -94,6 +94,22 @@ exports.createBroadcast = async (req, res) => {
 
         const broadcast = new WhatsAppBroadcast(broadcastData);
         await broadcast.save();
+
+        // If scheduled for the future, enqueue the delayed job NOW. There is no separate
+        // cron scanning SCHEDULED broadcasts, so without this a scheduled campaign would
+        // never fire (the UI exposes no "Start" button for SCHEDULED).
+        if (isScheduled) {
+            const tenantId = req.tenantId || userId;
+            const delayMs  = new Date(scheduledFor) - new Date();
+            const job = await getBroadcastQueue().add(
+                'process-broadcast',
+                { broadcastId: broadcast._id.toString(), userId: tenantId, tenantId },
+                { delay: delayMs }
+            );
+            broadcast.jobId = job.id;
+            await broadcast.save();
+        }
+
         res.status(201).json({ broadcast });
     } catch (error) {
         console.error('Error creating broadcast:', error);
@@ -105,12 +121,18 @@ exports.startBroadcast = async (req, res) => {
     try {
         const userId   = req.user.userId || req.user.id;
         const tenantId = req.tenantId || userId;
-        const broadcast = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId: tenantId });
+        // Look up by the record's real owner (raw userId) — the same scope used by
+        // getBroadcast/cancel/delete. tenantId is only used below for the job payload
+        // (lead + WhatsApp-credential resolution live on the tenant/manager).
+        const broadcast = await WhatsAppBroadcast.findOne({ _id: req.params.id, userId });
 
         if (!broadcast) return res.status(404).json({ message: 'Broadcast not found' });
 
         if (['PROCESSING', 'COMPLETED'].includes(broadcast.status)) {
             return res.status(400).json({ message: 'Broadcast is already running or completed' });
+        }
+        if (broadcast.status === 'SCHEDULED' && broadcast.jobId) {
+            return res.status(400).json({ message: 'Broadcast is already scheduled' });
         }
 
         const queue = getBroadcastQueue();
@@ -191,6 +213,19 @@ exports.deleteBroadcast = async (req, res) => {
         if (!broadcast) return res.status(404).json({ message: 'Broadcast not found' });
         if (broadcast.status === 'PROCESSING') {
             return res.status(400).json({ message: 'Cannot delete a running broadcast. Cancel it first.' });
+        }
+
+        // Remove any pending scheduled job so it doesn't linger in the queue after delete.
+        if (broadcast.jobId) {
+            try {
+                const job = await getBroadcastQueue().getJob(broadcast.jobId);
+                if (job) {
+                    const state = await job.getState();
+                    if (['waiting', 'delayed', 'prioritized'].includes(state)) await job.remove();
+                }
+            } catch (err) {
+                console.error('Failed to remove BullMQ job on delete:', err.message);
+            }
         }
 
         await WhatsAppBroadcast.findByIdAndDelete(req.params.id);

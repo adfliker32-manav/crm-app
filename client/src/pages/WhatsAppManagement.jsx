@@ -20,13 +20,12 @@ const WhatsAppManagement = () => {
     const hasModule = (moduleName) => {
         if (['superadmin', 'agency'].includes(user?.role)) return true;
         if (moduleName === 'chatbot') {
-            // Chatbot is a WhatsApp-dependent paid add-on: it needs the aiChatbot
-            // feature AND the WhatsApp module (or an explicit 'chatbot' module entry).
-            // Mirrors requireModule('chatbot') on the server, so the tab never shows
-            // for a plan that would be 403'd the moment it tries to save a flow.
+            // The WhatsApp chatbot / visual flow builder is FREE and available to anyone
+            // with the WhatsApp module. The premium AI (LLM) layer is gated separately by
+            // planFeatures.aiChatbot (see AISettings + the runtime AI node/fallback), so
+            // disabling AI no longer hides the builder. Mirrors requireModule('chatbot').
             const mods = user?.activeModules || [];
-            return mods.includes('chatbot')
-                || (user?.planFeatures?.aiChatbot && mods.includes('whatsapp'));
+            return mods.includes('chatbot') || mods.includes('whatsapp');
         }
         return user?.activeModules ? user.activeModules.includes(moduleName) : true;
     };

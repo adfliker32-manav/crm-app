@@ -76,7 +76,7 @@ exports.getTemplate = async (req, res) => {
 exports.createTemplate = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const { name, language, category, components, variableMapping } = req.body;
+        const { name, language, category, components, variableMapping, isAutomated, triggerType, stage, isActive } = req.body;
 
         // Validation
         if (!name || !language || !category || !components) {
@@ -88,10 +88,14 @@ exports.createTemplate = async (req, res) => {
             return res.status(400).json({ message: 'Template name must be lowercase with underscores only' });
         }
 
-        // Check for duplicate name
-        const existing = await WhatsAppTemplate.findOne({ userId, name });
+        // Check for duplicate name across the whole company (all users sharing the same
+        // WhatsApp number). Meta enforces template-name uniqueness per WABA, so catch it
+        // here instead of failing later at submit time.
+        const { getCompanyUserIds } = require('../utils/whatsappUtils');
+        const companyUserIds = await getCompanyUserIds(userId);
+        const existing = await WhatsAppTemplate.findOne({ userId: { $in: companyUserIds }, name });
         if (existing) {
-            return res.status(400).json({ message: 'Template with this name already exists' });
+            return res.status(400).json({ message: 'A template with this name already exists' });
         }
 
         // Validate components
@@ -107,6 +111,12 @@ exports.createTemplate = async (req, res) => {
             category,
             components,
             variableMapping: variableMapping || {},
+            // Automation settings are CRM-side — persist them on create too
+            // (otherwise a new template saved with automation ON would silently lose it).
+            isAutomated: isAutomated || false,
+            triggerType: triggerType || 'manual',
+            stage: stage || null,
+            isActive: isActive || false,
             status: 'DRAFT'
         });
 
@@ -142,6 +152,12 @@ exports.updateTemplate = async (req, res) => {
             if (name && name !== template.name) {
                 if (!/^[a-z0-9_]+$/.test(name)) {
                     return res.status(400).json({ message: 'Template name must be lowercase with underscores only' });
+                }
+                const { getCompanyUserIds } = require('../utils/whatsappUtils');
+                const companyUserIds = await getCompanyUserIds(userId);
+                const clash = await WhatsAppTemplate.findOne({ userId: { $in: companyUserIds }, name, _id: { $ne: template._id } });
+                if (clash) {
+                    return res.status(400).json({ message: 'A template with this name already exists' });
                 }
                 template.name = name;
             }
@@ -205,8 +221,21 @@ exports.deleteTemplate = async (req, res) => {
             return res.status(404).json({ message: 'Template not found' });
         }
 
+        // If it was submitted to Meta, remove it there too (otherwise the name lingers on
+        // Meta and blocks re-creating it). Local delete proceeds regardless so the user is
+        // never stuck with an undeletable record.
+        let metaWarning = null;
+        if (template.metaTemplateId) {
+            const { deleteTemplateFromMeta } = require('../services/whatsappService');
+            const del = await deleteTemplateFromMeta(userId, template.name);
+            if (!del.success) metaWarning = del.error;
+        }
+
         await WhatsAppTemplate.findByIdAndDelete(req.params.id);
-        res.json({ message: 'Template deleted successfully' });
+        res.json({
+            message: 'Template deleted successfully',
+            ...(metaWarning && { warning: `Removed from CRM, but Meta deletion failed: ${metaWarning}` })
+        });
     } catch (error) {
         console.error('Error deleting template:', error);
         res.status(500).json({ message: 'Error deleting template', error: 'Server error' });
@@ -260,9 +289,19 @@ exports.duplicateTemplate = async (req, res) => {
             return res.status(404).json({ message: 'Template not found' });
         }
 
+        // Pick the first free "<name>_copy", "<name>_copy_2", … so duplicating never 500s
+        // on the unique index and never collides with a teammate's name (Meta-unique per WABA).
+        const { getCompanyUserIds } = require('../utils/whatsappUtils');
+        const companyUserIds = await getCompanyUserIds(userId);
+        const baseName = `${original.name}_copy`;
+        let name = baseName;
+        for (let n = 2; n <= 100 && await WhatsAppTemplate.findOne({ userId: { $in: companyUserIds }, name }); n++) {
+            name = `${baseName}_${n}`;
+        }
+
         const duplicate = new WhatsAppTemplate({
             userId,
-            name: `${original.name}_copy`,
+            name,
             language: original.language,
             category: original.category,
             components: original.components,

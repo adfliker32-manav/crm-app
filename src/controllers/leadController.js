@@ -90,7 +90,7 @@ const applyLeadUpdates = (lead, updates) => {
     });
 };
 
-const queueLeadCreatedEffects = (lead, ownerId) => {
+const queueLeadCreatedEffects = (lead, ownerId, options = {}) => {
     if (lead.email) {
         runInBackground('Email automation error (non-blocking):', async () => {
             const sent = await sendAutomatedEmailOnLeadCreate(lead, ownerId);
@@ -141,9 +141,13 @@ const queueLeadCreatedEffects = (lead, ownerId) => {
         return enrollLeadInSequences(lead, 'LEAD_CREATED');
     });
 
-    // CAPI Lead event for manually created leads
-    sendMetaEventIfEnabled(lead, lead.status, null)
-        .catch(err => console.error('Meta CAPI error (Lead Created):', err));
+    // CAPI Lead event for manually created leads.
+    // skipCapi: bulk import sends CAPI itself with a single shared config fetch —
+    // without this flag every imported lead fired TWICE (here + the batch block).
+    if (!options.skipCapi) {
+        sendMetaEventIfEnabled(lead, lead.status, null)
+            .catch(err => console.error('Meta CAPI error (Lead Created):', err));
+    }
 };
 
 const queueLeadStageChangeEffects = (lead) => {
@@ -915,7 +919,7 @@ const syncLeads = async (req, res) => {
 
             // Trigger automations safely without blocking main thread
             setTimeout(async () => {
-                insertedLeads.forEach(newLead => queueLeadCreatedEffects(newLead, userId));
+                insertedLeads.forEach(newLead => queueLeadCreatedEffects(newLead, userId, { skipCapi: true }));
 
                 // Fetch CAPI config once for the whole batch — avoids N×1 DB queries
                 try {
@@ -1227,6 +1231,7 @@ const completeFollowUp = async (req, res) => {
         lead.lastFollowUpDate = lead.nextFollowUpDate || new Date();
 
         // Update next follow-up date or status based on action
+        const statusBeforeFollowUp = lead.status;
         if (markedAsDeadLead) {
             // Mark as Dead Lead stage - ensure the stage exists
             lead.status = 'Dead Lead';
@@ -1253,6 +1258,12 @@ const completeFollowUp = async (req, res) => {
         }
 
         await lead.save();
+
+        // CAPI: marking dead from follow-up is a real stage transition (was missing)
+        if (markedAsDeadLead && statusBeforeFollowUp !== 'Dead Lead') {
+            sendMetaEventIfEnabled(lead, 'Dead Lead', statusBeforeFollowUp)
+                .catch(err => console.error('Meta CAPI error (Follow-up Dead Lead):', err));
+        }
 
         res.json({ success: true, lead });
     } catch (err) {

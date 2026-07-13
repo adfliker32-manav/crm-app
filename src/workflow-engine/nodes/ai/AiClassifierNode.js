@@ -1,8 +1,10 @@
 const NodeRegistry = require('../../NodeRegistry');
-// WEAK #1 FIX: Use singleton OpenAI client instead of creating a new instance per execution
-const { getGlobalOpenAIClient } = require('../../../utils/openaiClient');
 // RATE #2 FIX: Per-tenant AI request rate limiting
 const { checkAIRate } = require('../../../utils/workflowRateLimiter');
+// Provider-agnostic classification + unified platform key resolution
+const { classifyText } = require('../../../services/aiService');
+const { getGlobalAIKey } = require('../../../utils/aiKeyResolver');
+const IntegrationConfig = require('../../../models/IntegrationConfig');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AiClassifierNode
@@ -11,8 +13,11 @@ const { checkAIRate } = require('../../../utils/workflowRateLimiter');
 // used to route to the appropriate output port.
 //
 // FIXES:
-//   WEAK #1 — Singleton OpenAI client via openaiClient.js (no more per-execution instantiation)
-//   RATE #2 — Per-tenant rate limit check before calling OpenAI API
+//   RATE #2 — Per-tenant rate limit check before calling the AI API
+//   KEYS    — Resolves the platform key from the DB global setting (Super-Admin UI)
+//             with an env-var fallback, so the node isn't silently keyless.
+//   PROVIDER— Honours the tenant's provider (OpenAI or Gemini) and auto-falls back
+//             to whichever provider actually has a key configured.
 // ─────────────────────────────────────────────────────────────────────────────
 const AiClassifierNode = {
     type: 'ai_classifier',
@@ -94,27 +99,29 @@ const AiClassifierNode = {
 
         let classification = 'default';
         try {
-            // WEAK #1 FIX: Get the shared singleton client — no new instance per call
-            const openai = getGlobalOpenAIClient();
-            if (!openai) {
-                console.warn('[AiClassifierNode] OPENAI_API_KEY not set. Routing to default.');
+            // Resolve the tenant's provider, then the platform key for it.
+            // If the configured provider has no key but the other one does, use that —
+            // so the node works on both OpenAI-only and Gemini-only deployments.
+            const cfg = await IntegrationConfig.findOne({ userId: tenantId }).select('ai.provider ai.model').lean();
+            let provider = cfg?.ai?.provider || 'openai';
+            let apiKey   = await getGlobalAIKey(provider);
+            if (!apiKey) {
+                const alt = provider === 'openai' ? 'gemini' : 'openai';
+                const altKey = await getGlobalAIKey(alt);
+                if (altKey) { provider = alt; apiKey = altKey; }
+            }
+
+            if (!apiKey) {
+                console.warn(`[AiClassifierNode] No AI API key configured (checked DB global keys + env) for tenant ${tenantId}. Routing to default.`);
             } else {
-                const model = data.model || 'gpt-4o-mini';
-                const completion = await openai.chat.completions.create({
-                    model,
-                    max_tokens: 50,
-                    temperature: 0,  // Deterministic — we want exact category matching
-                    messages: [
-                        {
-                            role: 'system',
-                            content: `You are a strict data classifier. Your task is to output exactly one of these allowed categories: ${categories.join(', ')}.\nDo not add any punctuation, explanation, quotes, prefix, or extra words. Output ONLY the exact category name.`
-                        },
-                        { role: 'user', content: prompt }
-                    ]
+                const rawText = await classifyText({
+                    provider,
+                    apiKey,
+                    model: data.model,
+                    categories,
+                    prompt
                 });
 
-                const rawText = completion.choices?.[0]?.message?.content?.trim() || '';
-                
                 // Clean the response (strip quotes, common punctuation, wrapper spaces)
                 const cleanResponse = rawText.replace(/^["'`.?!,\s]+|["'`.?!,\s]+$/g, '').trim().toLowerCase();
                 const lowercaseCategories = categories.map(c => c.toLowerCase());

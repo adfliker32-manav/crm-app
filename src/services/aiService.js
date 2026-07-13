@@ -1,6 +1,32 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const OpenAI = require('openai');
 
+// Global timeout applied to every LLM request (both providers). The OpenAI SDK
+// enforces this natively; the Gemini SDK does not, so we wrap its calls (see withTimeout).
+const AI_TIMEOUT_MS = 30000;
+
+// Cache OpenAI clients per API key so we get connection pooling + native
+// timeout/retry instead of constructing `new OpenAI()` on every request.
+const _openaiClientCache = new Map();
+function getOpenAIClient(apiKey) {
+    let client = _openaiClientCache.get(apiKey);
+    if (!client) {
+        client = new OpenAI({ apiKey, timeout: AI_TIMEOUT_MS, maxRetries: 2 });
+        _openaiClientCache.set(apiKey, client);
+    }
+    return client;
+}
+
+// Reject a promise if it doesn't settle within `ms`. Used to bound the Gemini
+// SDK, which otherwise has no request timeout and can hang the webhook path.
+function withTimeout(promise, ms, label = 'AI') {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} request timed out after ${ms}ms`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Normalizes conversation history into roles suitable for the LLM.
  * @param {Array} history - Array of { role: 'user'|'model'|'assistant', text: string }
@@ -129,9 +155,9 @@ async function callGemini(apiKey, modelName, systemPrompt, history, lastUserMess
         history: geminiHistory
     });
     
-    const result = await chat.sendMessage(lastUserMessage);
+    const result = await withTimeout(chat.sendMessage(lastUserMessage), AI_TIMEOUT_MS, 'Gemini');
     const responseText = result.response.text();
-    
+
     return JSON.parse(responseText);
 }
 
@@ -139,8 +165,8 @@ async function callGemini(apiKey, modelName, systemPrompt, history, lastUserMess
  * Invokes OpenAI API for chat completion.
  */
 async function callOpenAI(apiKey, modelName, systemPrompt, history, lastUserMessage) {
-    const openai = new OpenAI({ apiKey });
-    
+    const openai = getOpenAIClient(apiKey);
+
     const messages = [
         { role: 'system', content: systemPrompt },
         ...history.map(h => ({
@@ -220,4 +246,54 @@ exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conv
         reply: resultJson.reply || 'I understand. Let me check that for you.',
         action: resultJson.action || null
     };
+};
+
+/**
+ * Single-label classification for the workflow "AI Classifier" node.
+ * Provider-agnostic: works with both OpenAI and Gemini so the node is not
+ * silently broken on a Gemini-only deployment.
+ *
+ * Returns the raw model text — the caller is responsible for matching it
+ * against the configured category list.
+ *
+ * @param {Object}   params
+ * @param {'openai'|'gemini'} params.provider
+ * @param {string}   params.apiKey
+ * @param {string}   [params.model]      — provider-appropriate model; falls back to a sane default
+ * @param {string[]} params.categories   — allowed output labels
+ * @param {string}   params.prompt       — the interpolated classification prompt
+ * @returns {Promise<string>}
+ */
+exports.classifyText = async ({ provider, apiKey, model, categories = [], prompt }) => {
+    if (!apiKey) throw new Error('API key is required for classification.');
+
+    const systemInstruction = `You are a strict data classifier. Your task is to output exactly one of these allowed categories: ${categories.join(', ')}.\nDo not add any punctuation, explanation, quotes, prefix, or extra words. Output ONLY the exact category name.`;
+
+    if (provider === 'openai') {
+        const openai = getOpenAIClient(apiKey);
+        const completion = await openai.chat.completions.create({
+            model: (model && model.startsWith('gpt')) ? model : 'gpt-4o-mini',
+            max_tokens: 50,
+            temperature: 0, // Deterministic — we want exact category matching
+            messages: [
+                { role: 'system', content: systemInstruction },
+                { role: 'user', content: prompt }
+            ]
+        });
+        return completion.choices?.[0]?.message?.content?.trim() || '';
+    }
+
+    // Gemini
+    const genAI = getGeminiClient(apiKey);
+    const gModel = genAI.getGenerativeModel({
+        // The node's model dropdown holds OpenAI names; ignore them for Gemini.
+        model: (model && model.startsWith('gemini')) ? model : 'gemini-2.5-flash',
+        systemInstruction,
+        // Gemini 2.5 models spend "thinking" tokens against maxOutputTokens; a tiny cap
+        // can exhaust the budget on thinking and return empty text. 256 leaves headroom
+        // while still bounding cost (the output itself is a single short label).
+        generationConfig: { temperature: 0, maxOutputTokens: 256 }
+    });
+    const result = await withTimeout(gModel.generateContent(prompt), AI_TIMEOUT_MS, 'Gemini');
+    return (result.response.text() || '').trim();
 };

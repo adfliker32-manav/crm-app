@@ -294,6 +294,13 @@ exports.captureLead = async (req, res) => {
         const lead = new Lead(leadData);
         await lead.save();
 
+        // Meta CAPI 'Lead' event (was missing — web-form leads never reached Meta)
+        {
+            const { sendMetaEventForLead } = require('../services/metaConversionService');
+            sendMetaEventForLead(lead, lead.status, null)
+                .catch(e => console.error('[WebLead] Meta CAPI error:', e.message));
+        }
+
         // Trigger lead arrival alerts (socket and WhatsApp alerts)
         try {
             const { sendLeadArrivalAlert } = require('../services/leadAlertService');

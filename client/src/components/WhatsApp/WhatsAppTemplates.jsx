@@ -34,8 +34,23 @@ const WhatsAppTemplates = () => {
     const handleSyncStatus = async () => {
         setSyncing(true);
         try {
+            // Only templates submitted to Meta (have a metaTemplateId) can be synced.
+            const toSync = templates.filter(t => t.metaTemplateId);
+            if (toSync.length === 0) {
+                await fetchTemplates();
+                showSuccess('No submitted templates to sync yet.');
+                return;
+            }
+            const results = await Promise.allSettled(
+                toSync.map(t => api.post(`/whatsapp/templates/${t._id}/sync`))
+            );
+            const failed = results.filter(r => r.status === 'rejected').length;
             await fetchTemplates();
-            showSuccess('Templates synced successfully!');
+            if (failed > 0) {
+                showError(`Synced ${toSync.length - failed}/${toSync.length} from Meta — ${failed} failed.`);
+            } else {
+                showSuccess(`Synced ${toSync.length} template${toSync.length > 1 ? 's' : ''} from Meta!`);
+            }
         } catch (error) {
             showError('Failed to sync templates');
         } finally {
@@ -73,8 +88,9 @@ const WhatsAppTemplates = () => {
         );
         if (!confirmed) return;
         try {
-            await api.delete(`/whatsapp/templates/${template._id}`);
-            showSuccess('Template deleted successfully!');
+            const res = await api.delete(`/whatsapp/templates/${template._id}`);
+            if (res.data?.warning) showError(res.data.warning);
+            else showSuccess('Template deleted successfully!');
             fetchTemplates();
         } catch (error) {
             console.error('Error deleting template:', error);

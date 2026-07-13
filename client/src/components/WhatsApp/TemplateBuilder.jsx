@@ -49,30 +49,37 @@ const TemplateBuilder = ({ templateId, onBack }) => {
         finally { setLoading(false); }
     };
 
+    // Validate + persist the current template. Returns true on success, false on validation
+    // failure. Throws on network/API errors (callers handle). Shared by Save and Submit so
+    // that submitting always sends Meta exactly what's on screen (no lost unsaved edits).
+    const persistTemplate = async () => {
+        if (!/^[a-z0-9_]+$/.test(template.name)) { showError('Name must be lowercase with underscores only'); return false; }
+        const bodyComp = template.components.find(c => c.type === 'BODY');
+        if (!bodyComp?.text) { showError('Body text is required'); return false; }
+
+        // Validate media header has been uploaded
+        const headerComp = template.components.find(c => c.type === 'HEADER');
+        if (headerComp && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerComp.format)) {
+            if (!headerComp.example?.header_handle?.length) {
+                showError('Please upload a media file for the header');
+                return false;
+            }
+        }
+
+        if (templateId && templateId !== 'new') {
+            await api.put(`/whatsapp/templates/${templateId}`, template);
+        } else {
+            await api.post('/whatsapp/templates', template);
+        }
+        return true;
+    };
+
     const handleSave = async () => {
         try {
             setLoading(true);
-            if (!/^[a-z0-9_]+$/.test(template.name)) { showError('Name must be lowercase with underscores only'); setLoading(false); return; }
-            const bodyComp = template.components.find(c => c.type === 'BODY');
-            if (!bodyComp?.text) { showError('Body text is required'); setLoading(false); return; }
-
-            // Validate media header has been uploaded
-            const headerComp = template.components.find(c => c.type === 'HEADER');
-            if (headerComp && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerComp.format)) {
-                if (!headerComp.example?.header_handle?.length) {
-                    showError('Please upload a media file for the header');
-                    setLoading(false);
-                    return;
-                }
-            }
-
-            if (templateId && templateId !== 'new') {
-                await api.put(`/whatsapp/templates/${templateId}`, template);
-                showSuccess('Template updated!');
-            } else {
-                await api.post('/whatsapp/templates', template);
-                showSuccess('Template created!');
-            }
+            const isEdit = templateId && templateId !== 'new';
+            if (!(await persistTemplate())) return;
+            showSuccess(isEdit ? 'Template updated!' : 'Template created!');
             setTimeout(() => onBack(), 1200);
         } catch (err) { showError(err.response?.data?.message || 'Failed to save'); }
         finally { setLoading(false); }
@@ -81,6 +88,8 @@ const TemplateBuilder = ({ templateId, onBack }) => {
     const handleSubmitToMeta = async () => {
         try {
             setLoading(true);
+            // Persist any unsaved edits first so Meta reviews exactly what's on screen.
+            if (!(await persistTemplate())) return;
             await api.post(`/whatsapp/templates/${templateId}/submit`);
             showSuccess('Submitted to Meta! Review takes up to 24 hours.');
             setTimeout(fetchTemplate, 1000);
@@ -591,17 +600,25 @@ const TemplateBuilder = ({ templateId, onBack }) => {
 
                                         {(mediaPreview || headerComp?.example?.header_handle?.length > 0) && !uploading && (
                                             <div className="absolute inset-0 bg-white z-20 flex items-center justify-center p-2">
-                                                {currentHeaderFormat === 'IMAGE' ? (
+                                                {currentHeaderFormat === 'IMAGE' && mediaPreview ? (
                                                     <img src={mediaPreview} className="h-full w-full object-cover rounded-2xl shadow-md" alt="Preview" />
-                                                ) : currentHeaderFormat === 'VIDEO' ? (
+                                                ) : currentHeaderFormat === 'VIDEO' && mediaPreview ? (
                                                     <video src={mediaPreview} className="h-full w-full object-cover rounded-2xl shadow-md" />
-                                                ) : (
+                                                ) : currentHeaderFormat === 'DOCUMENT' ? (
                                                     <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100 w-full shadow-sm">
                                                         <div className="w-12 h-12 bg-rose-500 rounded-xl flex items-center justify-center text-white shadow-lg"><i className="fa-solid fa-file-pdf text-xl"></i></div>
                                                         <div className="text-left flex-1 min-w-0">
                                                             <div className="text-sm font-black text-slate-800 truncate">{headerComp?._uploadedFileName || 'Document'}</div>
                                                             <div className="text-[10px] font-bold text-slate-400">{headerComp?._uploadedFileSize ? formatFileSize(headerComp._uploadedFileSize) : 'Uploaded'}</div>
                                                         </div>
+                                                    </div>
+                                                ) : (
+                                                    /* Saved media handle from a previously-uploaded template — Meta handles
+                                                       aren't viewable URLs, so show a confirmation instead of a broken preview. */
+                                                    <div className="flex flex-col items-center justify-center gap-2 text-center">
+                                                        <div className="w-12 h-12 bg-emerald-500 rounded-xl flex items-center justify-center text-white shadow-lg"><i className="fa-solid fa-circle-check text-xl"></i></div>
+                                                        <div className="text-sm font-black text-slate-700 capitalize">{currentHeaderFormat.toLowerCase()} uploaded</div>
+                                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Click trash to remove</div>
                                                     </div>
                                                 )}
                                                 <div className="absolute top-4 right-4 z-30 opacity-0 group-hover/upload:opacity-100 transition-opacity">

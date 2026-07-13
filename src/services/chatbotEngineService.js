@@ -8,7 +8,8 @@ const User = require('../models/User');
 const AgencySettings = require('../models/AgencySettings');
 const axios = require('axios');
 const { sendWhatsAppTextMessage, sendInteractiveMessage, sendCtaUrlMessage, sendMediaMessage } = require('./whatsappService');
-const { emitToUser } = require('./socketService');
+const { emitToUser, emitToUsers, emitToConversation } = require('./socketService');
+const { getCompanyUserIds } = require('../utils/whatsappUtils');
 const whatsappQueueService = require('./whatsappQueueService');
 const NodeCache = require('node-cache');
 const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
@@ -244,10 +245,10 @@ const triggerChatbotLeadCreatedEffects = (lead, userId, leadStatus = null) => {
 // 🔧 HELPER: Persist automated outbound messages to the DB
 // Without this, chatbot replies are invisible in the inbox UI.
 // ============================================================
-const saveBotMessage = async (conversationId, userId, text, type = 'text', waResult = null, mediaData = null) => {
+const saveBotMessage = async (conversationId, userId, text, type = 'text', waResult = null, mediaData = null, automationSource = 'chatbot') => {
     try {
         const waMessageId = waResult?.messages?.[0]?.id || undefined;
-        
+
         const content = { text };
         if (['image', 'video', 'document', 'audio'].includes(type)) {
             content.caption = text;
@@ -267,7 +268,7 @@ const saveBotMessage = async (conversationId, userId, text, type = 'text', waRes
             status: waMessageId ? 'sent' : 'pending',
             timestamp: new Date(),
             isAutomated: true,
-            automationSource: 'chatbot'
+            automationSource
         });
         await messageDoc.save();
 
@@ -285,13 +286,18 @@ const saveBotMessage = async (conversationId, userId, text, type = 'text', waRes
             }
         });
 
-        // Push to frontend via Socket.IO (real-time)
+        // Push to the whole team via Socket.IO (shared inbox — all company users)
         const savedMsg = messageDoc.toObject();
-        emitToUser(userId, 'whatsapp:newMessage', {
+        const companyUserIds = await getCompanyUserIds(userId);
+        emitToUsers(companyUserIds, 'whatsapp:newMessage', {
             conversationId,
             message: savedMsg
         });
-        emitToUser(userId, 'whatsapp:conversationUpdate', {
+        emitToConversation(String(conversationId), 'whatsapp:newMessage', {
+            conversationId,
+            message: savedMsg
+        });
+        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
             conversationId,
             updates: {
                 lastMessage: lastMsgPreview,
@@ -773,11 +779,14 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                     return null;
                 }
 
-                // ── maxTurns guard: count existing AI-sent bot messages for this conversation ──
+                // ── maxTurns guard: count existing AI-fallback replies for this conversation ──
+                // FIX: previously queried `source: 'bot'`, a field that is never written, so the
+                // count was always 0 and this cap never fired. AI-fallback replies are saved with
+                // automationSource: 'ai_fallback' (see saveBotMessage call below) — count those.
                 const aiBotMessageCount = await WhatsAppMessage.countDocuments({
                     conversationId,
                     direction: 'outbound',
-                    source: 'bot'
+                    automationSource: 'ai_fallback'
                 });
                 if (aiBotMessageCount >= maxFallbackTurns) {
                     console.log(`🤖 [Chatbot] AI Fallback max turns (${maxFallbackTurns}) reached for conversation ${conversationId}. Stopping auto-reply.`);
@@ -822,10 +831,10 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                         leadContext: leadDetails
                     });
                     
-                    // Send WhatsApp reply
+                    // Send WhatsApp reply — tag it 'ai_fallback' so the maxTurns guard above can count it
                     const result = await sendWhatsAppTextMessage(conversation.phone, reply, tenantId);
-                    await saveBotMessage(conversationId, tenantId, reply, 'text', result);
-                    
+                    await saveBotMessage(conversationId, tenantId, reply, 'text', result, null, 'ai_fallback');
+
                     // Increment AI usage limit
                     await IntegrationConfig.updateOne({ userId: tenantId }, { $inc: { 'ai.tokensUsedThisMonth': 1 } });
                     
@@ -2210,10 +2219,19 @@ const executeAction = async (actionData, session, conversation) => {
                         $set: { leadId: leadForStage._id }
                     });
                     console.log(`🤖 [Chatbot] change_stage: auto-created lead ${leadForStage._id} in stage "${newStage}"`);
+
+                    // CAPI: lead created directly in a mapped stage (was missing —
+                    // AI/chatbot qualification never reached Meta on this path)
+                    {
+                        const { sendMetaEventForLead } = require('./metaConversionService');
+                        sendMetaEventForLead(leadForStage, newStage, null)
+                            .catch(e => console.error('[Chatbot] Meta CAPI error (change_stage create):', e.message));
+                    }
                     break; // Already created with correct stage, no need to update again
                 }
 
                 // ── Update the stage ──────────────────────────────────────────
+                const stageBeforeChange = leadForStage.status;
                 await Lead.findByIdAndUpdate(leadForStage._id, {
                     $set: { status: newStage },
                     $push: {
@@ -2228,6 +2246,13 @@ const executeAction = async (actionData, session, conversation) => {
                     }
                 });
                 console.log(`🤖 [Chatbot] change_stage: lead ${leadForStage._id} → "${newStage}"`);
+
+                // CAPI: chatbot/AI stage change is a qualification signal (was missing)
+                if (stageBeforeChange !== newStage) {
+                    const { sendMetaEventForLead } = require('./metaConversionService');
+                    sendMetaEventForLead(leadForStage, newStage, stageBeforeChange)
+                        .catch(e => console.error('[Chatbot] Meta CAPI error (change_stage):', e.message));
+                }
                 break;
             }
 

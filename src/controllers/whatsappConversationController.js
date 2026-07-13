@@ -6,7 +6,7 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const { sendWhatsAppTextMessage } = require('../services/whatsappService');
 const { cancelActiveChatbots } = require('../services/chatbotEngineService');
-const { emitToUser, emitToConversation } = require('../services/socketService');
+const { emitToUser, emitToUsers, emitToConversation } = require('../services/socketService');
 const mongoose = require('mongoose');
 
 const { buildMetaComponents } = require('../utils/templateVariableResolver');
@@ -186,9 +186,9 @@ exports.sendMessage = async (req, res) => {
             waMessageId
         });
 
-        // 🔌 Push to frontend via Socket.IO (real-time for other tabs/agents)
+        // 🔌 Push to the whole team via Socket.IO (shared inbox — all company users)
         const savedMsg = message.toObject();
-        emitToUser(userId, 'whatsapp:newMessage', {
+        emitToUsers(companyUserIds, 'whatsapp:newMessage', {
             conversationId: conversation._id,
             message: savedMsg
         });
@@ -196,7 +196,7 @@ exports.sendMessage = async (req, res) => {
             conversationId: conversation._id,
             message: savedMsg
         });
-        emitToUser(userId, 'whatsapp:conversationUpdate', {
+        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
             conversationId: conversation._id,
             updates: {
                 lastMessage: text.trim().substring(0, 100),
@@ -520,8 +520,9 @@ exports.startConversation = async (req, res) => {
             message: savedMsg
         });
 
-        // 🔌 Push to frontend via Socket.IO (real-time for other tabs/agents)
-        emitToUser(userId, 'whatsapp:newMessage', {
+        // 🔌 Push to the whole team via Socket.IO (shared inbox — all company users)
+        const convCompanyUserIds = await getCompanyUserIds(userId);
+        emitToUsers(convCompanyUserIds, 'whatsapp:newMessage', {
             conversationId: conversation._id,
             message: savedMsg
         });
@@ -529,7 +530,7 @@ exports.startConversation = async (req, res) => {
             conversationId: conversation._id,
             message: savedMsg
         });
-        emitToUser(userId, 'whatsapp:conversationUpdate', {
+        emitToUsers(convCompanyUserIds, 'whatsapp:conversationUpdate', {
             conversationId: conversation._id,
             updates: {
                 lastMessage: conversation.lastMessage,
@@ -699,8 +700,8 @@ exports.sendMediaMessage = async (req, res) => {
         const savedMsg = message.toObject();
         res.json({ success: true, message: savedMsg });
 
-        // 🔌 Push to frontend via Socket.IO (real-time for other tabs/agents)
-        emitToUser(userId, 'whatsapp:newMessage', {
+        // 🔌 Push to the whole team via Socket.IO (shared inbox — all company users)
+        emitToUsers(companyUserIds, 'whatsapp:newMessage', {
             conversationId: conversation._id,
             message: savedMsg
         });
@@ -708,7 +709,7 @@ exports.sendMediaMessage = async (req, res) => {
             conversationId: conversation._id,
             message: savedMsg
         });
-        emitToUser(userId, 'whatsapp:conversationUpdate', {
+        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
             conversationId: conversation._id,
             updates: {
                 lastMessage: conversation.lastMessage,
@@ -736,10 +737,45 @@ exports.downloadMediaProxy = async (req, res) => {
 
         const { downloadMedia } = require('../services/whatsappService');
         const result = await downloadMedia(mediaId, userId);
+        const buffer = Buffer.from(result.data);
+        const total = buffer.length;
 
+        // WhatsApp media is immutable per media ID — safe to cache aggressively.
         res.set('Content-Type', result.mimeType);
-        res.set('Content-Length', result.data.length);
-        res.send(Buffer.from(result.data));
+        res.set('Cache-Control', 'private, max-age=86400, immutable');
+        res.set('Accept-Ranges', 'bytes');
+
+        // Optional forced download (documents) with a friendly filename.
+        if (req.query.download) {
+            const safeName = String(req.query.name || 'file').replace(/[^\w.\- ]+/g, '_').slice(0, 120);
+            res.set('Content-Disposition', `attachment; filename="${safeName}"`);
+        }
+
+        // Range request (audio/video seeking) → 206 Partial Content.
+        const match = req.headers.range && /^bytes=(\d*)-(\d*)$/.exec(req.headers.range.trim());
+        if (match && (match[1] || match[2])) {
+            let start, end;
+            if (match[1] === '') {
+                // Suffix range "bytes=-N" → last N bytes.
+                const suffix = parseInt(match[2], 10);
+                start = Math.max(total - suffix, 0);
+                end = total - 1;
+            } else {
+                start = parseInt(match[1], 10);
+                end = match[2] ? parseInt(match[2], 10) : total - 1;
+            }
+            if (isNaN(start) || start < 0) start = 0;
+            if (isNaN(end) || end >= total) end = total - 1;
+            if (start > end) { start = 0; end = total - 1; }
+            const chunk = buffer.subarray(start, end + 1);
+            res.status(206);
+            res.set('Content-Range', `bytes ${start}-${end}/${total}`);
+            res.set('Content-Length', chunk.length);
+            return res.end(chunk);
+        }
+
+        res.set('Content-Length', total);
+        res.end(buffer);
     } catch (error) {
         console.error('Error downloading media:', error);
         res.status(500).json({ message: 'Error downloading media' });
@@ -765,8 +801,8 @@ exports.resumeChatbot = async (req, res) => {
             return res.status(404).json({ message: 'Conversation not found' });
         }
 
-        // Emit update to frontend
-        emitToUser(userId, 'whatsapp:conversationUpdate', {
+        // Emit update to the whole team (shared inbox)
+        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
             conversationId: conversation._id,
             updates: { chatbotPausedUntil: conversation.chatbotPausedUntil }
         });

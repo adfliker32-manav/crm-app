@@ -4,8 +4,9 @@ import { useNotification } from '../../context/NotificationContext';
 import { WORKSPACE_MODULES } from '../../constants/modules';
 
 // Modules a tenant workspace can have — single source of truth (no API/White-Label;
-// those are not manager-level offerings). `chatbot` is a sub-permission
-// (planFeatures.aiChatbot) under WhatsApp, not a top-level module.
+// those are not manager-level offerings). The WhatsApp chatbot / flow builder is FREE
+// and rides on the WhatsApp module, so it is not a top-level toggle. The `aiChatbot`
+// planFeature below gates ONLY the premium AI (LLM) layer, not the flow builder.
 const AVAILABLE_MODULES = WORKSPACE_MODULES;
 
 // Sub-permissions appear only when their parent module is active.

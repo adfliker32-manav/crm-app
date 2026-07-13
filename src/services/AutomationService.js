@@ -227,6 +227,16 @@ const executeRuleActions = async (rule, lead) => {
                 updates.$push = { history: { $each: historyEntries, $slice: -100 } };
             }
             await Lead.findByIdAndUpdate(lead._id, updates);
+
+            // CAPI: automation-driven stage change (was missing — the old automation
+            // engine never reported stage transitions to Meta). `lead` in memory still
+            // holds the pre-update status, so it doubles as oldStatus.
+            const capiNewStatus = updates.$set?.status;
+            if (capiNewStatus && capiNewStatus !== lead.status) {
+                const { sendMetaEventForLead } = require('./metaConversionService');
+                sendMetaEventForLead(lead, capiNewStatus, lead.status)
+                    .catch(e => console.error('[Automation] Meta CAPI error (CHANGE_STAGE):', e.message));
+            }
         }
 
         // Increment rule execution counter and release the per-(rule, lead) lock.
@@ -448,6 +458,15 @@ const handleWatcherReply = async (conversationId) => {
 
         if (Object.keys(updates).length > 0) {
             await Lead.findByIdAndUpdate(watcher.leadId, updates);
+
+            // CAPI: reply-triggered stage change (was missing). `lead` was fetched
+            // before the update, so lead.status is the previous stage.
+            const replyStage = watcher.ifRepliedAction?.changeStage;
+            if (replyStage && replyStage !== lead.status) {
+                const { sendMetaEventForLead } = require('./metaConversionService');
+                sendMetaEventForLead(lead, replyStage, lead.status)
+                    .catch(e => console.error('[Automation] Meta CAPI error (reply changeStage):', e.message));
+            }
         }
 
         // Send follow-up template if configured
@@ -542,6 +561,7 @@ const continueWorkflowAfterVoice = async (callLog) => {
         
         let changesMade = false;
         let historyEntries = [];
+        const statusBeforeVoiceActions = lead.status; // for CAPI oldStatus (loop mutates lead.status)
 
         // Execute mapped branch actions
         for (const action of mappedActions) {
@@ -571,6 +591,13 @@ const continueWorkflowAfterVoice = async (callLog) => {
                 userName: 'System Automation',
                 ipAddress: 'System'
             });
+
+            // CAPI: voice-outcome stage change (was missing)
+            if (lead.status !== statusBeforeVoiceActions) {
+                const { sendMetaEventForLead } = require('./metaConversionService');
+                sendMetaEventForLead(lead, lead.status, statusBeforeVoiceActions)
+                    .catch(e => console.error('[Automation] Meta CAPI error (voice CHANGE_STAGE):', e.message));
+            }
         }
     } catch (err) {
         console.error(`⚠️ [Automation] Failed to continue workflow after voice call:`, err);

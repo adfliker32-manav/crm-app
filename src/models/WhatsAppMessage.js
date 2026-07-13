@@ -55,6 +55,11 @@ const whatsAppMessageSchema = new mongoose.Schema({
         // For reactions
         reactionEmoji: String,
         reactedMessageId: String,
+        // For shared contacts
+        contacts: [{
+            name: String,
+            phones: [String]
+        }],
         // For Click-to-WhatsApp ad referrals
         referral: {
             source_url: String,
@@ -86,7 +91,7 @@ const whatsAppMessageSchema = new mongoose.Schema({
     },
     automationSource: {
         type: String,
-        enum: ['template', 'chatbot', 'auto_reply', 'broadcast', null],
+        enum: ['template', 'chatbot', 'auto_reply', 'broadcast', 'ai_fallback', null],
         default: null
     },
     broadcastId: {

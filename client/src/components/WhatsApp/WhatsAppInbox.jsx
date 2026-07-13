@@ -5,6 +5,142 @@ import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import useSocket from '../../hooks/useSocket';
 
+// ─────────────────────────────────────────────────────────────────────────
+// Media helpers
+// ─────────────────────────────────────────────────────────────────────────
+const formatWaFileSize = (bytes) => {
+    if (!bytes || isNaN(bytes)) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+// Pick a document icon + accent colour from the file name / mime type.
+const getWaDocMeta = (fileName = '', mimeType = '') => {
+    const ext = (fileName.split('.').pop() || '').toLowerCase();
+    const t = `${ext} ${mimeType || ''}`.toLowerCase();
+    if (t.includes('pdf'))               return { icon: 'fa-file-pdf',        color: 'bg-red-500',    label: 'PDF' };
+    if (/(xls|sheet|csv)/.test(t))       return { icon: 'fa-file-excel',      color: 'bg-green-600',  label: 'Sheet' };
+    if (/(docx?|word)/.test(t))          return { icon: 'fa-file-word',       color: 'bg-blue-600',   label: 'Doc' };
+    if (/(pptx?|presentation)/.test(t))  return { icon: 'fa-file-powerpoint', color: 'bg-orange-500', label: 'Slides' };
+    if (/(zip|rar|7z|tar|gz)/.test(t))   return { icon: 'fa-file-zipper',     color: 'bg-amber-500',  label: 'Archive' };
+    if (/(txt|text|rtf)/.test(t))        return { icon: 'fa-file-lines',      color: 'bg-slate-500',  label: 'Text' };
+    return { icon: 'fa-file', color: 'bg-slate-500', label: ext ? ext.toUpperCase() : 'File' };
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Voice / audio player — real HTML5 playback with seek + duration.
+// ─────────────────────────────────────────────────────────────────────────
+const WhatsAppAudioPlayer = ({ src, outbound }) => {
+    const audioRef = useRef(null);
+    const [playing, setPlaying] = useState(false);
+    const [dur, setDur] = useState(0);
+    const [cur, setCur] = useState(0);
+    const [err, setErr] = useState(false);
+
+    const fmt = (s) => {
+        if (!isFinite(s) || isNaN(s) || s < 0) return '0:00';
+        const m = Math.floor(s / 60);
+        const ss = Math.floor(s % 60).toString().padStart(2, '0');
+        return `${m}:${ss}`;
+    };
+
+    const toggle = () => {
+        const a = audioRef.current;
+        if (!a) return;
+        if (a.paused) a.play().catch(() => setErr(true));
+        else a.pause();
+    };
+
+    // Chrome reports duration = Infinity for some WhatsApp ogg/opus clips until
+    // the stream is scrubbed — nudge it once to force a real duration.
+    const handleMetadata = (e) => {
+        const a = e.currentTarget;
+        if (a.duration === Infinity || isNaN(a.duration)) {
+            const onTick = () => {
+                a.removeEventListener('timeupdate', onTick);
+                a.currentTime = 0;
+                if (isFinite(a.duration)) setDur(a.duration);
+            };
+            a.addEventListener('timeupdate', onTick);
+            a.currentTime = 1e101;
+        } else {
+            setDur(a.duration || 0);
+        }
+    };
+
+    const seek = (e) => {
+        const a = audioRef.current;
+        if (!a || !dur) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        const pct = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+        a.currentTime = pct * dur;
+        setCur(a.currentTime);
+    };
+
+    const pct = dur ? (cur / dur) * 100 : 0;
+    const accent = outbound ? '#017561' : '#00a884';
+
+    if (err) {
+        return <div className="text-xs text-slate-400 italic px-1 py-1"><i className="fa-solid fa-microphone-slash mr-1"></i>Voice message unavailable</div>;
+    }
+
+    return (
+        <div className="flex items-center gap-2.5 min-w-[220px] max-w-[300px] py-1 mb-1">
+            <audio
+                ref={audioRef}
+                src={src}
+                preload="metadata"
+                onLoadedMetadata={handleMetadata}
+                onDurationChange={(e) => { if (isFinite(e.currentTarget.duration)) setDur(e.currentTarget.duration); }}
+                onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
+                onPlay={() => setPlaying(true)}
+                onPause={() => setPlaying(false)}
+                onEnded={(e) => { setPlaying(false); setCur(0); e.currentTarget.currentTime = 0; }}
+                onError={() => setErr(true)}
+            />
+            <button
+                type="button"
+                onClick={toggle}
+                className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0 shadow-sm hover:brightness-105 transition"
+                style={{ background: accent }}
+            >
+                <i className={`fa-solid ${playing ? 'fa-pause' : 'fa-play'} text-sm ${playing ? '' : 'ml-0.5'}`}></i>
+            </button>
+            <div className="flex-1 min-w-0">
+                <div className="relative h-[18px] flex items-center cursor-pointer" onClick={seek}>
+                    <div className="w-full h-[3px] bg-slate-300/70 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: accent }}></div>
+                    </div>
+                    <div
+                        className="absolute w-3 h-3 rounded-full bg-white border-2 shadow"
+                        style={{ left: `${pct}%`, borderColor: accent, top: '50%', transform: 'translate(-50%, -50%)' }}
+                    ></div>
+                </div>
+                <div className="flex justify-between items-center mt-0.5">
+                    <span className="text-[10px] text-slate-500 tabular-nums">{fmt(cur > 0 || playing ? cur : dur)}</span>
+                    <i className="fa-solid fa-microphone text-slate-400 text-[10px]"></i>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Sticker image with graceful emoji fallback.
+const WhatsAppSticker = ({ src }) => {
+    const [err, setErr] = useState(false);
+    if (!src || err) return <div className="text-5xl mb-1">🎨</div>;
+    return (
+        <img
+            src={src}
+            alt="Sticker"
+            loading="lazy"
+            className="w-32 h-32 object-contain mb-1"
+            onError={() => setErr(true)}
+        />
+    );
+};
+
 const WhatsAppInbox = () => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
@@ -244,9 +380,11 @@ const WhatsAppInbox = () => {
                     const preview = message.content?.text?.substring(0, 100)
                         || (message.type === 'image'    ? '📷 Photo'
                           : message.type === 'video'    ? '🎥 Video'
-                          : message.type === 'audio'    ? '🎵 Audio'
+                          : message.type === 'audio'    ? '🎤 Voice message'
                           : message.type === 'document' ? `📄 ${message.content?.fileName || 'Document'}`
                           : message.type === 'sticker'  ? '🎨 Sticker'
+                          : message.type === 'location' ? '📍 Location'
+                          : message.type === 'contacts' ? '👤 Contact'
                           : '💬 Message');
                     const updated = prev.map(c => {
                         if (c._id !== convId) return c;
@@ -758,6 +896,10 @@ const WhatsAppInbox = () => {
         const base = api.defaults.baseURL || '';
         const sanitizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
         const fullMediaUrl = mediaProxy ? sanitizedBase + mediaProxy : msg.content?.mediaUrl;
+        // Forced-download variant (preserves the original filename).
+        const downloadUrl = fullMediaUrl
+            ? `${fullMediaUrl}${fullMediaUrl.includes('?') ? '&' : '?'}download=1&name=${encodeURIComponent(msg.content?.fileName || 'file')}`
+            : null;
 
         switch (msg.type) {
             case 'image':
@@ -790,56 +932,111 @@ const WhatsAppInbox = () => {
                 );
             case 'video':
                 return (
-                    <div className="mb-1 relative group cursor-pointer" onClick={() => fullMediaUrl && window.open(fullMediaUrl, '_blank')}>
-                        <div className="bg-[#111b21]/10 rounded-lg p-10 flex flex-col items-center justify-center gap-3 max-w-[280px] border border-slate-200 relative overflow-hidden">
-                            <i className="fa-solid fa-circle-play text-5xl text-[#00a884]"></i>
-                            <span className="text-[11px] font-bold text-slate-600 uppercase tracking-widest leading-none">Play Video</span>
-                            <div className="absolute top-2 right-2 px-1.5 py-0.5 bg-black/20 rounded text-[9px] text-white">MP4</div>
-                        </div>
+                    <div className="mb-1">
+                        {fullMediaUrl ? (
+                            <video
+                                src={fullMediaUrl}
+                                controls
+                                preload="metadata"
+                                playsInline
+                                className="rounded-lg max-w-[280px] max-h-[340px] bg-black"
+                            >
+                                Your browser does not support video playback.
+                            </video>
+                        ) : (
+                            <div className="bg-slate-50 text-[#8696a0] rounded-lg p-6 flex flex-col items-center justify-center gap-2 border border-dashed border-slate-200 max-w-[280px]">
+                                <i className="fa-solid fa-video-slash text-2xl"></i>
+                                <span className="text-[10px] font-medium uppercase tracking-wider">Video Unavailable</span>
+                            </div>
+                        )}
                         {msg.content?.caption && <p className="text-[14px] text-[#111b21] mt-1.5 px-0.5">{msg.content.caption}</p>}
                     </div>
                 );
-            case 'document':
+            case 'document': {
+                const doc = getWaDocMeta(msg.content?.fileName, msg.content?.mimeType);
+                const sizeLabel = formatWaFileSize(msg.content?.fileSize);
                 return (
-                    <div className="bg-white/80 rounded-xl p-3.5 flex items-center gap-3.5 max-w-[280px] border border-slate-200/80 mb-1 shadow-sm hover:shadow-md transition-all cursor-pointer group">
-                        <div className="w-11 h-11 bg-blue-500 rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-blue-500/20 group-hover:scale-105 transition-transform">
-                            <i className="fa-solid fa-file-pdf text-white text-lg"></i>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                            <p className="text-[13px] font-bold text-slate-800 truncate leading-tight mb-0.5">{msg.content?.fileName || 'Document'}</p>
-                            <p className="text-[10px] text-slate-400 font-medium uppercase tracking-tight">{(msg.content?.fileSize / 1024).toFixed(0) || '0'} KB • Document</p>
-                        </div>
-                        {fullMediaUrl && (
-                            <a href={fullMediaUrl} target="_blank" rel="noopener noreferrer" className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 hover:text-[#00a884] hover:bg-slate-200 transition-colors">
+                    <div className="mb-1">
+                        <a
+                            href={downloadUrl || '#'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download={msg.content?.fileName || undefined}
+                            onClick={(e) => { if (!downloadUrl) e.preventDefault(); }}
+                            className="bg-white/80 rounded-xl p-3.5 flex items-center gap-3.5 max-w-[280px] border border-slate-200/80 shadow-sm hover:shadow-md transition-all cursor-pointer group no-underline"
+                        >
+                            <div className={`w-11 h-11 ${doc.color} rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg group-hover:scale-105 transition-transform`}>
+                                <i className={`fa-solid ${doc.icon} text-white text-lg`}></i>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-[13px] font-bold text-slate-800 truncate leading-tight mb-0.5">{msg.content?.fileName || 'Document'}</p>
+                                <p className="text-[10px] text-slate-400 font-medium uppercase tracking-tight">
+                                    {[sizeLabel, doc.label].filter(Boolean).join(' • ')}
+                                </p>
+                            </div>
+                            <span className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 group-hover:text-[#00a884] group-hover:bg-slate-200 transition-colors flex-shrink-0">
                                 <i className="fa-solid fa-arrow-down-to-bracket"></i>
-                            </a>
-                        )}
+                            </span>
+                        </a>
+                        {msg.content?.caption && <p className="text-[14px] text-[#111b21] mt-1.5 px-0.5">{msg.content.caption}</p>}
                     </div>
                 );
+            }
             case 'audio':
-                return (
-                    <div className="flex items-center gap-3 bg-slate-50/50 rounded-full px-4 py-2 max-w-[280px] mb-1">
-                        <button className="w-8 h-8 bg-[#00a884] rounded-full flex items-center justify-center text-white flex-shrink-0">
-                            <i className="fa-solid fa-play text-xs ml-0.5"></i>
-                        </button>
-                        <div className="flex-1 h-1 bg-slate-300 rounded-full"><div className="h-1 bg-[#00a884] rounded-full w-1/3"></div></div>
-                        <span className="text-[10px] text-slate-500">0:00</span>
-                    </div>
-                );
+                return <WhatsAppAudioPlayer src={fullMediaUrl} outbound={msg.direction === 'outbound'} />;
             case 'sticker':
-                return <div className="text-4xl mb-1">🎨</div>;
-            case 'location':
+                return <WhatsAppSticker src={fullMediaUrl} />;
+            case 'location': {
+                const { latitude, longitude, locationName, address } = msg.content || {};
+                const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude);
+                const mapsUrl = hasCoords ? `https://www.google.com/maps?q=${latitude},${longitude}` : null;
                 return (
-                    <div className="bg-slate-100 rounded-lg overflow-hidden max-w-[280px] mb-1">
-                        <div className="h-32 bg-gradient-to-br from-green-200 to-blue-200 flex items-center justify-center">
-                            <i className="fa-solid fa-location-dot text-3xl text-red-500"></i>
+                    <a
+                        href={mapsUrl || '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => { if (!mapsUrl) e.preventDefault(); }}
+                        className={`block bg-slate-100 rounded-lg overflow-hidden max-w-[280px] mb-1 no-underline ${mapsUrl ? 'cursor-pointer hover:opacity-95 transition' : ''}`}
+                    >
+                        <div className="h-32 bg-gradient-to-br from-green-200 to-blue-200 flex items-center justify-center relative">
+                            <i className="fa-solid fa-location-dot text-3xl text-red-500 drop-shadow"></i>
+                            {mapsUrl && <span className="absolute bottom-1.5 right-1.5 bg-white/90 text-[9px] px-1.5 py-0.5 rounded text-slate-600 font-semibold">Open in Maps</span>}
                         </div>
                         <div className="p-2">
-                            <p className="text-sm font-medium">{msg.content?.locationName || 'Location'}</p>
-                            {msg.content?.address && <p className="text-xs text-slate-500">{msg.content.address}</p>}
+                            <p className="text-sm font-medium text-[#111b21]">{locationName || 'Shared Location'}</p>
+                            {address
+                                ? <p className="text-xs text-slate-500">{address}</p>
+                                : hasCoords && <p className="text-[11px] text-slate-400 tabular-nums">{Number(latitude).toFixed(5)}, {Number(longitude).toFixed(5)}</p>}
                         </div>
+                    </a>
+                );
+            }
+            case 'contacts': {
+                const contacts = msg.content?.contacts || [];
+                if (contacts.length === 0) {
+                    return <p className="text-sm text-slate-500 italic mb-1"><i className="fa-solid fa-address-card mr-1.5"></i>Shared a contact</p>;
+                }
+                return (
+                    <div className="space-y-1.5 mb-1">
+                        {contacts.map((c, i) => (
+                            <div key={i} className="bg-white/80 rounded-xl p-3 flex items-center gap-3 max-w-[260px] border border-slate-200/80 shadow-sm">
+                                <div className="w-10 h-10 bg-[#dfe5e7] rounded-full flex items-center justify-center text-[#8696a0] flex-shrink-0">
+                                    <i className="fa-solid fa-user"></i>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-[13px] font-semibold text-slate-800 truncate">{c.name || 'Contact'}</p>
+                                    {c.phones?.[0] && <p className="text-[11px] text-slate-500 truncate">{c.phones[0]}</p>}
+                                </div>
+                                {c.phones?.[0] && (
+                                    <a href={`tel:${c.phones[0]}`} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[#00a884] hover:bg-slate-200 transition flex-shrink-0" title="Call">
+                                        <i className="fa-solid fa-phone text-xs"></i>
+                                    </a>
+                                )}
+                            </div>
+                        ))}
                     </div>
                 );
+            }
             case 'interactive':
                 return (
                     <div className="mb-1">
@@ -1081,20 +1278,23 @@ const WhatsAppInbox = () => {
                                             {/* ── Automation badge (chatbot / broadcast / auto-reply) ── */}
                                             {msg.isAutomated && msg.automationSource && (
                                                 <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full mb-1.5 ${
-                                                    msg.automationSource === 'chatbot'    ? 'bg-blue-100 text-blue-600'    :
-                                                    msg.automationSource === 'broadcast'  ? 'bg-purple-100 text-purple-600' :
-                                                    msg.automationSource === 'auto_reply' ? 'bg-amber-100 text-amber-700'  :
+                                                    msg.automationSource === 'chatbot'     ? 'bg-blue-100 text-blue-600'     :
+                                                    msg.automationSource === 'ai_fallback' ? 'bg-violet-100 text-violet-600' :
+                                                    msg.automationSource === 'broadcast'   ? 'bg-purple-100 text-purple-600' :
+                                                    msg.automationSource === 'auto_reply'  ? 'bg-amber-100 text-amber-700'   :
                                                     'bg-slate-100 text-slate-500'
                                                 }`}>
                                                     <i className={`fa-solid ${
-                                                        msg.automationSource === 'chatbot'    ? 'fa-robot'              :
-                                                        msg.automationSource === 'broadcast'  ? 'fa-bullhorn'           :
-                                                        msg.automationSource === 'auto_reply' ? 'fa-bolt'               :
+                                                        msg.automationSource === 'chatbot'     ? 'fa-robot'                :
+                                                        msg.automationSource === 'ai_fallback' ? 'fa-wand-magic-sparkles'  :
+                                                        msg.automationSource === 'broadcast'   ? 'fa-bullhorn'             :
+                                                        msg.automationSource === 'auto_reply'  ? 'fa-bolt'                 :
                                                         'fa-wand-magic-sparkles'
                                                     } text-[9px]`}></i>
-                                                    {msg.automationSource === 'chatbot'    ? 'Chatbot'    :
-                                                     msg.automationSource === 'broadcast'  ? 'Broadcast'  :
-                                                     msg.automationSource === 'auto_reply' ? 'Auto Reply' : 'Automated'}
+                                                    {msg.automationSource === 'chatbot'     ? 'Chatbot'    :
+                                                     msg.automationSource === 'ai_fallback' ? 'AI Reply'   :
+                                                     msg.automationSource === 'broadcast'   ? 'Broadcast'  :
+                                                     msg.automationSource === 'auto_reply'  ? 'Auto Reply' : 'Automated'}
                                                 </span>
                                             )}
 
@@ -1550,12 +1750,22 @@ const WhatsAppInbox = () => {
             )}
             {/* ═══════════ IMAGE LIGHTBOX ═══════════ */}
             {selectedImage && (
-                <div className="fixed inset-0 bg-black/90 z-[100] flex flex-col animate-in fade-in zoom-in duration-200">
-                    <button onClick={() => setSelectedImage(null)} className="absolute top-6 right-6 w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition backdrop-blur-md">
-                        <i className="fa-solid fa-xmark text-2xl"></i>
-                    </button>
-                    <div className="flex-1 flex items-center justify-center p-12">
-                        <img src={selectedImage} alt="Fullscreen" className="max-w-full max-h-full object-contain shadow-2xl rounded-sm" />
+                <div className="fixed inset-0 bg-black/90 z-[100] flex flex-col animate-in fade-in zoom-in duration-200" onClick={() => setSelectedImage(null)}>
+                    <div className="absolute top-6 right-6 flex items-center gap-2 z-10" onClick={(e) => e.stopPropagation()}>
+                        <a
+                            href={`${selectedImage}${selectedImage.includes('?') ? '&' : '?'}download=1&name=image.jpg`}
+                            download="image.jpg"
+                            className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition backdrop-blur-md"
+                            title="Download"
+                        >
+                            <i className="fa-solid fa-arrow-down-to-bracket text-xl"></i>
+                        </a>
+                        <button onClick={() => setSelectedImage(null)} className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition backdrop-blur-md" title="Close">
+                            <i className="fa-solid fa-xmark text-2xl"></i>
+                        </button>
+                    </div>
+                    <div className="flex-1 flex items-center justify-center p-12" onClick={() => setSelectedImage(null)}>
+                        <img src={selectedImage} alt="Fullscreen" className="max-w-full max-h-full object-contain shadow-2xl rounded-sm" onClick={(e) => e.stopPropagation()} />
                     </div>
                 </div>
             )}

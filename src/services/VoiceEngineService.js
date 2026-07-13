@@ -139,10 +139,20 @@ class VoiceEngineService {
      */
     async _generateSmartPrompt(basePrompt, lead, config) {
         try {
-            const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY }); // Using platform API key
-            
-            // In a real scenario, we'd also fetch the WhatsAppConversation history here
-            const contextStr = `Lead Name: ${lead.name || 'Unknown'}\nStage: ${lead.stage}\nNotes: ${lead.notes?.join(' | ') || 'None'}`;
+            // Resolve the platform key from the DB global setting (Super-Admin UI) with an
+            // env-var fallback — matches how the rest of the AI stack sources its key.
+            const { getGlobalAIKey } = require('../utils/aiKeyResolver');
+            const apiKey = await getGlobalAIKey('openai');
+            if (!apiKey) {
+                console.warn('[VoiceEngine] No OpenAI key configured (DB global key or OPENAI_API_KEY). Degrading to injected base prompt.');
+                // Degrade to 'injected' behaviour — never ship literal {{variables}} to a live call.
+                return { prompt: this._injectVariables(basePrompt, lead), credits: 0 };
+            }
+            const openai = new OpenAI({ apiKey });
+
+            // In a real scenario, we'd also fetch the WhatsAppConversation history here.
+            // Lead status lives on `lead.status` (not `lead.stage`).
+            const contextStr = `Lead Name: ${lead.name || 'Unknown'}\nStage: ${lead.status || lead.stage || 'Unknown'}\nNotes: ${lead.notes?.join(' | ') || 'None'}`;
             
             const systemMsg = `You are a helpful assistant generating a system prompt for an AI Voice Agent.
 Base Instructions for the Voice Agent: "${basePrompt}"
@@ -163,8 +173,8 @@ Task: Write the final, precise system prompt for the Voice Agent. Do not include
             
             return { prompt: response.choices[0].message.content, credits };
         } catch (error) {
-            console.error('[VoiceEngine] Failed to generate smart prompt, falling back to base prompt:', error);
-            return { prompt: basePrompt, credits: 0 };
+            console.error('[VoiceEngine] Failed to generate smart prompt, falling back to injected base prompt:', error);
+            return { prompt: this._injectVariables(basePrompt, lead), credits: 0 };
         }
     }
 
