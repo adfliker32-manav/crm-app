@@ -14,7 +14,7 @@ const { isFeatureDisabled } = require('../utils/systemConfig');
 
 // Self-serve AI-credit top-up bounds (INR). Credits are derived from the amount
 // at aiCreditService.CREDIT_VALUE_INR, so no separate price list to keep in sync.
-const MIN_TOPUP_INR = 5; // TEMP(testing): revert to 100 when done
+const MIN_TOPUP_INR = 100;
 const MAX_TOPUP_INR = 200000;
 
 // ─── GET /api/billing/plans ────────────────────────────────────────────────
@@ -291,16 +291,22 @@ const cancel = async (req, res) => {
 // payment.captured webhook (backstop for when the browser closes before the
 // callback returns). Server-authoritative: credits + tenant come from the ORDER's
 // notes fetched fresh from Razorpay, never from the request body.
+// A "benign" rejection: the order simply isn't a payable top-up (wrong purpose, or
+// not paid yet). The webhook backstop attempts fulfilment on every order-linked
+// payment and uses this flag to tell "not our order / not ready" (ignore quietly)
+// apart from a real failure (alert + retry).
+const benignTopupErr = (msg) => { const e = new Error(msg); e.benign = true; return e; };
+
 const fulfilAiCreditTopup = async ({ orderId, paymentId, tenantId = null }) => {
     if (!orderId || !paymentId) throw new Error('orderId and paymentId are required');
 
     // Fetch the order from Razorpay — authoritative amount, notes, paid status.
     const order = await razorpayService.getOrder(orderId);
     if (!order || order.notes?.purpose !== 'ai_credit_topup') {
-        throw new Error('Order is not an AI credit top-up');
+        throw benignTopupErr('Order is not an AI credit top-up');
     }
     if (order.status !== 'paid') {
-        throw new Error(`Order not paid (status: ${order.status})`);
+        throw benignTopupErr(`Order not paid (status: ${order.status})`);
     }
 
     const grantTenant = order.notes.tenantId || (tenantId ? String(tenantId) : null);
@@ -311,10 +317,11 @@ const fulfilAiCreditTopup = async ({ orderId, paymentId, tenantId = null }) => {
     }
 
     // Atomic claim on the unique razorpayPaymentId. findOneAndUpdate with new:false
-    // returns the PRE-image: null means we just created the row (we own fulfilment);
+    // returns the PRE-image: null means we just inserted the row (we own the grant);
     // a non-null doc means someone already claimed this payment. A dead-heat between
     // the client-verify and webhook paths can surface a duplicate-key (E11000) — the
-    // loser treats that exactly like finding an existing claim.
+    // loser resolves the existing doc the same way.
+    let owned = false; // true when THIS call is responsible for granting
     let prior;
     try {
         prior = await AiCreditTopup.findOneAndUpdate(
@@ -325,34 +332,55 @@ const fulfilAiCreditTopup = async ({ orderId, paymentId, tenantId = null }) => {
             } },
             { upsert: true, new: false, setDefaultsOnInsert: true }
         );
+        if (!prior) owned = true; // fresh insert → we own the grant
     } catch (e) {
-        if (e.code === 11000) {
-            const existing = await AiCreditTopup.findOne({ razorpayPaymentId: paymentId }).lean();
-            if (existing?.status === 'granted') {
-                return { success: true, alreadyProcessed: true, credits: existing.credits, aiCreditsBalance: existing.balanceAfter };
-            }
-            return { success: true, processing: true, credits: existing?.credits ?? credits };
-        }
-        throw e;
+        if (e.code !== 11000) throw e;
+        prior = await AiCreditTopup.findOne({ razorpayPaymentId: paymentId }).lean();
     }
 
-    if (prior) {
-        // Already claimed by the other fulfilment path.
-        if (prior.status === 'granted') {
+    if (!owned) {
+        if (prior?.status === 'granted') {
             return { success: true, alreadyProcessed: true, credits: prior.credits, aiCreditsBalance: prior.balanceAfter };
         }
-        // 'pending' (concurrent, other path will finish) or 'grant_failed' (needs
-        // manual reconciliation — do NOT retry here or we risk a double grant).
-        return { success: true, processing: true, credits: prior.credits };
+        if (prior?.status === 'grant_failed') {
+            // Retry a previously-failed grant — but only if WE win the atomic flip
+            // grant_failed → pending, so concurrent webhook retries can't double-grant.
+            const reclaimed = await AiCreditTopup.findOneAndUpdate(
+                { razorpayPaymentId: paymentId, status: 'grant_failed' },
+                { $set: { status: 'pending' } },
+                { new: false }
+            );
+            if (!reclaimed) {
+                // Another caller grabbed the retry (or it just succeeded).
+                return { success: true, processing: true, credits: prior.credits };
+            }
+            owned = true; // we own the retry
+        } else {
+            // 'pending' — the other fulfilment path is mid-grant.
+            return { success: true, processing: true, credits: prior?.credits ?? credits };
+        }
     }
 
-    // We own the claim → grant exactly once.
+    // owned === true → grant exactly once.
     try {
-        const { balanceAfter, ledgerLogged } = await aiCreditService.grant(grantTenant, credits, {
+        const { granted, balanceAfter, ledgerLogged } = await aiCreditService.grant(grantTenant, credits, {
             feature: 'topup',
             note: `Self-serve top-up · ₹${amountInr}`,
             meta: { source: 'razorpay', razorpayOrderId: orderId, razorpayPaymentId: paymentId, amountInr }
         });
+
+        // grant() can report failure WITHOUT throwing (tenant missing, or the atomic
+        // balance+ledger commit rolled back). Treat that as a real failure — mark the
+        // claim grant_failed so it isn't falsely shown as granted, and surface it so
+        // the webhook alerts / retries rather than silently swallowing paid credits.
+        if (!granted) {
+            await AiCreditTopup.updateOne(
+                { razorpayPaymentId: paymentId },
+                { $set: { status: 'grant_failed' } }
+            ).catch(() => {});
+            throw new Error(`Credit grant did not apply for paid payment ${paymentId} (tenant ${grantTenant}, ${credits} cr)`);
+        }
+
         await AiCreditTopup.updateOne(
             { razorpayPaymentId: paymentId },
             { $set: { status: 'granted', balanceAfter } }
@@ -470,36 +498,46 @@ const webhook = async (req, res) => {
         eventType = (payload.event || '').toLowerCase();
 
         // ── One-time AI credit top-up (Orders API) — backstop fulfilment ────────
-        // These events carry a payment/order, NOT a subscription, so they must be
-        // handled before the subscription-id extraction below (which would otherwise
-        // dead-letter them). Primary fulfilment is the client verify callback; this
-        // covers the case where the browser closed before that callback returned.
-        // A non-topup payment.captured (e.g. a subscription's first charge) has no
-        // ai_credit_topup note and simply falls through to the subscription logic.
-        if (eventType === 'payment.captured' || eventType === 'order.paid') {
-            const paymentEntity = payload?.payload?.payment?.entity;
-            const orderEntity   = payload?.payload?.order?.entity;
-            const orderId   = paymentEntity?.order_id || orderEntity?.id || null;
-            const paymentId = paymentEntity?.id || null;
-            const notes     = paymentEntity?.notes || orderEntity?.notes || {};
+        // Handled before the subscription-id extraction below (which would otherwise
+        // dead-letter these). Primary fulfilment is the client verify callback; this
+        // covers the browser closing before that callback returns.
+        //
+        // IMPORTANT: a payment.captured event's `notes` are the PAYMENT's own notes
+        // (empty), NOT the order's — so we can't detect a top-up from the webhook
+        // payload. Instead we key off `order_id`: subscription charges are invoice-
+        // based and carry NO order_id, so any order-linked payment is a candidate
+        // top-up. fulfil re-fetches the order and validates purpose='ai_credit_topup',
+        // rejecting anything else benignly (→ fall through to normal handling).
+        if (eventType === 'payment.captured') {
+            const p = payload?.payload?.payment?.entity;
+            const orderId   = p?.order_id || null;
+            const paymentId = p?.id || null;
 
-            if (orderId && notes?.purpose === 'ai_credit_topup') {
-                if (paymentId) {
-                    try {
-                        await fulfilAiCreditTopup({ orderId, paymentId });
-                        webhookMonitor.recordSuccess();
-                    } catch (e) {
+            if (orderId && paymentId) {
+                try {
+                    await fulfilAiCreditTopup({ orderId, paymentId });
+                    webhookMonitor.recordSuccess();
+                    return res.json({ received: true, topup: true });
+                } catch (e) {
+                    if (e.benign) {
+                        // Not a top-up order (or not paid yet) → let normal handling run.
+                        console.log(`[Billing] payment.captured ${paymentId} is not a top-up order — continuing.`);
+                    } else {
                         console.error('AI credit top-up webhook fulfil error:', e.message);
                         webhookMonitor.recordFailure(eventType, e, req.body).catch(() => {});
+                        return res.json({ received: true, topup: true, error: e.message });
                     }
-                } else {
-                    // order.paid without a payment id — rely on payment.captured /
-                    // client verify, which both carry one.
-                    console.warn('[Billing] top-up webhook missing payment id — deferring to client verify / payment.captured');
                 }
-                return res.json({ received: true, topup: true });
             }
-            // Not a top-up payment → fall through to subscription handling.
+            // No order_id (subscription charge) or benign → fall through.
+        } else if (eventType === 'order.paid') {
+            // order.paid carries the order (with notes) but no payment id, so it can't
+            // grant. Acknowledge top-up orders so they don't dead-letter; fulfilment
+            // comes from payment.captured / the client verify callback.
+            const o = payload?.payload?.order?.entity;
+            if (o?.notes?.purpose === 'ai_credit_topup') {
+                return res.json({ received: true, topup: true, deferred: true });
+            }
         }
 
         // Extract the Razorpay subscription id from the standard webhook envelope.
