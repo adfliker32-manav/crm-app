@@ -2436,12 +2436,38 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 const systemPrompt = node.data.aiSystemPromptOverride || aiConfig.ai.systemPrompt;
                 const maxTurns = node.data.aiMaxTurns || aiConfig.ai.maxTurns || 12;
 
+                // Turn guard — checked BEFORE calling the AI. Previously this ran
+                // after the AI's reply was already sent, so on the limit-reaching
+                // turn the customer got both a fresh AI question AND the handoff
+                // message back to back. Now once the cap is hit we skip the AI
+                // call entirely and hand off cleanly (mirrors runAiReply's guard).
+                const turnCount = parseInt(session.variables.get('ai_turn_count') || '0');
+                if (turnCount >= maxTurns) {
+                    console.log(`🤖 [Chatbot] AI Node max turns (${maxTurns}) reached. Handing off to human agent.`);
+                    const handoffMsg = HANDOFF_MESSAGE;
+                    const handoffResult = await sendWhatsAppTextMessage(conversation.phone, handoffMsg, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, handoffMsg, 'text', handoffResult);
+
+                    await executeAction({
+                        actionType: 'notify_agent',
+                        actionData: { message: 'AI qualification limit reached. Please take over.' }
+                    }, session, conversation);
+
+                    // Pause the chatbot for 24h and end the session so it actually
+                    // stays handed off instead of re-triggering on the next message.
+                    await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                        $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+                    });
+                    await endSession(session, 'handoff');
+                    break;
+                }
+
                 // 1. Get recent conversation messages (last 15 messages)
                 const recentMessages = await WhatsAppMessage.find({ conversationId: session.conversationId })
                     .sort({ timestamp: -1 })
                     .limit(15)
                     .lean();
-                
+
                 const history = recentMessages.reverse();
 
                 // 2. Fetch Lead details
@@ -2501,6 +2527,14 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                                 actionType: 'notify_agent',
                                 actionData: { message: agentMsg }
                             }, session, conversation);
+
+                            // Same as the max-turns handoff: pause the bot and end
+                            // the session so a live agent isn't fighting the AI for
+                            // the next reply.
+                            await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+                                $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+                            });
+                            await endSession(session, 'handoff');
                             break;
                         } else if (action.type === 'book_appointment') {
                             await executeAction({
@@ -2508,21 +2542,6 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                                 actionData: action
                             }, session, conversation);
                         }
-                    }
-
-                    // 6. Check max turn count
-                    const turnCount = parseInt(session.variables.get('ai_turn_count') || '0');
-                    if (turnCount + 1 >= maxTurns) {
-                        console.log(`🤖 [Chatbot] AI Node max turns (${maxTurns}) reached. Handing off to human agent.`);
-                        const handoffMsg = HANDOFF_MESSAGE;
-                        const handoffResult = await sendWhatsAppTextMessage(conversation.phone, handoffMsg, session.userId);
-                        await saveBotMessage(session.conversationId, session.userId, handoffMsg, 'text', handoffResult);
-                        
-                        await executeAction({
-                            actionType: 'notify_agent',
-                            actionData: { message: 'AI qualification limit reached. Please take over.' }
-                        }, session, conversation);
-                        break;
                     }
 
                     // Increment turn count and stay on AI node (re-evaluate on next message)
@@ -2887,7 +2906,6 @@ const executeAction = async (actionData, session, conversation) => {
 
 
             case 'notify_agent':
-                // FIX: Implement real agent notification via Socket.IO
                 try {
                     const agentMsg = actionData.actionData?.message || `Chatbot needs attention for conversation with ${conversation.displayName || conversation.phone}`;
                     // Notify the conversation owner (or assigned agent)
@@ -2901,6 +2919,24 @@ const executeAction = async (actionData, session, conversation) => {
                         timestamp: new Date()
                     });
                     console.log(`🔔 Agent notification sent to ${notifyUserId} for conversation ${conversation._id}`);
+
+                    // Also reach the agent on WhatsApp — the socket emit above is
+                    // lost if they aren't actively watching the inbox. Mirrors the
+                    // dedicated "Notify Agent" flow-builder node (see the
+                    // 'notify_agent' case in executeNode), which always sends a
+                    // real WhatsApp message instead of relying on the socket alone.
+                    try {
+                        const agent = await User.findById(notifyUserId).select('phone name').lean();
+                        if (agent?.phone) {
+                            const alertMsg = `🔔 *Chatbot Handoff*\nConversation with ${conversation.displayName || conversation.phone} needs your attention.\n${agentMsg}`;
+                            await sendWhatsAppTextMessage(agent.phone, alertMsg, session.userId);
+                            console.log(`🔔 WhatsApp agent alert sent to ${agent.phone} for conversation ${conversation._id}`);
+                        } else {
+                            console.warn(`[Chatbot] notify_agent: agent ${notifyUserId} has no phone number configured — WhatsApp alert skipped.`);
+                        }
+                    } catch (waErr) {
+                        console.error('Error sending WhatsApp agent alert:', waErr.message);
+                    }
                 } catch (notifErr) {
                     console.error('Error sending agent notification:', notifErr.message);
                 }
