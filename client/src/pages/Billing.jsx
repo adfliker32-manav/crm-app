@@ -688,28 +688,40 @@ const Billing = () => {
                         <thead>
                             <tr className="text-left text-xs uppercase text-slate-400 font-semibold tracking-wide border-b border-slate-100">
                                 <th className="px-5 py-3">Date</th>
+                                <th className="px-5 py-3">Type</th>
                                 <th className="px-5 py-3">Amount</th>
                                 <th className="px-5 py-3">Credits</th>
-                                <th className="px-5 py-3 hidden lg:table-cell">Payment Ref</th>
+                                <th className="px-5 py-3 hidden lg:table-cell">Ref</th>
                                 <th className="px-5 py-3 text-right">Status</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {topups.map(t => (
+                            {topups.map(t => {
+                                const isManual = t.source === 'manual';
+                                return (
                                 <tr key={t._id} className="border-b border-slate-50 hover:bg-slate-50 transition">
                                     <td className="px-5 py-3 text-slate-700">{fmtDate(t.createdAt)}</td>
-                                    <td className="px-5 py-3 font-semibold text-slate-900">₹{fmt(t.amountInr)}</td>
+                                    <td className="px-5 py-3">
+                                        <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                            isManual ? 'text-amber-700 bg-amber-50' : 'text-emerald-700 bg-emerald-50'
+                                        }`}>
+                                            <i className={`fa-solid ${isManual ? 'fa-gift' : 'fa-indian-rupee-sign'} text-[10px]`} />
+                                            {isManual ? 'Admin grant' : 'Purchase'}
+                                        </span>
+                                    </td>
+                                    <td className="px-5 py-3 font-semibold text-slate-900">{isManual ? '—' : `₹${fmt(t.amountInr)}`}</td>
                                     <td className="px-5 py-3 text-indigo-600 font-semibold">+{fmt(t.credits)} cr</td>
                                     <td className="px-5 py-3 text-slate-400 font-mono text-xs hidden lg:table-cell">
-                                        {t.razorpayPaymentId?.slice(0, 20) || '—'}
+                                        {isManual ? (t.note || 'Added by admin') : (t.razorpayPaymentId?.slice(0, 20) || '—')}
                                     </td>
                                     <td className="px-5 py-3 text-right">
                                         <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
-                                            <i className="fa-solid fa-check text-[10px]" /> Paid
+                                            <i className="fa-solid fa-check text-[10px]" /> {isManual ? 'Added' : 'Paid'}
                                         </span>
                                     </td>
                                 </tr>
-                            ))}
+                                );
+                            })}
                         </tbody>
                     </table>
                 )}

@@ -2054,14 +2054,44 @@ const topUpAiCredits = async (req, res) => {
             return res.status(404).json({ message: "User not found." });
         }
 
+        const creditsToAdd = parseInt(amount, 10);
+        const adminId = req.user?.userId || req.user?.id || null;
+        const note = req.body.note || 'Super-admin top-up';
+
         // Route through the credit service so the top-up lands in the ledger as a
         // signed +credit row (the customer's statement), not just a raw balance bump.
         const aiCreditService = require('../services/aiCreditService');
-        const { balanceAfter, ledgerLogged } = await aiCreditService.grant(id, parseInt(amount, 10), {
+        const { granted, balanceAfter, ledgerLogged } = await aiCreditService.grant(id, creditsToAdd, {
             feature: 'topup',
-            note: req.body.note || 'Super-admin top-up',
-            adminId: req.user?.userId || req.user?.id || null
+            note,
+            adminId
         });
+
+        // Also record it in AiCreditTopup so this manual grant shows in the SAME
+        // top-up history as paid Razorpay purchases — on both the client Billing page
+        // and the SuperAdmin top-up panel. source='manual' + amountInr=0 keeps it OUT
+        // of ₹-revenue rollups (it's free credits, not a sale). Only record when the
+        // grant actually applied, so we never show a top-up that didn't move the
+        // balance. Non-fatal: credits are already granted, so a record-write hiccup
+        // must not fail the request.
+        if (granted) try {
+            const AiCreditTopup = require('../models/AiCreditTopup');
+            await AiCreditTopup.create({
+                userId:            id,
+                // Synthetic non-colliding ids so the unique paymentId index is happy.
+                razorpayOrderId:   'manual',
+                razorpayPaymentId: `manual_${new mongoose.Types.ObjectId()}`,
+                amountInr:         0,
+                credits:           creditsToAdd,
+                balanceAfter:      typeof balanceAfter === 'number' ? balanceAfter : null,
+                status:            'granted',
+                source:            'manual',
+                adminId,
+                note
+            });
+        } catch (recErr) {
+            console.error('[SuperAdmin] Failed to record manual top-up in AiCreditTopup:', recErr.message);
+        }
 
         // Log the manual credit addition
         auditLogger.log({
@@ -2153,6 +2183,103 @@ const getTenantAiLedger = async (req, res) => {
     } catch (err) {
         console.error('[SuperAdmin] getTenantAiLedger error:', err);
         res.status(500).json({ message: 'Failed to load tenant AI ledger.' });
+    }
+};
+
+// @route GET /api/superadmin/ai-credit-topups
+// Self-serve AI credit purchases (Razorpay one-time Orders), per client. Deliberately
+// SEPARATE from the subscription Payment/finance ledger so credit-sale revenue is
+// tracked without distorting subscription MRR. Returns a per-client rollup + recent
+// rows + grand totals.
+const listAiCreditTopups = async (req, res) => {
+    try {
+        const AiCreditTopup = require('../models/AiCreditTopup');
+        const limit = Math.min(500, parseInt(req.query.limit, 10) || 100);
+
+        // Recent granted top-ups, newest first, with client identity.
+        const rows = await AiCreditTopup.find({ status: 'granted' })
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .populate('userId', 'name companyName email')
+            .lean();
+
+        const topups = rows.map(t => ({
+            _id:               t._id,
+            clientId:          t.userId?._id || t.userId || null,
+            clientName:        t.userId?.companyName || t.userId?.name || '—',
+            clientEmail:       t.userId?.email || '',
+            source:            t.source || 'razorpay',   // 'razorpay' (paid) | 'manual' (admin grant)
+            amountInr:         t.amountInr,
+            credits:           t.credits,
+            note:              t.note || '',
+            razorpayPaymentId: t.razorpayPaymentId,
+            razorpayOrderId:   t.razorpayOrderId,
+            createdAt:         t.createdAt
+        }));
+
+        // Conditional sums so PAID (razorpay) revenue is never mixed with free MANUAL
+        // (admin) grants. ₹ totals count paid only; manual is tracked as its own stat.
+        const paidAmt    = { $cond: [{ $eq: ['$source', 'manual'] }, 0, '$amountInr'] };
+        const paidCr     = { $cond: [{ $eq: ['$source', 'manual'] }, 0, '$credits'] };
+        const paidOne    = { $cond: [{ $eq: ['$source', 'manual'] }, 0, 1] };
+        const manualCr   = { $cond: [{ $eq: ['$source', 'manual'] }, '$credits', 0] };
+        const manualOne  = { $cond: [{ $eq: ['$source', 'manual'] }, 1, 0] };
+
+        // Grand totals across ALL granted top-ups (not just the returned page).
+        const totalsAgg = await AiCreditTopup.aggregate([
+            { $match: { status: 'granted' } },
+            { $group: {
+                _id: null,
+                amountInr:     { $sum: paidAmt },
+                credits:       { $sum: paidCr },
+                count:         { $sum: paidOne },
+                manualCredits: { $sum: manualCr },
+                manualCount:   { $sum: manualOne }
+            } }
+        ]);
+        const totals = {
+            amountInr:     totalsAgg[0]?.amountInr || 0,      // ₹ from paid purchases only
+            credits:       totalsAgg[0]?.credits || 0,        // credits sold (paid)
+            count:         totalsAgg[0]?.count || 0,          // paid purchases
+            manualCredits: totalsAgg[0]?.manualCredits || 0,  // free admin-granted credits
+            manualCount:   totalsAgg[0]?.manualCount || 0     // number of admin grants
+        };
+
+        // Per-client rollup — "clean per client" view: paid ₹/credits AND admin grants.
+        const byClientAgg = await AiCreditTopup.aggregate([
+            { $match: { status: 'granted' } },
+            { $group: {
+                _id: '$userId',
+                amountInr:     { $sum: paidAmt },
+                paidCredits:   { $sum: paidCr },
+                manualCredits: { $sum: manualCr },
+                count:         { $sum: 1 },
+                lastAt:        { $max: '$createdAt' }
+            } },
+            { $sort: { amountInr: -1, lastAt: -1 } },
+            { $limit: 100 }
+        ]);
+        const clientIds = byClientAgg.map(c => c._id).filter(Boolean);
+        const users = await User.find({ _id: { $in: clientIds } }).select('name companyName email').lean();
+        const userMap = new Map(users.map(u => [String(u._id), u]));
+        const byClient = byClientAgg.map(c => {
+            const u = userMap.get(String(c._id));
+            return {
+                clientId:      c._id,
+                clientName:    u?.companyName || u?.name || '—',
+                clientEmail:   u?.email || '',
+                amountInr:     c.amountInr,
+                paidCredits:   c.paidCredits,
+                manualCredits: c.manualCredits,
+                count:         c.count,
+                lastAt:        c.lastAt
+            };
+        });
+
+        res.json({ topups, byClient, totals });
+    } catch (err) {
+        console.error('[SuperAdmin] listAiCreditTopups error:', err);
+        res.status(500).json({ message: 'Failed to load AI credit top-ups.' });
     }
 };
 
@@ -2396,6 +2523,7 @@ module.exports = {
     getAiModelRates,
     updateAiModelRate,
     getTenantAiLedger,
+    listAiCreditTopups,
     getAiSupportConfig,
     updateAiSupportConfig,
     updateAccountPermissions,

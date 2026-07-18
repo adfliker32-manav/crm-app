@@ -43,6 +43,7 @@ const {
     getAiModelRates,
     updateAiModelRate,
     getTenantAiLedger,
+    listAiCreditTopups,
     getAiSupportConfig,
     updateAiSupportConfig,
     updateAccountPermissions,
@@ -143,6 +144,10 @@ router.put('/accounts/:id/deactivate', validateObjectId({ params: ['id'] }), aut
 // Add AI Credits
 router.post('/accounts/:id/add-ai-credits', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, topUpAiCredits);
 router.get('/accounts/:id/ai-ledger', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getTenantAiLedger);
+
+// Self-serve AI credit top-up revenue (Razorpay Orders) — per-client, kept separate
+// from subscription finance so credit sales don't distort MRR.
+router.get('/ai-credit-topups', authMiddleware, requireSuperAdmin, listAiCreditTopups);
 
 // AI model rate table (credits per 1K tokens) — admin-editable pricing
 router.get('/ai-model-rates', authMiddleware, requireSuperAdmin, getAiModelRates);
