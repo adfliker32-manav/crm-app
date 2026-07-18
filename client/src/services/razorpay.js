@@ -87,4 +87,73 @@ export const openSubscriptionCheckout = async ({
     });
 };
 
-export default { openSubscriptionCheckout };
+/**
+ * Opens the Razorpay Checkout popup for a ONE-TIME Order (e.g. AI credit top-up).
+ *
+ * Differs from openSubscriptionCheckout by passing `order_id` instead of
+ * `subscription_id`. On success the handler receives:
+ *   { razorpay_order_id, razorpay_payment_id, razorpay_signature }
+ * which the caller sends to the backend /ai-credits/verify to be signature-checked
+ * and fulfilled. The server order is authoritative for the amount — the `amount`
+ * passed here is display-only.
+ *
+ * @param {string}   orderId        order_XXXXXXX returned by the backend
+ * @param {string}   keyId          RAZORPAY_KEY_ID
+ * @param {number}   [amount]       amount in PAISE (display only)
+ * @param {string}   [description]  shown in popup header
+ * @param {string}   [customerName]
+ * @param {string}   [customerEmail]
+ * @param {string}   [customerPhone]
+ * @param {Function} [onSuccess]
+ * @param {Function} [onDismiss]
+ * @returns {Promise<object>}       resolves with Razorpay response, rejects on dismiss
+ */
+export const openOrderCheckout = async ({
+    orderId,
+    keyId,
+    amount,
+    description   = 'AI Credit Top-up',
+    customerName  = '',
+    customerEmail = '',
+    customerPhone = '',
+    onSuccess,
+    onDismiss
+}) => {
+    if (!orderId) throw new Error('Missing orderId');
+    if (!keyId)   throw new Error('Missing Razorpay key_id');
+
+    const RazorpayFactory = await loadRazorpaySdk();
+
+    return new Promise((resolve, reject) => {
+        const rzp = new RazorpayFactory({
+            key:      keyId,
+            order_id: orderId,
+            amount,               // paise — display only; server order is authoritative
+            currency: 'INR',
+            name:     'Adfliker CRM',
+            description,
+            prefill: {
+                name:    customerName,
+                email:   customerEmail,
+                contact: customerPhone
+            },
+            theme: { color: '#6366f1' },
+            handler: (response) => {
+                // response = { razorpay_payment_id, razorpay_order_id, razorpay_signature }
+                onSuccess?.(response);
+                resolve(response);
+            },
+            modal: {
+                ondismiss: () => {
+                    onDismiss?.();
+                    reject(new Error('Razorpay Checkout closed by user'));
+                },
+                escape: true,
+                backdropclose: false
+            }
+        });
+        rzp.open();
+    });
+};
+
+export default { openSubscriptionCheckout, openOrderCheckout };

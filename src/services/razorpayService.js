@@ -113,6 +113,50 @@ const createSubscription = async ({
 
 const getSubscription = (subId) => rzpRequest('GET', `/subscriptions/${subId}`);
 
+// ─── Orders (one-time payments — e.g. AI credit top-ups) ─────────────────────
+// Unlike a Subscription (a recurring mandate), an Order is a single charge with
+// no future auto-debit. Used for self-serve credit top-ups.
+//
+//   amount  — in PAISE (₹100 = 10000). Razorpay is the source of truth for the
+//             amount once created; the client cannot alter it.
+//   notes   — arbitrary key/value map echoed back on the payment entity AND on
+//             every webhook for the order. We stash { purpose, tenantId, credits,
+//             amountInr } here so fulfilment reads server-authoritative data, never
+//             values the browser sent at verify time.
+const createOrder = async ({ amount, currency = 'INR', receipt, notes = {} }) =>
+    rzpRequest('POST', '/orders', {
+        amount:   Math.round(amount), // paise (caller converts rupees → paise)
+        currency,
+        receipt:  receipt || undefined,
+        notes
+    });
+
+const getOrder = (orderId) => rzpRequest('GET', `/orders/${orderId}`);
+
+// Verify the Checkout callback signature for a one-time Order payment.
+// Scheme (distinct from the webhook HMAC): the signature returned to the browser
+// is HMAC-SHA256(`${order_id}|${payment_id}`, key_secret), hex-encoded. Comparing
+// it proves the success callback genuinely came from Razorpay and wasn't forged by
+// the client before we grant any credits.
+const verifyPaymentSignature = ({ orderId, paymentId, signature }) => {
+    if (!isConfigured()) return false;
+    if (!orderId || !paymentId || !signature) return false;
+
+    const expected = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${orderId}|${paymentId}`)
+        .digest('hex');
+
+    try {
+        const sigBuf = Buffer.from(signature, 'hex');
+        const expBuf = Buffer.from(expected,  'hex');
+        if (sigBuf.length !== expBuf.length) return false;
+        return crypto.timingSafeEqual(sigBuf, expBuf);
+    } catch {
+        return false;
+    }
+};
+
 // Fetch all invoices (charges) for a subscription.
 // Used by the daily reconcile to replay any missed PAYMENT_SUCCESS webhook.
 const getSubscriptionInvoices = async (subId) => {
@@ -193,5 +237,8 @@ module.exports = {
     getSubscription,
     getSubscriptionInvoices,
     cancelSubscription,
+    createOrder,
+    getOrder,
+    verifyPaymentSignature,
     verifyWebhookSignature
 };

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useAuth } from '../../context/AuthContext';
+import { openOrderCheckout } from '../../services/razorpay';
 import PromptBuilderModal from './PromptBuilderModal';
 
 const AISettings = () => {
@@ -27,6 +28,9 @@ const AISettings = () => {
     const [creditsUsed, setCreditsUsed] = useState(0);
     const [usage, setUsage] = useState(null);
     const [ledger, setLedger] = useState([]);
+    // Self-serve credit top-up (custom INR amount → Razorpay one-time Order).
+    const [topupAmount, setTopupAmount] = useState('');
+    const [topupBusy, setTopupBusy] = useState(false);
     // Sub-tab within the AI Chatbot page: 'behavior' | 'agent' | 'usage'
     const [activeTab, setActiveTab] = useState('behavior');
     const [showPromptBuilder, setShowPromptBuilder] = useState(false);
@@ -57,6 +61,85 @@ const AISettings = () => {
             { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Cost-Efficient)' },
             { id: 'gpt-4o', name: 'GPT-4o (Premium Capability)' }
         ]
+    };
+
+    // Refresh the wallet balance + usage summary + ledger. Called on mount and
+    // after a successful top-up so the new balance shows without a page reload.
+    const refreshCredits = useCallback(async () => {
+        try {
+            const [usageRes, ledgerRes] = await Promise.all([
+                api.get('/ai/usage'),
+                api.get('/ai/ledger?limit=25')
+            ]);
+            setUsage(usageRes.data);
+            setLedger(ledgerRes.data.entries || []);
+            const bal = usageRes.data?.wallet?.balance;
+            if (typeof bal === 'number') setCreditsBalance(bal);
+        } catch (error) {
+            console.error('Failed to load AI usage/ledger:', error);
+        }
+    }, []);
+
+    // ₹ → credits conversion (from the server wallet rate; falls back to ₹1 = 100cr).
+    const creditsPerRupee = usage?.wallet?.creditValueInr ? Math.round(1 / usage.wallet.creditValueInr) : 100;
+    const estimatedCredits = (() => {
+        const inr = Math.floor(Number(topupAmount));
+        return Number.isFinite(inr) && inr > 0 ? inr * creditsPerRupee : 0;
+    })();
+
+    // Create a Razorpay order, open Checkout, then verify → credits land in the wallet.
+    const handleTopUp = async () => {
+        const amountInr = Math.floor(Number(topupAmount));
+        if (!Number.isFinite(amountInr) || amountInr < 100) {
+            showError('Minimum top-up is ₹100.');
+            return;
+        }
+        setTopupBusy(true);
+        try {
+            const { data } = await api.post('/billing/ai-credits/create-order', { amountInr });
+
+            await openOrderCheckout({
+                orderId:       data.orderId,
+                keyId:         data.keyId,
+                amount:        data.amount, // paise (display only)
+                description:   `${data.credits.toLocaleString()} AI credits`,
+                customerName:  user?.name || user?.companyName || '',
+                customerEmail: user?.email || '',
+                customerPhone: user?.phone || user?.mobile || '',
+                onSuccess: async (resp) => {
+                    try {
+                        const verifyRes = await api.post('/billing/ai-credits/verify', {
+                            razorpay_order_id:   resp.razorpay_order_id,
+                            razorpay_payment_id: resp.razorpay_payment_id,
+                            razorpay_signature:  resp.razorpay_signature
+                        });
+                        if (verifyRes.data?.processing) {
+                            showSuccess('Payment received — credits are being added. Refreshing…');
+                        } else {
+                            showSuccess(`${(data.credits).toLocaleString()} credits added to your wallet!`);
+                        }
+                        setTopupAmount('');
+                        await refreshCredits();
+                    } catch (verr) {
+                        // Payment succeeded but our verify call failed — the webhook
+                        // backstop will still fulfil it. Reassure, don't alarm.
+                        console.error('Top-up verify failed:', verr);
+                        showError('Payment received. Credits will appear shortly — please refresh in a minute.');
+                        await refreshCredits();
+                    }
+                }
+            });
+        } catch (err) {
+            // Popup dismissed is not an error worth shouting about.
+            if (err?.message === 'Razorpay Checkout closed by user') {
+                // silent
+            } else {
+                console.error('Top-up error:', err);
+                showError(err.response?.data?.message || 'Could not start the top-up. Please try again.');
+            }
+        } finally {
+            setTopupBusy(false);
+        }
     };
 
     // Load current config
@@ -100,24 +183,10 @@ const AISettings = () => {
             }
         };
 
-        const fetchUsageAndLedger = async () => {
-            try {
-                const [usageRes, ledgerRes] = await Promise.all([
-                    api.get('/ai/usage'),
-                    api.get('/ai/ledger?limit=25')
-                ]);
-                setUsage(usageRes.data);
-                setLedger(ledgerRes.data.entries || []);
-            } catch (error) {
-                // Non-fatal — the settings page still works without the statement.
-                console.error('Failed to load AI usage/ledger:', error);
-            }
-        };
-
         fetchSettings();
         checkServiceHealth();
-        fetchUsageAndLedger();
-    }, [showError]);
+        refreshCredits();
+    }, [showError, refreshCredits]);
 
     // Human labels for ledger feature codes.
     const FEATURE_LABELS = {
@@ -368,14 +437,32 @@ const AISettings = () => {
 
             {/* Low / empty balance inline warning (shown on any tab) */}
             {creditsBalance <= 0 ? (
-                <div className="mb-4 flex items-center gap-2 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-100 px-4 py-2.5 rounded-xl">
-                    <i className="fa-solid fa-triangle-exclamation"></i>
-                    Out of credits — AI replies are paused. Contact your administrator to add more.
+                <div className="mb-4 flex items-center justify-between gap-3 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-100 px-4 py-2.5 rounded-xl">
+                    <span className="flex items-center gap-2">
+                        <i className="fa-solid fa-triangle-exclamation"></i>
+                        Out of credits — AI replies are paused. Top up to resume.
+                    </span>
+                    <button
+                        type="button"
+                        onClick={() => setActiveTab('usage')}
+                        className="shrink-0 bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                        <i className="fa-solid fa-bolt mr-1"></i> Top up
+                    </button>
                 </div>
             ) : creditsBalance < 500 ? (
-                <div className="mb-4 flex items-center gap-2 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-100 px-4 py-2.5 rounded-xl">
-                    <i className="fa-solid fa-circle-exclamation"></i>
-                    Low balance — contact your administrator to top up before it runs out.
+                <div className="mb-4 flex items-center justify-between gap-3 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-100 px-4 py-2.5 rounded-xl">
+                    <span className="flex items-center gap-2">
+                        <i className="fa-solid fa-circle-exclamation"></i>
+                        Low balance — top up before it runs out.
+                    </span>
+                    <button
+                        type="button"
+                        onClick={() => setActiveTab('usage')}
+                        className="shrink-0 bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                        <i className="fa-solid fa-bolt mr-1"></i> Top up
+                    </button>
                 </div>
             ) : null}
 
@@ -515,6 +602,70 @@ const AISettings = () => {
             {/* ============ USAGE & CREDITS TAB ============ */}
             {activeTab === 'usage' && (
                 <div className="space-y-4">
+                    {/* Top up credits */}
+                    <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+                        <div className="flex items-center justify-between mb-1">
+                            <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                                <i className="fa-solid fa-wallet text-indigo-500"></i> Top Up Credits
+                            </h3>
+                            <span className="text-[11px] font-semibold text-slate-400">
+                                Balance: <span className="text-slate-700">{creditsBalance.toLocaleString()} cr</span>
+                            </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 font-medium mb-3">
+                            ₹1 = {creditsPerRupee.toLocaleString()} credits · minimum ₹100 · secure payment via Razorpay
+                        </p>
+
+                        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                            <div className="flex-1">
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Amount (₹)</label>
+                                <div className="relative">
+                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">₹</span>
+                                    <input
+                                        type="number"
+                                        min="100"
+                                        step="100"
+                                        inputMode="numeric"
+                                        value={topupAmount}
+                                        onChange={(e) => setTopupAmount(e.target.value)}
+                                        placeholder="500"
+                                        disabled={topupBusy}
+                                        className="w-full pl-7 pr-3 py-2.5 text-sm font-semibold rounded-xl border border-slate-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none disabled:bg-slate-50"
+                                    />
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={handleTopUp}
+                                disabled={topupBusy || estimatedCredits <= 0}
+                                className="shrink-0 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
+                            >
+                                {topupBusy
+                                    ? <><i className="fa-solid fa-spinner fa-spin"></i> Processing…</>
+                                    : <><i className="fa-solid fa-bolt"></i> Buy{estimatedCredits > 0 ? ` ${estimatedCredits.toLocaleString()} cr` : ''}</>}
+                            </button>
+                        </div>
+
+                        {/* Quick-pick presets */}
+                        <div className="flex flex-wrap gap-2 mt-3">
+                            {[100, 500, 1000, 2000].map(amt => (
+                                <button
+                                    key={amt}
+                                    type="button"
+                                    onClick={() => setTopupAmount(String(amt))}
+                                    disabled={topupBusy}
+                                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${
+                                        String(amt) === topupAmount
+                                            ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                                            : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-200'
+                                    }`}
+                                >
+                                    ₹{amt.toLocaleString()}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
                     {/* Usage summary + forecast */}
                     {usage && (
                         <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm space-y-4">

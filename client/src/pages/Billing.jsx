@@ -348,6 +348,7 @@ const Billing = () => {
     const ws   = data?.workspace;
     const plan = data?.plan;
     const invoices     = data?.invoices || [];
+    const topups       = data?.topups || [];
     const leadsUsed    = data?.leadsUsed ?? 0;
     const leadLimit    = ws?.planFeatures?.leadLimit ?? 0;
     const rzpReady  = data?.razorpayConfigured;
@@ -662,6 +663,50 @@ const Billing = () => {
                                                 <i className="fa-solid fa-file-pdf text-base" />
                                             )}
                                         </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+
+            {/* AI credit top-up history — one-time credit purchases, kept separate
+                from subscription invoices above. */}
+            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+                    <i className="fa-solid fa-wallet text-indigo-500" />
+                    <p className="text-sm font-semibold text-slate-900">Credit top-ups</p>
+                </div>
+                {topups.length === 0 ? (
+                    <div className="px-5 py-10 text-center">
+                        <i className="fa-regular fa-credit-card text-3xl text-slate-300 mb-2 block" />
+                        <p className="text-sm text-slate-400">No credit top-ups yet. Buy credits from AI Settings → Usage &amp; Credits.</p>
+                    </div>
+                ) : (
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="text-left text-xs uppercase text-slate-400 font-semibold tracking-wide border-b border-slate-100">
+                                <th className="px-5 py-3">Date</th>
+                                <th className="px-5 py-3">Amount</th>
+                                <th className="px-5 py-3">Credits</th>
+                                <th className="px-5 py-3 hidden lg:table-cell">Payment Ref</th>
+                                <th className="px-5 py-3 text-right">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {topups.map(t => (
+                                <tr key={t._id} className="border-b border-slate-50 hover:bg-slate-50 transition">
+                                    <td className="px-5 py-3 text-slate-700">{fmtDate(t.createdAt)}</td>
+                                    <td className="px-5 py-3 font-semibold text-slate-900">₹{fmt(t.amountInr)}</td>
+                                    <td className="px-5 py-3 text-indigo-600 font-semibold">+{fmt(t.credits)} cr</td>
+                                    <td className="px-5 py-3 text-slate-400 font-mono text-xs hidden lg:table-cell">
+                                        {t.razorpayPaymentId?.slice(0, 20) || '—'}
+                                    </td>
+                                    <td className="px-5 py-3 text-right">
+                                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
+                                            <i className="fa-solid fa-check text-[10px]" /> Paid
+                                        </span>
                                     </td>
                                 </tr>
                             ))}

@@ -16,6 +16,10 @@ router.get('/me/invoice/:paymentId', authMiddleware, billingController.getMyInvo
 router.post('/me/subscribe',     authMiddleware, billingController.subscribe);
 router.post('/me/change-plan',   authMiddleware, billingController.changePlan);
 router.post('/me/cancel',        authMiddleware, billingController.cancel);
+
+// AI credit top-up (one-time Razorpay Order). Manager-only via guardBillable.
+router.post('/ai-credits/create-order', authMiddleware, billingController.createAiCreditsOrder);
+router.post('/ai-credits/verify',       authMiddleware, billingController.verifyAiCreditsPayment);
 // Returns a fresh Razorpay short_url — always fetched live from Razorpay API
 // so the link is never stale, even months after subscription creation.
 router.get('/me/payment-link',   authMiddleware, billingController.getFreshPaymentLink);

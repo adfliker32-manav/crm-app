@@ -8,7 +8,14 @@ const razorpayService = require('../services/razorpayService');
 const webhookMonitor = require('../services/webhookMonitor');
 const { validateCode: validateCouponCode } = require('./couponController');
 const Coupon = require('../models/Coupon');
+const AiCreditTopup = require('../models/AiCreditTopup');
+const aiCreditService = require('../services/aiCreditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+
+// Self-serve AI-credit top-up bounds (INR). Credits are derived from the amount
+// at aiCreditService.CREDIT_VALUE_INR, so no separate price list to keep in sync.
+const MIN_TOPUP_INR = 100;
+const MAX_TOPUP_INR = 200000;
 
 // ─── GET /api/billing/plans ────────────────────────────────────────────────
 // Public — pricing page reads this.
@@ -36,14 +43,21 @@ const getMySubscription = async (req, res) => {
         }
         const clientId = req.tenantId;
         const Lead = require('../models/Lead');
-        const [sub, ws, invoices, leadsUsed] = await Promise.all([
+        const [sub, ws, invoices, leadsUsed, topups] = await Promise.all([
             Subscription.findOne({ clientId }).lean(),
             WorkspaceSettings.findOne({ userId: clientId }).lean(),
             Payment.find({ clientId })
                 .sort({ paymentDate: -1 })
                 .limit(10)
                 .lean(),
-            Lead.countDocuments({ userId: clientId })
+            Lead.countDocuments({ userId: clientId }),
+            // AI credit top-ups — a SEPARATE history from subscription invoices, so
+            // one-time credit purchases show on the Billing page without folding into
+            // subscription revenue/MRR reports. Only successful grants are shown.
+            AiCreditTopup.find({ userId: clientId, status: 'granted' })
+                .sort({ createdAt: -1 })
+                .limit(10)
+                .lean()
         ]);
         let plan = null;
         if (ws?.currentPlanCode) {
@@ -64,6 +78,7 @@ const getMySubscription = async (req, res) => {
             } : null,
             plan,
             invoices,
+            topups,
             leadsUsed,
             razorpayConfigured: razorpayService.isConfigured(),
             razorpayKeyId:      razorpayService.isConfigured() ? process.env.RAZORPAY_KEY_ID : null,
@@ -270,6 +285,165 @@ const cancel = async (req, res) => {
     }
 };
 
+// ─── AI credit top-up (one-time Razorpay Order) ─────────────────────────────
+// Grant credits for a PAID top-up order. Idempotent, and shared by both fulfilment
+// paths: the client success callback (POST /ai-credits/verify — primary) and the
+// payment.captured webhook (backstop for when the browser closes before the
+// callback returns). Server-authoritative: credits + tenant come from the ORDER's
+// notes fetched fresh from Razorpay, never from the request body.
+const fulfilAiCreditTopup = async ({ orderId, paymentId, tenantId = null }) => {
+    if (!orderId || !paymentId) throw new Error('orderId and paymentId are required');
+
+    // Fetch the order from Razorpay — authoritative amount, notes, paid status.
+    const order = await razorpayService.getOrder(orderId);
+    if (!order || order.notes?.purpose !== 'ai_credit_topup') {
+        throw new Error('Order is not an AI credit top-up');
+    }
+    if (order.status !== 'paid') {
+        throw new Error(`Order not paid (status: ${order.status})`);
+    }
+
+    const grantTenant = order.notes.tenantId || (tenantId ? String(tenantId) : null);
+    const credits     = parseInt(order.notes.credits, 10);
+    const amountInr   = Number(order.notes.amountInr) || Math.round(order.amount / 100);
+    if (!grantTenant || !Number.isFinite(credits) || credits <= 0) {
+        throw new Error('Invalid top-up order data');
+    }
+
+    // Atomic claim on the unique razorpayPaymentId. findOneAndUpdate with new:false
+    // returns the PRE-image: null means we just created the row (we own fulfilment);
+    // a non-null doc means someone already claimed this payment. A dead-heat between
+    // the client-verify and webhook paths can surface a duplicate-key (E11000) — the
+    // loser treats that exactly like finding an existing claim.
+    let prior;
+    try {
+        prior = await AiCreditTopup.findOneAndUpdate(
+            { razorpayPaymentId: paymentId },
+            { $setOnInsert: {
+                userId: grantTenant, razorpayOrderId: orderId, razorpayPaymentId: paymentId,
+                amountInr, credits, status: 'pending', source: 'razorpay'
+            } },
+            { upsert: true, new: false, setDefaultsOnInsert: true }
+        );
+    } catch (e) {
+        if (e.code === 11000) {
+            const existing = await AiCreditTopup.findOne({ razorpayPaymentId: paymentId }).lean();
+            if (existing?.status === 'granted') {
+                return { success: true, alreadyProcessed: true, credits: existing.credits, aiCreditsBalance: existing.balanceAfter };
+            }
+            return { success: true, processing: true, credits: existing?.credits ?? credits };
+        }
+        throw e;
+    }
+
+    if (prior) {
+        // Already claimed by the other fulfilment path.
+        if (prior.status === 'granted') {
+            return { success: true, alreadyProcessed: true, credits: prior.credits, aiCreditsBalance: prior.balanceAfter };
+        }
+        // 'pending' (concurrent, other path will finish) or 'grant_failed' (needs
+        // manual reconciliation — do NOT retry here or we risk a double grant).
+        return { success: true, processing: true, credits: prior.credits };
+    }
+
+    // We own the claim → grant exactly once.
+    try {
+        const { balanceAfter, ledgerLogged } = await aiCreditService.grant(grantTenant, credits, {
+            feature: 'topup',
+            note: `Self-serve top-up · ₹${amountInr}`,
+            meta: { source: 'razorpay', razorpayOrderId: orderId, razorpayPaymentId: paymentId, amountInr }
+        });
+        await AiCreditTopup.updateOne(
+            { razorpayPaymentId: paymentId },
+            { $set: { status: 'granted', balanceAfter } }
+        );
+        return { success: true, credits, aiCreditsBalance: balanceAfter, ledgerLogged };
+    } catch (grantErr) {
+        // Payment captured but wallet grant failed — flag for reconciliation. The
+        // grant failure itself is already logged loudly by aiCreditService.
+        await AiCreditTopup.updateOne(
+            { razorpayPaymentId: paymentId },
+            { $set: { status: 'grant_failed' } }
+        ).catch(() => {});
+        console.error(`[Billing] AI credit grant FAILED for paid payment ${paymentId} (tenant ${grantTenant}, ${credits} cr):`, grantErr.message);
+        throw grantErr;
+    }
+};
+
+// ─── POST /api/billing/ai-credits/create-order ──────────────────────────────
+// Body: { amountInr }. Creates a Razorpay Order for a custom-amount credit top-up.
+const createAiCreditsOrder = async (req, res) => {
+    try {
+        if (!guardBillable(req, res)) return;
+        if (await isFeatureDisabled('DISABLE_PAYMENTS')) {
+            return res.status(503).json({ message: 'Payments are temporarily paused for maintenance. Please try again later.' });
+        }
+
+        const amountInr = Math.round(Number(req.body.amountInr));
+        if (!Number.isFinite(amountInr) || amountInr < MIN_TOPUP_INR) {
+            return res.status(400).json({ message: `Minimum top-up is ₹${MIN_TOPUP_INR}.` });
+        }
+        if (amountInr > MAX_TOPUP_INR) {
+            return res.status(400).json({ message: `Maximum top-up is ₹${MAX_TOPUP_INR.toLocaleString('en-IN')}.` });
+        }
+
+        // Credits derived from the shared wallet rate (₹1 = 1/CREDIT_VALUE_INR credits).
+        const credits = Math.round(amountInr / aiCreditService.CREDIT_VALUE_INR);
+
+        const order = await razorpayService.createOrder({
+            amount:  amountInr * 100, // paise
+            receipt: `aicredit_${req.tenantId}_${Date.now()}`,
+            notes: {
+                purpose:   'ai_credit_topup',
+                tenantId:  String(req.tenantId),
+                credits:   String(credits),
+                amountInr: String(amountInr)
+            }
+        });
+
+        res.json({
+            success:  true,
+            orderId:  order.id,
+            amount:   order.amount,   // paise
+            currency: order.currency,
+            credits,
+            keyId:    process.env.RAZORPAY_KEY_ID,
+            mode:     razorpayService.mode()
+        });
+    } catch (err) {
+        console.error('createAiCreditsOrder error:', err);
+        if (err.code === 'RAZORPAY_NOT_CONFIGURED') {
+            return res.status(503).json({ message: err.message });
+        }
+        res.status(400).json({ message: err.message || 'Failed to create top-up order' });
+    }
+};
+
+// ─── POST /api/billing/ai-credits/verify ────────────────────────────────────
+// Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature }.
+// Primary fulfilment path — verifies the Checkout signature, then grants credits.
+const verifyAiCreditsPayment = async (req, res) => {
+    try {
+        if (!guardBillable(req, res)) return;
+
+        const {
+            razorpay_order_id:   orderId,
+            razorpay_payment_id: paymentId,
+            razorpay_signature:  signature
+        } = req.body || {};
+
+        if (!razorpayService.verifyPaymentSignature({ orderId, paymentId, signature })) {
+            return res.status(400).json({ message: 'Payment signature verification failed.' });
+        }
+
+        const result = await fulfilAiCreditTopup({ orderId, paymentId, tenantId: req.tenantId });
+        return res.json(result);
+    } catch (err) {
+        console.error('verifyAiCreditsPayment error:', err);
+        res.status(400).json({ message: err.message || 'Failed to verify payment' });
+    }
+};
+
 // ─── POST /api/billing/razorpay/webhook ────────────────────────────────────
 // Public — Razorpay → us. Verifies HMAC-SHA256 signature, dispatches per event.
 // Must be registered BEFORE express.json() in index.js (rawBody capture needed).
@@ -291,6 +465,39 @@ const webhook = async (req, res) => {
 
         const payload = req.body || {};
         eventType = (payload.event || '').toLowerCase();
+
+        // ── One-time AI credit top-up (Orders API) — backstop fulfilment ────────
+        // These events carry a payment/order, NOT a subscription, so they must be
+        // handled before the subscription-id extraction below (which would otherwise
+        // dead-letter them). Primary fulfilment is the client verify callback; this
+        // covers the case where the browser closed before that callback returned.
+        // A non-topup payment.captured (e.g. a subscription's first charge) has no
+        // ai_credit_topup note and simply falls through to the subscription logic.
+        if (eventType === 'payment.captured' || eventType === 'order.paid') {
+            const paymentEntity = payload?.payload?.payment?.entity;
+            const orderEntity   = payload?.payload?.order?.entity;
+            const orderId   = paymentEntity?.order_id || orderEntity?.id || null;
+            const paymentId = paymentEntity?.id || null;
+            const notes     = paymentEntity?.notes || orderEntity?.notes || {};
+
+            if (orderId && notes?.purpose === 'ai_credit_topup') {
+                if (paymentId) {
+                    try {
+                        await fulfilAiCreditTopup({ orderId, paymentId });
+                        webhookMonitor.recordSuccess();
+                    } catch (e) {
+                        console.error('AI credit top-up webhook fulfil error:', e.message);
+                        webhookMonitor.recordFailure(eventType, e, req.body).catch(() => {});
+                    }
+                } else {
+                    // order.paid without a payment id — rely on payment.captured /
+                    // client verify, which both carry one.
+                    console.warn('[Billing] top-up webhook missing payment id — deferring to client verify / payment.captured');
+                }
+                return res.json({ received: true, topup: true });
+            }
+            // Not a top-up payment → fall through to subscription handling.
+        }
 
         // Extract the Razorpay subscription id from the standard webhook envelope.
         const rzpSubId = payload?.payload?.subscription?.entity?.id
@@ -646,6 +853,8 @@ module.exports = {
     changePlan,
     cancel,
     webhook,
+    createAiCreditsOrder,
+    verifyAiCreditsPayment,
     getFreshPaymentLink,
     listAllPlans,
     upsertPlan,
