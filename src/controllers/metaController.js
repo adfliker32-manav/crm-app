@@ -614,6 +614,81 @@ const getForms = async (req, res) => {
     }
 };
 
+// Fetch the question/field keys defined on the connected lead form directly from Meta,
+// so the Field Mapping UI can be filled in without waiting for a real lead to arrive.
+const getFormFields = async (req, res) => {
+    try {
+        const config = await IntegrationConfig.findOne({ userId: req.tenantId })
+            .select('+meta.metaAccessToken meta.metaPageId meta.metaFormId meta.metaTokenExpiry');
+
+        if (!config?.meta?.metaAccessToken) {
+            return res.status(400).json({ success: false, message: 'Not connected to Facebook' });
+        }
+        const { metaPageId, metaFormId } = config.meta;
+        if (!metaPageId) {
+            return res.status(400).json({ success: false, message: 'No Facebook Page connected yet' });
+        }
+        if (!metaFormId) {
+            return res.status(400).json({ success: false, message: 'Select a specific Lead Form (not "Any Form") to fetch its fields directly from Meta.' });
+        }
+
+        const meta = await checkAndRefreshToken(req.tenantId, config.meta);
+        const userToken = meta.metaAccessToken;
+
+        // Derive a page access token the same way getForms() does
+        let pageAccessToken = null;
+        try {
+            const accountsRes = await axios.get(`${META_GRAPH_URL}/me/accounts`, {
+                params: { access_token: userToken, fields: 'id,access_token', limit: 100 },
+                timeout: META_API_TIMEOUT
+            });
+            const match = (accountsRes.data.data || []).find(p => p.id === metaPageId);
+            if (match) pageAccessToken = match.access_token;
+        } catch (e) {
+            console.warn('getFormFields: /me/accounts lookup failed:', e.response?.data?.error?.message || e.message);
+        }
+        if (!pageAccessToken) {
+            try {
+                const pageRes = await axios.get(`${META_GRAPH_URL}/${metaPageId}`, {
+                    params: { access_token: userToken, fields: 'access_token' },
+                    timeout: META_API_TIMEOUT
+                });
+                pageAccessToken = pageRes.data.access_token;
+            } catch (e) {
+                console.warn('getFormFields: direct page token derivation failed:', e.response?.data?.error?.message || e.message);
+            }
+        }
+        if (!pageAccessToken) {
+            return res.status(404).json({ success: false, message: 'Could not get access token for this page.' });
+        }
+
+        const formRes = await axios.get(`${META_GRAPH_URL}/${metaFormId}`, {
+            params: { access_token: pageAccessToken, fields: 'questions{key,label,type}' },
+            timeout: META_API_TIMEOUT
+        });
+
+        const fields = (formRes.data.questions || []).map(q => ({ key: q.key, label: q.label || q.key }));
+        const rawKeys = fields.map(f => f.key);
+
+        // Persist so the mapping UI keeps showing these keys even before a real lead arrives
+        if (rawKeys.length > 0) {
+            await IntegrationConfig.updateOne(
+                { userId: req.tenantId },
+                { $set: { 'meta.metaLastRawFields': rawKeys } }
+            );
+        }
+
+        res.json({ success: true, fields, rawKeys });
+    } catch (error) {
+        const metaErr = error.response?.data?.error;
+        console.error('❌ Meta getFormFields Error:', metaErr || error.message);
+        if (metaErr?.code === 190 || error.response?.status === 401) {
+            return res.status(401).json({ success: false, message: 'Meta access token expired. Please reconnect your Facebook account.' });
+        }
+        res.status(500).json({ success: false, message: metaErr?.message || 'Failed to fetch fields from Meta form' });
+    }
+};
+
 // Save page and form selection, subscribe to webhook
 const connect = async (req, res) => {
     try {
@@ -1282,6 +1357,7 @@ module.exports = {
     getStatus,
     getPages,
     getForms,
+    getFormFields,
     connect,
     resetPage,
     disconnect,

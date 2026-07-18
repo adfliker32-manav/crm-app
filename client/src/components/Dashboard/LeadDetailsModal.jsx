@@ -341,18 +341,19 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                                             {field.label}
                                         </label>
-                                        <p className="text-sm text-slate-800 font-medium truncate">
+                                        <p className="text-sm text-slate-800 font-medium break-words">
                                             {getCustomValue(field.key)}
                                         </p>
                                     </div>
                                 ))}
-                                {/* Render Any Extra Custom Data from Chatbots */}
+                                {/* Every other Meta question / chatbot answer that wasn't mapped to a named CRM field —
+                                    still shown here under its raw key so nothing from the lead form is ever hidden. */}
                                 {Object.keys(fullLead?.customData || lead.customData || {}).filter(k => !customFields.find(f => f.key === k)).map(key => (
                                     <div key={`extra-${key}`}>
                                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                                             {key.replace(/_/g, ' ')}
                                         </label>
-                                        <p className="text-sm text-slate-800 font-medium truncate">
+                                        <p className="text-sm text-slate-800 font-medium break-words">
                                             {getCustomValue(key)}
                                         </p>
                                     </div>

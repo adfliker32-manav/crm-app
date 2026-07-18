@@ -41,6 +41,7 @@ router.get('/status',      authMiddleware, requireFeature('metaSync'), guardLow,
 router.get('/debug-token', authMiddleware, requireFeature('metaSync'), guardLow,   metaController.debugToken);
 router.get('/pages',       authMiddleware, requireFeature('metaSync'), guardPages, metaController.getPages);   // medium (90%)
 router.get('/forms/:pageId', authMiddleware, requireFeature('metaSync'), guardForms, metaController.getForms); // medium (90%)
+router.get('/form-fields',   authMiddleware, requireFeature('metaSync'), guardForms, metaController.getFormFields); // medium (90%)
 router.post('/connect',      authMiddleware, requireFeature('metaSync'), guardLow,   metaController.connect);
 router.post('/reset-page',   authMiddleware, requireFeature('metaSync'), guardLow,   metaController.resetPage);
 router.post('/disconnect',   authMiddleware, requireFeature('metaSync'), guardLow,   metaController.disconnect);
