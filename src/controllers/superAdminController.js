@@ -2156,6 +2156,102 @@ const getTenantAiLedger = async (req, res) => {
     }
 };
 
+// ── AI Support Assistant (platform-owned, super-admin controlled) ────────────
+// Config + usage counters live in GlobalSetting under this key.
+const AI_SUPPORT_KEY = 'ai_support_config';
+const AI_SUPPORT_DEFAULTS = {
+    enabled: false,
+    provider: 'gemini',
+    model: 'gemini-2.5-flash',
+    agentName: 'AI Support',
+    systemPrompt: '',
+    // usage counters (updated by the support flow, read-only here)
+    creditsUsedThisMonth: 0,
+    creditsUsedTotal: 0,
+    repliesTotal: 0,
+    usageMonth: ''
+};
+
+// @desc  Get the platform AI Support config + usage stats
+// @route GET /api/superadmin/ai-support-config
+const getAiSupportConfig = async (req, res) => {
+    try {
+        const doc = await GlobalSetting.findOne({ key: AI_SUPPORT_KEY }).lean();
+        const cfg = { ...AI_SUPPORT_DEFAULTS, ...(doc?.value || {}) };
+        const aiCreditService = require('../services/aiCreditService');
+        res.json({
+            config: {
+                enabled: !!cfg.enabled,
+                provider: cfg.provider,
+                model: cfg.model,
+                agentName: cfg.agentName,
+                systemPrompt: cfg.systemPrompt
+            },
+            usage: {
+                creditsUsedThisMonth: cfg.creditsUsedThisMonth || 0,
+                creditsUsedTotal: cfg.creditsUsedTotal || 0,
+                repliesTotal: cfg.repliesTotal || 0,
+                inrThisMonth: aiCreditService.creditsToInr(cfg.creditsUsedThisMonth || 0),
+                inrTotal: aiCreditService.creditsToInr(cfg.creditsUsedTotal || 0),
+                creditValueInr: aiCreditService.CREDIT_VALUE_INR
+            }
+        });
+    } catch (err) {
+        console.error('[SuperAdmin] getAiSupportConfig error:', err);
+        res.status(500).json({ message: 'Failed to load AI support config.' });
+    }
+};
+
+// @desc  Update the platform AI Support config (never touches usage counters)
+// @route PUT /api/superadmin/ai-support-config
+const updateAiSupportConfig = async (req, res) => {
+    try {
+        const { enabled, provider, model, agentName, systemPrompt } = req.body;
+        if (provider !== undefined && !['gemini', 'openai'].includes(provider)) {
+            return res.status(400).json({ message: 'Invalid provider — must be "gemini" or "openai".' });
+        }
+        const doc = await GlobalSetting.findOne({ key: AI_SUPPORT_KEY });
+        const current = doc?.value || { ...AI_SUPPORT_DEFAULTS };
+
+        const merged = {
+            ...AI_SUPPORT_DEFAULTS,
+            ...current,
+            ...(enabled !== undefined ? { enabled: !!enabled } : {}),
+            ...(provider !== undefined ? { provider } : {}),
+            ...(model !== undefined ? { model } : {}),
+            ...(agentName !== undefined ? { agentName } : {}),
+            ...(systemPrompt !== undefined ? { systemPrompt: String(systemPrompt).substring(0, 2000) } : {})
+        };
+
+        await GlobalSetting.updateOne(
+            { key: AI_SUPPORT_KEY },
+            { $set: { value: merged, updatedBy: req.user?.userId || req.user?.id || null, updatedAt: new Date() } },
+            { upsert: true }
+        );
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'SUPERADMIN_ACTION',
+            action: 'AI_SUPPORT_CONFIG_UPDATE',
+            targetType: 'GlobalSetting',
+            targetName: AI_SUPPORT_KEY,
+            details: { enabled: merged.enabled, provider: merged.provider, model: merged.model },
+            req
+        });
+
+        res.json({
+            success: true,
+            config: {
+                enabled: merged.enabled, provider: merged.provider, model: merged.model,
+                agentName: merged.agentName, systemPrompt: merged.systemPrompt
+            }
+        });
+    } catch (err) {
+        console.error('[SuperAdmin] updateAiSupportConfig error:', err);
+        res.status(500).json({ message: 'Failed to update AI support config.' });
+    }
+};
+
 // @desc  Update granular permissions (e.g., AI Voice Access override)
 // @route PUT /api/superadmin/accounts/:id/permissions
 const updateAccountPermissions = async (req, res) => {
@@ -2300,6 +2396,8 @@ module.exports = {
     getAiModelRates,
     updateAiModelRate,
     getTenantAiLedger,
+    getAiSupportConfig,
+    updateAiSupportConfig,
     updateAccountPermissions,
     // 🧹 Maintenance
     cleanupOrphanedAccounts,

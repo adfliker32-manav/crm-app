@@ -175,7 +175,10 @@ const integrationConfigSchema = new mongoose.Schema({
         // Independent of aiFallbackEnabled: this only interprets an answer for the
         // scripted flow, it never writes a message to the customer.
         aiButtonMappingEnabled: { type: Boolean, default: true },
-        maxTurns: { type: Number, default: 5 },
+        // How many AI replies are allowed in one conversation before it hands off to
+        // a human. 12 gives real room for a multi-question qualification flow without
+        // letting a stuck conversation loop indefinitely.
+        maxTurns: { type: Number, default: 12 },
         // NOTE: Despite the name, this counts AI *messages* (1 per reply), not actual LLM tokens.
         // Kept for backward compatibility. The monthly limit (planFeatures.aiMessageLimit) is per-message.
         tokensUsedThisMonth: { type: Number, default: 0 }

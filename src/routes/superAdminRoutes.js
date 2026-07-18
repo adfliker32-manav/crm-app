@@ -43,6 +43,8 @@ const {
     getAiModelRates,
     updateAiModelRate,
     getTenantAiLedger,
+    getAiSupportConfig,
+    updateAiSupportConfig,
     updateAccountPermissions,
     // 🧹 Maintenance
     cleanupOrphanedAccounts,
@@ -145,6 +147,10 @@ router.get('/accounts/:id/ai-ledger', validateObjectId({ params: ['id'] }), auth
 // AI model rate table (credits per 1K tokens) — admin-editable pricing
 router.get('/ai-model-rates', authMiddleware, requireSuperAdmin, getAiModelRates);
 router.put('/ai-model-rates', authMiddleware, requireSuperAdmin, updateAiModelRate);
+
+// AI Support Assistant — platform-owned config + usage monitoring
+router.get('/ai-support-config', authMiddleware, requireSuperAdmin, getAiSupportConfig);
+router.put('/ai-support-config', authMiddleware, requireSuperAdmin, updateAiSupportConfig);
 
 // Update Permissions
 router.put('/accounts/:id/permissions', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updateAccountPermissions);

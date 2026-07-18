@@ -142,6 +142,32 @@ const emitToTenantUser = (userId, event, payload) => {
     io.to(`user:${userId}`).emit(event, payload);
 };
 
+// Accumulate platform-side AI support credit usage (for the super-admin monitor).
+// Read-modify-write on the GlobalSetting value; ticket volume is low so the small
+// concurrency window is acceptable. Resets the monthly counter on month change.
+async function recordAiSupportUsage(credits) {
+    // A reply was sent — always count it, even if the credit figure came back 0
+    // (so the reply count and monthly totals stay accurate).
+    const amount = Math.max(0, Number(credits) || 0);
+    try {
+        const GlobalSetting = require('../models/GlobalSetting');
+        const month = new Date().toISOString().slice(0, 7); // YYYY-MM
+        const doc = await GlobalSetting.findOne({ key: 'ai_support_config' });
+        const v = doc?.value || {};
+        const sameMonth = v.usageMonth === month;
+        const value = {
+            ...v,
+            usageMonth: month,
+            creditsUsedThisMonth: (sameMonth ? (v.creditsUsedThisMonth || 0) : 0) + amount,
+            creditsUsedTotal: (v.creditsUsedTotal || 0) + amount,
+            repliesTotal: (v.repliesTotal || 0) + 1
+        };
+        await GlobalSetting.updateOne({ key: 'ai_support_config' }, { $set: { value } }, { upsert: true });
+    } catch (err) {
+        console.error('[Support] Failed to record AI support usage:', err.message);
+    }
+}
+
 const buildAttachments = (req) => {
     if (!req.files || !req.files.length) return [];
     return req.files.map(f => ({
@@ -214,88 +240,89 @@ const createTicket = async (req, res) => {
 
         res.status(201).json({ ticket });
 
-        // 🤖 AI Support Assistant auto-reply
+        // 🤖 AI Support Assistant auto-reply — PLATFORM-OWNED (super-admin controlled).
+        // Support tickets go customer → platform, so the platform's own config (global
+        // key, super-admin prompt/model) answers them. The tenant is NOT charged; usage
+        // is tracked platform-side for the super-admin to monitor.
         setImmediate(async () => {
             try {
-                const WorkspaceSettings = require('../models/WorkspaceSettings');
                 const GlobalSetting = require('../models/GlobalSetting');
-                
-                const [config, workspace, globalGemini, globalOpenai] = await Promise.all([
-                    IntegrationConfig.findOne({ userId: req.tenantId }),
-                    WorkspaceSettings.findOne({ userId: req.tenantId }),
+
+                const [cfgDoc, globalGemini, globalOpenai] = await Promise.all([
+                    GlobalSetting.findOne({ key: 'ai_support_config' }).lean(),
                     GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
                     GlobalSetting.findOne({ key: 'global_openai_api_key' })
                 ]);
-                
+
+                const cfg = cfgDoc?.value || {};
+                if (!cfg.enabled) return; // super-admin controls this, not the tenant
+
                 const { decryptToken } = require('../utils/encryptionUtils');
-                const apiKey = config?.ai?.provider === 'openai' 
-                    ? decryptToken(globalOpenai?.value) 
+                const provider = cfg.provider || 'gemini';
+                const apiKey = provider === 'openai'
+                    ? decryptToken(globalOpenai?.value)
                     : decryptToken(globalGemini?.value);
-                const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
-                const hasCredit = await aiCreditService.hasCredits(req.tenantId);
+                if (!apiKey) {
+                    console.warn(`🤖 [Support] AI support is enabled but no global ${provider} key is configured.`);
+                    return;
+                }
 
-                if (config?.ai?.aiSupportEnabled && apiKey && hasAiPlan && hasCredit) {
-                    console.log(`🤖 [Support] AI support response triggered for ticket ${ticket._id}`);
+                console.log(`🤖 [Support] Platform AI support responding to ticket ${ticket._id}`);
 
-                    // Use the admin's configured system prompt if set;
-                    // otherwise fall back to a sensible CRM-support default.
-                    const defaultSupportPrompt = `You are the Support AI for our CRM Platform.
+                const defaultSupportPrompt = `You are the Support AI for our CRM Platform.
 A user (CRM tenant agent/manager) has created a support ticket.
 Provide a helpful, polite, and technical response to resolve their issue.
 If they ask about billing, SMTP config, WhatsApp setup, or Facebook lead ads sync, use your knowledge of CRM platforms to guide them step-by-step.
 If you cannot solve their issue, tell them you are forwarding this to a human administrator.`;
 
-                    const basePrompt = config.ai.systemPrompt && config.ai.systemPrompt.trim()
-                        ? config.ai.systemPrompt.trim()
-                        : defaultSupportPrompt;
+                const basePrompt = cfg.systemPrompt && cfg.systemPrompt.trim()
+                    ? cfg.systemPrompt.trim()
+                    : defaultSupportPrompt;
 
-                    const systemPrompt = `${basePrompt}
+                const systemPrompt = `${basePrompt}
 
 Ticket Details:
 - Subject: ${subject}
 - Tag: ${tag}
 - Submitter Name: ${sender?.name || req.user.name || ''} (${sender?.role || req.user.role || ''})`;
-                    
-                    const { reply, usage } = await generateReply({
-                        provider: config.ai.provider,
-                        apiKey: apiKey,
-                        modelName: config.ai.model,
-                        systemPrompt,
-                        conversationHistory: [
-                            { role: 'user', text: firstMessage || `Ticket Created: ${subject}` }
-                        ],
-                        leadContext: {}
-                    });
 
-                    // Deduct AI credits by actual token cost
-                    await aiCreditService.charge(req.tenantId, {
-                        model: config.ai.model,
-                        inputTokens: usage?.inputTokens,
-                        outputTokens: usage?.outputTokens,
-                        feature: 'ai_support'
-                    });
+                const { reply, usage } = await generateReply({
+                    provider,
+                    apiKey,
+                    modelName: cfg.model || 'gemini-2.5-flash',
+                    systemPrompt,
+                    conversationHistory: [
+                        { role: 'user', text: firstMessage || `Ticket Created: ${subject}` }
+                    ],
+                    leadContext: {}
+                });
 
-                    // Create AI message reply
-                    const aiMsg = await SupportMessage.create({
-                        ticketId: ticket._id,
-                        senderId: new mongoose.Types.ObjectId(SUPERADMIN_VIRTUAL_ID),
-                        senderRole: 'superadmin',
-                        senderName: `${config.ai.agentName} (AI Support)`,
-                        text: reply,
-                        attachments: []
-                    });
-                    
-                    // Update ticket status
-                    ticket.status = 'admin_replied';
-                    ticket.unreadByUser = (ticket.unreadByUser || 0) + 1;
-                    ticket.unreadByAdmin = 0;
-                    ticket.lastMessageAt = new Date();
-                    await ticket.save();
-                    
-                    // Emit socket updates to user & super admins
-                    emitToTenantUser(ticket.createdBy, 'support:newMessage', { ticketId: ticket._id, message: aiMsg });
-                    emitToSuperAdmins('support:newMessage', { ticketId: ticket._id, message: aiMsg });
-                }
+                // Track platform-side credit usage for the super-admin monitor.
+                // The tenant is never charged — this is the platform's own support cost.
+                const credits = await aiCreditService.computeCredits({
+                    model: cfg.model,
+                    inputTokens: usage?.inputTokens,
+                    outputTokens: usage?.outputTokens
+                });
+                await recordAiSupportUsage(credits);
+
+                const aiMsg = await SupportMessage.create({
+                    ticketId: ticket._id,
+                    senderId: new mongoose.Types.ObjectId(SUPERADMIN_VIRTUAL_ID),
+                    senderRole: 'superadmin',
+                    senderName: `${cfg.agentName || 'AI Support'} (AI)`,
+                    text: reply,
+                    attachments: []
+                });
+
+                ticket.status = 'admin_replied';
+                ticket.unreadByUser = (ticket.unreadByUser || 0) + 1;
+                ticket.unreadByAdmin = 0;
+                ticket.lastMessageAt = new Date();
+                await ticket.save();
+
+                emitToTenantUser(ticket.createdBy, 'support:newMessage', { ticketId: ticket._id, message: aiMsg });
+                emitToSuperAdmins('support:newMessage', { ticketId: ticket._id, message: aiMsg });
             } catch (aiErr) {
                 console.error('Support AI Assistant failed:', aiErr.message);
             }

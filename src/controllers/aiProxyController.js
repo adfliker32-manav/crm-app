@@ -33,7 +33,7 @@ exports.getSettings = async (req, res) => {
             // Defaults ON — only an explicit false turns it off.
             aiButtonMappingEnabled: config.ai?.aiButtonMappingEnabled !== false,
             aiSupportEnabled: config.ai?.aiSupportEnabled || false,
-            maxTurns: config.ai?.maxTurns || 5,
+            maxTurns: config.ai?.maxTurns || 12,
             tokensUsedThisMonth: config.ai?.tokensUsedThisMonth || 0,
             // AI credit wallet (shared with voice; priced via the AiModelRate table)
             aiCreditsBalance: wallet.balance,
@@ -82,8 +82,10 @@ exports.updateSettings = async (req, res) => {
         if (provider) config.ai.provider = provider;
         if (model) config.ai.model = model;
         if (agentName !== undefined) config.ai.agentName = agentName;
-        // Backend enforcement: cap system prompt at 1000 chars to prevent token waste
-        if (systemPrompt !== undefined) config.ai.systemPrompt = String(systemPrompt).substring(0, 1000);
+        // Backend enforcement: hard ceiling to prevent runaway abuse (a few thousand
+        // words). The UI encourages detailed prompts but warns past 1000 chars that
+        // every extra character is resent — and billed — on every single AI reply.
+        if (systemPrompt !== undefined) config.ai.systemPrompt = String(systemPrompt).substring(0, 6000);
         if (aiEnabled !== undefined) config.ai.aiEnabled = aiEnabled;
         if (aiFallbackEnabled !== undefined) config.ai.aiFallbackEnabled = aiFallbackEnabled;
         if (aiButtonMappingEnabled !== undefined) config.ai.aiButtonMappingEnabled = aiButtonMappingEnabled;

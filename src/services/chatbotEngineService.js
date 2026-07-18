@@ -637,12 +637,17 @@ const buildRescueContext = (session, currentNode) => {
     return ctx;
 };
 
+// Shown to the customer on every AI→human handoff path (rescue cap, fallback
+// max-turns, AI-node max-turns, AI unavailable). Kept as one constant so the
+// experience is identical no matter which limit tripped.
+const HANDOFF_MESSAGE = "We've received your message — one of our team members will follow up with you shortly.";
+
 // Last resort when a session is stuck and the AI cannot rescue it (AI disabled,
 // or the rescue cap is exhausted): tell the customer a human is coming, notify
 // the team, and stop the bot competing with the agent.
 const handoffStuckSession = async (session, conversation, conversationId, tenantId) => {
     try {
-        const msg = 'Thanks for your patience — let me connect you with someone from our team who can help.';
+        const msg = HANDOFF_MESSAGE;
         const result = await sendWhatsAppTextMessage(conversation.phone, msg, tenantId);
         await saveBotMessage(conversationId, tenantId, msg, 'text', result);
 
@@ -712,7 +717,7 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
     }
 
     console.log(`🤖 [Chatbot] AI ${mode} invoked for tenant ${tenantId} on conversation ${conversationId}.`);
-    const maxTurns = aiConfig.ai.maxTurns || 5;
+    const maxTurns = aiConfig.ai.maxTurns || 12;
 
     // ── AI credit guard (both modes) ──
     if (!(await aiCreditService.hasCredits(tenantId))) {
@@ -745,10 +750,11 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
             automationSource: 'ai_fallback'
         });
         if (aiBotMessageCount >= maxTurns) {
-            console.log(`🤖 [Chatbot] AI Fallback max turns (${maxTurns}) reached for conversation ${conversationId}. Stopping auto-reply.`);
-            await WhatsAppConversation.findByIdAndUpdate(conversationId, {
-                $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
-            });
+            // Previously this paused the bot with NO reply to the customer — they'd
+            // send a message and get total silence. Hand off properly instead: same
+            // message + agent notification as every other handoff path.
+            console.log(`🤖 [Chatbot] AI Fallback max turns (${maxTurns}) reached for conversation ${conversationId}. Handing to a human.`);
+            await handoffStuckSession(session, conversation, conversationId, tenantId);
             return null;
         }
     }
@@ -2428,7 +2434,7 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 }
 
                 const systemPrompt = node.data.aiSystemPromptOverride || aiConfig.ai.systemPrompt;
-                const maxTurns = node.data.aiMaxTurns || aiConfig.ai.maxTurns || 5;
+                const maxTurns = node.data.aiMaxTurns || aiConfig.ai.maxTurns || 12;
 
                 // 1. Get recent conversation messages (last 15 messages)
                 const recentMessages = await WhatsAppMessage.find({ conversationId: session.conversationId })
@@ -2508,7 +2514,7 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     const turnCount = parseInt(session.variables.get('ai_turn_count') || '0');
                     if (turnCount + 1 >= maxTurns) {
                         console.log(`🤖 [Chatbot] AI Node max turns (${maxTurns}) reached. Handing off to human agent.`);
-                        const handoffMsg = 'Connecting you with our sales team...';
+                        const handoffMsg = HANDOFF_MESSAGE;
                         const handoffResult = await sendWhatsAppTextMessage(conversation.phone, handoffMsg, session.userId);
                         await saveBotMessage(session.conversationId, session.userId, handoffMsg, 'text', handoffResult);
                         

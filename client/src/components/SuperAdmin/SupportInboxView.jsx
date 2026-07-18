@@ -3,6 +3,7 @@ import api from '../../services/api';
 import useSocket from '../../hooks/useSocket';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import AiSupportSettingsModal from './AiSupportSettingsModal';
 
 const fileUrl = (relativeUrl) => {
     if (!relativeUrl) return '';
@@ -33,6 +34,7 @@ const SupportInboxView = () => {
     const [busy, setBusy] = useState(false);
     const [suggestions, setSuggestions] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(true);
+    const [showAiSettings, setShowAiSettings] = useState(false);
     const fileRef = useRef(null);
     const scrollRef = useRef(null);
     const { socket } = useSocket();
@@ -154,13 +156,23 @@ const SupportInboxView = () => {
                     <h1 className="text-2xl font-bold text-slate-800">Support Inbox</h1>
                     <p className="text-sm text-slate-500">Live help requests from customers. Conversations are purged on close.</p>
                 </div>
-                <button
-                    onClick={loadTickets}
-                    className="text-sm bg-white border border-slate-300 hover:bg-slate-50 px-3 py-1.5 rounded-lg"
-                >
-                    <i className="fa-solid fa-rotate"></i> Refresh
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => setShowAiSettings(true)}
+                        className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-semibold shadow-sm"
+                    >
+                        <i className="fa-solid fa-headset"></i> AI Support
+                    </button>
+                    <button
+                        onClick={loadTickets}
+                        className="text-sm bg-white border border-slate-300 hover:bg-slate-50 px-3 py-1.5 rounded-lg"
+                    >
+                        <i className="fa-solid fa-rotate"></i> Refresh
+                    </button>
+                </div>
             </div>
+
+            <AiSupportSettingsModal isOpen={showAiSettings} onClose={() => setShowAiSettings(false)} />
 
             <div className="grid grid-cols-12 gap-4 bg-white rounded-xl border border-slate-200 overflow-hidden" style={{ height: 'calc(100vh - 200px)' }}>
                 {/* Ticket list */}
