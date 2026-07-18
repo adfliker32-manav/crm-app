@@ -90,8 +90,8 @@ const AISettings = () => {
     // Create a Razorpay order, open Checkout, then verify → credits land in the wallet.
     const handleTopUp = async () => {
         const amountInr = Math.floor(Number(topupAmount));
-        if (!Number.isFinite(amountInr) || amountInr < 5) { // TEMP(testing): revert to 100 when done
-            showError('Minimum top-up is ₹5.'); // TEMP(testing): revert to ₹100 when done
+        if (!Number.isFinite(amountInr) || amountInr < 100) {
+            showError('Minimum top-up is ₹100.');
             return;
         }
         setTopupBusy(true);
