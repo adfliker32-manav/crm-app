@@ -392,7 +392,10 @@ const createAiCreditsOrder = async (req, res) => {
 
         const order = await razorpayService.createOrder({
             amount:  amountInr * 100, // paise
-            receipt: `aicredit_${req.tenantId}_${Date.now()}`,
+            // Razorpay caps receipt at 40 chars. Full ObjectId + timestamp overflows,
+            // so use the tenant's last 6 id chars + a base36 timestamp (tenantId also
+            // travels in notes for identification). ~= "aic_XXXXXX_LLLLLLLL" (< 40).
+            receipt: `aic_${String(req.tenantId).slice(-6)}_${Date.now().toString(36)}`,
             notes: {
                 purpose:   'ai_credit_topup',
                 tenantId:  String(req.tenantId),
