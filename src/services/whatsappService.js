@@ -210,6 +210,53 @@ const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
     }
 };
 
+// Native WhatsApp interactive List Message — up to 10 rows behind a single
+// "View Options" button, for choices that don't fit the 3-button limit.
+const sendListMessage = async (to, bodyText, buttonText, items, userId = null) => {
+    try {
+        if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
+            throw new Error("Emergency: WhatsApp sending is temporarily disabled.");
+        }
+
+        const { phoneNumberId, accessToken } = await getCredentials(userId);
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+
+        const data = {
+            messaging_product: "whatsapp",
+            to,
+            type: "interactive",
+            interactive: {
+                type: "list",
+                body: { text: bodyText },
+                action: {
+                    button: (buttonText || 'View Options').substring(0, 20),
+                    sections: [{
+                        rows: items.slice(0, 10).map((item, idx) => ({
+                            id: item.id || `row_${idx}`,
+                            title: (item.title || '').substring(0, 24),
+                            ...(item.description ? { description: item.description.substring(0, 72) } : {})
+                        }))
+                    }]
+                }
+            }
+        };
+
+        const response = await retryWithBackoff(
+            () => axios.post(url, data, {
+                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+            }),
+            { maxRetries: 3, label: 'WA-List' }
+        );
+        return response.data;
+    } catch (error) {
+        if (error.response?.data?.error?.code === 190) {
+            console.error(`🔑 WhatsApp token EXPIRED for user ${userId}.`);
+        }
+        console.error('❌ Failed to send list message:', error.response?.data || error.message);
+        throw error;
+    }
+};
+
 const sendCtaUrlMessage = async (to, bodyText, buttonText, buttonUrl, userId = null) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
@@ -566,6 +613,7 @@ module.exports = {
     sendWhatsAppTextMessage,
     sendMediaMessage,
     sendInteractiveMessage,
+    sendListMessage,
     sendCtaUrlMessage,
     downloadMedia,
     submitTemplateToMeta,

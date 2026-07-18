@@ -9,6 +9,7 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 const { SUPPORT_UPLOAD_ROOT, classifyAttachment } = require('../middleware/supportUploadMiddleware');
 const { getIO } = require('../services/socketService');
 const { generateReply } = require('../services/aiService');
+const aiCreditService = require('../services/aiCreditService');
 
 // Smart auto-tag — keyword rules, no LLM. Lightweight & deterministic.
 const TAG_RULES = [
@@ -231,8 +232,9 @@ const createTicket = async (req, res) => {
                     ? decryptToken(globalOpenai?.value) 
                     : decryptToken(globalGemini?.value);
                 const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
-                
-                if (config?.ai?.aiEnabled && config?.ai?.aiSupportEnabled && apiKey && hasAiPlan) {
+                const hasCredit = await aiCreditService.hasCredits(req.tenantId);
+
+                if (config?.ai?.aiSupportEnabled && apiKey && hasAiPlan && hasCredit) {
                     console.log(`🤖 [Support] AI support response triggered for ticket ${ticket._id}`);
 
                     // Use the admin's configured system prompt if set;
@@ -254,7 +256,7 @@ Ticket Details:
 - Tag: ${tag}
 - Submitter Name: ${sender?.name || req.user.name || ''} (${sender?.role || req.user.role || ''})`;
                     
-                    const { reply } = await generateReply({
+                    const { reply, usage } = await generateReply({
                         provider: config.ai.provider,
                         apiKey: apiKey,
                         modelName: config.ai.model,
@@ -264,7 +266,15 @@ Ticket Details:
                         ],
                         leadContext: {}
                     });
-                    
+
+                    // Deduct AI credits by actual token cost
+                    await aiCreditService.charge(req.tenantId, {
+                        model: config.ai.model,
+                        inputTokens: usage?.inputTokens,
+                        outputTokens: usage?.outputTokens,
+                        feature: 'ai_support'
+                    });
+
                     // Create AI message reply
                     const aiMsg = await SupportMessage.create({
                         ticketId: ticket._id,

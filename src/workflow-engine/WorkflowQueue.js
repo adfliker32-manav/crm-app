@@ -251,8 +251,17 @@ const shutdownWorkflowQueue = async () => {
     console.log('[WorkflowQueue] Shutdown complete');
 };
 
+/**
+ * Returns the active BullMQ Worker (consumer) instance, or null if the
+ * worker hasn't been started yet. Used by health checks to verify the
+ * worker process is actually alive — getWorkflowQueue() only proves the
+ * producer-side Queue exists, not that jobs are being consumed.
+ */
+const getWorkflowWorker = () => _worker;
+
 module.exports = {
     getWorkflowQueue,
+    getWorkflowWorker,
     enqueueNode,
     enqueueTimeout,
     enqueueScheduledTrigger,

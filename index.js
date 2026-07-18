@@ -789,11 +789,17 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // will crash the entire Node.js process — taking down ALL users simultaneously.
 process.on('unhandledRejection', (reason, promise) => {
   console.error('⚠️ Unhandled Promise Rejection:', reason);
+  telemetryService.recordLog('exception', `Unhandled Promise Rejection: ${reason?.message || reason}`, {
+    stack: reason?.stack
+  });
   // Do NOT exit — keep the server alive for other users
 });
 
 process.on('uncaughtException', (error) => {
   console.error('💥 UNCAUGHT EXCEPTION:', error);
+  telemetryService.recordLog('exception', `Uncaught Exception: ${error?.message || error}`, {
+    stack: error?.stack
+  });
   // After an uncaught exception the process is in an undefined state — continuing to
   // serve risks corrupt data and hard-to-debug behaviour. Shut down cleanly and exit
   // non-zero so the platform (Render) restarts a fresh process.

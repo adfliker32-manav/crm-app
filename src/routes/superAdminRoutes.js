@@ -40,6 +40,9 @@ const {
     rejectAccount,
     deactivateAccount,
     topUpAiCredits,
+    getAiModelRates,
+    updateAiModelRate,
+    getTenantAiLedger,
     updateAccountPermissions,
     // 🧹 Maintenance
     cleanupOrphanedAccounts,
@@ -137,6 +140,11 @@ router.put('/accounts/:id/deactivate', validateObjectId({ params: ['id'] }), aut
 
 // Add AI Credits
 router.post('/accounts/:id/add-ai-credits', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, topUpAiCredits);
+router.get('/accounts/:id/ai-ledger', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getTenantAiLedger);
+
+// AI model rate table (credits per 1K tokens) — admin-editable pricing
+router.get('/ai-model-rates', authMiddleware, requireSuperAdmin, getAiModelRates);
+router.put('/ai-model-rates', authMiddleware, requireSuperAdmin, updateAiModelRate);
 
 // Update Permissions
 router.put('/accounts/:id/permissions', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updateAccountPermissions);

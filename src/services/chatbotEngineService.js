@@ -7,14 +7,15 @@ const Lead = require('../models/Lead');
 const User = require('../models/User');
 const AgencySettings = require('../models/AgencySettings');
 const axios = require('axios');
-const { sendWhatsAppTextMessage, sendInteractiveMessage, sendCtaUrlMessage, sendMediaMessage } = require('./whatsappService');
+const { sendWhatsAppTextMessage, sendInteractiveMessage, sendListMessage, sendCtaUrlMessage, sendMediaMessage } = require('./whatsappService');
 const { emitToUser, emitToUsers, emitToConversation } = require('./socketService');
 const { getCompanyUserIds } = require('../utils/whatsappUtils');
 const whatsappQueueService = require('./whatsappQueueService');
 const NodeCache = require('node-cache');
 const flowCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const bookingPageCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
-const { generateReply } = require('./aiService');
+const { generateReply, mapReplyToOption } = require('./aiService');
+const aiCreditService = require('./aiCreditService');
 const { decryptToken } = require('../utils/encryptionUtils');
 
 const normalizeBaseUrl = (value) => {
@@ -429,6 +430,540 @@ const isWithinBusinessHours = (settings) => {
     }
 };
 
+// How long after an outbound template a typed reply (one carrying no
+// contextMessageId) is still assumed to be about that template. Matches
+// WhatsApp's 24h customer-service window.
+const TEMPLATE_REPLY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// List-node items support both legacy string[] and {id,title,description}[].
+// Shared by the outgoing send (executeNode) and the incoming reply matcher
+// (continueSession) so both agree on the same ids/titles for a given node.
+const normaliseListItems = (rawItems) => (rawItems || []).map((item, idx) =>
+    typeof item === 'string'
+        ? { id: `list_${idx}`, title: item, description: '' }
+        : { id: item.id || `list_${idx}`, title: item.title || item.text || `Option ${idx + 1}`, description: item.description || '' }
+);
+
+// ============================================================
+// 🤖 BUTTON MATCHING — shared by every node type that has buttons
+// ============================================================
+// Match priority:
+//   1. content.buttonId — the id of the button the customer actually tapped.
+//      Most reliable: it survives WhatsApp's 20-char title truncation and any
+//      case/whitespace differences.
+//   2. Full button text (case-insensitive) — covers typed replies.
+//   3. Truncated button text (first 20 chars) — covers a tapped button whose
+//      configured title was longer than WhatsApp's 20-char display limit.
+const matchButton = (buttons, userResponse, incomingMessage) => {
+    if (!Array.isArray(buttons) || buttons.length === 0) return null;
+    const normalized = (userResponse || '').toLowerCase().trim();
+    const buttonId = incomingMessage?.content?.buttonId || null;
+
+    return buttons.find(b => {
+        if (buttonId && b.id === buttonId) return true;
+        const fullText = (b.text || '').toLowerCase().trim();
+        if (fullText && fullText === normalized) return true;
+        if (b.id === normalized) return true;
+        const truncated = (b.text || '').substring(0, 20).toLowerCase().trim();
+        if (truncated && truncated === normalized) return true;
+        return false;
+    }) || null;
+};
+
+// Ask the AI which option a free-text reply means, so an answer like "around
+// 50,000" to a budget question continues the flow instead of bouncing the
+// customer a "please tap a button" message. Only a validated match is accepted:
+// anything the AI isn't sure about returns null and the caller re-prompts.
+//
+// Gated on aiButtonMappingEnabled + plan + key. Deliberately NOT on aiEnabled or
+// aiFallbackEnabled — those switches govern the AI *talking to customers*, and
+// this never sends a message; it only interprets an answer for the scripted flow.
+// Mapping calls are counted against the monthly AI allowance like any other call.
+const tryAiButtonMap = async ({ buttons, currentNode, userResponse, tenantId }) => {
+    try {
+        const IntegrationConfig = require('../models/IntegrationConfig');
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
+        const GlobalSetting = require('../models/GlobalSetting');
+
+        const [aiConfig, workspace, globalGemini, globalOpenai] = await Promise.all([
+            IntegrationConfig.findOne({ userId: tenantId }),
+            WorkspaceSettings.findOne({ userId: tenantId }),
+            GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
+            GlobalSetting.findOne({ key: 'global_openai_api_key' })
+        ]);
+
+        if (aiConfig?.ai?.aiButtonMappingEnabled === false) return null;
+        if (workspace?.planFeatures?.aiChatbot !== true) return null;
+
+        const apiKey = aiConfig.ai.provider === 'openai'
+            ? decryptToken(globalOpenai?.value)
+            : decryptToken(globalGemini?.value);
+        if (!apiKey) return null;
+
+        if (!(await aiCreditService.hasCredits(tenantId))) {
+            console.log(`🎯 [Chatbot] Skipping AI button mapping — tenant ${tenantId} is out of AI credits.`);
+            return null;
+        }
+
+        const { index: idx, usage } = await mapReplyToOption({
+            provider: aiConfig.ai.provider,
+            apiKey,
+            model: aiConfig.ai.model,
+            question: currentNode.data?.text || '',
+            options: buttons.map(b => b.text),
+            userReply: userResponse,
+            // Same zone the business-hours check uses — "Saturday" has to resolve
+            // against the tenant's local today, not the server's.
+            timezone: aiConfig.whatsapp?.businessHours?.timezone
+        });
+
+        await aiCreditService.charge(tenantId, {
+            model: aiConfig.ai.model,
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            feature: 'button_mapping'
+        });
+
+        if (idx === null) {
+            console.log(`🎯 [Chatbot] AI could not map "${userResponse}" to any option on node "${currentNode.id}" — re-prompting.`);
+            return null;
+        }
+
+        const mapped = buttons[idx];
+        console.log(`🎯 [Chatbot] AI mapped "${userResponse}" → option "${mapped.text}" on node "${currentNode.id}".`);
+        return mapped;
+    } catch (err) {
+        // Mapping is an enhancement, never a dependency — fall back to re-prompting.
+        console.error('[Chatbot] AI button mapping failed:', err.message);
+        return null;
+    }
+};
+
+// Exact match first, then AI mapping for free text. This is the matcher every
+// button node uses to interpret a reply.
+const matchButtonWithAi = async (buttons, userResponse, incomingMessage, currentNode, tenantId) => {
+    const exact = matchButton(buttons, userResponse, incomingMessage);
+    if (exact) return exact;
+
+    // A reply carrying a buttonId came from an actual tap. If that didn't match,
+    // the flow was edited under the customer — a phrasing problem is not the
+    // issue, so there's nothing for the AI to interpret.
+    if (incomingMessage?.content?.buttonId) return null;
+    if (!userResponse || !userResponse.trim()) return null;
+
+    // Prefer the original text: userResponse has been lowercased upstream for
+    // keyword matching, and casing carries meaning the model can use.
+    const rawText = incomingMessage?.content?.text || userResponse;
+    return await tryAiButtonMap({ buttons, currentNode, userResponse: rawText, tenantId });
+};
+
+// Same matching pipeline as matchButtonWithAi, extended with numeric-position
+// matching: the numbered-text fallback (list nodes with no BSP-approved list
+// API, or where sendListMessage failed) asks the customer to reply "3", which
+// has no button/row id to match against a tap.
+const matchListItemWithAi = async (items, userResponse, incomingMessage, currentNode, tenantId) => {
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const asButtons = items.map(it => ({ id: it.id, text: it.title }));
+
+    const exact = matchButton(asButtons, userResponse, incomingMessage);
+    if (exact) return items.find(it => it.id === exact.id) || null;
+
+    const asNumber = Number((userResponse || '').trim());
+    if (Number.isInteger(asNumber) && asNumber >= 1 && asNumber <= items.length) {
+        return items[asNumber - 1];
+    }
+
+    if (incomingMessage?.content?.buttonId) return null;
+    if (!userResponse || !userResponse.trim()) return null;
+
+    const rawText = incomingMessage?.content?.text || userResponse;
+    const mapped = await tryAiButtonMap({ buttons: asButtons, currentNode, userResponse: rawText, tenantId });
+    return mapped ? (items.find(it => it.id === mapped.id) || null) : null;
+};
+
+// Resolve where a matched button should lead. Tries, in order:
+//   1. button.nextNodeId, if it points to a node that still exists.
+//   2. The target of an edge from (node.id, sourceHandle = button.id) whose
+//      target also exists.
+// The edge fallback covers two real cases: (a) older saves never wrote
+// nextNodeId onto the button, (b) the node nextNodeId points to was deleted but
+// a fresh edge was drawn afterwards.
+// Returns the target node id, or null when the link is genuinely broken.
+const resolveButtonTarget = (flow, node, button) => {
+    let targetNodeId = button.nextNodeId;
+    if (targetNodeId && flow.nodes.some(n => n.id === targetNodeId)) return targetNodeId;
+
+    if (flow.edges && flow.edges.length > 0) {
+        const matchingEdge = flow.edges.find(e =>
+            e.source === node.id &&
+            e.sourceHandle === button.id &&
+            flow.nodes.some(n => n.id === e.target)
+        );
+        if (matchingEdge) {
+            console.log(`🤖 [Chatbot] Recovered button "${button.text}" → ${matchingEdge.target} from flow.edges (button.nextNodeId was "${button.nextNodeId || 'empty'}")`);
+            return matchingEdge.target;
+        }
+    }
+    return null;
+};
+
+// Describes a stuck flow node to the AI so a rescue reply lands in context
+// instead of restarting qualification from scratch.
+const buildRescueContext = (session, currentNode) => {
+    let ctx = '\n=== CHATBOT FLOW CONTEXT ===\n';
+    ctx += "A scripted chatbot flow is running and could not interpret the customer's last message.\n";
+    if (currentNode?.data?.text) {
+        ctx += `The question the flow last asked was: "${currentNode.data.text}"\n`;
+    }
+    const options = (currentNode?.data?.buttons || []).map(b => b.text).filter(Boolean);
+    if (options.length > 0) {
+        ctx += `The flow expected one of these options: ${options.join(', ')}.\n`;
+        ctx += "Answer the customer's question or objection, then guide them back to choosing one of those options.\n";
+    }
+    const collected = [];
+    if (session?.variables?.size > 0) {
+        for (const [k, v] of session.variables.entries()) {
+            if (k.startsWith('ai_') || k.startsWith('btn_miss_')) continue;
+            if (v === null || v === undefined || typeof v === 'object') continue;
+            collected.push(`  * ${k}: ${v}`);
+        }
+    }
+    if (collected.length > 0) {
+        ctx += 'Information the flow already collected from this customer:\n';
+        ctx += collected.join('\n') + '\n';
+        ctx += 'Do not ask again for anything listed above.\n';
+    }
+    ctx += '=== END CHATBOT FLOW CONTEXT ===\n';
+    return ctx;
+};
+
+// Last resort when a session is stuck and the AI cannot rescue it (AI disabled,
+// or the rescue cap is exhausted): tell the customer a human is coming, notify
+// the team, and stop the bot competing with the agent.
+const handoffStuckSession = async (session, conversation, conversationId, tenantId) => {
+    try {
+        const msg = 'Thanks for your patience — let me connect you with someone from our team who can help.';
+        const result = await sendWhatsAppTextMessage(conversation.phone, msg, tenantId);
+        await saveBotMessage(conversationId, tenantId, msg, 'text', result);
+
+        await executeAction(
+            {
+                actionType: 'notify_agent',
+                actionData: { message: `Chatbot could not handle the conversation with ${conversation.displayName || conversation.phone} and handed off.` }
+            },
+            session || { userId: tenantId, conversationId, variables: new Map(), save: async () => {} },
+            conversation
+        );
+
+        await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+            $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+        });
+        if (session) await endSession(session, 'handoff');
+    } catch (err) {
+        console.error('[Chatbot] handoffStuckSession failed:', err.message);
+    }
+};
+
+// ============================================================
+// 🤖 AI REPLY — the single place the AI is allowed to speak
+// ============================================================
+// Two entry points share this:
+//
+//   mode 'fallback' — nothing matched an inbound message: no active session and
+//                     no flow trigger. The AI owns the conversation.
+//
+//   mode 'rescue'   — a live session hit a dead end: a button the customer's
+//                     reply doesn't match, or a matched button whose target node
+//                     no longer exists. The AI answers once and the session
+//                     STAYS ACTIVE on its current node, so the flow resumes as
+//                     soon as the customer says something the node understands.
+//                     Previously these cases ended the session silently: the
+//                     customer got no reply at all, and the fallback AI picked up
+//                     the whole conversation from their next message onward.
+//
+// Rescue turns are counted per-session so a permanently broken node cannot burn
+// the tenant's whole monthly AI quota; once the cap is hit the conversation goes
+// to a human instead.
+//
+// Returns 'ai_fallback' | 'ai_rescue' when a reply was sent, null otherwise.
+const runAiReply = async ({ conversation, conversationId, tenantId, session = null, flow = null, currentNode = null, mode = 'fallback' }) => {
+    const IntegrationConfig = require('../models/IntegrationConfig');
+    const WorkspaceSettings = require('../models/WorkspaceSettings');
+    const GlobalSetting = require('../models/GlobalSetting');
+
+    const [aiConfig, workspace, globalGemini, globalOpenai] = await Promise.all([
+        IntegrationConfig.findOne({ userId: tenantId }),
+        WorkspaceSettings.findOne({ userId: tenantId }),
+        GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
+        GlobalSetting.findOne({ key: 'global_openai_api_key' })
+    ]);
+
+    const apiKey = aiConfig?.ai?.provider === 'openai'
+        ? decryptToken(globalOpenai?.value)
+        : decryptToken(globalGemini?.value);
+    const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
+
+    if (!aiConfig?.ai?.aiFallbackEnabled || !apiKey || !hasAiPlan) {
+        if (mode === 'rescue') {
+            console.log(`🤖 [Chatbot] Rescue needed on conversation ${conversationId} but AI is unavailable (fallback=${!!aiConfig?.ai?.aiFallbackEnabled}, key=${!!apiKey}, plan=${hasAiPlan}). Handing to a human.`);
+            await handoffStuckSession(session, conversation, conversationId, tenantId);
+        }
+        return null;
+    }
+
+    console.log(`🤖 [Chatbot] AI ${mode} invoked for tenant ${tenantId} on conversation ${conversationId}.`);
+    const maxTurns = aiConfig.ai.maxTurns || 5;
+
+    // ── AI credit guard (both modes) ──
+    if (!(await aiCreditService.hasCredits(tenantId))) {
+        console.log(`🤖 [Chatbot] Tenant ${tenantId} is out of AI credits. Stopping AI ${mode}.`);
+        await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+            $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+        });
+        const limitMsg = 'Our AI assistant is currently unavailable. An agent will connect with you shortly.';
+        const limitResult = await sendWhatsAppTextMessage(conversation.phone, limitMsg, tenantId);
+        await saveBotMessage(conversationId, tenantId, limitMsg, 'text', limitResult);
+        if (session) await endSession(session, 'handoff');
+        return null;
+    }
+
+    // ── Turn guard ──
+    if (mode === 'rescue') {
+        const rescueCount = Number(session.variables.get('ai_rescue_count') || 0);
+        if (rescueCount >= maxTurns) {
+            console.log(`🤖 [Chatbot] AI rescue cap (${maxTurns}) reached on node "${currentNode?.id}" of flow "${flow?.name}" for conversation ${conversationId}. Handing to a human.`);
+            await handoffStuckSession(session, conversation, conversationId, tenantId);
+            return null;
+        }
+    } else {
+        // NOTE: this previously queried `source: 'bot'`, a field that is never
+        // written, so the count was always 0 and the cap never fired. AI replies
+        // are saved with automationSource — count those.
+        const aiBotMessageCount = await WhatsAppMessage.countDocuments({
+            conversationId,
+            direction: 'outbound',
+            automationSource: 'ai_fallback'
+        });
+        if (aiBotMessageCount >= maxTurns) {
+            console.log(`🤖 [Chatbot] AI Fallback max turns (${maxTurns}) reached for conversation ${conversationId}. Stopping auto-reply.`);
+            await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+                $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+            });
+            return null;
+        }
+    }
+
+    // Get recent messages (last 15)
+    const recentMessages = await WhatsAppMessage.find({ conversationId })
+        .sort({ timestamp: -1 })
+        .limit(15)
+        .lean();
+    const history = recentMessages.reverse();
+
+    // Get lead context
+    let leadDetails = {};
+    if (conversation.leadId) {
+        const lead = await Lead.findById(conversation.leadId).lean();
+        if (lead) {
+            leadDetails = {
+                name: lead.name,
+                phone: lead.phone,
+                email: lead.email,
+                currentStage: lead.status,
+                tags: lead.tags,
+                customData: lead.customData
+            };
+        }
+    }
+
+    const systemPrompt = mode === 'rescue'
+        ? `${aiConfig.ai.systemPrompt}\n${buildRescueContext(session, currentNode)}`
+        : aiConfig.ai.systemPrompt;
+
+    try {
+        const { reply, action, usage } = await generateReply({
+            provider: aiConfig.ai.provider,
+            apiKey: apiKey,
+            modelName: aiConfig.ai.model,
+            systemPrompt,
+            conversationHistory: history,
+            leadContext: leadDetails
+        });
+
+        // Tag the reply with its mode so the turn guards above can count it
+        const automationSource = mode === 'rescue' ? 'ai_rescue' : 'ai_fallback';
+        const result = await sendWhatsAppTextMessage(conversation.phone, reply, tenantId);
+        await saveBotMessage(conversationId, tenantId, reply, 'text', result, null, automationSource);
+
+        // Deduct AI credits by actual token cost
+        await aiCreditService.charge(tenantId, {
+            model: aiConfig.ai.model,
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            feature: `ai_${mode}`
+        });
+
+        if (mode === 'rescue') {
+            session.variables.set('ai_rescue_count', Number(session.variables.get('ai_rescue_count') || 0) + 1);
+            session.markModified('variables');
+            session.lastInteractionAt = new Date();
+            await session.save();
+        }
+
+        // Execute actions returned by the AI
+        if (action && action.type) {
+            // In rescue mode the real session is used, so AI actions land on the
+            // same variables the flow collected. In fallback mode there is no
+            // session — build a session-like object with leadDetails pre-populated
+            // so executeAction's change_stage path can find/create the lead.
+            let actionSession = session;
+            if (!actionSession) {
+                const fallbackVariables = new Map();
+                if (leadDetails.name)  fallbackVariables.set('name', leadDetails.name);
+                if (leadDetails.phone) fallbackVariables.set('phone', leadDetails.phone);
+                if (leadDetails.email) fallbackVariables.set('email', leadDetails.email);
+                actionSession = {
+                    userId: tenantId,
+                    conversationId,
+                    variables: fallbackVariables,
+                    save: async () => {}
+                };
+            }
+
+            const logTag = mode === 'rescue' ? 'AI Rescue' : 'AI Fallback';
+
+            if (action.type === 'change_stage' && action.stage) {
+                console.log(`🤖 [${logTag}] Executing change_stage → "${action.stage}" for conversation ${conversationId}`);
+                await executeAction({
+                    actionType: 'change_stage',
+                    actionData: { stage: action.stage }
+                }, actionSession, conversation);
+            } else if (action.type === 'assign_tag' && action.tag) {
+                console.log(`🤖 [${logTag}] Executing assign_tag → "${action.tag}" for conversation ${conversationId}`);
+                await executeAction({
+                    actionType: 'assign_tag',
+                    actionData: { tag: action.tag }
+                }, actionSession, conversation);
+            } else if (action.type === 'notify_agent') {
+                const agentMsg = action.reason || `${logTag}: Handoff requested for ${conversation.displayName || conversation.phone}`;
+                console.log(`🤖 [${logTag}] Executing notify_agent — pausing chatbot for 24h on conversation ${conversationId}`);
+                await executeAction({
+                    actionType: 'notify_agent',
+                    actionData: { message: agentMsg }
+                }, actionSession, conversation);
+
+                // Pause chatbot for 24h so the human agent can take over, and stop
+                // any live session competing with them.
+                await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+                    $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+                });
+                if (session) await endSession(session, 'handoff');
+            } else if (action.type === 'book_appointment') {
+                console.log(`🤖 [${logTag}] Executing book_appointment for conversation ${conversationId}`);
+                await executeAction({
+                    actionType: 'book_appointment',
+                    actionData: action
+                }, actionSession, conversation);
+            }
+        }
+
+        return automationSource;
+    } catch (err) {
+        console.error(`Error in AI ${mode} auto-reply:`, err.message);
+        return null;
+    }
+};
+
+// A button node could not interpret the customer's reply. Re-prompt once — a
+// near-miss usually just needs the options shown again — then hand the turn to
+// the AI rather than looping the same prompt forever.
+const handleButtonMiss = async (session, flow, currentNode, conversation, conversationId) => {
+    const missKey = `btn_miss_${currentNode.id}`;
+    const misses = Number(session.variables.get(missKey) || 0) + 1;
+    session.variables.set(missKey, misses);
+    session.markModified('variables');
+    session.lastInteractionAt = new Date();
+    await session.save();
+
+    if (misses === 1) {
+        if (conversation) {
+            const buttonOptions = currentNode.data.buttons.map(b => `• ${b.text}`).join('\n');
+            const retryText = `I didn't understand that. Please choose one of the following options:\n${buttonOptions}`;
+            const retryResult = await sendInteractiveMessage(
+                conversation.phone,
+                retryText,
+                currentNode.data.buttons.map(b => ({ id: b.id, text: b.text })),
+                session.userId
+            );
+            await saveBotMessage(conversationId, session.userId, retryText, 'interactive', retryResult);
+        }
+        return { success: true }; // Stay on current node
+    }
+
+    console.log(`🤖 [Chatbot] Node "${currentNode.id}" could not match the reply ${misses}× — handing this turn to the AI; session stays active.`);
+    return await runAiReply({
+        conversation,
+        conversationId,
+        tenantId: session.userId,
+        session,
+        flow,
+        currentNode,
+        mode: 'rescue'
+    });
+};
+
+// Same as handleButtonMiss, for list nodes. Kept separate because a list can
+// carry up to 10 items — WhatsApp's interactive button message rejects more
+// than 3, so the retry has to pick the same send strategy executeNode uses
+// (buttons for ≤3, native list message for 4-10, numbered text as a last resort).
+const handleListMiss = async (session, flow, currentNode, conversation, conversationId, items) => {
+    const missKey = `btn_miss_${currentNode.id}`;
+    const misses = Number(session.variables.get(missKey) || 0) + 1;
+    session.variables.set(missKey, misses);
+    session.markModified('variables');
+    session.lastInteractionAt = new Date();
+    await session.save();
+
+    if (misses === 1 && items.length > 0) {
+        if (conversation) {
+            const retryIntro = `I didn't understand that. Please choose one of the following options:`;
+            if (items.length <= 3) {
+                const retryResult = await sendInteractiveMessage(
+                    conversation.phone,
+                    retryIntro,
+                    items.map(it => ({ id: it.id, text: it.title })),
+                    session.userId
+                );
+                await saveBotMessage(conversationId, session.userId, retryIntro, 'interactive', retryResult);
+            } else {
+                try {
+                    const retryResult = await sendListMessage(
+                        conversation.phone, retryIntro, currentNode.data.buttonText || 'View Options', items, session.userId
+                    );
+                    await saveBotMessage(conversationId, session.userId, retryIntro, 'interactive', retryResult);
+                } catch (err) {
+                    const numberedList = items.map((it, idx) => `${idx + 1}. ${it.title}`).join('\n');
+                    const fallbackText = `${retryIntro}\n\n${numberedList}`;
+                    const fallbackResult = await sendWhatsAppTextMessage(conversation.phone, fallbackText, session.userId);
+                    await saveBotMessage(conversationId, session.userId, fallbackText, 'text', fallbackResult);
+                }
+            }
+        }
+        return { success: true }; // Stay on current node
+    }
+
+    console.log(`🤖 [Chatbot] List node "${currentNode.id}" could not match the reply ${misses}× — handing this turn to the AI; session stays active.`);
+    return await runAiReply({
+        conversation,
+        conversationId,
+        tenantId: session.userId,
+        session,
+        flow,
+        currentNode,
+        mode: 'rescue'
+    });
+};
+
 // Process incoming message and check if it should trigger a chatbot or auto-reply
 exports.processIncomingMessage = async (message, conversationId, userId) => {
     try {
@@ -642,11 +1177,46 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             );
         }
 
-        // 2. Template Reply Match — fires when user taps a QUICK_REPLY button on a template
+        // 2. Template Reply Match — fires when the customer replies to a template.
         // This bypasses pause (same as keyword — it's an explicit user intent).
-        if (!targetFlow && message.contextMessageId) {
+        //
+        // The preferred signal is contextMessageId, which WhatsApp only attaches when
+        // the customer taps a quick-reply button or swipe-replies. Someone who simply
+        // types "yes" gives us no context id at all, which used to drop the whole
+        // conversation to the AI. So when there's no context id, fall back to the last
+        // outbound template on this conversation — but only if it's still inside the
+        // 24h customer-service window AND this is the first inbound since it was sent,
+        // which together mean the message can only be a reply to that template.
+        if (!targetFlow) {
             try {
-                const originalMsg = await WhatsAppMessage.findOne({ waMessageId: message.contextMessageId }).lean();
+                let originalMsg = message.contextMessageId
+                    ? await WhatsAppMessage.findOne({ waMessageId: message.contextMessageId }).lean()
+                    : null;
+
+                if (!originalMsg?.content?.templateName) {
+                    const lastTemplate = await WhatsAppMessage.findOne({
+                        conversationId,
+                        direction: 'outbound',
+                        'content.templateName': { $exists: true, $ne: null },
+                        timestamp: { $gte: new Date(Date.now() - TEMPLATE_REPLY_WINDOW_MS) }
+                    }).sort({ timestamp: -1 }).lean();
+
+                    if (lastTemplate) {
+                        const inboundSinceTemplate = await WhatsAppMessage.countDocuments({
+                            conversationId,
+                            direction: 'inbound',
+                            timestamp: { $gt: lastTemplate.timestamp },
+                            _id: { $ne: message._id }
+                        });
+                        if (inboundSinceTemplate === 0) {
+                            console.log(`📩 [Chatbot] Reply has no contextMessageId — treating it as a reply to the last outbound template "${lastTemplate.content.templateName}".`);
+                            originalMsg = lastTemplate;
+                        } else {
+                            console.log(`📩 [Chatbot] Last outbound template "${lastTemplate.content.templateName}" already has ${inboundSinceTemplate} repl(y/ies) — not re-triggering its flow.`);
+                        }
+                    }
+                }
+
                 if (originalMsg && originalMsg.content?.templateName) {
                     const tplName = originalMsg.content.templateName;
                     const replyFlow = allActiveFlows.find(f =>
@@ -741,160 +1311,11 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 
         if (isPaused) {
             console.log(`⏸️ [Chatbot] No keyword match found. Chatbot remains paused for conversation ${conversationId}`);
-        } else {
-            console.log(`🤖 [Chatbot] No matching flow found for message "${messageText}" in conversation ${conversationId}`);
-            
-            // Check for AI fallback
-            const IntegrationConfig = require('../models/IntegrationConfig');
-            const WorkspaceSettings = require('../models/WorkspaceSettings');
-            const GlobalSetting = require('../models/GlobalSetting');
-            
-            const [aiConfig, workspace, globalGemini, globalOpenai] = await Promise.all([
-                IntegrationConfig.findOne({ userId: tenantId }),
-                WorkspaceSettings.findOne({ userId: tenantId }),
-                GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
-                GlobalSetting.findOne({ key: 'global_openai_api_key' })
-            ]);
-            
-            const apiKey = aiConfig?.ai?.provider === 'openai' 
-                ? decryptToken(globalOpenai?.value) 
-                : decryptToken(globalGemini?.value);
-            const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
-            
-            if (aiConfig?.ai?.aiEnabled && aiConfig?.ai?.aiFallbackEnabled && apiKey && hasAiPlan) {
-                console.log(`🤖 [Chatbot] AI Fallback enabled for tenant ${tenantId}. Invoking AI qualification.`);
-                
-                const maxFallbackTurns = aiConfig.ai.maxTurns || 5;
-                const tokensUsed = aiConfig.ai.tokensUsedThisMonth || 0;
-                
-                // --- MONTHLY LIMIT GUARD ---
-                const limit = workspace?.planFeatures?.aiMessageLimit || 1000;
-                if (tokensUsed >= limit) {
-                    console.log(`🤖 [Chatbot] Tenant ${tenantId} hit monthly AI limit (${limit}). Stopping AI Fallback.`);
-                    await WhatsAppConversation.findByIdAndUpdate(conversationId, {
-                        $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
-                    });
-                    const limitMsg = "Our AI assistant is currently unavailable. An agent will connect with you shortly.";
-                    await sendWhatsAppTextMessage(conversation.phone, limitMsg, tenantId);
-                    return null;
-                }
-
-                // ── maxTurns guard: count existing AI-fallback replies for this conversation ──
-                // FIX: previously queried `source: 'bot'`, a field that is never written, so the
-                // count was always 0 and this cap never fired. AI-fallback replies are saved with
-                // automationSource: 'ai_fallback' (see saveBotMessage call below) — count those.
-                const aiBotMessageCount = await WhatsAppMessage.countDocuments({
-                    conversationId,
-                    direction: 'outbound',
-                    automationSource: 'ai_fallback'
-                });
-                if (aiBotMessageCount >= maxFallbackTurns) {
-                    console.log(`🤖 [Chatbot] AI Fallback max turns (${maxFallbackTurns}) reached for conversation ${conversationId}. Stopping auto-reply.`);
-                    // Pause chatbot to allow human takeover
-                    await WhatsAppConversation.findByIdAndUpdate(conversationId, {
-                        $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
-                    });
-                    return null;
-                }
-
-                // Get recent messages (last 15)
-                const recentMessages = await WhatsAppMessage.find({ conversationId })
-                    .sort({ timestamp: -1 })
-                    .limit(15)
-                    .lean();
-                
-                const history = recentMessages.reverse();
-                
-                // Get lead context
-                let leadDetails = {};
-                if (conversation.leadId) {
-                    const lead = await Lead.findById(conversation.leadId).lean();
-                    if (lead) {
-                        leadDetails = {
-                            name: lead.name,
-                            phone: lead.phone,
-                            email: lead.email,
-                            currentStage: lead.status,
-                            tags: lead.tags,
-                            customData: lead.customData
-                        };
-                    }
-                }
-                
-                try {
-                    const { reply, action } = await generateReply({
-                        provider: aiConfig.ai.provider,
-                        apiKey: apiKey,
-                        modelName: aiConfig.ai.model,
-                        systemPrompt: aiConfig.ai.systemPrompt,
-                        conversationHistory: history,
-                        leadContext: leadDetails
-                    });
-                    
-                    // Send WhatsApp reply — tag it 'ai_fallback' so the maxTurns guard above can count it
-                    const result = await sendWhatsAppTextMessage(conversation.phone, reply, tenantId);
-                    await saveBotMessage(conversationId, tenantId, reply, 'text', result, null, 'ai_fallback');
-
-                    // Increment AI usage limit
-                    await IntegrationConfig.updateOne({ userId: tenantId }, { $inc: { 'ai.tokensUsedThisMonth': 1 } });
-                    
-                    // Execute actions returned by the AI
-                    if (action && action.type) {
-                        // Build a session-like object with leadDetails pre-populated so
-                        // executeAction's change_stage path can find/create the lead correctly.
-                        const fallbackVariables = new Map();
-                        if (leadDetails.name)  fallbackVariables.set('name', leadDetails.name);
-                        if (leadDetails.phone) fallbackVariables.set('phone', leadDetails.phone);
-                        if (leadDetails.email) fallbackVariables.set('email', leadDetails.email);
-
-                        const mockSession = {
-                            userId: tenantId,
-                            conversationId,
-                            variables: fallbackVariables,
-                            save: async () => {}
-                        };
-
-                        if (action.type === 'change_stage' && action.stage) {
-                            console.log(`🤖 [AI Fallback] Executing change_stage → "${action.stage}" for conversation ${conversationId}`);
-                            await executeAction({
-                                actionType: 'change_stage',
-                                actionData: { stage: action.stage }
-                            }, mockSession, conversation);
-                        } else if (action.type === 'assign_tag' && action.tag) {
-                            console.log(`🤖 [AI Fallback] Executing assign_tag → "${action.tag}" for conversation ${conversationId}`);
-                            await executeAction({
-                                actionType: 'assign_tag',
-                                actionData: { tag: action.tag }
-                            }, mockSession, conversation);
-                        } else if (action.type === 'notify_agent') {
-                            const agentMsg = action.reason || `AI Fallback: Handoff requested for ${conversation.displayName || conversation.phone}`;
-                            console.log(`🤖 [AI Fallback] Executing notify_agent — pausing chatbot for 24h on conversation ${conversationId}`);
-                            await executeAction({
-                                actionType: 'notify_agent',
-                                actionData: { message: agentMsg }
-                            }, mockSession, conversation);
-                            
-                            // Pause chatbot for 24h so the human agent can take over
-                            await WhatsAppConversation.findByIdAndUpdate(conversationId, {
-                                $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
-                            });
-                        } else if (action.type === 'book_appointment') {
-                            console.log(`🤖 [AI Fallback] Executing book_appointment for conversation ${conversationId}`);
-                            await executeAction({
-                                actionType: 'book_appointment',
-                                actionData: action
-                            }, mockSession, conversation);
-                        }
-                    }
-                    
-                    return 'ai_fallback';
-                } catch (err) {
-                    console.error('Error in AI fallback auto-reply:', err.message);
-                }
-            }
+            return null;
         }
 
-        return null;
+        console.log(`🤖 [Chatbot] No matching flow found for message "${messageText}" in conversation ${conversationId}`);
+        return await runAiReply({ conversation, conversationId, tenantId, mode: 'fallback' });
     } catch (error) {
         console.error('Error processing auto-replies / chatbot:', error);
         return null;
@@ -1239,13 +1660,13 @@ const continueSession = async (session, userResponse, conversationId, userId, in
         }
 
         // ── PRE-CHECK: Button re-selection takes priority over question/other nodes ──
-        // If the user sends text that matches a button from ANY previously visited
+        // If the user sends text that matches a button from a previously visited
         // button-node, pivot immediately — don't treat it as a question answer.
+        // The current node is skipped here: its own buttons are handled below, where
+        // the choice is also captured into the node's variable.
         if (userResponse) {
-            const _normResp = userResponse.toLowerCase().trim();
-            const _btnNodeTypes = new Set(['message', 'template']);
-            const _buttonId = incomingMessage?.content?.buttonId || null;
-            const _seenIds = new Set();
+            const _btnNodeTypes = new Set(['message', 'template', 'question']);
+            const _seenIds = new Set([currentNode.id]);
             const _reversedVisited = [...session.visitedNodes].reverse().filter(e => {
                 if (_seenIds.has(e.nodeId)) return false;
                 _seenIds.add(e.nodeId);
@@ -1254,27 +1675,10 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             for (const _entry of _reversedVisited) {
                 const _pNode = flow.nodes.find(n => n.id === _entry.nodeId);
                 if (!_pNode || !_btnNodeTypes.has(_pNode.type)) continue;
-                if (!_pNode.data?.buttons || _pNode.data.buttons.length === 0) continue;
-                const _mBtn = _pNode.data.buttons.find(b => {
-                    if (_buttonId && b.id === _buttonId) return true;
-                    const ft = (b.text || '').toLowerCase().trim();
-                    if (ft && ft === _normResp) return true;
-                    if (b.id === _normResp) return true;
-                    const tr = (b.text || '').substring(0, 20).toLowerCase().trim();
-                    if (tr && tr === _normResp) return true;
-                    return false;
-                });
+                const _mBtn = matchButton(_pNode.data?.buttons, userResponse, incomingMessage);
                 if (!_mBtn) continue;
-                let _tId = _mBtn.nextNodeId;
-                let _tNode = _tId ? flow.nodes.find(n => n.id === _tId) : null;
-                if (!_tNode && flow.edges?.length > 0) {
-                    const _edge = flow.edges.find(e =>
-                        e.source === _pNode.id && e.sourceHandle === _mBtn.id &&
-                        flow.nodes.some(n => n.id === e.target)
-                    );
-                    if (_edge) { _tId = _edge.target; _tNode = flow.nodes.find(n => n.id === _tId); }
-                }
-                if (_tNode) {
+                const _tId = resolveButtonTarget(flow, _pNode, _mBtn);
+                if (_tId) {
                     console.log(`🔄 [Chatbot] Button re-selection (pre-check) at node type "${currentNode.type}": user picked "${_mBtn.text}" from past node "${_pNode.id}". Pivoting → "${_tId}".`);
                     session.currentNodeId = _tId;
                     session.lastInteractionAt = new Date();
@@ -1293,6 +1697,52 @@ const continueSession = async (session, userResponse, conversationId, userId, in
             await session.save();
             return await executeNode(session, flow, currentNode.id, conversation);
         } else if (currentNode.type === 'question') {
+            const hasButtons = Array.isArray(currentNode.data.buttons) && currentNode.data.buttons.length > 0;
+
+            // A question node can offer buttons instead of free text. When it does,
+            // the reply must match one of them: the matched button's text is what
+            // gets stored in the node's variable, and the button's own link decides
+            // where the flow goes next (falling back to the node's nextNodeId).
+            if (hasButtons) {
+                const chosen = await matchButtonWithAi(
+                    currentNode.data.buttons, userResponse, incomingMessage, currentNode, session.userId
+                );
+                if (!chosen) {
+                    return await handleButtonMiss(session, flow, currentNode, conversation, conversationId);
+                }
+
+                if (currentNode.data.noReplyTimeoutSeconds > 0) {
+                    whatsappQueueService.cancelNoReplyTimeout(session._id.toString(), currentNode.id).catch(() => {});
+                }
+
+                session.variables.set(currentNode.data.variableName || 'answer', chosen.text);
+                session.variables.set(`btn_miss_${currentNode.id}`, 0);
+                session.markModified('variables');
+                await evaluateSmartLead(session, flow, conversation);
+
+                const chosenTarget = resolveButtonTarget(flow, currentNode, chosen)
+                    || (flow.nodes.some(n => n.id === currentNode.data.nextNodeId) ? currentNode.data.nextNodeId : null);
+
+                if (chosenTarget) {
+                    session.currentNodeId = chosenTarget;
+                    session.lastInteractionAt = new Date();
+                    session.followUpIndex = 0;
+                    await session.save();
+                    return await executeNode(session, flow, chosenTarget, conversation);
+                }
+
+                console.log(`🤖 [Chatbot] Question node "${currentNode.id}" button "${chosen.text}" has no reachable target. Handing this turn to the AI; session stays active.`);
+                return await runAiReply({
+                    conversation,
+                    conversationId,
+                    tenantId: session.userId,
+                    session,
+                    flow,
+                    currentNode,
+                    mode: 'rescue'
+                });
+            }
+
             // FIX: Validate response against expectedType before accepting
             const expectedType = currentNode.data.expectedType || 'any';
             if (expectedType !== 'any' && expectedType !== 'text') {
@@ -1344,143 +1794,79 @@ const continueSession = async (session, userResponse, conversationId, userId, in
                 await endSession(session, 'completed');
                 return null;
             }
-        } else if ((currentNode.type === 'message' || currentNode.type === 'template') && currentNode.data.buttons) {
-            // Handle button response. Match priority:
-            //   1. Exact buttonId from interactive.button_reply.id (most reliable — survives
-            //      WhatsApp's 20-char title truncation and case/whitespace differences).
-            //   2. Full button text (case-insensitive) — covers typed replies that match exactly.
-            //   3. Truncated button text (first 20 chars) — covers tapped buttons whose original
-            //      title was longer than WhatsApp's 20-char display limit.
-            const normalizedResponse = (userResponse || '').toLowerCase().trim();
-            const buttonId = incomingMessage?.content?.buttonId || null;
+        } else if (currentNode.type === 'list') {
+            const items = normaliseListItems(currentNode.data.items);
 
-            const button = currentNode.data.buttons.find(b => {
-                if (buttonId && b.id === buttonId) return true;
-                const fullText = (b.text || '').toLowerCase().trim();
-                if (fullText && fullText === normalizedResponse) return true;
-                if (b.id === normalizedResponse) return true;
-                const truncated = (b.text || '').substring(0, 20).toLowerCase().trim();
-                if (truncated && truncated === normalizedResponse) return true;
-                return false;
-            });
+            const chosen = await matchListItemWithAi(items, userResponse, incomingMessage, currentNode, session.userId);
+            if (!chosen) {
+                return await handleListMiss(session, flow, currentNode, conversation, conversationId, items);
+            }
+
+            session.variables.set(currentNode.data.variableName || 'answer', chosen.title);
+            session.variables.set(`btn_miss_${currentNode.id}`, 0);
+            session.markModified('variables');
+            await evaluateSmartLead(session, flow, conversation);
+
+            const nextNodeId = currentNode.data.nextNodeId;
+            if (nextNodeId && flow.nodes.some(n => n.id === nextNodeId)) {
+                session.currentNodeId = nextNodeId;
+                session.lastInteractionAt = new Date();
+                session.followUpIndex = 0;
+                await session.save();
+                return await executeNode(session, flow, nextNodeId, conversation);
+            }
+
+            await endSession(session, 'completed');
+            return null;
+        } else if ((currentNode.type === 'message' || currentNode.type === 'template') && currentNode.data.buttons) {
+            const button = await matchButtonWithAi(
+                currentNode.data.buttons, userResponse, incomingMessage, currentNode, session.userId
+            );
 
             if (button) {
-                // Resolve the target node. Try, in order:
-                //   1. button.nextNodeId, if it points to an existing node.
-                //   2. The target of any edge from (currentNode.id, sourceHandle = button.id)
-                //      whose target also exists in flow.nodes.
-                // The edge fallback covers two real cases: (a) older saves never wrote
-                // nextNodeId onto the button, (b) the node nextNodeId points to was deleted
-                // but a fresh edge was drawn afterwards.
-                let targetNodeId = button.nextNodeId;
-                let targetNode = targetNodeId ? flow.nodes.find(n => n.id === targetNodeId) : null;
+                const targetNodeId = resolveButtonTarget(flow, currentNode, button);
 
-                if (!targetNode && flow.edges && flow.edges.length > 0) {
-                    const matchingEdge = flow.edges.find(e =>
-                        e.source === currentNode.id &&
-                        e.sourceHandle === button.id &&
-                        flow.nodes.some(n => n.id === e.target)
-                    );
-                    if (matchingEdge) {
-                        targetNodeId = matchingEdge.target;
-                        targetNode = flow.nodes.find(n => n.id === targetNodeId);
-                        console.log(`🤖 [Chatbot] Recovered button "${button.text}" → ${targetNodeId} from flow.edges (button.nextNodeId was "${button.nextNodeId || 'empty'}")`);
-                    }
-                }
-
-                if (targetNode) {
+                if (targetNodeId) {
                     session.currentNodeId = targetNodeId;
+                    session.variables.set(`btn_miss_${currentNode.id}`, 0);
+                    session.markModified('variables');
                     session.lastInteractionAt = new Date();
                     session.followUpIndex = 0;
                     await session.save();
                     await evaluateSmartLead(session, flow, conversation);
                     return await executeNode(session, flow, targetNodeId, conversation);
-                } else {
-                    const stalePointer = button.nextNodeId
-                        ? `points to deleted node "${button.nextNodeId}"`
-                        : 'has no nextNodeId set';
-                    const edgeOut = (flow.edges || []).find(e => e.source === currentNode.id && e.sourceHandle === button.id);
-                    const edgeNote = edgeOut
-                        ? `(edge with sourceHandle="${button.id}" exists but its target "${edgeOut.target}" is also missing)`
-                        : `(no edge with sourceHandle="${button.id}" found either)`;
-                    console.log(`🤖 [Chatbot] Button "${button.text}" ${stalePointer} ${edgeNote}. Ending session.`);
-                    await endSession(session, 'completed');
-                    return null;
                 }
-            }
-            
-            // No button matched at all → send retry prompt
-            if (conversation) {
-                const buttonOptions = currentNode.data.buttons.map(b => `• ${b.text}`).join('\n');
-                const retryText = `I didn't understand that. Please choose one of the following options:\n${buttonOptions}`;
-                const retryResult = await sendInteractiveMessage(
-                    conversation.phone,
-                    retryText,
-                    currentNode.data.buttons.map(b => ({ id: b.id, text: b.text })),
-                    session.userId
-                );
-                await saveBotMessage(conversationId, session.userId, retryText, 'interactive', retryResult);
-            }
-            return { success: true }; // Stay on current node
-        }
 
-        // ─── BUTTON RE-SELECTION: scan ALL visited button-nodes in history ──────
-        // User may be at Node 4 but tap/type a button from Node 1 (or any earlier
-        // node). We scan ALL visited button-nodes in reverse so ANY past menu can
-        // be re-selected, not just the most recent one.
-        if (userResponse) {
-            const normalizedResp = userResponse.toLowerCase().trim();
-            const buttonNodeTypes = new Set(['message', 'template']);
-
-            // Walk visitedNodes in reverse to find the last node that had buttons
-            const reversedVisited = [...session.visitedNodes].reverse();
-            for (const entry of reversedVisited) {
-                const pastNode = flow.nodes.find(n => n.id === entry.nodeId);
-                if (!pastNode || !buttonNodeTypes.has(pastNode.type)) continue;
-                if (!pastNode.data?.buttons || pastNode.data.buttons.length === 0) continue;
-
-                const buttonId = incomingMessage?.content?.buttonId || null;
-                const matchedButton = pastNode.data.buttons.find(b => {
-                    if (buttonId && b.id === buttonId) return true;
-                    const fullText = (b.text || '').toLowerCase().trim();
-                    if (fullText && fullText === normalizedResp) return true;
-                    if (b.id === normalizedResp) return true;
-                    const truncated = (b.text || '').substring(0, 20).toLowerCase().trim();
-                    if (truncated && truncated === normalizedResp) return true;
-                    return false;
+                // The customer picked a valid option but the flow has nowhere to send
+                // them — the target node was deleted, or was never linked. Ending the
+                // session here would drop them mid-flow without a reply, so the AI
+                // answers this turn and the session stays put.
+                const stalePointer = button.nextNodeId
+                    ? `points to deleted node "${button.nextNodeId}"`
+                    : 'has no nextNodeId set';
+                const edgeOut = (flow.edges || []).find(e => e.source === currentNode.id && e.sourceHandle === button.id);
+                const edgeNote = edgeOut
+                    ? `(edge with sourceHandle="${button.id}" exists but its target "${edgeOut.target}" is also missing)`
+                    : `(no edge with sourceHandle="${button.id}" found either)`;
+                console.log(`🤖 [Chatbot] Button "${button.text}" ${stalePointer} ${edgeNote}. Handing this turn to the AI; session stays active.`);
+                return await runAiReply({
+                    conversation,
+                    conversationId,
+                    tenantId: session.userId,
+                    session,
+                    flow,
+                    currentNode,
+                    mode: 'rescue'
                 });
-
-                if (matchedButton) {
-                    let targetNodeId = matchedButton.nextNodeId;
-                    let targetNode = targetNodeId ? flow.nodes.find(n => n.id === targetNodeId) : null;
-
-                    if (!targetNode && flow.edges && flow.edges.length > 0) {
-                        const matchingEdge = flow.edges.find(e =>
-                            e.source === pastNode.id &&
-                            e.sourceHandle === matchedButton.id &&
-                            flow.nodes.some(n => n.id === e.target)
-                        );
-                        if (matchingEdge) {
-                            targetNodeId = matchingEdge.target;
-                            targetNode = flow.nodes.find(n => n.id === targetNodeId);
-                        }
-                    }
-
-                    if (targetNode) {
-                        console.log(`🔄 [Chatbot] Button re-selection detected! User changed from previous choice to "${matchedButton.text}" on node "${pastNode.id}". Pivoting to node "${targetNodeId}".`);
-                        session.currentNodeId = targetNodeId;
-                        session.lastInteractionAt = new Date();
-                        session.followUpIndex = 0;
-                        await session.save();
-                        await evaluateSmartLead(session, flow, conversation);
-                        return await executeNode(session, flow, targetNodeId, conversation);
-                    }
-                }
-                // Button matched but target node missing — keep scanning older nodes
-                continue;
             }
+
+            // No button matched at all → re-prompt once, then let the AI step in.
+            return await handleButtonMiss(session, flow, currentNode, conversation, conversationId);
         }
 
+        // NOTE: re-selecting a button from an earlier menu is handled by the
+        // pre-check at the top of this function, which scans the same visited
+        // button-nodes before any node-type handler runs.
         return null;
     } catch (error) {
         console.error('Error continuing session:', error);
@@ -1566,10 +1952,23 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 break;
 
             case 'question': {
-                // Send question and wait for response
+                // Send question and wait for response. A question node may define
+                // buttons — send it interactively so the customer taps an option
+                // rather than guessing the wording (continueSession then matches the
+                // reply against those buttons).
                 const questionText = replaceVariables(node.data.text, session.variables);
-                const questionResult = await sendWhatsAppTextMessage(conversation.phone, questionText, session.userId);
-                await saveBotMessage(session.conversationId, session.userId, questionText, 'text', questionResult);
+                if (node.data.buttons && node.data.buttons.length > 0) {
+                    const questionInteractive = await sendInteractiveMessage(
+                        conversation.phone,
+                        questionText,
+                        node.data.buttons.map(b => ({ id: b.id, text: b.text })),
+                        session.userId
+                    );
+                    await saveBotMessage(session.conversationId, session.userId, questionText, 'interactive', questionInteractive);
+                } else {
+                    const questionResult = await sendWhatsAppTextMessage(conversation.phone, questionText, session.userId);
+                    await saveBotMessage(session.conversationId, session.userId, questionText, 'text', questionResult);
+                }
 
                 // If a no-reply timeout is configured, schedule auto-advance
                 if (node.data.noReplyTimeoutSeconds > 0 && node.data.nextNodeId) {
@@ -1771,13 +2170,7 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
 
             case 'list': {
                 const listText = replaceVariables(node.data.text || 'Choose an option:', session.variables);
-                const listItems = node.data.items || [];
-                // Normalise items — support both legacy string[] and new {id,title,description}[]
-                const normalisedItems = listItems.map((item, idx) =>
-                    typeof item === 'string'
-                        ? { id: `list_${idx}`, title: item, description: '' }
-                        : { id: item.id || `list_${idx}`, title: item.title || item.text || `Option ${idx + 1}`, description: item.description || '' }
-                );
+                const normalisedItems = normaliseListItems(node.data.items);
 
                 if (normalisedItems.length > 0 && normalisedItems.length <= 3) {
                     // ≤3 items — send as WhatsApp interactive reply buttons
@@ -1786,8 +2179,25 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                         conversation.phone, listText, listButtons, session.userId
                     );
                     await saveBotMessage(session.conversationId, session.userId, listText, 'interactive', listResult);
-                } else if (normalisedItems.length > 3) {
-                    // >3 items — send as numbered text list (WhatsApp interactive list API requires approved BSP access)
+                } else if (normalisedItems.length > 3 && normalisedItems.length <= 10) {
+                    // 4-10 items — native WhatsApp interactive List Message (scrollable picker)
+                    try {
+                        const listMsgResult = await sendListMessage(
+                            conversation.phone, listText, node.data.buttonText || 'View Options', normalisedItems, session.userId
+                        );
+                        await saveBotMessage(session.conversationId, session.userId, listText, 'interactive', listMsgResult);
+                    } catch (listErr) {
+                        console.error(`[Chatbot] List message failed, falling back to numbered text:`, listErr.message);
+                        const numberedList = normalisedItems.map((it, idx) => {
+                            const desc = it.description ? ` — ${it.description}` : '';
+                            return `${idx + 1}. ${it.title}${desc}`;
+                        }).join('\n');
+                        const fullListText = `${listText}\n\n${numberedList}`;
+                        const listTextResult = await sendWhatsAppTextMessage(conversation.phone, fullListText, session.userId);
+                        await saveBotMessage(session.conversationId, session.userId, fullListText, 'text', listTextResult);
+                    }
+                } else if (normalisedItems.length > 10) {
+                    // >10 items (UI caps at 10; defensive fallback for stale/imported flows)
                     const numberedList = normalisedItems.map((it, idx) => {
                         const desc = it.description ? ` — ${it.description}` : '';
                         return `${idx + 1}. ${it.title}${desc}`;
@@ -2006,11 +2416,10 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     ? decryptToken(globalOpenai?.value) 
                     : decryptToken(globalGemini?.value);
                 const hasAiPlan = workspace?.planFeatures?.aiChatbot === true;
-                const tokensUsed = aiConfig?.ai?.tokensUsedThisMonth || 0;
+                const hasCredit = await aiCreditService.hasCredits(session.userId);
 
-                const limit = workspace?.planFeatures?.aiMessageLimit || 1000;
-                if (!apiKey || !hasAiPlan || tokensUsed >= limit) {
-                    console.warn(`[Chatbot] AI node configuration error or limit reached (API Key: ${!!apiKey}, Plan: ${hasAiPlan}, LimitReached: ${tokensUsed >= limit}) for user ${session.userId}. Advancing to handoff.`);
+                if (!aiConfig?.ai?.aiEnabled || !apiKey || !hasAiPlan || !hasCredit) {
+                    console.warn(`[Chatbot] AI node blocked (Enabled: ${!!aiConfig?.ai?.aiEnabled}, API Key: ${!!apiKey}, Plan: ${hasAiPlan}, Credits: ${hasCredit}) for user ${session.userId}. Advancing to handoff.`);
                     const errMsg = 'Connecting you to an agent...';
                     const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);
@@ -2047,7 +2456,7 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
 
                 // 3. Make HTTP request to AI Service
                 try {
-                    const { reply, action } = await generateReply({
+                    const { reply, action, usage } = await generateReply({
                         provider: aiConfig.ai.provider,
                         apiKey: apiKey,
                         modelName: aiConfig.ai.model,
@@ -2060,8 +2469,13 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     const result = await sendWhatsAppTextMessage(conversation.phone, reply, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, reply, 'text', result);
 
-                    // Increment AI usage limit
-                    await IntegrationConfig.updateOne({ userId: session.userId }, { $inc: { 'ai.tokensUsedThisMonth': 1 } });
+                    // Deduct AI credits by actual token cost
+                    await aiCreditService.charge(session.userId, {
+                        model: aiConfig.ai.model,
+                        inputTokens: usage?.inputTokens,
+                        outputTokens: usage?.outputTokens,
+                        feature: 'ai_node'
+                    });
 
                     // 5. Execute actions if returned
                     if (action) {

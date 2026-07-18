@@ -18,9 +18,15 @@ const AISettings = () => {
     const [systemPrompt, setSystemPrompt] = useState('');
     const [aiEnabled, setAiEnabled] = useState(false);
     const [aiFallbackEnabled, setAiFallbackEnabled] = useState(false);
+    const [aiButtonMappingEnabled, setAiButtonMappingEnabled] = useState(true);
     const [aiSupportEnabled, setAiSupportEnabled] = useState(false);
     const [maxTurns, setMaxTurns] = useState(5);
     const [tokensUsed, setTokensUsed] = useState(0);
+    // AI credit wallet (shared with voice). Priced via the admin model-rate table.
+    const [creditsBalance, setCreditsBalance] = useState(0);
+    const [creditsUsed, setCreditsUsed] = useState(0);
+    const [usage, setUsage] = useState(null);
+    const [ledger, setLedger] = useState([]);
 
     // Voice Automation Config
     const [voiceProvider, setVoiceProvider] = useState('vapi');
@@ -64,9 +70,13 @@ const AISettings = () => {
                 setSystemPrompt(data.systemPrompt || '');
                 setAiEnabled(data.aiEnabled || false);
                 setAiFallbackEnabled(data.aiFallbackEnabled || false);
+                // Defaults ON, so treat only an explicit false as off.
+                setAiButtonMappingEnabled(data.aiButtonMappingEnabled !== false);
                 setAiSupportEnabled(data.aiSupportEnabled || false);
                 setMaxTurns(data.maxTurns || 5);
                 setTokensUsed(data.tokensUsedThisMonth || 0);
+                setCreditsBalance(data.aiCreditsBalance || 0);
+                setCreditsUsed(data.aiCreditsUsedThisMonth || 0);
 
                 // Voice Automation
                 if (data.voiceAutomation) {
@@ -95,9 +105,41 @@ const AISettings = () => {
             }
         };
 
+        const fetchUsageAndLedger = async () => {
+            try {
+                const [usageRes, ledgerRes] = await Promise.all([
+                    api.get('/ai/usage'),
+                    api.get('/ai/ledger?limit=25')
+                ]);
+                setUsage(usageRes.data);
+                setLedger(ledgerRes.data.entries || []);
+            } catch (error) {
+                // Non-fatal — the settings page still works without the statement.
+                console.error('Failed to load AI usage/ledger:', error);
+            }
+        };
+
         fetchSettings();
         checkServiceHealth();
+        fetchUsageAndLedger();
     }, [showError]);
+
+    // Human labels for ledger feature codes.
+    const FEATURE_LABELS = {
+        ai_fallback: 'Chatbot (AI reply)',
+        ai_rescue: 'Chatbot (AI rescue)',
+        ai_node: 'Chatbot (AI node)',
+        button_mapping: 'Smart button match',
+        ai_classifier: 'AI classifier',
+        ai_support: 'AI support',
+        test_simulator: 'Test simulator',
+        voice: 'Voice call',
+        topup: 'Top-up',
+        bonus: 'Bonus',
+        refund: 'Refund',
+        migration: 'Starting balance'
+    };
+    const featureLabel = (f) => FEATURE_LABELS[f] || f;
 
     // Handle provider toggle and auto-select default model
     const handleProviderChange = (newProvider) => {
@@ -121,6 +163,7 @@ const AISettings = () => {
                 systemPrompt,
                 aiEnabled,
                 aiFallbackEnabled,
+                aiButtonMappingEnabled,
                 aiSupportEnabled,
                 maxTurns,
                 voiceAutomation: {
@@ -267,12 +310,146 @@ const AISettings = () => {
                     </div>
                     
                     <div className="text-right">
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Usage this month</p>
-                        <p className="text-xl font-black text-slate-800 mt-0.5">
-                            {tokensUsed.toLocaleString()} <span className="text-sm font-bold text-slate-400">/ {user?.planFeatures?.aiMessageLimit?.toLocaleString() || '1,000'} messages</span>
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">AI Credit Balance</p>
+                        <p className={`text-2xl font-black mt-0.5 ${creditsBalance <= 0 ? 'text-rose-600' : creditsBalance < 500 ? 'text-amber-600' : 'text-slate-800'}`}>
+                            {creditsBalance.toLocaleString()} <span className="text-sm font-bold text-slate-400">credits</span>
+                        </p>
+                        <p className="text-[11px] font-semibold text-slate-400 mt-0.5">
+                            {creditsUsed.toLocaleString()} used this month
                         </p>
                     </div>
                 </div>
+
+                {/* Credit wallet explainer + low/empty balance warning */}
+                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+                    <div className="flex items-start gap-3">
+                        <div className="p-2.5 bg-indigo-50 rounded-xl">
+                            <i className="fa-solid fa-coins text-indigo-500"></i>
+                        </div>
+                        <div className="flex-1">
+                            <h3 className="font-bold text-sm text-slate-800">How AI credits work</h3>
+                            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                                Every AI reply, smart-button match, support answer, and voice call draws from your credit balance.
+                                Roughly <span className="font-bold text-slate-700">1 credit ≈ 100 tokens</span>, and heavier models
+                                (e.g. GPT-4o) cost proportionally more credits per reply than lighter ones (e.g. Gemini Flash).
+                                When your balance runs out, the AI stops replying and conversations hand off to a human.
+                            </p>
+                            {creditsBalance <= 0 ? (
+                                <div className="mt-3 flex items-center gap-2 text-xs font-bold text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">
+                                    <i className="fa-solid fa-triangle-exclamation"></i>
+                                    Out of credits — AI replies are paused. Contact your administrator to add more.
+                                </div>
+                            ) : creditsBalance < 500 ? (
+                                <div className="mt-3 flex items-center gap-2 text-xs font-bold text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">
+                                    <i className="fa-solid fa-circle-exclamation"></i>
+                                    Low balance — contact your administrator to top up before it runs out.
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Usage summary + monthly forecast */}
+                {usage && (
+                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm space-y-5">
+                        <h3 className="text-base font-bold text-slate-800 border-b border-slate-50 pb-3 flex items-center gap-2">
+                            <i className="fa-solid fa-chart-line text-emerald-500"></i> AI Usage — This Month
+                        </h3>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div className="bg-slate-50/70 rounded-xl p-3">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Credits Used</p>
+                                <p className="text-lg font-black text-slate-800 mt-0.5">{(usage.creditsUsed || 0).toLocaleString()}</p>
+                            </div>
+                            <div className="bg-slate-50/70 rounded-xl p-3">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">≈ Money</p>
+                                <p className="text-lg font-black text-slate-800 mt-0.5">₹{(usage.moneyUsedInr || 0).toLocaleString()}</p>
+                            </div>
+                            <div className="bg-slate-50/70 rounded-xl p-3">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Tokens</p>
+                                <p className="text-lg font-black text-slate-800 mt-0.5">{((usage.inputTokens || 0) + (usage.outputTokens || 0)).toLocaleString()}</p>
+                            </div>
+                            <div className="bg-indigo-50/70 rounded-xl p-3">
+                                <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Forecast (month)</p>
+                                <p className="text-lg font-black text-indigo-700 mt-0.5">
+                                    {(usage.forecast?.projectedCredits || 0).toLocaleString()}
+                                    <span className="text-xs font-bold text-indigo-400"> · ₹{(usage.forecast?.projectedInr || 0).toLocaleString()}</span>
+                                </p>
+                            </div>
+                        </div>
+
+                        {(usage.topFeatures?.length > 0 || usage.topModels?.length > 0) && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {usage.topFeatures?.length > 0 && (
+                                    <div>
+                                        <p className="text-xs font-bold text-slate-500 mb-2">Top features</p>
+                                        <div className="space-y-1.5">
+                                            {usage.topFeatures.slice(0, 4).map(f => (
+                                                <div key={f.feature} className="flex items-center justify-between text-xs">
+                                                    <span className="font-semibold text-slate-600">{featureLabel(f.feature)}</span>
+                                                    <span className="font-bold text-slate-800">{f.credits.toLocaleString()} cr</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                {usage.topModels?.length > 0 && (
+                                    <div>
+                                        <p className="text-xs font-bold text-slate-500 mb-2">Top models</p>
+                                        <div className="space-y-1.5">
+                                            {usage.topModels.slice(0, 4).map(m => (
+                                                <div key={m.model} className="flex items-center justify-between text-xs">
+                                                    <span className="font-semibold text-slate-600">{m.model}</span>
+                                                    <span className="font-bold text-slate-800">{m.credits.toLocaleString()} cr</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Credit ledger — bank-statement view */}
+                {ledger.length > 0 && (
+                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
+                        <h3 className="text-base font-bold text-slate-800 border-b border-slate-50 pb-3 mb-3 flex items-center gap-2">
+                            <i className="fa-solid fa-receipt text-slate-500"></i> Credit Ledger
+                        </h3>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                                <thead>
+                                    <tr className="text-left text-slate-400 border-b border-slate-100">
+                                        <th className="py-2 pr-3 font-bold">Date</th>
+                                        <th className="py-2 pr-3 font-bold">Feature</th>
+                                        <th className="py-2 pr-3 font-bold">Model</th>
+                                        <th className="py-2 pr-3 font-bold text-right">Tokens</th>
+                                        <th className="py-2 pr-3 font-bold text-right">Credits</th>
+                                        <th className="py-2 font-bold text-right">Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {ledger.map((e) => (
+                                        <tr key={e._id} className="border-b border-slate-50">
+                                            <td className="py-2 pr-3 text-slate-500 whitespace-nowrap">{new Date(e.createdAt).toLocaleDateString()}</td>
+                                            <td className="py-2 pr-3 font-semibold text-slate-700">{featureLabel(e.feature)}</td>
+                                            <td className="py-2 pr-3 text-slate-500">{e.model || '—'}</td>
+                                            <td className="py-2 pr-3 text-right text-slate-500">
+                                                {(e.inputTokens || e.outputTokens) ? `${(e.inputTokens || 0)}/${(e.outputTokens || 0)}` : '—'}
+                                            </td>
+                                            <td className={`py-2 pr-3 text-right font-bold ${e.credits >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                {e.credits >= 0 ? '+' : ''}{e.credits.toLocaleString()}
+                                            </td>
+                                            <td className="py-2 text-right font-semibold text-slate-700">{(e.balanceAfter || 0).toLocaleString()}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-3 font-medium">Showing your most recent {ledger.length} credit movements.</p>
+                    </div>
+                )}
 
                 <form onSubmit={handleSave} className="space-y-6">
                     
@@ -310,6 +487,23 @@ const AISettings = () => {
                                 onClick={() => setAiFallbackEnabled(!aiFallbackEnabled)}
                                 className={`w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none flex items-center p-0.5 ${
                                     aiFallbackEnabled ? 'bg-blue-600 justify-end' : 'bg-slate-300 justify-start'
+                                }`}
+                            >
+                                <span className="w-5 h-5 rounded-full bg-white shadow-md"></span>
+                            </button>
+                        </div>
+
+                        {/* Smart answer matching on chatbot buttons */}
+                        <div className="flex items-start justify-between py-2 border-t border-slate-50 pt-4">
+                            <div className="pr-4">
+                                <label className="font-bold text-sm text-slate-800 block">Smart Button Matching</label>
+                                <span className="text-xs text-slate-500 block mt-0.5">When a chatbot asks a question with buttons and the customer types instead of tapping, the AI works out which option they meant ("around 50,000" → the ₹40k–60k option) and the flow continues. If it isn't sure, the buttons are sent again. Uses one AI message per typed reply.</span>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setAiButtonMappingEnabled(!aiButtonMappingEnabled)}
+                                className={`w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none flex items-center p-0.5 ${
+                                    aiButtonMappingEnabled ? 'bg-blue-600 justify-end' : 'bg-slate-300 justify-start'
                                 }`}
                             >
                                 <span className="w-5 h-5 rounded-full bg-white shadow-md"></span>

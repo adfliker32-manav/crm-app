@@ -14,12 +14,14 @@ const VoiceHub = () => {
         provider: 'vapi',
         apiKey: '',
         defaultAgentId: '',
-        fromNumber: ''
+        fromNumber: '',
+        webhookSecret: ''
     });
     const [configLoading, setConfigLoading] = useState(false);
     const [configSaving, setConfigSaving] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
     const [hasExistingKey, setHasExistingKey] = useState(false);
+    const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
     const [testingConnection, setTestingConnection] = useState(false);
     const [connectionStatus, setConnectionStatus] = useState(null); // null | 'success' | 'error'
 
@@ -60,11 +62,14 @@ const VoiceHub = () => {
             if (res.data.success) {
                 const c = res.data.config;
                 setHasExistingKey(c.hasApiKey);
+                setHasWebhookSecret(!!c.hasWebhookSecret);
                 setConfig({
                     provider: c.provider || 'vapi',
                     apiKey: c.hasApiKey ? c.apiKeyMasked : '',
                     defaultAgentId: c.defaultAgentId || '',
-                    fromNumber: c.fromNumber || ''
+                    fromNumber: c.fromNumber || '',
+                    // The secret is never returned by the API — blank means "leave unchanged".
+                    webhookSecret: ''
                 });
                 setConnectionStatus(c.hasApiKey ? 'success' : null);
             }
@@ -86,7 +91,8 @@ const VoiceHub = () => {
                 provider: config.provider,
                 apiKey: config.apiKey,
                 defaultAgentId: config.defaultAgentId,
-                fromNumber: config.fromNumber
+                fromNumber: config.fromNumber,
+                webhookSecret: config.webhookSecret
             });
             showSuccess('Voice integration settings saved!');
             setHasExistingKey(true);
@@ -107,7 +113,8 @@ const VoiceHub = () => {
                 provider: config.provider,
                 apiKey: config.apiKey,
                 defaultAgentId: config.defaultAgentId,
-                fromNumber: config.fromNumber
+                fromNumber: config.fromNumber,
+                webhookSecret: config.webhookSecret
             });
             // If save succeeds, assume connection is valid
             setConnectionStatus('success');
@@ -425,6 +432,37 @@ const VoiceHub = () => {
                                             : <>Your Twilio outbound number linked to Vapi. Get it from <span className="font-semibold">Vapi Dashboard → Phone Numbers</span>.</>}
                                     </p>
                                 </div>
+
+                                {/* Webhook Secret — Vapi only. Retell signs its webhooks with the API key. */}
+                                {config.provider === 'vapi' && (
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                                            Webhook Secret
+                                            <span className="ml-1 text-red-400">*</span>
+                                        </label>
+                                        <input
+                                            type="password"
+                                            value={config.webhookSecret}
+                                            onChange={e => setConfig(prev => ({ ...prev, webhookSecret: e.target.value }))}
+                                            placeholder={hasWebhookSecret ? '•••••••• (saved — leave blank to keep)' : 'Paste your Vapi Server URL Secret'}
+                                            className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-slate-50"
+                                        />
+                                        {hasWebhookSecret ? (
+                                            <p className="text-[11px] text-green-600 mt-1.5 flex items-center gap-1">
+                                                <i className="fa-solid fa-shield-halved"></i>
+                                                Webhook secret is set — incoming call results are verified.
+                                            </p>
+                                        ) : (
+                                            <p className="text-[11px] text-red-500 mt-1.5 flex items-center gap-1">
+                                                <i className="fa-solid fa-triangle-exclamation"></i>
+                                                Required. Without it, call outcome webhooks are rejected and your calls will never report back.
+                                            </p>
+                                        )}
+                                        <p className="text-[11px] text-slate-400 mt-1.5">
+                                            Set the same value in <span className="font-semibold">Vapi Dashboard → Server URL → Secret</span>. Vapi sends it back on every webhook so we can prove the call result really came from Vapi.
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         </div>
 

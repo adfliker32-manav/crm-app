@@ -25,8 +25,6 @@ const { invalidateConfigCache } = require('../utils/systemConfig');
 const auditLogger = require('../services/auditLogger');
 const VoiceTemplate = require('../models/VoiceTemplate');
 const mongoose = require('mongoose');
-const os = require('os');
-const telemetryService = require('../services/telemetryService');
 const { deleteOwnedRecords } = require('../services/accountCleanupService');
 const {
     STRONG_PASSWORD_MESSAGE,
@@ -2056,9 +2054,15 @@ const topUpAiCredits = async (req, res) => {
             return res.status(404).json({ message: "User not found." });
         }
 
-        user.aiCreditsBalance = (user.aiCreditsBalance || 0) + parseInt(amount, 10);
-        await user.save();
-        
+        // Route through the credit service so the top-up lands in the ledger as a
+        // signed +credit row (the customer's statement), not just a raw balance bump.
+        const aiCreditService = require('../services/aiCreditService');
+        const { balanceAfter, ledgerLogged } = await aiCreditService.grant(id, parseInt(amount, 10), {
+            feature: 'topup',
+            note: req.body.note || 'Super-admin top-up',
+            adminId: req.user?.userId || req.user?.id || null
+        });
+
         // Log the manual credit addition
         auditLogger.log({
             actor: req.user,
@@ -2067,14 +2071,88 @@ const topUpAiCredits = async (req, res) => {
             targetType: 'User',
             targetId: id,
             targetName: user.companyName || user.name || user.email,
-            details: { amount: parseInt(amount, 10), newBalance: user.aiCreditsBalance },
+            details: { amount: parseInt(amount, 10), newBalance: balanceAfter },
             req
         });
-        
-        res.json({ success: true, message: "AI Credits added successfully.", aiCreditsBalance: user.aiCreditsBalance });
+
+        res.json({
+            success: true,
+            // Credits were added (balance is authoritative); flag if the statement
+            // entry couldn't be written so the admin knows the ledger needs a look.
+            message: ledgerLogged
+                ? "AI Credits added successfully."
+                : "AI Credits added, but the ledger entry failed to record — check logs to reconcile.",
+            ledgerLogged,
+            aiCreditsBalance: balanceAfter
+        });
     } catch (err) {
         console.error("[SuperAdmin] topUpAiCredits error:", err);
         res.status(500).json({ message: "Failed to top up AI credits." });
+    }
+};
+
+// @desc  List the AI model rate table (credits per 1K tokens, admin-editable)
+// @route GET /api/superadmin/ai-model-rates
+const getAiModelRates = async (req, res) => {
+    try {
+        const aiCreditService = require('../services/aiCreditService');
+        const rates = await aiCreditService.listRates();
+        res.json({ rates, creditValueInr: aiCreditService.CREDIT_VALUE_INR, defaultRatePer1k: aiCreditService.DEFAULT_RATE_PER_1K });
+    } catch (err) {
+        console.error('[SuperAdmin] getAiModelRates error:', err);
+        res.status(500).json({ message: 'Failed to load AI model rates.' });
+    }
+};
+
+// @desc  Create or update one model's credit rate (takes effect immediately)
+// @route PUT /api/superadmin/ai-model-rates
+const updateAiModelRate = async (req, res) => {
+    try {
+        const { model, provider, label, creditsPer1kTokens, active } = req.body;
+        if (!model) return res.status(400).json({ message: 'model is required.' });
+
+        const aiCreditService = require('../services/aiCreditService');
+        const row = await aiCreditService.upsertRate({
+            model, provider, label, creditsPer1kTokens, active,
+            adminId: req.user?.userId || req.user?.id || null
+        });
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'SUPERADMIN_ACTION',
+            action: 'AI_MODEL_RATE_UPDATE',
+            targetType: 'AiModelRate',
+            targetId: row._id,
+            targetName: model,
+            details: { creditsPer1kTokens: row.creditsPer1kTokens, active: row.active },
+            req
+        });
+
+        res.json({ success: true, rate: row });
+    } catch (err) {
+        console.error('[SuperAdmin] updateAiModelRate error:', err);
+        res.status(500).json({ message: 'Failed to update AI model rate.' });
+    }
+};
+
+// @desc  AI credit ledger for a specific tenant (super-admin statement view)
+// @route GET /api/superadmin/accounts/:id/ai-ledger
+const getTenantAiLedger = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const limit = Math.min(200, parseInt(req.query.limit, 10) || 50);
+        const skip = parseInt(req.query.skip, 10) || 0;
+
+        const aiCreditService = require('../services/aiCreditService');
+        const [entries, summary, wallet] = await Promise.all([
+            aiCreditService.getLedger(id, { limit, skip }),
+            aiCreditService.getUsageSummary(id),
+            aiCreditService.getWallet(id)
+        ]);
+        res.json({ entries, summary, wallet });
+    } catch (err) {
+        console.error('[SuperAdmin] getTenantAiLedger error:', err);
+        res.status(500).json({ message: 'Failed to load tenant AI ledger.' });
     }
 };
 
@@ -2219,6 +2297,9 @@ module.exports = {
     rejectAccount,
     deactivateAccount,
     topUpAiCredits,
+    getAiModelRates,
+    updateAiModelRate,
+    getTenantAiLedger,
     updateAccountPermissions,
     // 🧹 Maintenance
     cleanupOrphanedAccounts,

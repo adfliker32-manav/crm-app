@@ -11,6 +11,7 @@ import ManageAgentsModal from './ManageAgentsModal';
 import ChangePasswordModal from './ChangePasswordModal';
 import ManageAgencyModal from './ManageAgencyModal';
 import ManagePermissionsModal from './ManagePermissionsModal';
+import AiLedgerModal from './AiLedgerModal';
 
 const DirectClientsView = () => {
     const { showSuccess, showError } = useNotification();
@@ -29,6 +30,7 @@ const DirectClientsView = () => {
     const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
     const [isManageModalOpen, setIsManageModalOpen] = useState(false);
     const [isManagePermissionsModalOpen, setIsManagePermissionsModalOpen] = useState(false);
+    const [isAiLedgerModalOpen, setIsAiLedgerModalOpen] = useState(false);
 
     useEffect(() => {
         fetchCompanies();
@@ -267,12 +269,20 @@ const DirectClientsView = () => {
                                             <p className="text-slate-400 text-xs mt-0.5">{company.phone || 'No Phone'}</p>
                                         </td>
                                         <td className="px-8 py-6">
-                                            <div className="flex gap-2">
+                                            <div className="flex flex-wrap gap-2">
                                                 <span className="px-2 py-0.5 bg-purple-50 text-purple-700 text-[10px] font-black rounded-lg border border-purple-100">
                                                     {company.leadsCount || 0} LEADS
                                                 </span>
                                                 <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-black rounded-lg border border-indigo-100">
                                                     {company.agentsCount || 0} AGENTS
+                                                </span>
+                                                <span className={`px-2 py-0.5 text-[10px] font-black rounded-lg border inline-flex items-center gap-1 ${
+                                                    (company.aiCreditsBalance || 0) <= 0
+                                                        ? 'bg-rose-50 text-rose-600 border-rose-100'
+                                                        : 'bg-sky-50 text-sky-700 border-sky-100'
+                                                }`}>
+                                                    <i className="fa-solid fa-robot text-[8px]" />
+                                                    {(company.aiCreditsBalance || 0).toLocaleString()} AI
                                                 </span>
                                             </div>
                                         </td>
@@ -326,6 +336,7 @@ const DirectClientsView = () => {
                     { label: 'Leads Database', icon: 'fa-users', onClick: () => { setSelectedCompany(selectedCompany); setIsViewLeadsModalOpen(true); } },
                     { label: 'Manage Access & Limits', icon: 'fa-lock', onClick: () => { setSelectedCompany(selectedCompany); setIsManagePermissionsModalOpen(true); } },
                     { label: 'Add AI Credits', icon: 'fa-coins', onClick: () => handleAddAiCredits(selectedCompany) },
+                    { label: 'View AI Ledger', icon: 'fa-receipt', onClick: () => { setSelectedCompany(selectedCompany); setIsAiLedgerModalOpen(true); } },
                     { label: 'Manage Agents', icon: 'fa-user-tie', onClick: () => { setSelectedCompany(selectedCompany); setIsManageAgentsModalOpen(true); } },
                     { label: 'Change Password', icon: 'fa-key', onClick: () => { setSelectedCompany(selectedCompany); setIsChangePasswordModalOpen(true); } },
                     { label: 'Edit Profile', icon: 'fa-edit', onClick: () => { setSelectedCompany(selectedCompany); setIsEditModalOpen(true); } },
@@ -343,6 +354,7 @@ const DirectClientsView = () => {
             <CreateCompanyModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onSuccess={fetchCompanies} />
             <EditCompanyModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
             <ViewLeadsModal isOpen={isViewLeadsModalOpen} onClose={() => setIsViewLeadsModalOpen(false)} company={selectedCompany} />
+            <AiLedgerModal isOpen={isAiLedgerModalOpen} onClose={() => setIsAiLedgerModalOpen(false)} company={selectedCompany} />
             <ManageAgentsModal isOpen={isManageAgentsModalOpen} onClose={() => setIsManageAgentsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
             <ChangePasswordModal isOpen={isChangePasswordModalOpen} onClose={() => setIsChangePasswordModalOpen(false)} company={selectedCompany} />
             <ManagePermissionsModal isOpen={isManagePermissionsModalOpen} onClose={() => setIsManagePermissionsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />

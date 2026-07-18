@@ -10,6 +10,7 @@ const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutom
 const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationService');
 const { evaluateLead } = require('../services/AutomationService');
 const { checkAndRefreshToken } = require('./metaController');
+const telemetryService = require('../services/telemetryService');
 
 const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
 const META_API_TIMEOUT = 8000; // 8s — prevents hung threads on slow Meta API
@@ -43,6 +44,7 @@ const verifyWebhook = (req, res) => {
 const handleLeadWebhook = async (req, res) => {
     // Always respond quickly to Meta to prevent retries
     res.sendStatus(200);
+    const _webhookStartedAt = Date.now();
 
     try {
         const body = req.body;
@@ -54,6 +56,7 @@ const handleLeadWebhook = async (req, res) => {
         if (APP_SECRET) {
             if (!signature) {
                 console.warn("⛔ Unauthorized - Missing Meta Signature");
+                telemetryService.recordWebhook(false, false, Date.now() - _webhookStartedAt);
                 return;
             }
             if (!req.rawBody) {
@@ -61,6 +64,7 @@ const handleLeadWebhook = async (req, res) => {
                 // Falling back to JSON.stringify(body) is insecure — the byte sequence
                 // can differ from the original payload, making HMAC verification unreliable.
                 console.warn("⛔ Unauthorized - rawBody not available. Ensure express raw-body middleware is configured for this route.");
+                telemetryService.recordWebhook(false, false, Date.now() - _webhookStartedAt);
                 return;
             }
             const expectedSignature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(req.rawBody).digest('hex');
@@ -68,6 +72,7 @@ const handleLeadWebhook = async (req, res) => {
             const expBuffer = Buffer.from(expectedSignature);
             if (sigBuffer.length !== expBuffer.length || !crypto.timingSafeEqual(sigBuffer, expBuffer)) {
                 console.warn("⛔ Unauthorized - Invalid Meta Signature");
+                telemetryService.recordWebhook(false, false, Date.now() - _webhookStartedAt);
                 return;
             }
         }
@@ -94,9 +99,12 @@ const handleLeadWebhook = async (req, res) => {
                 }
             }
         }
+
+        telemetryService.recordWebhook(true, false, Date.now() - _webhookStartedAt);
     } catch (error) {
         console.error("❌ Meta Webhook Processing Error:", error.message);
         console.error("Stack:", error.stack);
+        telemetryService.recordWebhook(false, false, Date.now() - _webhookStartedAt);
     }
 };
 

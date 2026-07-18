@@ -157,8 +157,43 @@ async function callGemini(apiKey, modelName, systemPrompt, history, lastUserMess
     
     const result = await withTimeout(chat.sendMessage(lastUserMessage), AI_TIMEOUT_MS, 'Gemini');
     const responseText = result.response.text();
+    const usage = geminiUsage(result);
 
-    return JSON.parse(responseText);
+    return { parsed: JSON.parse(responseText), usage };
+}
+
+// Normalize a Gemini response's usageMetadata into { inputTokens, outputTokens }.
+function geminiUsage(result) {
+    const u = result?.response?.usageMetadata || {};
+    return {
+        inputTokens: u.promptTokenCount || 0,
+        outputTokens: u.candidatesTokenCount || 0,
+    };
+}
+
+// Normalize an OpenAI response's usage into { inputTokens, outputTokens }.
+function openaiUsage(response) {
+    const u = response?.usage || {};
+    return {
+        inputTokens: u.prompt_tokens || 0,
+        outputTokens: u.completion_tokens || 0,
+    };
+}
+
+// Rough token estimate (~4 chars/token) used ONLY as a billing fallback when a
+// provider omits usage metadata. Gemini's SDK does not always return
+// usageMetadata; without this, such a call would be metered at 0 credits — a
+// silent leak. Estimating keeps a real call from ever being free.
+function estTokens(str) {
+    return Math.ceil((String(str || '').length) / 4);
+}
+
+// If a provider reported no usage, estimate it from the text actually sent and
+// received so the call is still billed proportionally.
+function ensureUsage(usage, inputText, outputText) {
+    const total = (usage?.inputTokens || 0) + (usage?.outputTokens || 0);
+    if (total > 0) return usage;
+    return { inputTokens: estTokens(inputText), outputTokens: estTokens(outputText) };
 }
 
 /**
@@ -191,7 +226,7 @@ async function callOpenAI(apiKey, modelName, systemPrompt, history, lastUserMess
     }
     
     let parsed = JSON.parse(responseText);
-    
+
     // Sometimes the model double-stringifies the JSON
     if (typeof parsed === 'string') {
         try {
@@ -200,8 +235,8 @@ async function callOpenAI(apiKey, modelName, systemPrompt, history, lastUserMess
             // keep the string if it's not valid JSON inside
         }
     }
-    
-    return parsed;
+
+    return { parsed, usage: openaiUsage(response) };
 }
 
 /**
@@ -228,23 +263,33 @@ exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conv
     
     console.log(`🤖 Sending request to ${provider} (${modelName || 'default'}). History length: ${historySubset.length}. Msg: "${lastUserMessage}"`);
     
-    let resultJson;
+    let resultJson, usage;
     if (provider === 'openai') {
-        resultJson = await callOpenAI(apiKey, modelName, finalSystemPrompt, historySubset, lastUserMessage);
+        ({ parsed: resultJson, usage } = await callOpenAI(apiKey, modelName, finalSystemPrompt, historySubset, lastUserMessage));
     } else {
         // Default to Gemini
-        resultJson = await callGemini(apiKey, modelName, finalSystemPrompt, historySubset, lastUserMessage);
+        ({ parsed: resultJson, usage } = await callGemini(apiKey, modelName, finalSystemPrompt, historySubset, lastUserMessage));
     }
-    
+
     // Validation check on the response object format
     if (!resultJson || typeof resultJson !== 'object' || Array.isArray(resultJson)) {
         console.error('[AI_SERVICE ERROR] Invalid response format. resultJson:', JSON.stringify(resultJson));
         throw new Error('Invalid response received from LLM.');
     }
-    
+
+    const reply = resultJson.reply || 'I understand. Let me check that for you.';
+
+    // Token usage for credit accounting; callers deduct via aiCreditService.
+    // Fall back to an estimate if the provider reported none, so the call is
+    // never billed at 0. Input ≈ system prompt + prior turns + last user message.
+    const inputText = finalSystemPrompt + ' ' +
+        historySubset.map(h => h.text).join(' ') + ' ' + lastUserMessage;
+    const finalUsage = ensureUsage(usage, inputText, reply);
+
     return {
-        reply: resultJson.reply || 'I understand. Let me check that for you.',
-        action: resultJson.action || null
+        reply,
+        action: resultJson.action || null,
+        usage: finalUsage
     };
 };
 
@@ -253,8 +298,8 @@ exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conv
  * Provider-agnostic: works with both OpenAI and Gemini so the node is not
  * silently broken on a Gemini-only deployment.
  *
- * Returns the raw model text — the caller is responsible for matching it
- * against the configured category list.
+ * Returns { text, usage } — the raw model text (caller matches it against the
+ * configured category list) plus token usage for credit accounting.
  *
  * @param {Object}   params
  * @param {'openai'|'gemini'} params.provider
@@ -262,7 +307,7 @@ exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conv
  * @param {string}   [params.model]      — provider-appropriate model; falls back to a sane default
  * @param {string[]} params.categories   — allowed output labels
  * @param {string}   params.prompt       — the interpolated classification prompt
- * @returns {Promise<string>}
+ * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number } }>}
  */
 exports.classifyText = async ({ provider, apiKey, model, categories = [], prompt }) => {
     if (!apiKey) throw new Error('API key is required for classification.');
@@ -280,7 +325,11 @@ exports.classifyText = async ({ provider, apiKey, model, categories = [], prompt
                 { role: 'user', content: prompt }
             ]
         });
-        return completion.choices?.[0]?.message?.content?.trim() || '';
+        const oText = completion.choices?.[0]?.message?.content?.trim() || '';
+        return {
+            text: oText,
+            usage: ensureUsage(openaiUsage(completion), systemInstruction + ' ' + prompt, oText)
+        };
     }
 
     // Gemini
@@ -295,5 +344,104 @@ exports.classifyText = async ({ provider, apiKey, model, categories = [], prompt
         generationConfig: { temperature: 0, maxOutputTokens: 256 }
     });
     const result = await withTimeout(gModel.generateContent(prompt), AI_TIMEOUT_MS, 'Gemini');
-    return (result.response.text() || '').trim();
+    const gText = (result.response.text() || '').trim();
+    return {
+        text: gText,
+        usage: ensureUsage(geminiUsage(result), systemInstruction + ' ' + prompt, gText)
+    };
+};
+
+/**
+ * Maps a free-text customer reply onto one of a button node's options.
+ *
+ * A customer answering "around 50,000" to a budget question with ₹40k–60k on
+ * offer has answered it — asking them to tap a button to say the same thing
+ * again costs conversions. This resolves the reply to an option so the flow can
+ * continue as if they'd tapped.
+ *
+ * Deliberately conservative: it returns null unless exactly one option clearly
+ * fits, so questions, objections and genuinely ambiguous replies fall through to
+ * the caller's re-prompt rather than being force-fitted onto an option the
+ * customer never chose.
+ *
+ * Options are referred to by NUMBER, never by their own text — labels routinely
+ * contain commas, currency symbols and emoji, which would collide with the
+ * comma-separated category list the classifier is constrained to.
+ *
+ * The rules below are deliberately general. An earlier version listed worked
+ * examples ("around 50,000" → a 40k-60k option, and so on); that taught the model
+ * to pattern-match those cases rather than reason, and made the prompt look
+ * correct precisely on the examples it was written around.
+ *
+ * The current date is supplied because options like "Today / Tomorrow / Next
+ * Week" cannot be resolved without it — the model has no clock, so a reply of
+ * "Saturday" is unanswerable unless it knows today's date in the tenant's own
+ * timezone.
+ *
+ * @param {Object}   params
+ * @param {'openai'|'gemini'} params.provider
+ * @param {string}   params.apiKey
+ * @param {string}   [params.model]
+ * @param {string}   params.question    — what the flow asked
+ * @param {string[]} params.options     — the button labels, in order
+ * @param {string}   params.userReply   — the customer's free text
+ * @param {string}   [params.timezone]  — IANA zone for date grounding; defaults to UTC
+ * @param {Date}     [params.now]       — injectable clock, for tests
+ * @returns {Promise<{ index: number|null, usage: { inputTokens: number, outputTokens: number } }>}
+ *          0-based index of the matched option (or null), plus token usage. A
+ *          short-circuit with no LLM call reports zero usage.
+ */
+exports.mapReplyToOption = async ({ provider, apiKey, model, question, options = [], userReply, timezone, now = new Date() }) => {
+    const NO_USAGE = { inputTokens: 0, outputTokens: 0 };
+    if (!apiKey) throw new Error('API key is required for option mapping.');
+    if (!Array.isArray(options) || options.length === 0) return { index: null, usage: NO_USAGE };
+    if (!userReply || !String(userReply).trim()) return { index: null, usage: NO_USAGE };
+
+    const optionLines = options.map((text, i) => `${i + 1}. ${text}`).join('\n');
+    const categories = [...options.map((_, i) => String(i + 1)), 'NONE'];
+
+    // A bad IANA zone makes Intl throw; fall back rather than lose the mapping.
+    let zone = timezone || 'UTC';
+    let today;
+    try {
+        today = new Intl.DateTimeFormat('en-GB', {
+            weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: zone
+        }).format(now);
+    } catch (err) {
+        zone = 'UTC';
+        today = new Intl.DateTimeFormat('en-GB', {
+            weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'
+        }).format(now);
+    }
+
+    const prompt = `Today is ${today} (timezone ${zone}).
+
+A chatbot asked the customer: "${question}"
+
+The customer must pick exactly one of these options:
+${optionLines}
+
+The customer replied: "${userReply}"
+
+Decide which single option the reply means.
+
+Rules:
+- Judge by meaning, not wording. The reply need not reuse an option's words: it may give a value that falls inside an option's range, describe or name an option indirectly, or give a day or date that one option covers.
+- Choose an option only when exactly one option is a clear match that a reasonable person would agree with.
+- Answer NONE if the reply is a question, an objection, a refusal, or gives no answer.
+- Answer NONE if more than one option could fit, if the reply falls outside every option, or if you are in any doubt.
+- NONE is always better than a guess. A wrong choice sends the customer down the wrong path; NONE simply re-asks.
+
+Answer with the option number alone, or NONE.`;
+
+    const { text: raw, usage } = await exports.classifyText({ provider, apiKey, model, categories, prompt });
+
+    // Strict parse: a bare option number, optionally with a trailing dot. Anything
+    // chattier than that means the model ignored the contract — treat as no match.
+    const parsed = /^\s*(\d+)\s*\.?\s*$/.exec(String(raw || '').trim());
+    if (!parsed) return { index: null, usage };
+
+    const idx = parseInt(parsed[1], 10) - 1;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= options.length) return { index: null, usage };
+    return { index: idx, usage };
 };

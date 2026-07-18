@@ -71,6 +71,7 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
                 { id: 'finance', icon: 'fa-sack-dollar', label: 'Billing & Finance', color: 'text-emerald-500 font-bold' },
                 { id: 'plans', icon: 'fa-layer-group', label: 'Plan Catalog', color: 'text-indigo-500 font-semibold' },
                 { id: 'coupons', icon: 'fa-tag', label: 'Coupon Codes', color: 'text-pink-500 font-semibold' },
+                { id: 'ai-credits', icon: 'fa-coins', label: 'AI Credit Rates', color: 'text-indigo-500 font-semibold' },
                 { id: 'support', icon: 'fa-life-ring', label: 'Support Inbox', color: 'text-orange-500', badge: supportUnread },
             ]
         },

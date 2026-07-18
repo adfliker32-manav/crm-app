@@ -188,9 +188,14 @@ const applyCoupon = async (req, res) => {
             : now;
         const newExpiry = new Date(base.getTime() + coupon.extensionDays * 24 * 60 * 60 * 1000);
 
+        // NOTE: status stays 'trial', not 'active' — this coupon only pushes
+        // planExpiryDate out, it is not a payment. Marking it 'active' made the
+        // account look like a paying customer: it vanished from the SuperAdmin
+        // trial-tracking dashboards (which filter on subscriptionStatus:'trial')
+        // and the customer's own Billing page showed them as fully subscribed.
         await WorkspaceSettings.findOneAndUpdate(
             { userId: req.tenantId },
-            { $set: { planExpiryDate: newExpiry, subscriptionStatus: 'active' } }
+            { $set: { planExpiryDate: newExpiry, subscriptionStatus: 'trial' } }
         );
 
         res.json({ success: true, extensionDays: coupon.extensionDays, newExpiryDate: newExpiry });

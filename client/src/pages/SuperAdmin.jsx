@@ -15,6 +15,7 @@ import WhatsAppInbox from '../components/WhatsApp/WhatsAppInbox';
 import EmailInbox from '../components/Email/EmailInbox';
 import SuperAdminCommSettings from '../components/SuperAdmin/SuperAdminCommSettings';
 import SuperAdminVoiceTemplates from '../components/SuperAdmin/SuperAdminVoiceTemplates';
+import AiCreditsView from '../components/SuperAdmin/AiCreditsView';
 
 
 const SuperAdmin = () => {
@@ -45,6 +46,8 @@ const SuperAdmin = () => {
                 return <SuperAdminCommSettings />;
             case 'voice-templates':
                 return <SuperAdminVoiceTemplates />;
+            case 'ai-credits':
+                return <AiCreditsView />;
             case 'system-health':
                 return <SystemHealthView />;
             case 'audit-logs':

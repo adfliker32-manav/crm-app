@@ -738,9 +738,15 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                 </div>
                                 )}
 
-                                {selectedNode.data.blockType === 'message' && (
+                                {(selectedNode.data.blockType === 'message' || selectedNode.data.blockType === 'question') && (
                                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
                                         <label className="block text-sm font-semibold text-slate-700 mb-3">Interactive Buttons</label>
+                                        {selectedNode.data.blockType === 'question' && (
+                                            <p className="text-xs text-slate-500 mb-3 -mt-1">
+                                                Optional. Add buttons to make this a multiple-choice question — the label the
+                                                customer taps is saved as the answer, and free-text replies are no longer accepted.
+                                            </p>
+                                        )}
                                         {selectedNode.data.buttons?.map((btn, i) => (
                                             <div key={i} className="flex gap-2 mb-2">
                                                 <input
@@ -790,20 +796,24 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                 placeholder="e.g., email, company_name, phone"
                                             />
                                         </div>
-                                        <div>
-                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Expected Input Type</label>
-                                            <select
-                                                value={selectedNode.data.expectedType || 'any'}
-                                                onChange={(e) => updateSelectedNodeData({ expectedType: e.target.value })}
-                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
-                                            >
-                                                <option value="any">Any text</option>
-                                                <option value="text">Letters only</option>
-                                                <option value="number">Number</option>
-                                                <option value="email">Email address</option>
-                                                <option value="phone">Phone number</option>
-                                            </select>
-                                        </div>
+                                        {/* Input validation only applies to free-text answers — a
+                                            question with buttons is validated against the buttons. */}
+                                        {!(selectedNode.data.buttons?.length > 0) && (
+                                            <div>
+                                                <label className="block text-sm font-semibold text-slate-700 mb-2">Expected Input Type</label>
+                                                <select
+                                                    value={selectedNode.data.expectedType || 'any'}
+                                                    onChange={(e) => updateSelectedNodeData({ expectedType: e.target.value })}
+                                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                >
+                                                    <option value="any">Any text</option>
+                                                    <option value="text">Letters only</option>
+                                                    <option value="number">Number</option>
+                                                    <option value="email">Email address</option>
+                                                    <option value="phone">Phone number</option>
+                                                </select>
+                                            </div>
+                                        )}
                                         {/* No-Reply Timeout */}
                                         <div className="bg-orange-50 p-3 rounded-lg border border-orange-200">
                                             <label className="flex items-center gap-2 cursor-pointer mb-2">

@@ -43,6 +43,10 @@ const whatsAppMessageSchema = new mongoose.Schema({
         templateParams: [String],
         // For interactive messages
         interactiveType: String, // button, list, product
+        // The id of the button/row the customer actually tapped. Survives
+        // WhatsApp's 20-char title truncation, so the chatbot engine matches
+        // on this before falling back to comparing titles.
+        buttonId: String,
         buttons: [{
             id: String,
             text: String
@@ -91,7 +95,7 @@ const whatsAppMessageSchema = new mongoose.Schema({
     },
     automationSource: {
         type: String,
-        enum: ['template', 'chatbot', 'auto_reply', 'broadcast', 'ai_fallback', null],
+        enum: ['template', 'chatbot', 'auto_reply', 'broadcast', 'ai_fallback', 'ai_rescue', null],
         default: null
     },
     broadcastId: {

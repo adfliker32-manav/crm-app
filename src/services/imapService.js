@@ -169,12 +169,22 @@ async function syncUserEmails(userId, config) {
 }
 
 let isRunning = false;
+// Liveness tracking for the System Health monitor — a hardcoded "always running"
+// flag can't detect a crashed/stalled polling loop, so we record real timestamps.
+let _lastCycleStartedAt = null;
+let _lastCycleCompletedAt = null;
+
+function getSyncStatus() {
+    return { lastCycleStartedAt: _lastCycleStartedAt, lastCycleCompletedAt: _lastCycleCompletedAt, isRunning };
+}
+
 async function syncAllUsers() {
     if (isRunning) {
         console.log("⏳ Skipping IMAP Sync: Previous cycle still running.");
         return;
     }
     isRunning = true;
+    _lastCycleStartedAt = Date.now();
     try {
         const IntegrationConfig = require('../models/IntegrationConfig');
         const configs = await IntegrationConfig.find({
@@ -212,15 +222,18 @@ async function syncAllUsers() {
         console.error("Error in syncAllUsers:", e);
     } finally {
         isRunning = false;
+        _lastCycleCompletedAt = Date.now();
     }
 }
+
+const SYNC_INTERVAL_MS = 600000; // 10 minutes
 
 function startEmailSyncPolling() {
     console.log("🚀 Starting IMAP Email Polling Service (Interval: 10m)");
     // Run immediately on startup so users don't wait 10 minutes after a restart
     syncAllUsers();
     // Increased from 30s to 10m (600000ms) to reduce CPU overhead and IP ban risk from mail providers
-    setInterval(syncAllUsers, 600000);
+    setInterval(syncAllUsers, SYNC_INTERVAL_MS);
 }
 
-module.exports = { syncUserEmails, startEmailSyncPolling };
+module.exports = { syncUserEmails, startEmailSyncPolling, getSyncStatus, SYNC_INTERVAL_MS };

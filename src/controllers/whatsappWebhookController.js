@@ -538,7 +538,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                     signalType:   'WHATSAPP_REPLY',
                     channelId:    conversation._id,
                     tenantId:     conversation.userId,   // BUG #3 FIX: scope to this tenant
-                    payload:      { message: inboundMessage?.body || '' },
+                    payload:      { message: messageDoc.content?.text || '' },
                     resolvedPort: 'replied'
                 });
 
@@ -766,9 +766,11 @@ const extractMessageContent = (message) => {
         content.interactiveType = interactive.type;
         if (interactive.button_reply) {
             content.text = interactive.button_reply.title;
+            content.buttonId = interactive.button_reply.id;
             content.buttons = [{ id: interactive.button_reply.id, text: interactive.button_reply.title }];
         } else if (interactive.list_reply) {
             content.text = interactive.list_reply.title;
+            content.buttonId = interactive.list_reply.id;
         }
     } else if (message.contacts) {
         content.contacts = (message.contacts || []).map(c => ({
@@ -778,7 +780,11 @@ const extractMessageContent = (message) => {
             phones: (c.phones || []).map(p => p.phone).filter(Boolean)
         }));
     } else if (message.button) {
+        // Quick-reply button tapped on a template. The payload carries the
+        // configured button value; the chatbot engine matches on it like any
+        // other button id.
         content.text = message.button.text;
+        content.buttonId = message.button.payload || undefined;
     } else if (message.reaction) {
         content.reactionEmoji = message.reaction.emoji;
         content.reactedMessageId = message.reaction.message_id;

@@ -3,6 +3,7 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 const Lead = require('../models/Lead');
 const GlobalSetting = require('../models/GlobalSetting');
 const { generateReply } = require('../services/aiService');
+const aiCreditService = require('../services/aiCreditService');
 const { decryptToken } = require('../utils/encryptionUtils');
 
 // Helper to get or create integration config
@@ -19,7 +20,8 @@ async function getOrCreateConfig(userId) {
 exports.getSettings = async (req, res) => {
     try {
         const config = await getOrCreateConfig(req.tenantId);
-        
+        const wallet = await aiCreditService.getWallet(req.tenantId);
+
         // Prepare settings for frontend (masking API key)
         const settings = {
             provider: config.ai?.provider || 'gemini',
@@ -28,9 +30,17 @@ exports.getSettings = async (req, res) => {
             systemPrompt: config.ai?.systemPrompt || '',
             aiEnabled: config.ai?.aiEnabled || false,
             aiFallbackEnabled: config.ai?.aiFallbackEnabled || false,
+            // Defaults ON — only an explicit false turns it off.
+            aiButtonMappingEnabled: config.ai?.aiButtonMappingEnabled !== false,
             aiSupportEnabled: config.ai?.aiSupportEnabled || false,
             maxTurns: config.ai?.maxTurns || 5,
             tokensUsedThisMonth: config.ai?.tokensUsedThisMonth || 0,
+            // AI credit wallet (shared with voice; priced via the AiModelRate table)
+            aiCreditsBalance: wallet.balance,
+            aiCreditsUsedThisMonth: wallet.usedThisMonth,
+            creditValueInr: wallet.creditValueInr,
+            aiCreditsBalanceInr: wallet.balanceInr,
+            aiCreditsUsedThisMonthInr: wallet.usedThisMonthInr,
             voiceAutomation: {
                 provider:       config.voiceAutomation?.provider || 'vapi',
                 defaultAgentId: config.voiceAutomation?.defaultAgentId || '',
@@ -61,6 +71,7 @@ exports.updateSettings = async (req, res) => {
             systemPrompt,
             aiEnabled,
             aiFallbackEnabled,
+            aiButtonMappingEnabled,
             aiSupportEnabled,
             maxTurns
         } = req.body;
@@ -75,6 +86,7 @@ exports.updateSettings = async (req, res) => {
         if (systemPrompt !== undefined) config.ai.systemPrompt = String(systemPrompt).substring(0, 1000);
         if (aiEnabled !== undefined) config.ai.aiEnabled = aiEnabled;
         if (aiFallbackEnabled !== undefined) config.ai.aiFallbackEnabled = aiFallbackEnabled;
+        if (aiButtonMappingEnabled !== undefined) config.ai.aiButtonMappingEnabled = aiButtonMappingEnabled;
         if (aiSupportEnabled !== undefined) config.ai.aiSupportEnabled = aiSupportEnabled;
         if (maxTurns !== undefined) config.ai.maxTurns = maxTurns;
 
@@ -101,6 +113,7 @@ exports.updateSettings = async (req, res) => {
                 systemPrompt: config.ai.systemPrompt,
                 aiEnabled: config.ai.aiEnabled,
                 aiFallbackEnabled: config.ai.aiFallbackEnabled,
+                aiButtonMappingEnabled: config.ai.aiButtonMappingEnabled,
                 aiSupportEnabled: config.ai.aiSupportEnabled,
                 maxTurns: config.ai.maxTurns,
                 tokensUsedThisMonth: config.ai.tokensUsedThisMonth
@@ -184,7 +197,16 @@ exports.testAI = async (req, res) => {
             leadContext
         });
 
-        return res.status(200).json(result);
+        // The simulator makes a real LLM call on the shared key — charge it to the
+        // tenant's wallet like any other AI usage so testing isn't a free leak.
+        await aiCreditService.charge(req.tenantId, {
+            model: config.ai.model,
+            inputTokens: result.usage?.inputTokens,
+            outputTokens: result.usage?.outputTokens,
+            feature: 'test_simulator'
+        });
+
+        return res.status(200).json({ reply: result.reply, action: result.action });
     } catch (error) {
         console.error('Error during AI settings test:', error.message);
         const errDetails = error.response?.data?.details || error.message;
@@ -195,4 +217,31 @@ exports.testAI = async (req, res) => {
 // Check Health of standalone service
 exports.checkHealth = async (req, res) => {
     return res.status(200).json({ status: 'OK', message: 'Standalone AI service merged.' });
+};
+
+// AI credit ledger for this tenant (paginated statement, newest first)
+exports.getLedger = async (req, res) => {
+    try {
+        const limit = Math.min(200, parseInt(req.query.limit, 10) || 50);
+        const skip = parseInt(req.query.skip, 10) || 0;
+        const entries = await aiCreditService.getLedger(req.tenantId, { limit, skip });
+        return res.status(200).json({ entries });
+    } catch (error) {
+        console.error('Error fetching AI ledger:', error);
+        return res.status(500).json({ error: 'Failed to fetch AI credit ledger' });
+    }
+};
+
+// Month-to-date usage summary + linear monthly forecast for this tenant
+exports.getUsage = async (req, res) => {
+    try {
+        const [summary, wallet] = await Promise.all([
+            aiCreditService.getUsageSummary(req.tenantId),
+            aiCreditService.getWallet(req.tenantId)
+        ]);
+        return res.status(200).json({ ...summary, wallet });
+    } catch (error) {
+        console.error('Error fetching AI usage summary:', error);
+        return res.status(500).json({ error: 'Failed to fetch AI usage summary' });
+    }
 };

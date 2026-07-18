@@ -74,6 +74,9 @@ const emailLogSchema = new mongoose.Schema({
 emailLogSchema.index({ userId: 1, sentAt: -1 });
 emailLogSchema.index({ userId: 1, status: 1 });
 emailLogSchema.index({ userId: 1, isAutomated: 1 });
+// Supports the superadmin System Health "Webhooks" tab, which queries delivery
+// counts by status over the last 24h across all tenants (no userId filter).
+emailLogSchema.index({ status: 1, sentAt: -1 });
 
 // ⚠️ PRODUCTION NOTE:
 // Logs grow indefinitely without TTL — major long-term cost risk.

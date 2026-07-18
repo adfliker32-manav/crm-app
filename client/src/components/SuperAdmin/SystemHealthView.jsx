@@ -214,8 +214,8 @@ const OverviewTab = ({ activeTab }) => {
                     status={h.redis?.ok ? 'good' : h.redis?.configured ? 'critical' : null}
                     sub={h.redis?.pingMs ? `${h.redis.pingMs}ms latency` : ''} />
                 <MetricCard label="Active Users" value={h.activeUsers || 0} icon="fa-users" />
-                <MetricCard label="Today's Requests" value={(h.todayRequests || 0).toLocaleString()} icon="fa-arrow-right-arrow-left"
-                    sub={`${h.requestsPerSecond || 0} req/s`} />
+                <MetricCard label="Requests (rolling)" value={(h.todayRequests || 0).toLocaleString()} icon="fa-arrow-right-arrow-left"
+                    sub={`${h.requestsPerSecond || 0} req/s · resets every 15min`} />
                 <MetricCard label="Error Rate" value={`${h.api?.errorRatePercent || 0}%`} icon="fa-bug"
                     status={(h.api?.errorRatePercent || 0) > 5 ? 'critical' : (h.api?.errorRatePercent || 0) > 2 ? 'warning' : 'good'}
                     sub={`5xx: ${h.api?.error5xxCount || 0} | 4xx: ${h.api?.error4xxCount || 0}`} />

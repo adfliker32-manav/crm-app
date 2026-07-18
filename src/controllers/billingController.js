@@ -279,6 +279,9 @@ const cancel = async (req, res) => {
 //   payload.payload.subscription.entity  = subscription object
 //   payload.payload.payment.entity       = payment object (on charge events)
 const webhook = async (req, res) => {
+    // Declared outside the try so the catch block below can still reference
+    // the event type when the failure happens mid-processing (see bug note there).
+    let eventType = 'unknown';
     try {
         const ok = razorpayService.verifyWebhookSignature(req.rawBody, req.headers);
         if (!ok) {
@@ -286,8 +289,8 @@ const webhook = async (req, res) => {
             return res.status(401).json({ message: 'Invalid signature' });
         }
 
-        const payload   = req.body || {};
-        const eventType = (payload.event || '').toLowerCase();
+        const payload = req.body || {};
+        eventType = (payload.event || '').toLowerCase();
 
         // Extract the Razorpay subscription id from the standard webhook envelope.
         const rzpSubId = payload?.payload?.subscription?.entity?.id

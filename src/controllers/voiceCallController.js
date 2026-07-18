@@ -4,8 +4,13 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 exports.getLeadVoiceCalls = async (req, res) => {
     try {
         const { leadId } = req.params;
-        const calls = await VoiceCallLog.find({ leadId, userId: req.user.id })
-            .sort({ createdAt: -1 });
+        // Scope by req.tenantId (set by authMiddleware), NOT req.user.id — the JWT
+        // payload has `userId`, so `req.user.id` is undefined and Mongoose sends it
+        // to Mongo as `userId: null`, which matches nothing. Using tenantId also
+        // means agents correctly see their parent tenant's calls.
+        const calls = await VoiceCallLog.find({ leadId, userId: req.tenantId })
+            .sort({ createdAt: -1 })
+            .limit(100);
 
         res.json({ success: true, calls });
     } catch (error) {
@@ -18,7 +23,7 @@ exports.getLeadVoiceCalls = async (req, res) => {
 exports.getVoiceConfig = async (req, res) => {
     try {
         const config = await IntegrationConfig.findOne({ userId: req.tenantId })
-            .select('+voiceAutomation.apiKey');
+            .select('+voiceAutomation.apiKey +voiceAutomation.webhookSecret');
 
         const voiceAutomation = config?.voiceAutomation || {};
         const apiKey = voiceAutomation.apiKey;
@@ -31,7 +36,10 @@ exports.getVoiceConfig = async (req, res) => {
                 apiKeyMasked: apiKey ? `••••••••${apiKey.slice(-6)}` : null,
                 hasApiKey: !!apiKey,
                 defaultAgentId: voiceAutomation.defaultAgentId || '',
-                fromNumber: voiceAutomation.fromNumber || ''
+                fromNumber: voiceAutomation.fromNumber || '',
+                // Never return the secret itself — only whether one is set. Vapi webhooks
+                // are rejected without it (or a VAPI_WEBHOOK_SECRET env fallback).
+                hasWebhookSecret: !!(voiceAutomation.webhookSecret || process.env.VAPI_WEBHOOK_SECRET)
             }
         });
     } catch (error) {
@@ -43,7 +51,7 @@ exports.getVoiceConfig = async (req, res) => {
 // PUT /api/voice-calls/config — save voice integration settings
 exports.saveVoiceConfig = async (req, res) => {
     try {
-        const { provider, apiKey, defaultAgentId, fromNumber } = req.body;
+        const { provider, apiKey, defaultAgentId, fromNumber, webhookSecret } = req.body;
 
         const updateFields = {
             'voiceAutomation.provider': provider || 'vapi',
@@ -54,6 +62,12 @@ exports.saveVoiceConfig = async (req, res) => {
         // Only update the key if the user actually sent a new one (not a masked placeholder)
         if (apiKey && !apiKey.startsWith('••••')) {
             updateFields['voiceAutomation.apiKey'] = apiKey;
+        }
+
+        // Same for the webhook secret — it is never sent back to the client, so an
+        // empty value means "unchanged", not "clear it".
+        if (webhookSecret && !webhookSecret.startsWith('••••')) {
+            updateFields['voiceAutomation.webhookSecret'] = webhookSecret;
         }
 
         await IntegrationConfig.findOneAndUpdate(

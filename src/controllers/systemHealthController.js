@@ -26,6 +26,11 @@ const _withTimeout = (promise, ms, label) =>
         )
     ]);
 
+// Atlas storage limit used for the DB storage alert/gauge. Defaults to the M0
+// free-tier cap (512MB) but must be overridable per-deployment via env var —
+// hardcoding it produces false alerts on any paid tier with a larger limit.
+const DB_STORAGE_LIMIT_BYTES = Number(process.env.DB_STORAGE_LIMIT_BYTES) || 536870912;
+
 // process.cpuUsage() is cumulative; we diff against the previous reading
 // so each sample reflects real CPU usage over the interval between polls (~30-60s).
 let _prevCpuUsage    = process.cpuUsage();
@@ -107,7 +112,10 @@ const getRedisHealth = async () => {
             ...info
         };
     } catch (e) {
-        return { configured: true, status: 'error', ok: false, error: e.message };
+        // Don't forward raw driver error text (host/port/connection details) to
+        // the browser — log it server-side and return a generic status instead.
+        console.error('[SystemHealth] Redis health check failed:', e.message);
+        return { configured: true, status: 'error', ok: false, error: 'Connection failed' };
     }
 };
 
@@ -158,36 +166,59 @@ const getWorkerStatus = () => {
         workers.push({ name: 'Broadcast Worker', type: 'bullmq', running: false, error: 'Not loaded' });
     }
 
-    // Workflow Worker
+    // Workflow Worker — check the actual consumer instance, not just the
+    // producer-side Queue (which stays truthy even if the worker crashed).
     try {
-        const { getWorkflowQueue } = require('../workflow-engine/WorkflowQueue');
-        // WorkflowQueue module doesn't export the worker reference directly,
-        // so we check if the queue itself is initialized as a proxy signal
-        const q = getWorkflowQueue();
+        const { getWorkflowWorker } = require('../workflow-engine/WorkflowQueue');
+        const w = getWorkflowWorker();
         workers.push({
             name: 'Workflow Worker',
             type: 'bullmq',
-            running: !!q,
-            concurrency: Number(process.env.WORKFLOW_WORKER_CONCURRENCY) || 10
+            running: w ? w.isRunning() : false,
+            paused: w ? w.isPaused() : false,
+            concurrency: w?.opts?.concurrency || Number(process.env.WORKFLOW_WORKER_CONCURRENCY) || 10
         });
     } catch (_) {
         workers.push({ name: 'Workflow Worker', type: 'bullmq', running: false, error: 'Not loaded' });
     }
 
-    // IMAP Worker (cron-based, not BullMQ)
-    workers.push({
-        name: 'IMAP Sync Worker',
-        type: 'cron',
-        running: true, // Always running via cron
-        interval: '5 minutes'
-    });
+    // IMAP Worker (cron-based, not BullMQ) — "running" reflects whether a
+    // sync cycle has actually completed recently, not a hardcoded assumption.
+    try {
+        const { getSyncStatus, SYNC_INTERVAL_MS } = require('../services/imapService');
+        const status = getSyncStatus();
+        // Grace window: allow up to 1.5x the interval before flagging stalled,
+        // and don't flag as down if the very first cycle simply hasn't completed yet
+        // (process.uptime() is used as the "since startup" clock).
+        const staleAfterMs = SYNC_INTERVAL_MS * 1.5;
+        const neverRan = !status.lastCycleStartedAt;
+        const startupGrace = neverRan && (process.uptime() * 1000) < staleAfterMs;
+        const stalled = !status.isRunning &&
+            (!status.lastCycleCompletedAt || (Date.now() - status.lastCycleCompletedAt) > staleAfterMs);
+        workers.push({
+            name: 'IMAP Sync Worker',
+            type: 'cron',
+            running: status.isRunning || startupGrace || (!neverRan && !stalled),
+            interval: `${Math.round(SYNC_INTERVAL_MS / 60000)} minutes`,
+            lastCycleCompletedAt: status.lastCycleCompletedAt
+        });
+    } catch (_) {
+        workers.push({ name: 'IMAP Sync Worker', type: 'cron', running: false, error: 'Not loaded' });
+    }
 
-    // Email Queue Worker (Agenda)
-    workers.push({
-        name: 'Email Queue Worker',
-        type: 'agenda',
-        running: true
-    });
+    // Email Queue Worker (Agenda) — Agenda sets _processInterval when start()
+    // resolves and clears it on stop(), so it's a reliable liveness signal.
+    try {
+        const { getAgenda } = require('../services/agendaService');
+        const agenda = getAgenda();
+        workers.push({
+            name: 'Email Queue Worker',
+            type: 'agenda',
+            running: !!(agenda && agenda._processInterval)
+        });
+    } catch (_) {
+        workers.push({ name: 'Email Queue Worker', type: 'agenda', running: false, error: 'Not loaded' });
+    }
 
     return workers;
 };
@@ -379,19 +410,25 @@ const getHealthOverview = async (req, res) => {
         const todayRequests = apiStats.totalRequests;
 
         // DB basic stats
-        let database = { connections: 0, totalUsedBytes: 0, storageLimitBytes: 536870912 };
+        let database = { connections: 0, totalUsedBytes: 0, storageLimitBytes: DB_STORAGE_LIMIT_BYTES };
         try {
-            const serverStatus = await mongoose.connection.db.admin().serverStatus();
-            const dbStats = await mongoose.connection.db.stats();
+            const serverStatus = await _withTimeout(
+                mongoose.connection.db.admin().serverStatus(),
+                5000, 'Mongo serverStatus'
+            );
+            const dbStats = await _withTimeout(
+                mongoose.connection.db.stats(),
+                5000, 'Mongo dbStats'
+            );
             const totalUsedBytes = (dbStats.dataSize || 0) + (dbStats.indexSize || 0);
             database = {
                 connections:      serverStatus.connections?.current || 0,
                 totalUsedBytes,
-                storageLimitBytes: 536870912, // 512 MB (M0 Free Tier limit)
+                storageLimitBytes: DB_STORAGE_LIMIT_BYTES,
                 dataSize:         dbStats.dataSize || 0,
                 indexSize:        dbStats.indexSize || 0
             };
-        } catch (_) { /* graceful degradation */ }
+        } catch (_) { /* graceful degradation — a hung Atlas cluster must not hang this endpoint */ }
 
         const overview = {
             cpu,
@@ -509,7 +546,7 @@ const getHealthDatabase = async (req, res) => {
                 dataSize:       dbStats.dataSize || 0,
                 indexSize:      dbStats.indexSize || 0,
                 totalUsedBytes,
-                storageLimitBytes: 536870912,
+                storageLimitBytes: DB_STORAGE_LIMIT_BYTES,
                 collections:    dbStats.collections || 0,
                 objects:        dbStats.objects || 0,
                 collectionStats,
@@ -611,11 +648,13 @@ const getHealthWebhooks = async (req, res) => {
             const WhatsAppLog = require('../models/WhatsAppLog');
             const EmailLog    = require('../models/EmailLog');
 
+            // Query on sentAt (indexed via {status, sentAt}), not createdAt — the
+            // latter has no covering index and forced a full collection scan.
             const [waSent, waFailed, emSent, emFailed] = await Promise.all([
-                WhatsAppLog.countDocuments({ status: 'sent', createdAt: { $gte: yesterday } }),
-                WhatsAppLog.countDocuments({ status: 'failed', createdAt: { $gte: yesterday } }),
-                EmailLog.countDocuments({ status: 'sent', createdAt: { $gte: yesterday } }),
-                EmailLog.countDocuments({ status: 'failed', createdAt: { $gte: yesterday } })
+                WhatsAppLog.countDocuments({ status: 'sent', sentAt: { $gte: yesterday } }),
+                WhatsAppLog.countDocuments({ status: 'failed', sentAt: { $gte: yesterday } }),
+                EmailLog.countDocuments({ status: 'sent', sentAt: { $gte: yesterday } }),
+                EmailLog.countDocuments({ status: 'failed', sentAt: { $gte: yesterday } })
             ]);
 
             whatsapp = {

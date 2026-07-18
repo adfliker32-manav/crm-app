@@ -4,6 +4,7 @@ const { checkAIRate } = require('../../../utils/workflowRateLimiter');
 // Provider-agnostic classification + unified platform key resolution
 const { classifyText } = require('../../../services/aiService');
 const { getGlobalAIKey } = require('../../../utils/aiKeyResolver');
+const aiCreditService = require('../../../services/aiCreditService');
 const IntegrationConfig = require('../../../models/IntegrationConfig');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -113,13 +114,23 @@ const AiClassifierNode = {
 
             if (!apiKey) {
                 console.warn(`[AiClassifierNode] No AI API key configured (checked DB global keys + env) for tenant ${tenantId}. Routing to default.`);
+            } else if (!(await aiCreditService.hasCredits(tenantId))) {
+                console.warn(`[AiClassifierNode] Tenant ${tenantId} is out of AI credits. Routing to default.`);
             } else {
-                const rawText = await classifyText({
+                const { text: rawText, usage } = await classifyText({
                     provider,
                     apiKey,
                     model: data.model,
                     categories,
                     prompt
+                });
+
+                // Deduct AI credits by actual token cost
+                await aiCreditService.charge(tenantId, {
+                    model: data.model,
+                    inputTokens: usage?.inputTokens,
+                    outputTokens: usage?.outputTokens,
+                    feature: 'ai_classifier'
                 });
 
                 // Clean the response (strip quotes, common punctuation, wrapper spaces)

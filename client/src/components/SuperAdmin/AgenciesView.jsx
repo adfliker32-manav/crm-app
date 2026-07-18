@@ -11,6 +11,7 @@ import ViewAgencyClientsModal from './ViewAgencyClientsModal';
 import ManageAgencyLimitsModal from './ManageAgencyLimitsModal';
 import ManageAgencyModal from './ManageAgencyModal';
 import ManagePermissionsModal from './ManagePermissionsModal';
+import AiLedgerModal from './AiLedgerModal';
 
 const AgenciesView = () => {
     const { showSuccess, showError } = useNotification();
@@ -30,6 +31,7 @@ const AgenciesView = () => {
     const [isManageLimitsModalOpen, setIsManageLimitsModalOpen] = useState(false);
     const [isManageModalOpen, setIsManageModalOpen] = useState(false);
     const [isManagePermissionsModalOpen, setIsManagePermissionsModalOpen] = useState(false);
+    const [isAiLedgerModalOpen, setIsAiLedgerModalOpen] = useState(false);
 
     useEffect(() => {
         fetchCompanies();
@@ -280,6 +282,14 @@ const AgenciesView = () => {
                                                     <i className="fa-solid fa-coins text-[9px]" />
                                                     {fmt(company.totalCommissionEarned || 0)} EARNED
                                                 </span>
+                                                <span className={`px-2.5 py-1 text-[10px] font-black rounded-lg border inline-flex items-center gap-1.5 w-fit ${
+                                                    (company.aiCreditsBalance || 0) <= 0
+                                                        ? 'bg-rose-50 text-rose-600 border-rose-100'
+                                                        : 'bg-indigo-50 text-indigo-700 border-indigo-100'
+                                                }`}>
+                                                    <i className="fa-solid fa-robot text-[9px]" />
+                                                    {(company.aiCreditsBalance || 0).toLocaleString()} AI CREDITS
+                                                </span>
                                             </div>
                                         </td>
                                         <td className="px-8 py-6">
@@ -340,6 +350,7 @@ const AgenciesView = () => {
                     { label: 'Sub-Clients', icon: 'fa-users-rectangle', onClick: () => { setSelectedCompany(selectedCompany); setIsViewClientsModalOpen(true); } },
                     { label: 'Manage Permission Overrides', icon: 'fa-lock', onClick: () => { setSelectedCompany(selectedCompany); setIsManagePermissionsModalOpen(true); } },
                     { label: 'Add AI Credits', icon: 'fa-coins', onClick: () => handleAddAiCredits(selectedCompany) },
+                    { label: 'View AI Ledger', icon: 'fa-receipt', onClick: () => { setSelectedCompany(selectedCompany); setIsAiLedgerModalOpen(true); } },
                     { label: 'Reseller Limits & Controls', icon: 'fa-shield-halved', onClick: () => { setSelectedCompany(selectedCompany); setIsManageLimitsModalOpen(true); } },
                     { label: 'Change Password', icon: 'fa-key', onClick: () => { setSelectedCompany(selectedCompany); setIsChangePasswordModalOpen(true); } },
                     { label: 'Edit Profile', icon: 'fa-edit', onClick: () => { setSelectedCompany(selectedCompany); setIsEditModalOpen(true); } },
@@ -352,6 +363,8 @@ const AgenciesView = () => {
                     { label: 'Delete Company', icon: 'fa-trash', onClick: () => handleDeleteCompany(selectedCompany._id), variant: 'danger' }
                 ]}
             />
+
+            <AiLedgerModal isOpen={isAiLedgerModalOpen} onClose={() => setIsAiLedgerModalOpen(false)} company={selectedCompany} />
 
             {/* Original Modals for logic - Hidden, triggered from Management Window */}
             <CreateCompanyModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onSuccess={fetchCompanies} />

@@ -140,9 +140,17 @@ const executeRuleActions = async (rule, lead) => {
             // ── VOICE_CALL ─────────────────────────────────────────
             } else if (action.type === 'VOICE_CALL') {
                 try {
-                    const success = await VoiceEngineService.executeCallAction(lead._id, lead.userId, action, rule._id);
+                    // executeCallAction now returns { success, callLog, error } — destructure it.
+                    // Truthiness-testing the whole object would treat a failed dispatch as a success.
+                    const { success, error } = await VoiceEngineService.executeCallAction(
+                        lead._id, lead.userId, action, { automationRuleId: rule._id }
+                    );
                     if (success) {
                         historyEntries.push({ type: 'System', subType: 'Auto', content: `Initiated AI Voice Call (Mode: ${action.executionMode || 'static'}) (Rule: ${rule.name})`, date: new Date() });
+                        changesMade = true;
+                    } else {
+                        // Surface the failure on the lead timeline instead of only the console.
+                        historyEntries.push({ type: 'System', subType: 'Auto', content: `AI Voice Call failed: ${error || 'unknown error'} (Rule: ${rule.name})`, date: new Date() });
                         changesMade = true;
                     }
                 } catch (e) {

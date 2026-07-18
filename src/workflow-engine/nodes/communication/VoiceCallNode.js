@@ -86,17 +86,21 @@ const VoiceCallNode = {
             agentId:       data.agentId || null
         };
 
-        // Initiate the call
-        const workflowId = context.workflowId.toString();
-        const success = await VoiceEngineService.executeCallAction(
+        // Initiate the call. `workflowId` is passed under its own key — it used to be
+        // handed to the `ruleId` parameter and stored in VoiceCallLog.automationRuleId,
+        // a field declared `ref: 'AutomationRule'`, corrupting that reference.
+        const { success, callLog, error } = await VoiceEngineService.executeCallAction(
             lead._id,
             context.tenantId.toString(),
             action,
-            workflowId
+            { workflowId: context.workflowId }
         );
 
         if (!success) {
-            return { nextPort: 'error', output: { 'voice.error': 'Call initiation failed' } };
+            return {
+                nextPort: 'error',
+                output: { 'voice.error': error || 'Call initiation failed' }
+            };
         }
 
         // Wait for the voice outcome webhook to arrive
@@ -109,10 +113,18 @@ const VoiceCallNode = {
         // 'waiting' connection and incorrectly marking the execution as completed.
         return {
             nextPort: null,
-            output:  { 'voice.callInitiated': true, 'voice.initiatedAt': new Date().toISOString() },
+            output:  {
+                'voice.callInitiated': true,
+                'voice.initiatedAt':   new Date().toISOString(),
+                'voice.callLogId':     callLog._id.toString()
+            },
             waitSignal: {
                 signalType: 'VOICE_OUTCOME',
-                channelId:  lead._id,  // VoiceCallLog references leadId
+                // BUG FIX: keyed on THIS call, not on the lead. resolveWaitSignal resumes
+                // every pending signal on a channel, so with channelId = lead._id a second
+                // call to the same lead (or two workflows calling one lead) had its outcome
+                // resolve the other call's branch. The call log id is unique per call.
+                channelId:  callLog._id,
                 waitUntil,
                 resolvedPort: 'No Answer' // Default outcome if the webhook never arrives within the deadline
             }

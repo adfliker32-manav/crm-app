@@ -170,6 +170,11 @@ const integrationConfigSchema = new mongoose.Schema({
         aiEnabled: { type: Boolean, default: false },
         aiFallbackEnabled: { type: Boolean, default: false },
         aiSupportEnabled: { type: Boolean, default: false },
+        // Lets the AI resolve a free-text reply onto a chatbot button ("around 50k"
+        // → the ₹40k-60k option) so the flow continues instead of re-prompting.
+        // Independent of aiFallbackEnabled: this only interprets an answer for the
+        // scripted flow, it never writes a message to the customer.
+        aiButtonMappingEnabled: { type: Boolean, default: true },
         maxTurns: { type: Number, default: 5 },
         // NOTE: Despite the name, this counts AI *messages* (1 per reply), not actual LLM tokens.
         // Kept for backward compatibility. The monthly limit (planFeatures.aiMessageLimit) is per-message.
@@ -181,7 +186,12 @@ const integrationConfigSchema = new mongoose.Schema({
         provider:       { type: String, enum: ['vapi', 'retell'], default: 'vapi' },
         apiKey:         { type: String, default: null, select: false, set: encryptToken, get: decryptToken },
         defaultAgentId: { type: String, default: null },
-        fromNumber:     { type: String, default: null }  // Outbound phone number (Retell or Twilio)
+        fromNumber:     { type: String, default: null },  // Outbound phone number (Retell or Twilio)
+        // Shared secret used to authenticate inbound provider webhooks.
+        // Vapi: the "Server URL Secret" — sent back as the X-Vapi-Secret header.
+        // Retell: unused (Retell signs with the API key via X-Retell-Signature).
+        // Falls back to process.env.VAPI_WEBHOOK_SECRET when not set per-tenant.
+        webhookSecret:  { type: String, default: null, select: false, set: encryptToken, get: decryptToken }
     },
 
     createdAt: {

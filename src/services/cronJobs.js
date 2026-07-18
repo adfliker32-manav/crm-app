@@ -752,11 +752,22 @@ const runFollowUpTemplateSend = async () => {
 const resetMonthlyAiTokens = async () => {
     try {
         const IntegrationConfig = require('../models/IntegrationConfig');
+        const User = require('../models/User');
+
         const result = await IntegrationConfig.updateMany(
             { 'ai.tokensUsedThisMonth': { $gt: 0 } },
             { $set: { 'ai.tokensUsedThisMonth': 0 } }
         );
-        console.log(`[MonthlyAIReset] Reset tokensUsedThisMonth for ${result.modifiedCount} tenant(s).`);
+
+        // Reset the credit "used this month" display metric. IMPORTANT: this only
+        // zeroes the monthly usage counter — aiCreditsBalance (the actual wallet)
+        // is a persistent balance and must never be touched here.
+        const walletResult = await User.updateMany(
+            { aiCreditsUsedThisMonth: { $gt: 0 } },
+            { $set: { aiCreditsUsedThisMonth: 0 } }
+        );
+
+        console.log(`[MonthlyAIReset] Reset tokensUsedThisMonth for ${result.modifiedCount} tenant(s) and aiCreditsUsedThisMonth for ${walletResult.modifiedCount} tenant(s).`);
     } catch (err) {
         console.error('❌ [MonthlyAIReset] Cron error:', err.message);
     }
