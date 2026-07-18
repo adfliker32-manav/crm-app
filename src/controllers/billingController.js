@@ -14,7 +14,7 @@ const { isFeatureDisabled } = require('../utils/systemConfig');
 
 // Self-serve AI-credit top-up bounds (INR). Credits are derived from the amount
 // at aiCreditService.CREDIT_VALUE_INR, so no separate price list to keep in sync.
-const MIN_TOPUP_INR = 100;
+const MIN_TOPUP_INR = 5; // TEMP(testing): revert to 100 when done
 const MAX_TOPUP_INR = 200000;
 
 // ─── GET /api/billing/plans ────────────────────────────────────────────────
