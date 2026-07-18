@@ -7,6 +7,7 @@ const Lead = require('../../../models/Lead');
 // ─────────────────────────────────────────────────────────────────────────────
 const UpdateStageNode = {
     type: 'update_stage',
+    sideEffect: true, // L4/L5: mutates the lead + fires triggers — dry-run in Test Mode, idempotent on retry
 
     meta: () => ({
         type:     'update_stage',
@@ -69,7 +70,13 @@ const UpdateStageNode = {
 
             runInBackground('Workflow Engine Error (STAGE_CHANGED):', () => {
                 const WorkflowEngine = require('../../WorkflowEngine');
-                return WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc });
+                // L1 FIX: pass toStage so triggerConfig stage filters match on
+                // workflow-driven stage changes too.
+                return WorkflowEngine.fireTrigger('STAGE_CHANGED', {
+                    lead: leadDoc,
+                    fromStage: oldStatus,
+                    toStage: stageName
+                });
             });
 
             runInBackground('Sequence enrollment error (STAGE_CHANGED):', () => {

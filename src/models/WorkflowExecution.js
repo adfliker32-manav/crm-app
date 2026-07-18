@@ -89,6 +89,27 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     // so BullMQ retries and legitimate re-arrivals can still re-run it.
     claimedNodeIds: { type: [String], default: [] },
 
+    // L5 FIX: idempotency ledger for side-effecting nodes. `claimedNodeIds` stops
+    // two CONCURRENT arrivals from double-running a node, but a BullMQ RETRY (after
+    // a post-send crash) releases the claim and re-runs the node — re-sending the
+    // message. Once a side-effect node's external action succeeds, the engine records
+    // it here; on any re-run the recorded result is reused and the action is skipped.
+    // `committedNodeIds` is the fast membership set; `committedEffects` stores the
+    // {port, output} to replay so routing/variables stay identical.
+    committedNodeIds: { type: [String], default: [] },
+    committedEffects: { type: mongoose.Schema.Types.Mixed, default: {} },
+
+    // L2 FIX: branch-token counter for correct parallel fan-out lifecycle.
+    // Counts the live "tokens" flowing through the graph: a node consumes the token
+    // that reached it and emits one per enqueued successor (net = successors − 1),
+    // a join's extra arrivals are absorbed by the dedup guard, and a parked (waiting)
+    // branch keeps its token. The execution is COMPLETED only when this reaches 0 —
+    // so a parallel fan-out no longer completes when the first branch ends.
+    // `null` marks a legacy execution created before this field existed; the engine
+    // falls back to the old terminal-node completion for those so in-flight runs
+    // aren't disrupted by a deploy.
+    activeBranches: { type: Number, default: null },
+
     // When waiting, this is the resume timestamp. BullMQ delayed job fires at this time.
     waitingUntil:   { type: Date, default: null, index: true },
     // The type of wait signal that can also resolve this execution (e.g. 'WHATSAPP_REPLY')

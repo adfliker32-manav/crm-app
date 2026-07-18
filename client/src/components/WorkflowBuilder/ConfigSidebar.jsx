@@ -4,7 +4,10 @@ import api from '../../services/api';
 
 const TRIGGER_OPTIONS = [
     { value: 'LEAD_CREATED',       label: '🔆 Lead Created',         desc: 'Fires when a new lead is added to the CRM' },
+    { value: 'LEAD_UPDATED',       label: '✏️ Lead Updated',         desc: 'Fires when a lead’s details are edited' },
     { value: 'STAGE_CHANGED',      label: '🔄 Stage Changed',        desc: 'Fires when a lead moves to a different stage' },
+    { value: 'TAG_ADDED',          label: '🏷️ Tag Added',           desc: 'Fires when a tag is added to a lead' },
+    { value: 'EMAIL_OPENED',       label: '📧 Email Opened',         desc: 'Fires the first time a lead opens a tracked email' },
     { value: 'WHATSAPP_REPLY',     label: '💬 WhatsApp Reply',       desc: 'Fires when a lead replies on WhatsApp' },
     { value: 'VOICE_CALL_FINISHED',label: '📞 Voice Call Finished',  desc: 'Fires when an AI voice call completes' },
     { value: 'APPOINTMENT_BOOKED', label: '📅 Appointment Booked',   desc: 'Fires when a lead books an appointment' },
@@ -277,8 +280,15 @@ export default function ConfigSidebar({
 
     // Trigger configuration panel
     if (selectedNode.type === 'trigger') {
-        const webhookUrl = workflow?._id ? `${window.location.origin}/api/workflows/webhook/${workflow._id}` : 'Save workflow to get webhook URL';
-        
+        const webhookSecret = workflow?.triggerConfig?.webhookSecret || '';
+        const webhookUrl = workflow?._id
+            ? `${window.location.origin}/api/workflows/webhook/${workflow._id}${webhookSecret ? `?token=${webhookSecret}` : ''}`
+            : 'Save workflow to get webhook URL';
+
+        // Shared styles for trigger-filter fields (L1 FIX).
+        const triggerLabelStyle = { display: 'block', fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 };
+        const triggerInputStyle = { width: '100%', padding: '8px 10px', borderRadius: 8, fontSize: 13, border: '1.5px solid #E2E8F0', outline: 'none', background: '#fff', boxSizing: 'border-box', color: '#1E293B', fontFamily: 'inherit' };
+
         return (
             <div style={{ width: 300, borderLeft: '1.5px solid #E2E8F0', background: '#FAFAFA', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ padding: '16px 20px', borderBottom: '1.5px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -338,6 +348,96 @@ export default function ConfigSidebar({
                             />
                             <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 6, lineHeight: 1.4 }}>
                                 Send a POST request to this URL to trigger this workflow. Payload data will be available as variables.
+                            </p>
+                            {webhookSecret ? (
+                                <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 8, lineHeight: 1.4 }}>
+                                    🔒 This URL includes a secret token. Requests without it are rejected.
+                                    You can also send the token as the <code>X-Webhook-Token</code> header instead of the query string.
+                                </p>
+                            ) : (
+                                <p style={{ fontSize: 11, color: '#B45309', marginTop: 8, lineHeight: 1.4 }}>
+                                    ⚠️ Publish this workflow to secure the webhook with a secret token.
+                                </p>
+                            )}
+                        </div>
+                    )}
+
+                    {/* L1 FIX: STAGE_CHANGED filter — without this the workflow fired
+                        on EVERY stage change. Empty = fire on any stage change. */}
+                    {workflow?.trigger === 'STAGE_CHANGED' && (
+                        <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            <div>
+                                <label style={triggerLabelStyle}>Run when moved INTO stage</label>
+                                <select
+                                    value={workflow?.triggerConfig?.toStage || ''}
+                                    onChange={e => onUpdateTriggerConfig({ toStage: e.target.value })}
+                                    style={{ ...triggerInputStyle, cursor: 'pointer' }}
+                                >
+                                    <option value="">Any stage</option>
+                                    {(stages || []).map(s => <option key={s._id} value={s.name}>{s.name}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label style={triggerLabelStyle}>Only if moved FROM stage (optional)</label>
+                                <select
+                                    value={workflow?.triggerConfig?.fromStage || ''}
+                                    onChange={e => onUpdateTriggerConfig({ fromStage: e.target.value })}
+                                    style={{ ...triggerInputStyle, cursor: 'pointer' }}
+                                >
+                                    <option value="">Any stage</option>
+                                    {(stages || []).map(s => <option key={s._id} value={s.name}>{s.name}</option>)}
+                                </select>
+                            </div>
+                            <p style={{ fontSize: 11, color: '#94A3B8', margin: 0, lineHeight: 1.4 }}>
+                                Leave as "Any stage" to run on every stage change.
+                            </p>
+                        </div>
+                    )}
+
+                    {/* L1 FIX: TAG_ADDED filter — only fire when this tag is added. */}
+                    {workflow?.trigger === 'TAG_ADDED' && (
+                        <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 16 }}>
+                            <label style={triggerLabelStyle}>Run when this tag is added</label>
+                            <input
+                                type="text"
+                                value={workflow?.triggerConfig?.tag || ''}
+                                onChange={e => onUpdateTriggerConfig({ tag: e.target.value })}
+                                placeholder="e.g. hot-lead (leave blank for any tag)"
+                                style={triggerInputStyle}
+                            />
+                            <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 6, lineHeight: 1.4 }}>
+                                Leave blank to run whenever any tag is added.
+                            </p>
+                        </div>
+                    )}
+
+                    {/* L1 FIX: LEAD_CREATED source filter (optional). */}
+                    {workflow?.trigger === 'LEAD_CREATED' && (
+                        <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 16 }}>
+                            <label style={triggerLabelStyle}>Only for leads from source (optional)</label>
+                            <input
+                                type="text"
+                                value={workflow?.triggerConfig?.source || ''}
+                                onChange={e => onUpdateTriggerConfig({ source: e.target.value })}
+                                placeholder="e.g. Facebook (leave blank for any source)"
+                                style={triggerInputStyle}
+                            />
+                        </div>
+                    )}
+
+                    {/* L1 FIX: LEAD_UPDATED field filter (optional). */}
+                    {workflow?.trigger === 'LEAD_UPDATED' && (
+                        <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 16 }}>
+                            <label style={triggerLabelStyle}>Only when this field changes (optional)</label>
+                            <input
+                                type="text"
+                                value={workflow?.triggerConfig?.field || ''}
+                                onChange={e => onUpdateTriggerConfig({ field: e.target.value })}
+                                placeholder="e.g. dealValue (leave blank for any field)"
+                                style={triggerInputStyle}
+                            />
+                            <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 6, lineHeight: 1.4 }}>
+                                Matches the lead field name that was updated.
                             </p>
                         </div>
                     )}

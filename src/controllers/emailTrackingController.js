@@ -17,12 +17,31 @@ const TRACKING_PIXEL = Buffer.from(
 exports.trackOpen = async (req, res) => {
     try {
         const { logId } = req.params;
-        
+
         if (logId && logId.match(/^[a-f\d]{24}$/i)) {
-            await EmailLog.findByIdAndUpdate(logId, {
+            // Return the PRE-update doc so we can detect the FIRST open (opens was 0).
+            const prev = await EmailLog.findByIdAndUpdate(logId, {
                 $set: { openedAt: new Date() },
                 $inc: { opens: 1 }
             });
+
+            // L3 FIX: fire EMAIL_OPENED (previously a dead trigger) on the first open
+            // only — mail clients re-load the pixel on every view, so gating on the
+            // prior open count keeps the workflow from re-firing on every re-open.
+            if (prev && (prev.opens || 0) === 0 && prev.leadId) {
+                const Lead = require('../models/Lead');
+                const { runInBackground } = require('../utils/controllerHelpers');
+                runInBackground('Workflow Engine Error (EMAIL_OPENED):', async () => {
+                    const lead = await Lead.findById(prev.leadId).lean();
+                    if (!lead) return;
+                    const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                    return WorkflowEngine.fireTrigger('EMAIL_OPENED', {
+                        lead,
+                        tenantId: prev.userId,
+                        campaign: prev.templateId ? prev.templateId.toString() : null
+                    });
+                });
+            }
         }
     } catch (err) {
         // Silently fail — tracking should never break the user experience

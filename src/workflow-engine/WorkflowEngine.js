@@ -46,6 +46,9 @@ class ExecutionContext {
         this.tenantId    = execution.tenantId;
         this.contactId   = execution.contactId;
         this.variables   = { ...(execution.variables || {}) };
+        // L4 FIX: expose how the execution was started so side-effect nodes can
+        // dry-run under Test Mode instead of sending real messages / mutating leads.
+        this.startedBy   = execution.startedBy;
         this._lead       = lead;
         // ARCH #3: Use the snapshotted graph stored on the execution doc,
         // so in-flight executions are not affected by workflow edits.
@@ -89,6 +92,13 @@ class ExecutionContext {
 
     getLead() {
         return this._lead;
+    }
+
+    // L4 FIX: true when this execution is a Test run (started from the "Test"
+    // button). Side-effect nodes check this to simulate success instead of
+    // performing a real send / lead mutation.
+    isTestMode() {
+        return this.startedBy === 'test';
     }
 }
 
@@ -159,6 +169,100 @@ const buildPayloadVariables = (payload) => {
     return variables;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TRIGGER FILTERING (L1 FIX)
+// ─────────────────────────────────────────────────────────────────────────────
+// Previously fireTrigger matched workflows on { tenantId, trigger } ONLY, so a
+// STAGE_CHANGED workflow configured (via triggerConfig) to watch a specific stage
+// fired on EVERY stage change for EVERY lead. matchesTriggerConfig() honours the
+// per-workflow triggerConfig so a workflow only runs when the concrete event
+// matches its configured filter.
+//
+// Design rules:
+//   - An empty / absent filter value is a WILDCARD (matches anything). This keeps
+//     every existing workflow behaving exactly as before until the user narrows it.
+//   - Filter values may be a single string OR an array of strings.
+//   - String matching is case-insensitive and trimmed (stage/tag/source names are
+//     user-entered and inconsistently cased).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Normalise a value to a lower-cased, trimmed string for tolerant comparison. */
+const norm = (v) => (v === null || v === undefined) ? '' : String(v).trim().toLowerCase();
+
+/**
+ * Does `candidate` satisfy a triggerConfig `filter` value?
+ * @param {string|string[]|undefined|null} filter  — configured allowed value(s)
+ * @param {string} candidate — the actual value from the event
+ * @returns {boolean} true if the filter is empty (wildcard) or contains candidate
+ */
+const filterMatches = (filter, candidate) => {
+    // Wildcard: no filter configured → match anything.
+    if (filter === undefined || filter === null || filter === '') return true;
+    const allowed = (Array.isArray(filter) ? filter : [filter])
+        .map(norm)
+        .filter(Boolean);
+    if (allowed.length === 0) return true; // e.g. filter was [] or ['']
+    return allowed.includes(norm(candidate));
+};
+
+/**
+ * Decide whether a workflow should fire for this concrete event, based on the
+ * workflow's triggerConfig. Returns true when the workflow has no relevant filter
+ * (backwards-compatible wildcard) or when the event matches the filter.
+ *
+ * @param {string} triggerType
+ * @param {object} triggerConfig — workflow.triggerConfig (may be {})
+ * @param {object} payload       — the fireTrigger payload
+ * @param {object|null} lead
+ */
+const matchesTriggerConfig = (triggerType, triggerConfig, payload, lead) => {
+    const cfg = triggerConfig || {};
+
+    switch (triggerType) {
+        case 'STAGE_CHANGED': {
+            // toStage: the stage the lead moved INTO (payload.toStage, else lead.status).
+            // fromStage: the stage the lead moved OUT OF (only known on the primary
+            // lead-update path; wildcard-friendly elsewhere).
+            const toStage   = payload.toStage   ?? lead?.status;
+            const fromStage = payload.fromStage;
+            // Accept both { toStage } and legacy { stage } config keys.
+            const toFilter = cfg.toStage ?? cfg.stage;
+            return filterMatches(toFilter, toStage)
+                && filterMatches(cfg.fromStage, fromStage);
+        }
+
+        case 'TAG_ADDED': {
+            // payload.tag (single) or payload.addedTags (array). Match if ANY added
+            // tag satisfies the filter.
+            const added = payload.addedTags
+                ? payload.addedTags
+                : (payload.tag ? [payload.tag] : []);
+            const tagFilter = cfg.tag ?? cfg.tags;
+            if (tagFilter === undefined || tagFilter === null || tagFilter === '') return true;
+            return added.some(t => filterMatches(tagFilter, t));
+        }
+
+        case 'LEAD_CREATED':
+            // Optional source filter (e.g. only leads from 'Facebook').
+            return filterMatches(cfg.source, lead?.source);
+
+        case 'LEAD_UPDATED': {
+            // Optional field filter: only fire when one of the configured fields changed.
+            const fieldFilter = cfg.field ?? cfg.fields;
+            if (fieldFilter === undefined || fieldFilter === null || fieldFilter === '') return true;
+            const changed = payload.changedFields || [];
+            return changed.some(f => filterMatches(fieldFilter, f));
+        }
+
+        case 'EMAIL_OPENED':
+            return filterMatches(cfg.campaign, payload.campaign);
+
+        // No server-side filtering for these trigger types.
+        default:
+            return true;
+    }
+};
+
 /**
  * Append a node log entry to the execution history.
  * Returns the _id of the newly appended entry for later reference.
@@ -212,6 +316,44 @@ const mergeVariablesAtomic = async (executionId, delta) => {
         await new Promise(r => setTimeout(r, 10 * (attempt + 1)));
     }
     console.warn(`[WorkflowEngine] mergeVariablesAtomic gave up after retries for execution ${executionId}`);
+};
+
+/**
+ * L2 FIX: apply a branch-token delta and complete the execution when the last
+ * token drains.
+ *
+ * `activeBranches` counts the live tokens flowing through the graph. A node
+ * consumes the token that reached it and produces one per enqueued successor, so
+ * the net change for a node is (successors - 1): a fork raises the count, a
+ * terminal branch lowers it, a pass-through leaves it unchanged. A join's extra
+ * arrivals are retired by the dedup guard (delta -1 each). A parked wait keeps its
+ * token (no delta) so the count can't hit zero while a branch is still waiting.
+ *
+ * The execution is COMPLETED only when the count reaches zero AND it is still
+ * running — which is exactly when every branch has ended. This replaces the old
+ * "first terminal node completes the whole execution" logic that silently dropped
+ * sibling branches in a parallel fan-out.
+ *
+ * @param {string} executionId
+ * @param {number} delta — (successors - 1) for a node, or -1 to retire one token
+ * @returns {Promise<object|null>} the updated execution doc, or null if terminal
+ */
+const settleBranches = async (executionId, delta) => {
+    const updated = await WorkflowExecution.findOneAndUpdate(
+        { _id: executionId, status: { $nin: ['failed', 'cancelled', 'completed'] } },
+        { $inc: { activeBranches: delta } },
+        { new: true }
+    );
+    if (!updated) return null; // execution already terminal — nothing to settle
+
+    if (updated.activeBranches <= 0 && updated.status === 'running') {
+        await WorkflowExecution.updateOne(
+            { _id: executionId, status: 'running', activeBranches: { $lte: 0 } },
+            { $set: { status: 'completed', completedAt: new Date() } }
+        );
+        console.log(`[WorkflowEngine] Execution ${executionId} completed (all branches drained).`);
+    }
+    return updated;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -276,6 +418,14 @@ const fireTrigger = async (triggerType, payload) => {
         const createdExecutionIds = [];
 
         for (const workflow of workflows) {
+            // ── L1 FIX: honour per-workflow triggerConfig ──────────────────────
+            // Skip workflows whose configured filter (stage / tag / source / field /
+            // campaign) does not match this concrete event. An empty filter is a
+            // wildcard, so unconfigured workflows behave exactly as before.
+            if (!matchesTriggerConfig(triggerType, workflow.triggerConfig, payload, lead)) {
+                continue;
+            }
+
             // Find the first node (node with no incoming connections).
             // PHANTOM-NODE FIX: The canvas saves a connection with sourceNodeId='trigger'
             // (a virtual trigger handle) but never adds a real node with id='trigger'
@@ -339,6 +489,8 @@ const fireTrigger = async (triggerType, payload) => {
                 status:           'running',
                 currentNodeId:    startNodes[0].id,
                 variables,
+                // L2 FIX: seed the branch-token counter with one token per start node.
+                activeBranches:   startNodes.length,
                 startedBy:        payload.startedBy || 'trigger'
             });
 
@@ -441,10 +593,20 @@ const executeNode = async (executionId, nodeId) => {
         );
         if (!claimed) {
             console.log(`[WorkflowEngine] Node "${nodeId}" already claimed for execution ${executionId} (duplicate join arrival). Skipping.`);
+            // L2 FIX: this arrival's token is absorbed by the already-claimed node
+            // (join semantics) — retire it so the branch counter stays accurate.
+            // Legacy executions (no counter) keep the old no-op behavior.
+            if (typeof execution.activeBranches === 'number') {
+                await settleBranches(executionId, -1);
+            }
             return;
         }
         // Use the freshly-updated document (it carries the claim + latest variables).
         execution = claimed;
+        // L2 FIX: only new executions carry a branch-token counter. Legacy in-flight
+        // executions (created before this field existed) fall back to the original
+        // terminal-node completion so a deploy never disrupts a running workflow.
+        const usesBranchCounting = typeof execution.activeBranches === 'number';
 
         // ARCH #3: Use the snapshotted graph stored on the execution, so edits
         // to the live workflow don't break in-flight executions.
@@ -507,9 +669,52 @@ const executeNode = async (executionId, nodeId) => {
         // Get the node implementation from registry
         const nodeImpl = NodeRegistry.get(node.type);
 
-        // Execute the node
-        const result = await nodeImpl.execute(context, node.data || {});
-        // result: { nextPort: 'output' | 'true' | 'false' | string, output: {}, waitSignal: {...} }
+        // Nodes declare `sideEffect: true` when execute() performs a real external
+        // action (send message, call API, mutate the lead). Both Test Mode (L4) and
+        // the idempotency ledger (L5) apply ONLY to those; pure logic nodes
+        // (condition/switch/wait) are safe to run/re-run freely.
+        let result;
+
+        if (context.isTestMode() && nodeImpl.sideEffect) {
+            // ── L4 FIX: Test Mode dry-run ──────────────────────────────────────
+            // A test run (the "Test" button) must never send real WhatsApp/email/
+            // voice or mutate real lead data. Simulate a successful run and route
+            // down the primary 'output' port so the tester can validate the graph.
+            console.log(`[WorkflowEngine] TEST MODE: simulating side-effect node "${nodeId}" (${node.type}) — no real action performed.`);
+            result = { nextPort: 'output', output: { 'test.simulated': node.type, 'test.mode': true } };
+
+        } else if (nodeImpl.sideEffect
+                   && Array.isArray(execution.committedNodeIds)
+                   && execution.committedNodeIds.includes(nodeId)) {
+            // ── L5 FIX: idempotency replay across BullMQ retries ───────────────
+            // This node already committed its external action on a prior attempt
+            // (e.g. the send succeeded but a later step crashed and BullMQ retried).
+            // Reuse the recorded result instead of re-running execute() and
+            // re-sending the message / re-hitting the API.
+            const prior = (execution.committedEffects && execution.committedEffects[nodeId]) || {};
+            console.log(`[WorkflowEngine] Node "${nodeId}" already committed for execution ${executionId} — replaying result, skipping re-send (idempotency).`);
+            result = { nextPort: prior.port || 'output', output: prior.output || {} };
+
+        } else {
+            // Execute the node for real.
+            result = await nodeImpl.execute(context, node.data || {});
+            // result: { nextPort: 'output' | 'true' | 'false' | string, output: {}, waitSignal: {...} }
+
+            // L5 FIX: record the side effect as committed IMMEDIATELY after it
+            // succeeds and BEFORE the failure-prone steps below (variable merge,
+            // history update). A wait-signal result is not a completed side effect,
+            // so it is never ledgered (the node re-runs cleanly on resume paths).
+            if (nodeImpl.sideEffect && !result?.waitSignal) {
+                await WorkflowExecution.updateOne(
+                    { _id: executionId },
+                    {
+                        $addToSet: { committedNodeIds: nodeId },
+                        $set: { [`committedEffects.${nodeId}`]: { port: result?.nextPort || 'output', output: result?.output || {} } }
+                    }
+                );
+            }
+        }
+        // result: { nextPort, output, waitSignal? }
 
         const outputPort = result?.nextPort || 'output';
         const outputData = result?.output || {};
@@ -587,25 +792,35 @@ const executeNode = async (executionId, nodeId) => {
             return c.sourcePort === outputPort;
         });
 
-        // Mark execution as completed if this is a terminal node (atomic $set,
-        // guarded so an already failed/cancelled execution isn't revived).
-        // NOTE: with a non-rejoining parallel fan-out this still completes the whole
-        // execution when the FIRST tail ends; correct fork/join lifecycle tracking is
-        // a separate concern from the lost-write race fixed here.
-        if (finalConns.length === 0) {
+        // ── BRANCH LIFECYCLE (L2 FIX) ─────────────────────────────────────
+        if (usesBranchCounting) {
+            // Net token change for this node = (successors - 1). settleBranches
+            // applies it atomically and completes the execution only when the LAST
+            // live token drains — so a parallel fan-out is no longer completed when
+            // the first tail ends. Reserve tokens BEFORE enqueueing successors so an
+            // enqueued node can't drain the counter to zero before we've counted its
+            // siblings (for finalConns.length >= 1 the delta is >= 0, so the counter
+            // never dips here; a terminal node's -1 is the only decrement).
+            await settleBranches(executionId, finalConns.length - 1);
+            if (finalConns.length === 0) {
+                console.log(`[WorkflowEngine] Branch ended at terminal node "${nodeId}" for execution ${executionId}.`);
+                return;
+            }
+        } else {
+            // Legacy execution (pre-L2): keep the original terminal-completes behavior.
+            if (finalConns.length === 0) {
+                await WorkflowExecution.updateOne(
+                    { _id: executionId, status: { $nin: ['failed', 'cancelled'] } },
+                    { $set: { status: 'completed', completedAt: new Date() } }
+                );
+                console.log(`[WorkflowEngine] Execution ${executionId} completed.`);
+                return;
+            }
             await WorkflowExecution.updateOne(
-                { _id: executionId, status: { $nin: ['failed', 'cancelled'] } },
-                { $set: { status: 'completed', completedAt: new Date() } }
+                { _id: executionId, status: { $nin: ['failed', 'cancelled', 'completed'] } },
+                { $set: { status: 'running' } }
             );
-            console.log(`[WorkflowEngine] Execution ${executionId} completed.`);
-            return;
         }
-
-        // Keep the execution 'running', then enqueue next nodes (atomic $set).
-        await WorkflowExecution.updateOne(
-            { _id: executionId, status: { $nin: ['failed', 'cancelled', 'completed'] } },
-            { $set: { status: 'running' } }
-        );
 
         const queue = getQueue();
         for (const conn of finalConns) {
@@ -647,20 +862,34 @@ const executeNode = async (executionId, nodeId) => {
                 workflowGraph = liveWf ? { nodes: liveWf.nodes, connections: liveWf.connections, settings: liveWf.settings } : null;
             }
             const continueOnError = workflowGraph?.settings?.continueOnError ?? false;
+            // L2 FIX: recompute here — `usesBranchCounting` from the try block is out
+            // of scope in catch. Legacy executions (no counter) keep old behavior.
+            const usesBranchCounting = typeof execution.activeBranches === 'number';
 
             if (continueOnError) {
                 const errorConns = (workflowGraph?.connections || []).filter(
                     c => c.sourceNodeId === nodeId && c.sourcePort === 'error'
                 );
-                if (errorConns.length > 0) {
-                    const queue = getQueue();
-                    for (const conn of errorConns) {
-                        await queue.enqueueNode(executionId, conn.targetNodeId);
-                    }
+                const queue = getQueue();
+                for (const conn of errorConns) {
+                    const targetNode = (workflowGraph?.nodes || []).find(n => n.id === conn.targetNodeId);
+                    await queue.enqueueNode(executionId, conn.targetNodeId, 0, targetNode?.type);
                 }
+
+                if (usesBranchCounting) {
+                    // L2 FIX: the failed node consumed its token and produced one per
+                    // wired error branch (net = errorConns.length - 1). Settle it, then
+                    // return WITHOUT rethrowing: continueOnError means "handle the error
+                    // via the branch, don't retry" — rethrowing would make BullMQ re-run
+                    // the node and re-enqueue the error branch on every attempt.
+                    await settleBranches(executionId, errorConns.length - 1);
+                    return;
+                }
+                // Legacy execution: preserve the original (rethrow) behavior.
             } else {
                 // Fail the execution (atomic $set, guarded so we don't overwrite a
-                // terminal state a sibling branch may have set).
+                // terminal state a sibling branch may have set). A hard failure ends
+                // the whole run, so no branch settling is needed.
                 await WorkflowExecution.updateOne(
                     { _id: executionId, status: { $nin: ['completed', 'cancelled'] } },
                     { $set: {
@@ -672,7 +901,8 @@ const executeNode = async (executionId, nodeId) => {
             }
         }
 
-        // Re-throw so BullMQ can handle retry logic
+        // Re-throw so BullMQ can handle retry logic (hard-failure path, and legacy
+        // continueOnError executions).
         throw err;
     }
 };
@@ -801,8 +1031,15 @@ const resumeFromSignal = async (signal, { payload, resolvedPort }) => {
             { $set: { status: 'running', waitingUntil: null, waitSignalType: null } }
         );
 
-        if (nextConns.length === 0) {
-            // No next node — execution is complete.
+        // L2 FIX: the parked wait token is consumed here and produces one per
+        // next node (net = nextConns.length - 1). settleBranches completes the
+        // execution only if this was the last live branch. Legacy executions
+        // (no counter) keep the original terminal-completes behavior.
+        const usesBranchCounting = typeof execution.activeBranches === 'number';
+        if (usesBranchCounting) {
+            await settleBranches(execution._id.toString(), nextConns.length - 1);
+            if (nextConns.length === 0) return; // branch ended; settleBranches handled completion
+        } else if (nextConns.length === 0) {
             await WorkflowExecution.updateOne(
                 { _id: execution._id, status: { $nin: ['failed', 'cancelled'] } },
                 { $set: { status: 'completed', completedAt: new Date() } }
@@ -859,12 +1096,21 @@ const resolveTimeoutSignal = async (executionId, nodeId, signalId) => {
             )
         );
 
-        execution.status         = 'running';
-        execution.waitingUntil   = null;
-        execution.waitSignalType  = null;
-        await execution.save();
+        // Resume from the timeout branch (atomic $set — no full-document save so we
+        // don't clobber a concurrent sibling branch's variables/history; BUG #9).
+        await WorkflowExecution.updateOne(
+            { _id: executionId },
+            { $set: { status: 'running', waitingUntil: null, waitSignalType: null } }
+        );
 
-        if (timeoutConns.length === 0) {
+        // L2 FIX: the parked wait token is consumed here and produces one per
+        // timeout-branch node (net = timeoutConns.length - 1). Legacy executions
+        // (no counter) keep the original terminal-completes behavior.
+        const usesBranchCounting = typeof execution.activeBranches === 'number';
+        if (usesBranchCounting) {
+            await settleBranches(executionId, timeoutConns.length - 1);
+            if (timeoutConns.length === 0) return; // branch ended; settleBranches handled completion
+        } else if (timeoutConns.length === 0) {
             await WorkflowExecution.findByIdAndUpdate(executionId, {
                 $set: { status: 'completed', completedAt: new Date() }
             });

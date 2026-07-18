@@ -16,6 +16,7 @@ const { checkEmailDailyLimit } = require('../../../utils/workflowRateLimiter');
 // ─────────────────────────────────────────────────────────────────────────────
 const SendEmailNode = {
     type: 'send_email',
+    sideEffect: true, // L4/L5: real send — dry-run in Test Mode, idempotent on retry
 
     meta: () => ({
         type:     'send_email',

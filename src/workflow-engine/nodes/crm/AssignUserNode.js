@@ -4,6 +4,7 @@ const { emitToUser } = require('../../../services/socketService');
 
 const AssignUserNode = {
     type: 'assign_user',
+    sideEffect: true, // L4/L5: mutates the lead — dry-run in Test Mode, idempotent on retry
 
     meta: () => ({
         type: 'assign_user', name: 'Assign User', icon: 'fa-solid fa-user-tag',

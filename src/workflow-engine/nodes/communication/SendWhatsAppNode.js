@@ -14,6 +14,7 @@ const { checkWhatsAppRate } = require('../../../utils/workflowRateLimiter');
 // ─────────────────────────────────────────────────────────────────────────────
 const SendWhatsAppNode = {
     type: 'send_whatsapp',
+    sideEffect: true, // L4/L5: real send — dry-run in Test Mode, idempotent on retry
 
     meta: () => ({
         type:     'send_whatsapp',

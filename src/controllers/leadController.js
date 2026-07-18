@@ -150,11 +150,12 @@ const queueLeadCreatedEffects = (lead, ownerId, options = {}) => {
     }
 };
 
-const queueLeadStageChangeEffects = (lead) => {
+const queueLeadStageChangeEffects = (lead, fromStage = undefined) => {
     runInBackground('Auto Error (STAGE_CHANGED):', () => evaluateLead(lead, 'STAGE_CHANGED'));
-    // New Workflow Engine — runs in parallel, non-blocking
+    // New Workflow Engine — runs in parallel, non-blocking.
+    // L1 FIX: pass fromStage/toStage so triggerConfig stage filters can match.
     runInBackground('Workflow Engine Error (STAGE_CHANGED):', () =>
-        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead })
+        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, fromStage, toStage: lead.status })
     );
     // NOTE: TIME_IN_STAGE removed - it is time-based, not event-based. Needs a cron/Agenda job.
 
@@ -457,6 +458,10 @@ const updateLead = async (req, res) => {
         const oldStatus = lead.status;
         const nextStatus = updates.status;
         const stageChanged = hasStageChanged(oldStatus, nextStatus);
+        // L3 FIX: capture tags before the update so we can detect newly-added ones
+        // and fire TAG_ADDED for tags added via a plain lead edit (not just bulk /
+        // automation). Guarded below so re-saving existing tags never re-fires.
+        const oldTags = Array.isArray(lead.tags) ? [...lead.tags] : [];
         applyLeadUpdates(lead, updates);
 
         if (stageChanged) {
@@ -559,7 +564,26 @@ const updateLead = async (req, res) => {
 
         if (stageChanged) {
             await sendMetaEventIfEnabled(lead, nextStatus, oldStatus);
-            queueLeadStageChangeEffects(lead);
+            queueLeadStageChangeEffects(lead, oldStatus);
+        }
+
+        // L3 FIX: fire LEAD_UPDATED (previously a dead trigger — defined but never
+        // fired). changedFields lets triggerConfig field filters match.
+        runInBackground('Workflow Engine Error (LEAD_UPDATED):', () =>
+            WorkflowEngine.fireTrigger('LEAD_UPDATED', {
+                lead,
+                changedFields: Object.keys(updates || {})
+            })
+        );
+
+        // L3 FIX: fire TAG_ADDED for tags added via a plain lead edit. Compute the
+        // set difference so re-saving existing tags never re-fires the trigger.
+        const newTags = (Array.isArray(lead.tags) ? lead.tags : [])
+            .filter(t => !oldTags.includes(t));
+        if (newTags.length > 0) {
+            runInBackground('Workflow Engine Error (TAG_ADDED):', () =>
+                WorkflowEngine.fireTrigger('TAG_ADDED', { lead, addedTags: newTags })
+            );
         }
 
         res.json({ success: true, lead });
@@ -1577,6 +1601,17 @@ const bulkAddTags = async (req, res) => {
             query,
             { $addToSet: { tags: { $each: tags } } }
         );
+
+        // L3 FIX: fire TAG_ADDED (previously a dead trigger). Re-read the affected
+        // leads so each execution has a real lead in context, and pass addedTags so
+        // triggerConfig tag filters can match. Non-blocking — never delays the response.
+        runInBackground('Workflow Engine Error (TAG_ADDED):', async () => {
+            const taggedLeads = await Lead.find(query).lean();
+            for (const taggedLead of taggedLeads) {
+                WorkflowEngine.fireTrigger('TAG_ADDED', { lead: taggedLead, addedTags: tags })
+                    .catch(err => console.error('TAG_ADDED fireTrigger error:', err.message));
+            }
+        });
 
         // Audit log
         logActivity({

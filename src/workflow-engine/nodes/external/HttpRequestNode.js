@@ -11,6 +11,7 @@ const { validateOutboundUrl } = require('../../../utils/ssrfGuard');
 // ─────────────────────────────────────────────────────────────────────────────
 const HttpRequestNode = {
     type: 'http_request',
+    sideEffect: true, // L4/L5: external HTTP call — dry-run in Test Mode, idempotent on retry
 
     meta: () => ({
         type:     'http_request',

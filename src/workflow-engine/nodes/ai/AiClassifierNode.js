@@ -22,6 +22,7 @@ const IntegrationConfig = require('../../../models/IntegrationConfig');
 // ─────────────────────────────────────────────────────────────────────────────
 const AiClassifierNode = {
     type: 'ai_classifier',
+    sideEffect: true, // L4/L5: spends AI credits — dry-run in Test Mode, idempotent on retry
 
     meta: () => ({
         type:     'ai_classifier',

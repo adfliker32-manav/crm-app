@@ -15,6 +15,7 @@ const { VOICE_OUTCOME_PORTS } = require('./voiceOutcomePorts');
 // ─────────────────────────────────────────────────────────────────────────────
 const VoiceCallNode = {
     type: 'voice_call',
+    sideEffect: true, // L4/L5: real call — dry-run in Test Mode, idempotent on retry
 
     meta: () => ({
         type:     'voice_call',

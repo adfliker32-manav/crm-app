@@ -71,6 +71,7 @@ const isFieldKeyAllowed = (fieldKey) => {
 
 const UpdateCustomFieldNode = {
     type: 'update_custom_field',
+    sideEffect: true, // L4/L5: mutates the lead — dry-run in Test Mode, idempotent on retry
     meta: () => ({
         type: 'update_custom_field', name: 'Update Field', icon: 'fa-solid fa-pen-to-square',
         category: 'crm', color: '#06B6D4',

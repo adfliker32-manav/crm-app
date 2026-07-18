@@ -8,6 +8,7 @@ const User = require('../../../models/User');
 // ─────────────────────────────────────────────────────────────────────────────
 const InternalNotificationNode = {
     type: 'internal_notification',
+    sideEffect: true, // L4/L5: real notification — dry-run in Test Mode, idempotent on retry
 
     meta: () => ({
         type:     'internal_notification',

@@ -5,6 +5,99 @@ const NodeRegistry     = require('../workflow-engine/NodeRegistry');
 const WorkflowEngine   = require('../workflow-engine/WorkflowEngine');
 const WorkflowQueue    = require('../workflow-engine/WorkflowQueue');
 const Lead             = require('../models/Lead');
+const crypto           = require('crypto');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WEBHOOK SECURITY (L6 FIX)
+// ─────────────────────────────────────────────────────────────────────────────
+// The public webhook trigger endpoint was unauthenticated — anyone who learned a
+// workflow's ObjectId could fire executions. We attach a per-workflow secret token
+// to WEBHOOK_RECEIVED workflows and require it on inbound calls (header
+// `X-Webhook-Token`, `?token=`, or body `_token`). Legacy workflows without a secret
+// keep working until republished (which mints one) so existing integrations don't
+// break the moment this deploys.
+
+/** Ensure a WEBHOOK_RECEIVED workflow has a secret token; mutates triggerConfig. */
+const ensureWebhookSecret = (workflow) => {
+    if (workflow.trigger !== 'WEBHOOK_RECEIVED') return;
+    if (!workflow.triggerConfig) workflow.triggerConfig = {};
+    if (!workflow.triggerConfig.webhookSecret) {
+        workflow.triggerConfig.webhookSecret = crypto.randomBytes(24).toString('hex');
+        // triggerConfig is a Mixed type — mark modified so Mongoose persists the change.
+        if (typeof workflow.markModified === 'function') workflow.markModified('triggerConfig');
+    }
+};
+
+/** Constant-time string comparison that never throws on length mismatch. */
+const safeTokenEqual = (a, b) => {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    const ba = Buffer.from(a);
+    const bb = Buffer.from(b);
+    if (ba.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ba, bb);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GRAPH VALIDATION (L7 FIX — block loops at publish)
+// ─────────────────────────────────────────────────────────────────────────────
+// The execution engine claims each node at most once per run (claimedNodeIds), so
+// a loop-back edge would silently dead-end at runtime with no error surfaced to the
+// user. We reject cyclic graphs at publish time instead, with the offending node
+// path in the error so the user can find and remove the loop.
+//
+// Standard iterative DFS with a recursion stack (white/grey/black colouring).
+// Only real nodes are considered; the virtual 'trigger' source handle (edges whose
+// sourceNodeId is not a real node) is ignored, mirroring the engine's start-node logic.
+const findWorkflowCycle = (nodes = [], connections = []) => {
+    const realIds = new Set(nodes.map(n => n.id));
+
+    // adjacency list: nodeId → [targetNodeId, …]
+    const adj = new Map();
+    for (const id of realIds) adj.set(id, []);
+    for (const c of connections) {
+        if (realIds.has(c.sourceNodeId) && realIds.has(c.targetNodeId)) {
+            adj.get(c.sourceNodeId).push(c.targetNodeId);
+        }
+    }
+
+    const WHITE = 0, GREY = 1, BLACK = 2;
+    const color = new Map([...realIds].map(id => [id, WHITE]));
+
+    // Iterative DFS carrying the active path so we can report the cycle.
+    for (const start of realIds) {
+        if (color.get(start) !== WHITE) continue;
+
+        const stack = [{ node: start, iter: adj.get(start)[Symbol.iterator]() }];
+        color.set(start, GREY);
+        const path = [start];
+
+        while (stack.length) {
+            const frame = stack[stack.length - 1];
+            const next = frame.iter.next();
+
+            if (next.done) {
+                color.set(frame.node, BLACK);
+                stack.pop();
+                path.pop();
+                continue;
+            }
+
+            const target = next.value;
+            if (color.get(target) === GREY) {
+                // Back-edge → cycle. Slice the path from where the target first appears.
+                const loopStart = path.indexOf(target);
+                return [...path.slice(loopStart), target];
+            }
+            if (color.get(target) === WHITE) {
+                color.set(target, GREY);
+                path.push(target);
+                stack.push({ node: target, iter: adj.get(target)[Symbol.iterator]() });
+            }
+        }
+    }
+
+    return null; // acyclic
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/workflows
@@ -94,6 +187,10 @@ exports.createWorkflow = async (req, res) => {
             createdBy:   userId
         });
 
+        // L6 FIX: mint a webhook secret for webhook-triggered workflows.
+        ensureWebhookSecret(workflow);
+        if (workflow.isModified && workflow.isModified()) await workflow.save();
+
         // Save layout if provided
         if (layout) {
             await WorkflowLayout.create({
@@ -138,6 +235,9 @@ exports.updateWorkflow = async (req, res) => {
         if (variables)   workflow.variables   = variables;
         if (settings)    workflow.settings    = settings;
 
+        // L6 FIX: mint a webhook secret if the trigger was switched to webhook.
+        ensureWebhookSecret(workflow);
+
         await workflow.save();
         res.json({ workflow });
     } catch (err) {
@@ -177,6 +277,26 @@ exports.publishWorkflow = async (req, res) => {
         if (errors.length > 0) {
             return res.status(400).json({ message: 'Validation failed', errors });
         }
+
+        // L7 FIX: reject cyclic graphs — the engine can't run loops (each node is
+        // claimed once per execution), so a loop would silently dead-end at runtime.
+        const cycle = findWorkflowCycle(workflow.nodes, workflow.connections);
+        if (cycle) {
+            const nameFor = (id) => {
+                const n = workflow.nodes.find(nd => nd.id === id);
+                return n ? (n.name || n.type) : id;
+            };
+            return res.status(400).json({
+                message: 'Validation failed',
+                errors: [
+                    `Workflow contains a loop, which is not supported: ${cycle.map(nameFor).join(' → ')}. ` +
+                    `Remove the connection that feeds back to an earlier step.`
+                ]
+            });
+        }
+
+        // L6 FIX: guarantee a webhook secret exists before the endpoint goes live.
+        ensureWebhookSecret(workflow);
 
         workflow.status      = 'published';
         workflow.publishedAt = new Date();
@@ -474,6 +594,20 @@ exports.webhookTrigger = async (req, res) => {
 
         if (workflow.trigger !== 'WEBHOOK_RECEIVED') {
             return res.status(400).json({ message: 'Workflow is not configured to receive webhooks' });
+        }
+
+        // L6 FIX: require the workflow's secret token when one is set. Accepted via
+        // the `X-Webhook-Token` header, a `?token=` query param, or a `_token` body
+        // field. Legacy workflows without a secret remain callable (backwards compat)
+        // until they are republished, which mints one.
+        const requiredSecret = workflow.triggerConfig?.webhookSecret;
+        if (requiredSecret) {
+            const provided = req.get('x-webhook-token')
+                || req.query.token
+                || (req.body && req.body._token);
+            if (!safeTokenEqual(provided, requiredSecret)) {
+                return res.status(401).json({ message: 'Invalid or missing webhook token' });
+            }
         }
 
         let lead = null;
