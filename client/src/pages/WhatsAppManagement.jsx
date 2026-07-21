@@ -80,9 +80,9 @@ const WhatsAppManagement = () => {
                                     <button
                                         key={st.id}
                                         onClick={() => setChatbotView(st.id)}
-                                        className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition ${
+                                        className={`px-6 py-3 rounded-xl font-bold text-sm flex items-center gap-2.5 transition-all duration-200 ${
                                             chatbotView === st.id
-                                                ? 'bg-[#008069] text-white shadow-sm'
+                                                ? 'bg-[#008069] text-white shadow-lg shadow-black/25 ring-2 ring-[#05cd99] scale-105'
                                                 : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
                                         }`}
                                     >
