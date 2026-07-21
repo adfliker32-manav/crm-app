@@ -51,11 +51,11 @@ export default function AutomationHub() {
                         onClick={() => switchView(v)}
                         className={`px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2.5 transition-all duration-200 ${
                             active.id === v.id
-                                ? 'bg-white text-blue-600 shadow-sm ring-1 ring-slate-200/50'
+                                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
                                 : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
                         }`}
                     >
-                        <i className={`fa-solid ${v.icon} ${active.id === v.id ? 'text-blue-500' : 'text-slate-400'}`}></i>
+                        <i className={`fa-solid ${v.icon} ${active.id === v.id ? 'text-white' : 'text-slate-400'}`}></i>
                         {v.label}
                     </button>
                 ))}

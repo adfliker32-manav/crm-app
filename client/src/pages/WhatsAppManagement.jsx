@@ -159,7 +159,7 @@ const WhatsAppManagement = () => {
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
                                     className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all duration-300 flex items-center gap-2.5 relative group ${activeTab === tab.id
-                                        ? 'bg-white text-[#008069] shadow-md scale-105'
+                                        ? 'bg-white text-[#008069] shadow-lg shadow-black/25 ring-2 ring-white scale-110'
                                         : 'text-white/80 hover:bg-white/15 hover:text-white hover:scale-102'
                                     }`}
                                 >

@@ -477,7 +477,7 @@ const AISettings = () => {
                         key={t.id}
                         type="button"
                         onClick={() => setActiveTab(t.id)}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold transition ${activeTab === t.id ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                        className={`px-4 py-2 rounded-lg text-sm font-bold transition ${activeTab === t.id ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30' : 'text-slate-500 hover:text-slate-700 hover:bg-white/60'}`}
                     >
                         <i className={`fa-solid ${t.icon} mr-2`}></i>{t.label}
                     </button>
