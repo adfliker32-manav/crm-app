@@ -2,16 +2,16 @@ import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 
-// Models offered for the platform support AI. Mirrors the tenant chatbot options.
+// Models offered for the platform support AI. Only the 4 active Adfliker-branded
+// models are listed — real names shown with the Adfliker brand in brackets.
 const MODELS_BY_PROVIDER = {
     gemini: [
-        { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (Fast, low cost)' },
-        { id: 'gemini-2.5-flash-lite-preview-06-17', name: 'Gemini 2.5 Flash Lite' },
-        { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' }
+        { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (Adfliker Smart)' },
+        { id: 'gemini-2.5-flash-lite-preview-06-17', name: 'Gemini 2.5 Flash Lite (Adfliker Light)' },
     ],
     openai: [
-        { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Cost-efficient)' },
-        { id: 'gpt-4o', name: 'GPT-4o (Premium)' }
+        { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Adfliker Advance)' },
+        { id: 'gpt-4o', name: 'GPT-4o (Adfliker Ultra)' }
     ]
 };
 

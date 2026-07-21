@@ -2,6 +2,14 @@ import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 
+// Adfliker brand names for the 4 active models. Shown as a badge in the rate table.
+const ADFLIKER_MAP = {
+    'gemini-2.5-flash-lite-preview-06-17': 'Adfliker Light',
+    'gemini-2.5-flash': 'Adfliker Smart',
+    'gpt-4o-mini': 'Adfliker Advance',
+    'gpt-4o': 'Adfliker Ultra',
+};
+
 // Super-admin editor for the AI credit rate table. Each model's credits-per-1K-tokens
 // is editable live (no deploy) and takes effect on the next AI call (server cache
 // busts on save). Credit money value is shown so rates can be reasoned about in ₹.
@@ -312,7 +320,14 @@ const AiCreditsView = () => {
                             <tbody className="divide-y divide-slate-50">
                                 {rates.map((row) => (
                                     <tr key={row.model} className="hover:bg-slate-50/60">
-                                        <td className="px-5 py-3 font-mono text-xs font-bold text-slate-700">{row.model}</td>
+                                        <td className="px-5 py-3">
+                                            <span className="font-mono text-xs font-bold text-slate-700">{row.model}</span>
+                                            {ADFLIKER_MAP[row.model] && (
+                                                <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-600 border border-blue-100">
+                                                    {ADFLIKER_MAP[row.model]}
+                                                </span>
+                                            )}
+                                        </td>
                                         <td className="px-5 py-3 text-slate-500">{row.provider}</td>
                                         <td className="px-5 py-3">
                                             <input

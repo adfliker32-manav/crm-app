@@ -49,19 +49,16 @@ const AISettings = () => {
         { sender: 'bot', text: 'Hello! I am your AI assistant. Send me a message to test my qualification logic.' }
     ]);
 
-    // Available models based on provider
-    const modelsByProvider = {
-        gemini: [
-            { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash ✅ (Free — Works Now)' },
-            { id: 'gemini-2.5-flash-lite-preview-06-17', name: 'Gemini 2.5 Flash Lite (Preview)' },
-            { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite (Legacy)' },
-            { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash (Legacy)' },
-        ],
-        openai: [
-            { id: 'gpt-4o-mini', name: 'GPT-4o Mini (Cost-Efficient)' },
-            { id: 'gpt-4o', name: 'GPT-4o (Premium Capability)' }
-        ]
-    };
+    // Adfliker-branded AI models. The internal model ID + provider are resolved
+    // automatically — customers only see the Adfliker tier names.
+    const ADFLIKER_MODELS = [
+        { id: 'gemini-2.5-flash-lite-preview-06-17', provider: 'gemini', name: 'Adfliker Light', desc: 'Fast & cost-effective' },
+        { id: 'gemini-2.5-flash', provider: 'gemini', name: 'Adfliker Smart', desc: 'Best balance — Recommended', recommended: true },
+        { id: 'gpt-4o-mini', provider: 'openai', name: 'Adfliker Advance', desc: 'Powerful reasoning, affordable' },
+        { id: 'gpt-4o', provider: 'openai', name: 'Adfliker Ultra', desc: 'Maximum capability, premium' },
+    ];
+    // Lookup helper for mapping raw model IDs to Adfliker display names.
+    const adfliker = (modelId) => ADFLIKER_MODELS.find(m => m.id === modelId);
 
     // Refresh the wallet balance + usage summary + ledger. Called on mount and
     // after a successful top-up so the new balance shows without a page reload.
@@ -151,7 +148,11 @@ const AISettings = () => {
                 const data = response.data;
                 
                 setProvider(data.provider || 'gemini');
-                setModel(data.model || 'gemini-2.5-flash');
+                // If the saved model is a legacy ID not in the current lineup,
+                // gracefully fall back to the recommended Adfliker model.
+                const loadedModel = data.model || 'gemini-2.5-flash';
+                const isKnown = ADFLIKER_MODELS.some(m => m.id === loadedModel);
+                setModel(isKnown ? loadedModel : 'gemini-2.5-flash');
                 setAgentName(data.agentName || 'AI Assistant');
                 setSystemPrompt(data.systemPrompt || '');
                 setAiEnabled(data.aiEnabled || false);
@@ -205,14 +206,11 @@ const AISettings = () => {
     };
     const featureLabel = (f) => FEATURE_LABELS[f] || f;
 
-    // Handle provider toggle and auto-select default model
-    const handleProviderChange = (newProvider) => {
-        setProvider(newProvider);
-        if (newProvider === 'gemini') {
-            setModel('gemini-2.5-flash');
-        } else {
-            setModel('gpt-4o-mini');
-        }
+    // Handle model selection — auto-resolves the provider from the model ID.
+    const handleModelChange = (modelId) => {
+        setModel(modelId);
+        const found = ADFLIKER_MODELS.find(m => m.id === modelId);
+        setProvider(found?.provider || 'gemini');
     };
 
     // Save configuration
@@ -501,36 +499,38 @@ const AISettings = () => {
                                 </div>
                             </div>
 
-                            {/* AI engine */}
+                            {/* AI engine — unified Adfliker model selector */}
                             <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm space-y-4">
                                 <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                                    <i className="fa-solid fa-microchip text-blue-500"></i> AI Engine
+                                    <i className="fa-solid fa-microchip text-blue-500"></i> AI Model
                                 </h3>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <label className={`flex items-center gap-2.5 p-3 rounded-xl border cursor-pointer transition ${provider === 'gemini' ? 'border-blue-500 bg-blue-50/20 ring-1 ring-blue-500/50' : 'border-slate-200 hover:bg-slate-50'}`}>
-                                        <input type="radio" name="provider" checked={provider === 'gemini'} onChange={() => handleProviderChange('gemini')} className="text-blue-600 focus:ring-blue-500 h-4 w-4" />
-                                        <div>
-                                            <p className="text-sm font-bold text-slate-800">Google Gemini</p>
-                                            <p className="text-[11px] text-slate-500 font-semibold">Fast, low cost</p>
-                                        </div>
-                                    </label>
-                                    <label className={`flex items-center gap-2.5 p-3 rounded-xl border cursor-pointer transition ${provider === 'openai' ? 'border-blue-500 bg-blue-50/20 ring-1 ring-blue-500/50' : 'border-slate-200 hover:bg-slate-50'}`}>
-                                        <input type="radio" name="provider" checked={provider === 'openai'} onChange={() => handleProviderChange('openai')} className="text-blue-600 focus:ring-blue-500 h-4 w-4" />
-                                        <div>
-                                            <p className="text-sm font-bold text-slate-800">OpenAI GPT</p>
-                                            <p className="text-[11px] text-slate-500 font-semibold">Strong reasoning</p>
-                                        </div>
-                                    </label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    {ADFLIKER_MODELS.map(m => (
+                                        <label
+                                            key={m.id}
+                                            className={`flex items-center gap-3 p-3.5 rounded-xl border cursor-pointer transition ${
+                                                model === m.id
+                                                    ? 'border-blue-500 bg-blue-50/30 ring-1 ring-blue-500/50'
+                                                    : 'border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                                            }`}
+                                        >
+                                            <input
+                                                type="radio"
+                                                name="aiModel"
+                                                checked={model === m.id}
+                                                onChange={() => handleModelChange(m.id)}
+                                                className="text-blue-600 focus:ring-blue-500 h-4 w-4"
+                                            />
+                                            <div>
+                                                <p className="text-sm font-bold text-slate-800">
+                                                    {m.name}{m.recommended ? ' ✅' : ''}
+                                                </p>
+                                                <p className="text-[11px] text-slate-500 font-semibold">{m.desc}</p>
+                                            </div>
+                                        </label>
+                                    ))}
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    <div>
-                                        <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Model</label>
-                                        <select value={model} onChange={(e) => setModel(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl bg-white focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-800 text-sm">
-                                            {modelsByProvider[provider].map(m => (
-                                                <option key={m.id} value={m.id}>{m.name}</option>
-                                            ))}
-                                        </select>
-                                    </div>
                                     <div>
                                         <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Max Turns</label>
                                         <input type="number" min="1" max="30" value={maxTurns} onChange={(e) => setMaxTurns(parseInt(e.target.value) || 12)} className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-800 text-sm" />
@@ -718,7 +718,7 @@ const AISettings = () => {
                                             <div className="space-y-1.5">
                                                 {usage.topModels.slice(0, 3).map(m => (
                                                     <div key={m.model} className="flex items-center justify-between text-xs">
-                                                        <span className="font-semibold text-slate-600">{m.model}</span>
+                                                        <span className="font-semibold text-slate-600">{adfliker(m.model)?.name || m.model}</span>
                                                         <span className="font-bold text-slate-800">{m.credits.toLocaleString()} cr</span>
                                                     </div>
                                                 ))}
@@ -753,7 +753,7 @@ const AISettings = () => {
                                             <tr key={e._id} className="border-t border-slate-50">
                                                 <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{new Date(e.createdAt).toLocaleDateString()}</td>
                                                 <td className="px-3 py-2 font-semibold text-slate-700">{featureLabel(e.feature)}</td>
-                                                <td className="px-3 py-2 text-slate-500">{e.model || '—'}</td>
+                                                <td className="px-3 py-2 text-slate-500">{adfliker(e.model)?.name || e.model || '—'}</td>
                                                 <td className="px-3 py-2 text-right text-slate-500">
                                                     {(e.inputTokens || e.outputTokens) ? `${(e.inputTokens || 0)}/${(e.outputTokens || 0)}` : '—'}
                                                 </td>

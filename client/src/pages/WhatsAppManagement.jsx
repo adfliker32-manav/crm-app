@@ -102,7 +102,7 @@ const WhatsAppManagement = () => {
                                         <div className="h-full overflow-y-auto bg-slate-50">
                                             <div className="p-6 border-b border-slate-100 bg-white">
                                                 <h2 className="text-xl font-bold text-slate-800">AI Chatbot Qualification Settings</h2>
-                                                <p className="text-sm text-slate-500 mt-1">Configure your automated lead qualification AI bot using Gemini or OpenAI.</p>
+                                                <p className="text-sm text-slate-500 mt-1">Configure your automated lead qualification AI bot powered by Adfliker AI.</p>
                                             </div>
                                             <div className="p-6">
                                                 <AISettings />

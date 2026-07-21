@@ -67,7 +67,7 @@ const PromptBuilderModal = ({ isOpen, onClose, onApply }) => {
                             <i className="fa-solid fa-wand-magic-sparkles text-blue-600 text-xl"></i>
                             <h2 className="text-xl font-bold text-slate-800">Build My Prompt with AI</h2>
                         </div>
-                        <p className="text-sm text-slate-500">Fill in your business, copy the prompt out to ChatGPT/Gemini, then paste the result back in.</p>
+                        <p className="text-sm text-slate-500">Fill in your business details, copy the prompt to any AI tool (like ChatGPT), then paste the result back in.</p>
                     </div>
                     <button onClick={onClose} className="text-slate-400 hover:text-slate-600 hover:bg-slate-200 w-10 h-10 rounded-full flex items-center justify-center transition">
                         <i className="fa-solid fa-times text-lg"></i>
@@ -117,7 +117,7 @@ const PromptBuilderModal = ({ isOpen, onClose, onApply }) => {
                     <div className="pt-1">
                         <p className="text-xs font-black text-blue-600 uppercase tracking-wider mb-3">Step 2 — Generate It</p>
                         <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                            <p className="text-xs text-slate-500 mb-2">Copy this, paste it into ChatGPT, Gemini, or Claude, and send it. Then come back and paste its reply below.</p>
+                            <p className="text-xs text-slate-500 mb-2">Copy this, paste it into any AI tool (ChatGPT, Gemini, etc.), and send it. Then come back and paste its reply below.</p>
                             <button
                                 type="button"
                                 onClick={handleCopy}
