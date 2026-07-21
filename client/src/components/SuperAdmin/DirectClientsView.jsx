@@ -11,6 +11,7 @@ import ManageAgentsModal from './ManageAgentsModal';
 import ChangePasswordModal from './ChangePasswordModal';
 import ManageAgencyModal from './ManageAgencyModal';
 import ManagePermissionsModal from './ManagePermissionsModal';
+import PermissionManagerModal from './PermissionManagerModal';
 import AiLedgerModal from './AiLedgerModal';
 
 const DirectClientsView = () => {
@@ -30,6 +31,7 @@ const DirectClientsView = () => {
     const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
     const [isManageModalOpen, setIsManageModalOpen] = useState(false);
     const [isManagePermissionsModalOpen, setIsManagePermissionsModalOpen] = useState(false);
+    const [isModulePermsModalOpen, setIsModulePermsModalOpen] = useState(false);
     const [isAiLedgerModalOpen, setIsAiLedgerModalOpen] = useState(false);
 
     useEffect(() => {
@@ -335,6 +337,7 @@ const DirectClientsView = () => {
                     { label: 'Login as Merchant', icon: 'fa-right-to-bracket', onClick: () => handleImpersonate(selectedCompany) },
                     { label: 'Leads Database', icon: 'fa-users', onClick: () => { setSelectedCompany(selectedCompany); setIsViewLeadsModalOpen(true); } },
                     { label: 'Manage Access & Limits', icon: 'fa-lock', onClick: () => { setSelectedCompany(selectedCompany); setIsManagePermissionsModalOpen(true); } },
+                    { label: 'Module Permissions', icon: 'fa-sitemap', onClick: () => { setSelectedCompany(selectedCompany); setIsModulePermsModalOpen(true); } },
                     { label: 'Add AI Credits', icon: 'fa-coins', onClick: () => handleAddAiCredits(selectedCompany) },
                     { label: 'View AI Ledger', icon: 'fa-receipt', onClick: () => { setSelectedCompany(selectedCompany); setIsAiLedgerModalOpen(true); } },
                     { label: 'Manage Agents', icon: 'fa-user-tie', onClick: () => { setSelectedCompany(selectedCompany); setIsManageAgentsModalOpen(true); } },
@@ -358,6 +361,7 @@ const DirectClientsView = () => {
             <ManageAgentsModal isOpen={isManageAgentsModalOpen} onClose={() => setIsManageAgentsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
             <ChangePasswordModal isOpen={isChangePasswordModalOpen} onClose={() => setIsChangePasswordModalOpen(false)} company={selectedCompany} />
             <ManagePermissionsModal isOpen={isManagePermissionsModalOpen} onClose={() => setIsManagePermissionsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
+            <PermissionManagerModal isOpen={isModulePermsModalOpen} onClose={() => setIsModulePermsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
         </div>
     );
 };

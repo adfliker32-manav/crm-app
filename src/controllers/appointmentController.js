@@ -123,20 +123,45 @@ const updateAppointment = async (req, res) => {
         const userId = req.tenantId;
         const { status, notes, cancelledReason, appointmentDate, appointmentTime } = req.body;
 
-        const updates = {};
-        if (status)             updates.status = status;
-        if (notes !== undefined) updates.notes = notes;
-        if (cancelledReason)    updates.cancelledReason = cancelledReason;
-        if (appointmentDate)    updates.appointmentDate = new Date(appointmentDate);
-        if (appointmentTime)    updates.appointmentTime = appointmentTime;
-
-        const appt = await Appointment.findOneAndUpdate(
-            { _id: req.params.id, userId },
-            { $set: updates },
-            { new: true }
-        ).populate('leadId', 'name phone email status');
-
+        // Fetch-modify-save (not findOneAndUpdate) so the model's pre-save hook
+        // recomputes appointmentAt whenever the date/time changes.
+        const appt = await Appointment.findOne({ _id: req.params.id, userId });
         if (!appt) return res.status(404).json({ message: 'Appointment not found' });
+
+        const prevStatus = appt.status;
+        if (status)              appt.status = status;
+        if (notes !== undefined) appt.notes = notes;
+        if (cancelledReason)     appt.cancelledReason = cancelledReason;
+
+        let rescheduled = false;
+        if (appointmentDate) { appt.appointmentDate = new Date(appointmentDate); rescheduled = true; }
+        if (appointmentTime) { appt.appointmentTime = appointmentTime;          rescheduled = true; }
+
+        // On reschedule, let reminders fire again for the new time.
+        if (rescheduled) {
+            appt.reminder24hSent = false;
+            appt.reminder1hSent  = false;
+        }
+
+        await appt.save();
+
+        // Log status changes and reschedules to the linked lead's timeline so the
+        // history isn't silently lost.
+        if (appt.leadId && ((status && status !== prevStatus) || rescheduled)) {
+            const parts = [];
+            if (status && status !== prevStatus) parts.push(`status ${prevStatus} ➔ ${status}`);
+            if (rescheduled) parts.push(`rescheduled to ${new Date(appt.appointmentDate).toLocaleDateString()} at ${appt.appointmentTime}`);
+            Lead.findByIdAndUpdate(appt.leadId, {
+                $push: { history: { $each: [{
+                    type: 'Appointment',
+                    subType: 'Updated',
+                    content: `Appointment ${parts.join('; ')}${cancelledReason ? ` (${cancelledReason})` : ''}`,
+                    date: new Date()
+                }], $slice: -100 } }
+            }).catch(err => console.error('[Appointment] lead history update error:', err.message));
+        }
+
+        await appt.populate('leadId', 'name phone email status');
         res.json(appt);
     } catch (err) {
         console.error('updateAppointment error:', err);

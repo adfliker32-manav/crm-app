@@ -1,28 +1,7 @@
 const BookingPage  = require('../models/BookingPage');
 const Appointment  = require('../models/Appointment');
 const BlockedSlot  = require('../models/BlockedSlot');
-
-// Convert "09:00 AM" / "12:00 PM" → minutes since midnight
-function timeToMinutes(str) {
-    const m = String(str).match(/^(\d+):(\d+)\s*(AM|PM)$/i);
-    if (!m) return -1;
-    let h = parseInt(m[1]);
-    const mins = parseInt(m[2]);
-    const period = m[3].toUpperCase();
-    if (period === 'PM' && h !== 12) h += 12;
-    if (period === 'AM' && h === 12) h = 0;
-    return h * 60 + mins;
-}
-
-// Slot S is blocked by booked appointment A (with buffer B in minutes):
-// - exact match, OR
-// - S falls in the buffer window immediately after A  (0 < S-A < B)
-function conflicts(slotMins, apptMins, bufferMinutes) {
-    const diff = slotMins - apptMins;
-    if (diff === 0) return true;
-    if (bufferMinutes > 0 && diff > 0 && diff < bufferMinutes) return true;
-    return false;
-}
+const { timeToMinutes, conflicts, deriveAppointmentAt, DEFAULT_TZ_OFFSET_MINUTES } = require('../utils/appointmentUtils');
 
 // ─── Public: GET /book/:slug/slots?date=YYYY-MM-DD ──────────────────────────
 
@@ -58,10 +37,18 @@ const getAvailableSlots = async (req, res) => {
 
         const blockedTimes = new Set(blocked.filter(b => b.time).map(b => b.time));
 
+        // Hide slots that start sooner than the minimum-notice window (and, for today,
+        // any slot already in the past).
+        const tzOffset = Number.isFinite(page.timezoneOffsetMinutes)
+            ? page.timezoneOffsetMinutes : DEFAULT_TZ_OFFSET_MINUTES;
+        const earliestAllowed = Date.now() + Number(page.minNoticeMinutes || 0) * 60000;
+
         const available = (page.timeSlots || []).filter(slot => {
             if (blockedTimes.has(slot.time)) return false;
             const slotMins = timeToMinutes(slot.time);
             if (slotMins < 0) return false;
+            const slotAt = deriveAppointmentAt(date, slot.time, tzOffset);
+            if (slotAt && slotAt.getTime() < earliestAllowed) return false;
             return !bookedMins.some(bm => conflicts(slotMins, bm, bufferMinutes));
         });
 

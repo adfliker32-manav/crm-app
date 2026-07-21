@@ -9,9 +9,9 @@ import SheetSyncSettings from '../components/Settings/SheetSyncSettings';
 import TagsSettings from '../components/Settings/TagsSettings';
 import WebLeadSettings from '../components/Settings/WebLeadSettings';
 import ClaudeAISettings from '../components/Settings/ClaudeAISettings';
-import AISettings from '../components/Settings/AISettings';
 import LeadAssignmentSettings from '../components/Settings/LeadAssignmentSettings';
 import ExternalApiSettings from '../components/Settings/ExternalApiSettings';
+import FeatureGate from '../components/FeatureGate';
 
 const Settings = () => {
     const { user, updateUser } = useAuth();
@@ -98,10 +98,19 @@ const Settings = () => {
         { id: 'meta',           label: 'Meta Lead Sync',   icon: 'fa-brands fa-facebook' },
         { id: 'webLead',        label: 'Web-to-Lead',      icon: 'fa-code' },
         { id: 'claudeAI',       label: 'Claude AI',        icon: 'fa-brain' },
-        { id: 'aiSettings',     label: 'AI Chatbot',       icon: 'fa-robot' },
+        // AI Chatbot settings moved to WhatsApp → Chatbot → AI Settings.
         { id: 'leadAssignment', label: 'Lead Assignment',  icon: 'fa-user-tag' },
         { id: 'externalApi',    label: 'API Access',       icon: 'fa-plug' },
     ];
+
+    // Guard stale/removed tab deep-links (e.g. the old ?tab=aiSettings which now
+    // lives under WhatsApp → Chatbot) so the content card never renders blank.
+    useEffect(() => {
+        if (!tabs.some(t => t.id === activeTab)) {
+            setActiveTab('profile');
+            setSearchParams({ tab: 'profile' });
+        }
+    }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
     if (!canAccessSettings) return <Navigate to="/dashboard" replace />;
 
@@ -224,7 +233,9 @@ const Settings = () => {
                             <p className="text-sm text-slate-500 mt-1">Connect your Facebook pages to automatically sync incoming Lead Ads.</p>
                         </div>
                         <div className="p-8">
-                            <MetaConfigSection />
+                            <FeatureGate feature="leads.metaSync" featureLabel="Meta Lead Sync" source="sub-feature">
+                                <MetaConfigSection />
+                            </FeatureGate>
                         </div>
                     </div>
                 )}
@@ -285,22 +296,12 @@ const Settings = () => {
                     </div>
                 )}
                 
-                {activeTab === 'aiSettings' && (
-                    <div className="animate-in fade-in duration-300">
-                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
-                            <h2 className="text-xl font-bold text-slate-800">AI Chatbot Qualification Settings</h2>
-                            <p className="text-sm text-slate-500 mt-1">Configure your automated lead qualification AI bot using Gemini or OpenAI.</p>
-                        </div>
-                        <div className="p-8">
-                            <AISettings />
-                        </div>
-                    </div>
-                )}
-
                 {activeTab === 'externalApi' && (
                     <div className="animate-in fade-in duration-300">
                         <div className="p-8">
-                            <ExternalApiSettings />
+                            <FeatureGate feature="settings.apiAccess" featureLabel="API Access" source="sub-feature">
+                                <ExternalApiSettings />
+                            </FeatureGate>
                         </div>
                     </div>
                 )}

@@ -8,14 +8,24 @@ import WhatsAppSettings from '../components/WhatsApp/WhatsAppSettings';
 import WhatsAppAnalytics from '../components/WhatsApp/WhatsAppAnalytics';
 import ChatbotFlows from '../components/WhatsApp/ChatbotFlows';
 import ChatbotFlowBuilder from '../components/WhatsApp/ChatbotFlowBuilder';
+import AISettings from '../components/Settings/AISettings';
+import FeatureGate from '../components/FeatureGate';
+import { hasEntitlement } from '../utils/entitlements';
 
 const WhatsAppManagement = () => {
     const { user } = useAuth();
     const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
+    // Plan entitlement for the AI layer (sub-feature). The flow builder is free
+    // with WhatsApp; only the AI Chatbot draws a plan feature → gate it separately.
+    const aiChatbotEntitled = hasEntitlement(user, 'whatsapp.chatbot.ai');
     const canViewWhatsApp = canManageTeam || user?.permissions?.viewWhatsApp === true;
 
     const [activeTab, setActiveTab] = useState('inbox');
     const [editingFlowId, setEditingFlowId] = useState(null);
+    // Sub-view inside the Chatbot tab: the visual flow builder ('flows') or the
+    // AI qualification settings ('ai') — moved here out of Organization Settings
+    // so everything chatbot-related lives in one place.
+    const [chatbotView, setChatbotView] = useState('flows');
 
     const hasModule = (moduleName) => {
         if (['superadmin', 'agency'].includes(user?.role)) return true;
@@ -44,13 +54,74 @@ const WhatsAppManagement = () => {
     const renderContent = () => {
         switch (activeTab) {
             case 'inbox': return <WhatsAppInbox />;
-            case 'chatbot': 
+            case 'chatbot': {
+                // Fullscreen flow builder takes over the whole area (no sub-tabs).
                 if (editingFlowId) {
                     return <ChatbotFlowBuilder flowId={editingFlowId} onBack={() => setEditingFlowId(null)} />;
                 }
-                return <ChatbotFlows onEditFlow={(id) => setEditingFlowId(id)} />;
+                // AI Settings is workspace-level config — keep it manager-only, matching
+                // its old home in Organization Settings (accessSettings). Line agents with
+                // viewWhatsApp still get the flow builder, just not the AI config.
+                const chatbotSubTabs = [
+                    { id: 'flows', label: 'Flows',       icon: 'fa-diagram-project' },
+                    canManageTeam && { id: 'ai', label: 'AI Settings', icon: 'fa-wand-magic-sparkles' },
+                ].filter(Boolean);
+                // Defensive: never render AI settings for a non-manager, even if state drifts.
+                const showAi = canManageTeam && chatbotView === 'ai';
+                return (
+                    <div className="h-full flex flex-col">
+                        {/* Chatbot sub-navigation: Flows | AI Settings */}
+                        <div className="flex items-center gap-2 px-6 py-3 bg-white border-b border-slate-200">
+                            {chatbotSubTabs.map(st => {
+                                // Show the AI Settings tab even when the plan doesn't include
+                                // it (soft paywall) — a lock hints the upsell; the wall sells it.
+                                const locked = st.id === 'ai' && !aiChatbotEntitled;
+                                return (
+                                    <button
+                                        key={st.id}
+                                        onClick={() => setChatbotView(st.id)}
+                                        className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition ${
+                                            chatbotView === st.id
+                                                ? 'bg-[#008069] text-white shadow-sm'
+                                                : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                                        }`}
+                                    >
+                                        <i className={`fa-solid ${st.icon}`}></i>
+                                        {st.label}
+                                        {locked && <i className="fa-solid fa-lock text-[9px] opacity-70" />}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div className="flex-1 overflow-hidden">
+                            {!showAi
+                                ? <ChatbotFlows onEditFlow={(id) => setEditingFlowId(id)} />
+                                : (
+                                    // Sub-feature gate: unlocked → AI settings; locked → upgrade wall.
+                                    <FeatureGate feature="whatsapp.chatbot.ai" featureLabel="AI Chatbot" source="sub-feature">
+                                        <div className="h-full overflow-y-auto bg-slate-50">
+                                            <div className="p-6 border-b border-slate-100 bg-white">
+                                                <h2 className="text-xl font-bold text-slate-800">AI Chatbot Qualification Settings</h2>
+                                                <p className="text-sm text-slate-500 mt-1">Configure your automated lead qualification AI bot using Gemini or OpenAI.</p>
+                                            </div>
+                                            <div className="p-6">
+                                                <AISettings />
+                                            </div>
+                                        </div>
+                                    </FeatureGate>
+                                )}
+                        </div>
+                    </div>
+                );
+            }
             case 'templates': return <WhatsAppTemplates />;
-            case 'broadcasts': return <WhatsAppBroadcasts />;
+            case 'broadcasts':
+                // Broadcast = bulk campaigns → plan sub-feature (soft paywall).
+                return (
+                    <FeatureGate feature="whatsapp.broadcast" featureLabel="Broadcast" source="sub-feature">
+                        <WhatsAppBroadcasts />
+                    </FeatureGate>
+                );
             case 'analytics': return <WhatsAppAnalytics />;
             case 'settings': return <WhatsAppSettings />;
             default: return <WhatsAppInbox />;

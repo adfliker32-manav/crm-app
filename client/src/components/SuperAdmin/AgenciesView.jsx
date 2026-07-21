@@ -11,6 +11,7 @@ import ViewAgencyClientsModal from './ViewAgencyClientsModal';
 import ManageAgencyLimitsModal from './ManageAgencyLimitsModal';
 import ManageAgencyModal from './ManageAgencyModal';
 import ManagePermissionsModal from './ManagePermissionsModal';
+import PermissionManagerModal from './PermissionManagerModal';
 import AiLedgerModal from './AiLedgerModal';
 
 const AgenciesView = () => {
@@ -31,6 +32,7 @@ const AgenciesView = () => {
     const [isManageLimitsModalOpen, setIsManageLimitsModalOpen] = useState(false);
     const [isManageModalOpen, setIsManageModalOpen] = useState(false);
     const [isManagePermissionsModalOpen, setIsManagePermissionsModalOpen] = useState(false);
+    const [isModulePermsModalOpen, setIsModulePermsModalOpen] = useState(false);
     const [isAiLedgerModalOpen, setIsAiLedgerModalOpen] = useState(false);
 
     useEffect(() => {
@@ -349,6 +351,7 @@ const AgenciesView = () => {
                     { label: 'Login as Affiliate', icon: 'fa-right-to-bracket', onClick: () => handleImpersonate(selectedCompany) },
                     { label: 'Sub-Clients', icon: 'fa-users-rectangle', onClick: () => { setSelectedCompany(selectedCompany); setIsViewClientsModalOpen(true); } },
                     { label: 'Manage Permission Overrides', icon: 'fa-lock', onClick: () => { setSelectedCompany(selectedCompany); setIsManagePermissionsModalOpen(true); } },
+                    { label: 'Module Permissions', icon: 'fa-sitemap', onClick: () => { setSelectedCompany(selectedCompany); setIsModulePermsModalOpen(true); } },
                     { label: 'Add AI Credits', icon: 'fa-coins', onClick: () => handleAddAiCredits(selectedCompany) },
                     { label: 'View AI Ledger', icon: 'fa-receipt', onClick: () => { setSelectedCompany(selectedCompany); setIsAiLedgerModalOpen(true); } },
                     { label: 'Reseller Limits & Controls', icon: 'fa-shield-halved', onClick: () => { setSelectedCompany(selectedCompany); setIsManageLimitsModalOpen(true); } },
@@ -373,6 +376,7 @@ const AgenciesView = () => {
             <ViewAgencyClientsModal isOpen={isViewClientsModalOpen} onClose={() => setIsViewClientsModalOpen(false)} agency={selectedCompany} />
             <ManageAgencyLimitsModal isOpen={isManageLimitsModalOpen} onClose={() => setIsManageLimitsModalOpen(false)} agency={selectedCompany} onSuccess={fetchCompanies} />
             <ManagePermissionsModal isOpen={isManagePermissionsModalOpen} onClose={() => setIsManagePermissionsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
+            <PermissionManagerModal isOpen={isModulePermsModalOpen} onClose={() => setIsModulePermsModalOpen(false)} company={selectedCompany} onSuccess={fetchCompanies} />
         </div>
     );
 };

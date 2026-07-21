@@ -12,6 +12,7 @@ import GoalTracker from '../components/Reports/GoalTracker';
 import FunnelChart from '../components/Reports/FunnelChart';
 import ActivityMetrics from '../components/Reports/ActivityMetrics';
 import ExportReport from '../components/Reports/ExportReport';
+import FeatureGate from '../components/FeatureGate';
 
 const Reports = () => {
     const { user } = useAuth();
@@ -195,9 +196,10 @@ const Reports = () => {
                             {activeTab === 'agents' && <AgentPerformance data={data} onViewDetails={handleViewAgentDetails} />}
                             {activeTab === 'agent-detail' && <AgentPerformanceDetail period={period} dateRange={dateRange} preSelectedAgentId={selectedAgentId} />}
                             {activeTab === 'revenue' && <RevenueReport data={data} />}
-                            {activeTab === 'funnel' && <FunnelChart period={period} dateRange={dateRange} />}
-                            {activeTab === 'activity' && <ActivityMetrics period={period} dateRange={dateRange} />}
-                            {activeTab === 'goals' && <GoalTracker period={period} />}
+                            {/* Advanced Analytics — plan sub-feature (soft paywall). */}
+                            {activeTab === 'funnel' && <FeatureGate feature="reports.advanced" featureLabel="Advanced Analytics" source="sub-feature"><FunnelChart period={period} dateRange={dateRange} /></FeatureGate>}
+                            {activeTab === 'activity' && <FeatureGate feature="reports.advanced" featureLabel="Advanced Analytics" source="sub-feature"><ActivityMetrics period={period} dateRange={dateRange} /></FeatureGate>}
+                            {activeTab === 'goals' && <FeatureGate feature="reports.advanced" featureLabel="Advanced Analytics" source="sub-feature"><GoalTracker period={period} /></FeatureGate>}
                             {activeTab === 'export' && <ExportReport period={period} dateRange={dateRange} />}
                         </>
                     )}

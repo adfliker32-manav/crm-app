@@ -24,6 +24,7 @@ const UsageLog = require('../models/UsageLog');
 const { invalidateConfigCache } = require('../utils/systemConfig');
 const auditLogger = require('../services/auditLogger');
 const VoiceTemplate = require('../models/VoiceTemplate');
+const { FEATURE_REGISTRY, resolveValues } = require('../constants/featureRegistry');
 const mongoose = require('mongoose');
 const { deleteOwnedRecords } = require('../services/accountCleanupService');
 const {
@@ -2414,6 +2415,90 @@ const updateAccountPermissions = async (req, res) => {
 };
 
 // ==========================================
+// 🌳 CLIENT MODULE PERMISSIONS (Feature Registry tree)
+// ==========================================
+
+// GET /api/superadmin/companies/:id/permissions
+// Returns the canonical feature registry + this client's resolved on/off state.
+const getClientPermissions = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const company = await User.findById(id).select('_id name companyName email role').lean();
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+
+        const ws = await WorkspaceSettings.findOne({ userId: id }).lean() || {};
+        res.json({
+            success: true,
+            registry: FEATURE_REGISTRY,
+            values: resolveValues(ws),
+        });
+    } catch (error) {
+        console.error('getClientPermissions Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+// PUT /api/superadmin/companies/:id/permissions
+// Body: { values: { [nodeKey]: boolean } }
+// Maps each toggled node back onto its declared storage (activeModules /
+// planFeatures / featureFlags) so existing enforcement keeps working. Only keys
+// present in the registry are honoured — arbitrary keys are ignored.
+const updateClientPermissions = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { values } = req.body || {};
+        if (!values || typeof values !== 'object') {
+            return res.status(400).json({ message: 'values object is required' });
+        }
+
+        // Create a workspace on demand if the account doesn't have one yet (e.g. an
+        // agency), so the permission manager works uniformly for every account type.
+        let ws = await WorkspaceSettings.findOne({ userId: id });
+        if (!ws) ws = new WorkspaceSettings({ userId: id });
+
+        const activeModules = new Set(ws.activeModules || []);
+        if (!ws.featureFlags) ws.featureFlags = {};
+
+        const apply = (nodes) => nodes.forEach((n) => {
+            if (n.storage && values[n.key] !== undefined) {
+                const on = !!values[n.key];
+                if (n.storage.type === 'module') {
+                    if (on) activeModules.add(n.storage.id); else activeModules.delete(n.storage.id);
+                } else if (n.storage.type === 'feature') {
+                    ws.planFeatures[n.storage.key] = on;
+                } else if (n.storage.type === 'flag') {
+                    ws.featureFlags[n.storage.key] = on;
+                }
+            }
+            if (n.children) apply(n.children);
+        });
+        apply(FEATURE_REGISTRY);
+
+        ws.activeModules = [...activeModules];
+        // Mixed/subdoc fields need an explicit dirty flag to persist mutations.
+        ws.markModified('featureFlags');
+        ws.markModified('planFeatures');
+        await ws.save(); // post-save hook busts the tenant cache
+
+        auditLogger.log({
+            actor: req.user,
+            actionCategory: 'ACCOUNT_MANAGEMENT',
+            action: 'CLIENT_PERMISSIONS_UPDATED',
+            targetType: 'WorkspaceSettings',
+            targetId: id,
+            targetName: (await User.findById(id).select('companyName name email').lean())?.companyName || id,
+            details: { activeModules: ws.activeModules, planFeatures: ws.planFeatures, featureFlags: ws.featureFlags },
+            req
+        });
+
+        res.json({ success: true, message: 'Permissions updated successfully', values: resolveValues(ws.toObject()) });
+    } catch (error) {
+        console.error('updateClientPermissions Error:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+// ==========================================
 // 🎙️ GLOBAL VOICE TEMPLATES
 // ==========================================
 
@@ -2527,6 +2612,8 @@ module.exports = {
     getAiSupportConfig,
     updateAiSupportConfig,
     updateAccountPermissions,
+    getClientPermissions,
+    updateClientPermissions,
     // 🧹 Maintenance
     cleanupOrphanedAccounts,
     // 🎙️ Global Voice Templates

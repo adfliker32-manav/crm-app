@@ -11,5 +11,5 @@
 module.exports = {
     TRIAL_DURATION_MS: 14 * 24 * 60 * 60 * 1000,
     DEFAULT_AGENT_LIMIT: 5,
-    DEFAULT_ACTIVE_MODULES: ['leads', 'team', 'reports', 'settings', 'whatsapp', 'email', 'automations']
+    DEFAULT_ACTIVE_MODULES: ['leads', 'team', 'reports', 'settings', 'whatsapp', 'email', 'automations', 'voice']
 };

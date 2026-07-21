@@ -5,6 +5,8 @@ const Stage = require('../models/Stage');
 const User = require('../models/User');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const mongoose = require('mongoose');
+const { escapeHtml, generateManageToken, buildIcs } = require('../utils/appointmentUtils');
+const { checkAvailability } = require('../services/bookingAvailabilityService');
 const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } = require('../services/whatsappService');
 const { sendEmail } = require('../services/emailService');
 const { emitToUser } = require('../services/socketService');
@@ -22,6 +24,15 @@ const formatDate = (dateObj) =>
     new Date(dateObj).toLocaleDateString('en-IN', {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
     });
+
+const resolveFrontendUrl = (req) => {
+    let url =
+        process.env.FRONTEND_URL ||
+        (req?.get?.('host') ? `${req.protocol}://${req.get('host')}` : null) ||
+        'http://localhost:5173';
+    if (url.endsWith('/')) url = url.slice(0, -1);
+    return url;
+};
 
 const coerceObjectIdOrNull = (value) => {
     if (value === undefined) return undefined;
@@ -98,6 +109,7 @@ const getPublicBookingPage = async (req, res) => {
             businessName:    page.businessName,
             maxAdvanceDays:  page.maxAdvanceDays,
             bufferMinutes:   page.bufferMinutes || 0,
+            minNoticeMinutes: page.minNoticeMinutes || 0,
             slug:            page.slug,
             customQuestions: page.customQuestions || [],
             thankYouMessage: page.thankYouMessage || '',
@@ -126,6 +138,14 @@ const submitBooking = async (req, res) => {
         const page = await BookingPage.findOne({ slug, isActive: true }).lean();
         if (!page) return res.status(404).json({ message: 'Booking page not found.' });
 
+        // ─── Server-side availability validation (never trust the client) ───────
+        // The public form enforces these rules, but a direct POST bypasses it, so
+        // every constraint is re-checked here (shared with the reschedule flow).
+        const availability = await checkAvailability(page, { appointmentDate, appointmentTime, serviceType });
+        if (!availability.ok)
+            return res.status(availability.code).json({ message: availability.message });
+        const { appointmentAt, tzOffset } = availability;
+
         const countryCode = await getWorkspaceCountryCode(page.userId);
         const normalizedPhone = normalizePhoneForWhatsApp(customerPhone, countryCode) || customerPhone.replace(/[^0-9]/g, '');
 
@@ -150,9 +170,27 @@ const submitBooking = async (req, res) => {
             notes:           notes || '',
             source:          'direct_link',
             status:          'Pending',
-            customAnswers:   sanitizedAnswers
+            customAnswers:   sanitizedAnswers,
+            manageToken:     generateManageToken()
         });
+        // Let the model's pre-save hook derive appointmentAt in the page's timezone.
+        appt.$locals.tzOffsetMinutes = tzOffset;
         await appt.save();
+
+        // Concurrency guard: two submits can both pass the availability check above
+        // and race to save. If an earlier active booking exists for the same exact
+        // slot, this one loses and is rolled back. (ObjectIds are creation-ordered.)
+        const earlier = await Appointment.findOne({
+            userId: page.userId,
+            appointmentDate: appt.appointmentDate,
+            appointmentTime,
+            status: { $in: ['Pending', 'Confirmed'] },
+            _id: { $lt: appt._id }
+        }).select('_id').lean();
+        if (earlier) {
+            await Appointment.deleteOne({ _id: appt._id });
+            return res.status(409).json({ message: 'Sorry, that time slot was just booked. Please choose another.' });
+        }
 
         const formattedDate = formatDate(appt.appointmentDate);
 
@@ -287,17 +325,42 @@ const submitBooking = async (req, res) => {
                 businessName: page.businessName || ''
             };
 
+            // Self-service manage link (reschedule / cancel) + calendar invite.
+            const manageUrl = `${resolveFrontendUrl(req)}/book/manage/${appt.manageToken}`;
+            const icsContent = buildIcs({
+                uid:            `appt-${appt._id}@adfliker`,
+                start:          appointmentAt,
+                durationMinutes: Number(page.slotDurationMinutes || 30),
+                summary:        `${serviceType} — ${page.businessName || 'Appointment'}`,
+                description:    `Booking with ${page.businessName || ''}. Manage: ${manageUrl}`,
+                organizerName:  page.businessName || 'Appointment'
+            });
+
+            // Escape all customer-supplied values — they arrive from an unauthenticated
+            // public form and must never be interpolated into HTML raw.
+            const eName    = escapeHtml(customerName);
+            const eService = escapeHtml(serviceType);
+            const eDate    = escapeHtml(formattedDate);
+            const eTime    = escapeHtml(appointmentTime);
+            const eNotes   = escapeHtml(notes);
+            const eBiz     = escapeHtml(page.businessName || '');
+            const eManage  = escapeHtml(manageUrl);
+
             const emailHtml = customerEmail?.trim() ? `
                 <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;">
                     <h2 style="color:#1e293b;margin-bottom:4px;">✅ Appointment Confirmed</h2>
-                    <p style="color:#64748b;margin-top:0;">Hi <strong>${customerName}</strong>, your appointment has been booked!</p>
+                    <p style="color:#64748b;margin-top:0;">Hi <strong>${eName}</strong>, your appointment has been booked!</p>
                     <table style="width:100%;border-collapse:collapse;margin:20px 0;">
-                        <tr><td style="padding:10px 0;color:#64748b;font-size:14px;">Service</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${serviceType}</td></tr>
-                        <tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Date</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${formattedDate}</td></tr>
-                        <tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Time</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${appointmentTime}</td></tr>
-                        ${notes ? `<tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Notes</td><td style="padding:10px 0;color:#1e293b;">${notes}</td></tr>` : ''}
+                        <tr><td style="padding:10px 0;color:#64748b;font-size:14px;">Service</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${eService}</td></tr>
+                        <tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Date</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${eDate}</td></tr>
+                        <tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Time</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${eTime}</td></tr>
+                        ${notes ? `<tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Notes</td><td style="padding:10px 0;color:#1e293b;">${eNotes}</td></tr>` : ''}
                     </table>
-                    <p style="color:#94a3b8;font-size:12px;margin-top:24px;">${page.businessName || ''}</p>
+                    <div style="text-align:center;margin:20px 0;">
+                        <a href="${eManage}" style="display:inline-block;padding:11px 22px;background:#3b82f6;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;">Reschedule or Cancel</a>
+                    </div>
+                    <p style="color:#94a3b8;font-size:12px;text-align:center;">A calendar invite (.ics) is attached — tap it to add this to your calendar.</p>
+                    <p style="color:#94a3b8;font-size:12px;margin-top:24px;">${eBiz}</p>
                 </div>
             ` : null;
 
@@ -332,7 +395,7 @@ const submitBooking = async (req, res) => {
                     date:    bookingData.date,
                     time:    bookingData.time,
                     service: bookingData.service
-                });
+                }) + `\n\nReschedule or cancel: ${manageUrl}`;
 
                 sends.push(
                     sendWhatsAppTextMessage(normalizedPhone, waMsg, page.userId)
@@ -347,8 +410,16 @@ const submitBooking = async (req, res) => {
                         to:      customerEmail.trim(),
                         subject: `✅ Appointment Confirmed — ${serviceType} on ${formattedDate}`,
                         html:    emailHtml,
-                        userId:  page.userId
-                    }).catch(e => console.warn('[Booking] Email confirmation failed:', e.message))
+                        userId:  page.userId,
+                        transactional: true,
+                        attachments: [{
+                            filename:    'appointment.ics',
+                            content:     icsContent,
+                            contentType: 'text/calendar; charset=utf-8; method=PUBLISH'
+                        }]
+                    })
+                        .then(() => Appointment.findByIdAndUpdate(appt._id, { confirmationSent: true }))
+                        .catch(e => console.warn('[Booking] Email confirmation failed:', e.message))
                 );
             }
 
@@ -397,11 +468,7 @@ const getMyBookingPage = async (req, res) => {
             page = newPage.toObject();
         }
 
-        let frontendUrl =
-            process.env.FRONTEND_URL ||
-            (req.get('host') ? `${req.protocol}://${req.get('host')}` : null) ||
-            'http://localhost:5173';
-        if (frontendUrl.endsWith('/')) frontendUrl = frontendUrl.slice(0, -1);
+        const frontendUrl = resolveFrontendUrl(req);
         res.json({ ...page, publicUrl: `${frontendUrl}/book/${page.slug}` });
     } catch (err) {
         console.error('getMyBookingPage error:', err);
@@ -417,6 +484,7 @@ const updateMyBookingPage = async (req, res) => {
             'primaryColor', 'logoUrl', 'businessName', 'confirmationMessage',
             'confirmationTemplateId', 'leadStageId',
             'sendConfirmation', 'isActive', 'maxAdvanceDays', 'bufferMinutes',
+            'timezoneOffsetMinutes', 'minNoticeMinutes', 'slotDurationMinutes',
             'customQuestions', 'thankYouMessage', 'description', 'slugPrefix'
         ];
         const updates = {};
@@ -451,11 +519,7 @@ const updateMyBookingPage = async (req, res) => {
             await page.save();
         }
 
-        let frontendUrl =
-            process.env.FRONTEND_URL ||
-            (req.get('host') ? `${req.protocol}://${req.get('host')}` : null) ||
-            'http://localhost:5173';
-        if (frontendUrl.endsWith('/')) frontendUrl = frontendUrl.slice(0, -1);
+        const frontendUrl = resolveFrontendUrl(req);
         res.json({ ...page.toObject(), publicUrl: `${frontendUrl}/book/${page.slug}` });
     } catch (err) {
         console.error('updateMyBookingPage error:', err);

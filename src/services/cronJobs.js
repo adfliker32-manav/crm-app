@@ -183,6 +183,18 @@ const runAppointmentReminders = async () => {
 
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
 
+        // Self-healing backfill: appointments created before appointmentAt existed
+        // have it null and would be invisible to the windows below. Derive it (via
+        // the pre-save hook, default IST offset) for a bounded batch of upcoming ones.
+        const missing = await Appointment.find({
+            status: { $in: ['Pending', 'Confirmed'] },
+            appointmentAt: null,
+            appointmentDate: { $gte: new Date(Date.now() - 2 * 86400000) }
+        }).limit(200);
+        for (const appt of missing) {
+            try { await appt.save(); } catch (_) { /* skip malformed */ }
+        }
+
         const now = Date.now();
 
         // 24h window: appointments between 23h and 25h from now
@@ -192,15 +204,18 @@ const runAppointmentReminders = async () => {
         const window1Start = new Date(now + 55 * 60000);
         const window1End = new Date(now + 65 * 60000);
 
+        // Use appointmentAt (the true instant: date + time-of-day in the booking
+        // timezone), NOT appointmentDate — which is stored at midnight-UTC and would
+        // make every reminder fire relative to midnight regardless of the real time.
         const [appts24h, appts1h] = await Promise.all([
             Appointment.find({
                 status: { $in: ['Pending', 'Confirmed'] },
-                appointmentDate: { $gte: window24Start, $lte: window24End },
+                appointmentAt: { $gte: window24Start, $lte: window24End },
                 reminder24hSent: { $ne: true }
             }).lean(),
             Appointment.find({
                 status: { $in: ['Pending', 'Confirmed'] },
-                appointmentDate: { $gte: window1Start, $lte: window1End },
+                appointmentAt: { $gte: window1Start, $lte: window1End },
                 reminder1hSent: { $ne: true }
             }).lean()
         ]);
@@ -233,27 +248,68 @@ const runAppointmentReminders = async () => {
         const map24h = new Map(templates24h.map(t => [t.userId.toString(), t]));
         const map1h = new Map(templates1h.map(t => [t.userId.toString(), t]));
 
-        // ── Helper using the pre-fetched map instead of per-call DB query ───────────
-        const sendReminder = async (appt, templateMap, flagField) => {
-            const template = templateMap.get(appt.userId.toString());
-            // No template configured for this tenant: skip without marking so it retries
-            // next tick once admin creates a template.
-            if (!template) return;
+        const { sendEmail } = require('./emailService');
+        const { escapeHtml } = require('../utils/appointmentUtils');
+        const FRONTEND = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
 
-            try {
-                if (appt.customerPhone) {
-                    await sendWhatsAppMessage(appt.customerPhone, template.name, appt.userId.toString());
-                    console.log(`📅 [AppointmentReminder] ${template.triggerType} sent to ${appt.customerPhone} (appt ${appt._id})`);
-                }
-            } catch (err) {
-                console.error(`❌ [AppointmentReminder] ${template.triggerType} failed for ${appt._id}:`, err.message);
-            } finally {
-                await Appointment.findByIdAndUpdate(appt._id, { $set: { [flagField]: true } });
-            }
+        const buildReminderEmail = (appt, label) => {
+            const when = label === '24h' ? 'is coming up tomorrow' : 'is in about an hour';
+            const dateStr = new Date(appt.appointmentDate).toLocaleDateString('en-IN', {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+            });
+            const manageUrl = (appt.manageToken && FRONTEND) ? `${FRONTEND}/book/manage/${appt.manageToken}` : '';
+            return `
+                <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;">
+                    <h2 style="color:#1e293b;margin-bottom:4px;">⏰ Appointment Reminder</h2>
+                    <p style="color:#64748b;margin-top:0;">Hi <strong>${escapeHtml(appt.customerName)}</strong>, your appointment ${when}.</p>
+                    <table style="width:100%;border-collapse:collapse;margin:20px 0;">
+                        <tr><td style="padding:10px 0;color:#64748b;font-size:14px;">Service</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${escapeHtml(appt.serviceType)}</td></tr>
+                        <tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Date</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${escapeHtml(dateStr)}</td></tr>
+                        <tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Time</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${escapeHtml(appt.appointmentTime)}</td></tr>
+                    </table>
+                    ${manageUrl ? `<div style="text-align:center;margin:20px 0;"><a href="${escapeHtml(manageUrl)}" style="display:inline-block;padding:11px 22px;background:#3b82f6;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;">Reschedule or Cancel</a></div>` : ''}
+                </div>`;
         };
 
-        for (const appt of appts24h) await sendReminder(appt, map24h, 'reminder24hSent');
-        for (const appt of appts1h) await sendReminder(appt, map1h, 'reminder1hSent');
+        // ── Helper: send reminder over WhatsApp (template) and/or email ─────────────
+        const sendReminder = async (appt, templateMap, flagField, label) => {
+            const template = templateMap.get(appt.userId.toString());
+            const hasEmail = !!(appt.customerEmail && appt.customerEmail.trim());
+
+            // Nothing available on either channel: skip WITHOUT marking so it retries
+            // next tick once the admin configures a template.
+            if (!template && !hasEmail) return;
+
+            if (template && appt.customerPhone) {
+                try {
+                    await sendWhatsAppMessage(appt.customerPhone, template.name, appt.userId.toString());
+                    console.log(`📅 [AppointmentReminder] ${label} WhatsApp sent to ${appt.customerPhone} (appt ${appt._id})`);
+                } catch (err) {
+                    console.error(`❌ [AppointmentReminder] ${label} WhatsApp failed for ${appt._id}:`, err.message);
+                }
+            }
+
+            if (hasEmail) {
+                try {
+                    await sendEmail({
+                        to:      appt.customerEmail.trim(),
+                        subject: label === '24h' ? '⏰ Reminder: your appointment is tomorrow' : '⏰ Reminder: your appointment is in 1 hour',
+                        html:    buildReminderEmail(appt, label),
+                        userId:  appt.userId,
+                        transactional: true
+                    });
+                    console.log(`📅 [AppointmentReminder] ${label} email sent to ${appt.customerEmail} (appt ${appt._id})`);
+                } catch (err) {
+                    console.error(`❌ [AppointmentReminder] ${label} email failed for ${appt._id}:`, err.message);
+                }
+            }
+
+            // Mark once a channel was available so we don't resend every tick.
+            await Appointment.findByIdAndUpdate(appt._id, { $set: { [flagField]: true } });
+        };
+
+        for (const appt of appts24h) await sendReminder(appt, map24h, 'reminder24hSent', '24h');
+        for (const appt of appts1h) await sendReminder(appt, map1h, 'reminder1hSent', '1h');
 
         console.log(`📅 [AppointmentReminder] Processed ${appts24h.length} 24h + ${appts1h.length} 1h reminders`);
     } catch (err) {

@@ -85,12 +85,20 @@ const SheetSyncSettings = () => {
     const fetchConfig = async () => {
         try {
             setLoading(true);
-            const [configRes, cfRes] = await Promise.all([
-                api.get('/leads/sheet-sync-config'),
-                api.get('/custom-fields'),
-            ]);
+            // Custom fields are non-essential enrichment (used to offer extra sync
+            // columns) AND are gated by requireModule('leads') on the backend — a
+            // tenant without the Leads module gets a 403 there. Fetch them
+            // best-effort so that failure can NEVER sink the sheet-sync config load
+            // (which was the cause of the misleading "Failed to load sync
+            // configuration" toast). Only a real sheet-sync-config failure errors.
+            const cfDefsPromise = api.get('/custom-fields')
+                .then(res => (Array.isArray(res.data) ? res.data : []))
+                .catch(err => { console.error('Failed to load custom fields:', err.message); return []; });
+
+            const configRes = await api.get('/leads/sheet-sync-config');
+            const cfDefs = await cfDefsPromise;
+
             const config = configRes.data.googleSheetSync || {};
-            const cfDefs = Array.isArray(cfRes.data) ? cfRes.data : [];
             setCustomFields(cfDefs);
 
             if (config.sheetId) {
@@ -113,17 +121,8 @@ const SheetSyncSettings = () => {
         }
     };
 
-    // Fetch custom field definitions for this workspace (backup/refresh)
-    useEffect(() => {
-        if (customFields.length === 0) {
-            api.get('/custom-fields')
-                .then(res => {
-                    const cfDefs = Array.isArray(res.data) ? res.data : [];
-                    setCustomFields(cfDefs);
-                })
-                .catch((err) => { console.error('Failed to load custom fields:', err.message); });
-        }
-    }, []);
+    // (Custom fields are loaded best-effort inside fetchConfig above — no separate
+    // fetch needed, which also avoids a duplicate request on mount.)
 
     // Google Login — needs drive + spreadsheets read scope
     const googleLogin = useGoogleLogin({

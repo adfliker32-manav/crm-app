@@ -37,9 +37,10 @@ const automationRoutes = require('./src/routes/automationRoutes'); // Visual Aut
 const appointmentRoutes = require('./src/routes/appointmentRoutes'); // Appointment Booking
 const bookingRoutes = require('./src/routes/bookingRoutes'); // Public Booking Pages
 const supportRoutes = require('./src/routes/supportRoutes'); // In-built Help Center
-const { authMiddleware } = require('./src/middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('./src/middleware/authMiddleware');
 const requireModule = require('./src/middleware/moduleMiddleware');
 const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
+const { renderManageBookingPage } = require('./src/views/manageBookingPage');
 const webLeadRoutes = require('./src/routes/webLeadRoutes'); // Web-to-Lead embed
 const mcpRoutes = require('./src/routes/mcpRoutes'); // Claude AI / MCP server
 const sequenceRoutes = require('./src/routes/sequenceRoutes'); // Drip Sequences
@@ -508,6 +509,8 @@ app.use('/api/stages', authMiddleware, requireModule('leads'), stageRoutes);
 app.use('/api/custom-fields', authMiddleware, requireModule('leads'), customFieldRoutes);
 app.use('/api/tags', authMiddleware, requireModule('leads'), require('./src/routes/tagRoutes'));
 app.use('/api/tasks', authMiddleware, taskRoutes);
+// Feature registry metadata + upgrade-prompt analytics (auth applied per-route).
+app.use('/api/features', require('./src/routes/featureRoutes'));
 // Plan-gated by the 'automations' module (drip Sequences are part of Automations,
 // not a separate module). Mirrors the email/whatsapp/chatbot gates so a Basic-tier
 // user can't reach these APIs directly even if the nav is hidden.
@@ -573,7 +576,7 @@ app.use('/api/ai', aiProxyRoutes);
 app.use('/api/v1', extApiRoutes);
 
 // Key management for External API (JWT auth — workspace owner only)
-app.use('/api/ext-api', authMiddleware, extApiKeyRoutes);
+app.use('/api/ext-api', authMiddleware, requireFeature('settings.apiAccess'), extApiKeyRoutes);
 
 
 // Meta Webhook URL: /api/meta/webhook
@@ -629,6 +632,12 @@ app.use('/api/invoice', invoicePublicRoute);
 
 // Public booking page (HTML + Tailwind, no React required)
 // This prevents blank screens if the SPA bundle doesn't yet include /book/:slug.
+// Manage route registered first — /book/manage/:token has more path segments than
+// /book/:slug so they don't collide, but keep it explicit.
+app.get('/book/manage/:token', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.status(200).send(renderManageBookingPage(req.params.token));
+});
 app.get('/book/:slug', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.status(200).send(renderPublicBookingPage(req.params.slug));

@@ -9,6 +9,7 @@ import NotificationContainer from './components/NotificationContainer';
 import ConfirmDialog from './components/ConfirmDialog';
 import PromptDialog from './components/PromptDialog';
 import ProtectedRoute from './components/ProtectedRoute';
+import FeatureGate from './components/FeatureGate';
 import Layout from './layouts/Layout';
 import AgencyLayout from './layouts/AgencyLayout';
 import React, { Suspense, lazy } from 'react';
@@ -37,8 +38,9 @@ const Leads = lazy(() => import('./pages/Leads'));
 const SuperAdmin = lazy(() => import('./pages/SuperAdmin'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Reports = lazy(() => import('./pages/Reports'));
-const Automations = lazy(() => import('./pages/Automations'));
-const Sequences = lazy(() => import('./pages/Sequences'));
+// Automations / Workflows / Sequences pages are composed inside AutomationHub,
+// which is the only route entry point for the merged "Automation" module.
+const AutomationHub = lazy(() => import('./pages/AutomationHub'));
 const Appointments = lazy(() => import('./pages/Appointments'));
 const BookingPage = lazy(() => import('./pages/BookingPage'));
 const TermsAndConditions = lazy(() => import('./pages/TermsAndConditions'));
@@ -49,7 +51,6 @@ const PaymentRequired = lazy(() => import('./pages/PaymentRequired'));
 const Plans = lazy(() => import('./pages/Plans'));
 const Billing = lazy(() => import('./pages/Billing'));
 const VoiceHub = lazy(() => import('./pages/VoiceHub'));
-const Workflows = lazy(() => import('./pages/Workflows'));
 const WorkflowBuilder = lazy(() => import('./pages/WorkflowBuilder'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
@@ -96,18 +97,29 @@ function App() {
                           <Route element={<Layout />}>
                             <Route path="/dashboard" element={<Dashboard />} />
 
-                            <Route path="/leads" element={<Leads />} />
-                            <Route path="/email" element={<EmailManagement />} />
-                            <Route path="/whatsapp" element={<WhatsAppManagement />} />
-                            <Route path="/team" element={<Team />} />
-                            <Route path="/automations" element={<Automations />} />
-                            <Route path="/workflows" element={<Workflows />} />
-                            <Route path="/sequences" element={<Sequences />} />
-                            <Route path="/appointments" element={<Appointments />} />
+                            {/* Module routes are wrapped in <FeatureGate>: a plan that
+                                doesn't include the module still routes here, but renders the
+                                UpgradeWall instead of the feature (soft paywall). Dashboard &
+                                Billing are always accessible. */}
+                            <Route path="/leads" element={<FeatureGate feature="leads" featureLabel="Leads"><Leads /></FeatureGate>} />
+                            <Route path="/email" element={<FeatureGate feature="email" featureLabel="Email"><EmailManagement /></FeatureGate>} />
+                            <Route path="/whatsapp" element={<FeatureGate feature="whatsapp" featureLabel="WhatsApp"><WhatsAppManagement /></FeatureGate>} />
+                            <Route path="/team" element={<FeatureGate feature="team" featureLabel="Team"><Team /></FeatureGate>} />
+                            {/* Legacy Automation + Workflow + Sequences now live under one
+                                "Automation" hub. Each path renders the hub (the URL picks the
+                                default tab) so the fullscreen builder's back-nav to /workflows
+                                and existing deep links keep working. */}
+                            <Route path="/automations" element={<FeatureGate feature="automation" featureLabel="Automation"><AutomationHub /></FeatureGate>} />
+                            <Route path="/workflows" element={<FeatureGate feature="automation" featureLabel="Automation"><AutomationHub /></FeatureGate>} />
+                            <Route path="/sequences" element={<FeatureGate feature="automation" featureLabel="Automation"><AutomationHub /></FeatureGate>} />
+                            <Route path="/appointments" element={<FeatureGate feature="appointments" featureLabel="Appointments"><Appointments /></FeatureGate>} />
+                            {/* Settings is NOT gated as a whole — it holds universal Profile /
+                                password. Paid sub-tabs (Meta Sync, API Access) are gated inside
+                                the page individually; the rest stay reachable on every plan. */}
                             <Route path="/settings" element={<Settings />} />
-                            <Route path="/reports" element={<Reports />} />
+                            <Route path="/reports" element={<FeatureGate feature="reports" featureLabel="Analytics"><Reports /></FeatureGate>} />
                             <Route path="/billing" element={<Billing />} />
-                            <Route path="/voice-hub" element={<VoiceHub />} />
+                            <Route path="/voice-hub" element={<FeatureGate feature="voice" featureLabel="AI Voice"><VoiceHub /></FeatureGate>} />
                           </Route>
                         </Route>
 

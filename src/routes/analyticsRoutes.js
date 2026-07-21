@@ -5,7 +5,7 @@ const { authMiddleware, requireFeature } = require('../middleware/authMiddleware
 const checkPermission = require('../middleware/checkPermission');
 
 router.use(authMiddleware);
-router.use(requireFeature('advancedAnalytics'));
+router.use(requireFeature('reports.advanced')); // registry key → advancedAnalytics planFeature
 
 // Goal Tracking
 router.get('/goals', checkPermission('viewReports'), getGoals);

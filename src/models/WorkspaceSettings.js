@@ -139,6 +139,17 @@ const workspaceSettingsSchema = new mongoose.Schema({
         default: ['leads', 'team', 'reports']
     },
 
+    // 🌳 GRANULAR FEATURE FLAGS (SuperAdmin Permission Manager)
+    // Free-form { featureKey: boolean } map for sub-feature entitlements that are
+    // finer-grained than activeModules/planFeatures (e.g. 'whatsapp.chatbot.flow',
+    // 'settings.sheetSync'). Keys are declared in src/constants/featureRegistry.js.
+    // Mixed type so new registry keys need no schema migration. Enforcement for
+    // individual flags is wired incrementally; the manager persists them today.
+    featureFlags: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+    },
+
     agentLimit: { // Hard cap instance
         type: Number,
         default: 5 

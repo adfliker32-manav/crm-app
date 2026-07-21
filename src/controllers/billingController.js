@@ -11,6 +11,7 @@ const Coupon = require('../models/Coupon');
 const AiCreditTopup = require('../models/AiCreditTopup');
 const aiCreditService = require('../services/aiCreditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { FEATURE_REGISTRY, resolveValues, applyValues } = require('../constants/featureRegistry');
 
 // Self-serve AI-credit top-up bounds (INR). Credits are derived from the amount
 // at aiCreditService.CREDIT_VALUE_INR, so no separate price list to keep in sync.
@@ -630,7 +631,12 @@ const webhook = async (req, res) => {
 // ─── SuperAdmin Plan Catalog CRUD ──────────────────────────────────────────
 const listAllPlans = async (req, res) => {
     const plans = await Plan.find({}).sort({ sortOrder: 1 }).lean();
-    res.json({ success: true, plans });
+    // Attach the resolved tree values per plan so the tree-based plan builder can
+    // render each plan's current entitlements, and ship the registry + a blank
+    // baseline so a "New plan" starts from sensible defaults.
+    const withValues = plans.map(p => ({ ...p, entitlementValues: resolveValues(p) }));
+    const defaultValues = resolveValues({ activeModules: ['leads', 'team', 'reports'], planFeatures: {}, featureFlags: {} });
+    res.json({ success: true, plans: withValues, registry: FEATURE_REGISTRY, defaultValues });
 };
 
 const upsertPlan = async (req, res) => {
@@ -639,11 +645,31 @@ const upsertPlan = async (req, res) => {
             code, name, description, monthlyPrice, yearlyPrice,
             discountPercentage,
             razorpayMonthlyPlanId, razorpayYearlyPlanId,
-            activeModules, planFeatures, isActive, isCustom, sortOrder
+            activeModules, planFeatures, entitlementValues, isActive, isCustom, sortOrder
         } = req.body;
         if (!code || !name || monthlyPrice === undefined) {
             return res.status(400).json({ message: 'code, name, monthlyPrice are required' });
         }
+
+        // Preferred path: the tree-based builder sends `entitlementValues`
+        // ({ nodeKey: bool }). Fold it back onto the three storage buckets via the
+        // shared registry helper. Numeric limits (leadLimit/agentLimit) aren't tree
+        // toggles, so preserve them from the submitted planFeatures. Falls back to
+        // raw activeModules/planFeatures for any legacy caller.
+        let resolvedModules = activeModules || ['leads', 'team', 'reports'];
+        let resolvedFeatures = planFeatures || {};
+        let resolvedFlags = {};
+        if (entitlementValues && typeof entitlementValues === 'object') {
+            const applied = applyValues(entitlementValues, {});
+            resolvedModules = applied.activeModules;
+            resolvedFeatures = {
+                ...applied.planFeatures,
+                leadLimit:  planFeatures?.leadLimit  ?? 100,
+                agentLimit: planFeatures?.agentLimit ?? 3,
+            };
+            resolvedFlags = applied.featureFlags;
+        }
+
         const doc = await Plan.findOneAndUpdate(
             { code: code.toLowerCase() },
             {
@@ -656,8 +682,9 @@ const upsertPlan = async (req, res) => {
                     // Razorpay plan IDs — always from DB, never hardcoded
                     razorpayMonthlyPlanId: razorpayMonthlyPlanId || null,
                     razorpayYearlyPlanId:  razorpayYearlyPlanId  || null,
-                    activeModules: activeModules || ['leads', 'team', 'reports'],
-                    planFeatures: planFeatures || {},
+                    activeModules: resolvedModules,
+                    planFeatures: resolvedFeatures,
+                    featureFlags: resolvedFlags,
                     isActive: isActive !== false,
                     isCustom: !!isCustom,
                     sortOrder: Number(sortOrder || 0)
@@ -685,6 +712,7 @@ const upsertPlan = async (req, res) => {
                         $set: {
                             subscriptionPlan: doc.name,
                             activeModules:    doc.activeModules,
+                            featureFlags:     doc.featureFlags || {},
                             agentLimit:       doc.planFeatures?.agentLimit ?? 5,
                             ...featureSet
                         }

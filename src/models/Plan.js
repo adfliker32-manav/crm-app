@@ -70,6 +70,15 @@ const planSchema = new mongoose.Schema({
         agentLimit:         { type: Number,  default: 3     }
     },
 
+    // Granular sub-feature overrides (registry featureFlags) selected in the
+    // tree-based plan builder. Copied onto WorkspaceSettings.featureFlags on
+    // subscribe, exactly like activeModules/planFeatures. Mixed so new registry
+    // keys need no schema change. See src/constants/featureRegistry.js.
+    featureFlags: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+    },
+
     // 'custom' is a sentinel tier — price/features set per-tenant by superadmin,
     // not by this catalog. Hidden from the public /plans pricing page.
     // 0 = no discount. When > 0 a "sale" badge is shown on the pricing page.

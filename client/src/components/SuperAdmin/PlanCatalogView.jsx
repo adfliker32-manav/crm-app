@@ -2,35 +2,28 @@ import React, { useEffect, useState } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
-import { WORKSPACE_MODULE_IDS } from '../../constants/modules';
+import PermissionTree from './PermissionTree';
 
-// SuperAdmin CRUD for the Plan tier catalog. Every field is editable so the
-// user can adjust pricing/modules without redeploy.
-// Modules come from the shared catalog (no API/White-Label). Things like
-// chatbot/campaigns/webhooks are feature flags, configured below — not modules.
-const KNOWN_MODULES = WORKSPACE_MODULE_IDS;
-
-// Only flags that are actually ENFORCED somewhere. 'agentCreation' (agents are
-// capped by agentLimit, not this boolean) and 'webhooks' (no feature behind it)
-// were removed — they were inert toggles that misled the plan author.
-const KNOWN_FEATURE_BOOLEANS = [
-    'whatsappAutomation', 'emailAutomation', 'metaSync',
-    'campaigns', 'advancedAnalytics', 'aiChatbot'
-];
-
+// SuperAdmin CRUD for the Plan tier catalog. Every field is editable so the user
+// can adjust pricing/entitlements without redeploy. Modules AND sub-features are
+// selected via the same registry <PermissionTree> the per-client manager uses —
+// the plan carries the resolved activeModules/planFeatures/featureFlags, which
+// are copied onto a client's workspace on subscribe.
 const emptyPlan = () => ({
     code: '', name: '', description: '',
     monthlyPrice: 0, yearlyPrice: 0,
     discountPercentage: 0,
     razorpayMonthlyPlanId: '',
     razorpayYearlyPlanId: '',
-    activeModules: ['leads', 'team', 'reports'],
     planFeatures: { leadLimit: 100, agentLimit: 3 },
+    entitlementValues: {},
     isActive: true, isCustom: false, sortOrder: 0
 });
 
 const PlanCatalogView = () => {
     const [plans, setPlans] = useState([]);
+    const [registry, setRegistry] = useState([]);
+    const [defaultValues, setDefaultValues] = useState({});
     const [loading, setLoading] = useState(true);
     const [editing, setEditing] = useState(null); // null | plan obj
     const [saving, setSaving] = useState(false);
@@ -42,6 +35,8 @@ const PlanCatalogView = () => {
         try {
             const res = await api.get('/billing/superadmin/plans');
             setPlans(res.data?.plans || []);
+            setRegistry(res.data?.registry || []);
+            setDefaultValues(res.data?.defaultValues || {});
         } catch {
             showError('Failed to load plan catalog');
         } finally {
@@ -80,23 +75,6 @@ const PlanCatalogView = () => {
         }
     };
 
-    const toggleModule = (mod) => {
-        const has = editing.activeModules.includes(mod);
-        setEditing({
-            ...editing,
-            activeModules: has
-                ? editing.activeModules.filter(m => m !== mod)
-                : [...editing.activeModules, mod]
-        });
-    };
-
-    const toggleFeature = (key) => {
-        setEditing({
-            ...editing,
-            planFeatures: { ...editing.planFeatures, [key]: !editing.planFeatures[key] }
-        });
-    };
-
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -104,7 +82,7 @@ const PlanCatalogView = () => {
                     <h1 className="text-3xl font-black text-slate-900">Plan Catalog</h1>
                     <p className="text-sm text-slate-500 mt-1">Tier prices, modules, and limits. Edits are live — no redeploy.</p>
                 </div>
-                <button onClick={() => setEditing(emptyPlan())}
+                <button onClick={() => setEditing({ ...emptyPlan(), entitlementValues: { ...defaultValues } })}
                     className="bg-slate-900 hover:bg-black text-white text-sm font-bold px-4 py-2 rounded-xl">
                     <i className="fa-solid fa-plus mr-2" />New plan
                 </button>
@@ -170,7 +148,7 @@ const PlanCatalogView = () => {
                                         </span>
                                     </td>
                                     <td className="px-4 py-3 text-right">
-                                        <button onClick={() => setEditing({ ...p, planFeatures: p.planFeatures || {} })}
+                                        <button onClick={() => setEditing({ ...p, planFeatures: p.planFeatures || {}, entitlementValues: p.entitlementValues || {} })}
                                             className="text-blue-600 hover:text-blue-800 mr-3"><i className="fa-solid fa-pen" /></button>
                                         <button onClick={() => remove(p)}
                                             className="text-rose-600 hover:text-rose-800"><i className="fa-solid fa-trash" /></button>
@@ -320,33 +298,18 @@ const PlanCatalogView = () => {
                             </div>
 
                             <div>
-                                <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Active modules</label>
-                                <div className="flex flex-wrap gap-2 mt-2">
-                                    {KNOWN_MODULES.map(m => {
-                                        const on = editing.activeModules.includes(m);
-                                        return (
-                                            <button key={m} onClick={() => toggleModule(m)}
-                                                className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition
-                                                    ${on ? 'bg-emerald-100 border-emerald-300 text-emerald-700' : 'bg-white border-slate-300 text-slate-500'}`}>
-                                                {on && <i className="fa-solid fa-check mr-1" />}
-                                                {m}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Feature flags</label>
-                                <div className="grid grid-cols-2 gap-2 mt-2">
-                                    {KNOWN_FEATURE_BOOLEANS.map(key => (
-                                        <label key={key} className="flex items-center gap-2 text-sm">
-                                            <input type="checkbox"
-                                                checked={!!editing.planFeatures?.[key]}
-                                                onChange={() => toggleFeature(key)} />
-                                            {key}
-                                        </label>
-                                    ))}
+                                <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Modules &amp; features</label>
+                                <p className="text-xs text-slate-400 mt-0.5 mb-2">
+                                    Toggle exactly what this plan includes. Turning a parent off disables everything under it.
+                                    (e.g. keep <strong>Chatbot</strong> on but <strong>AI Chatbot</strong> off for a Starter plan.)
+                                </p>
+                                <div className="border border-slate-200 rounded-xl p-2 max-h-80 overflow-y-auto">
+                                    <PermissionTree
+                                        registry={registry}
+                                        values={editing.entitlementValues || {}}
+                                        onChange={(v) => setEditing({ ...editing, entitlementValues: v })}
+                                        showEnforcedBadge={false}
+                                    />
                                 </div>
                             </div>
 

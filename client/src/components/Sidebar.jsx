@@ -1,19 +1,23 @@
-/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useConfirm } from '../context/ConfirmContext';
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 import useSocket from '../hooks/useSocket';
+import { hasEntitlement } from '../utils/entitlements';
 
-const NavItem = ({ to, icon, label, collapsed, badgeCount = 0 }) => {
+const NavItem = ({ to, icon, label, collapsed, badgeCount = 0, alsoMatch = [], locked = false }) => {
     const location = useLocation();
-    const isActive = location.pathname.startsWith(to);
+    // `alsoMatch` lets one nav item stay highlighted across sibling paths that
+    // render the same page (e.g. Automation hub served at /automations & /workflows).
+    const isActive = location.pathname.startsWith(to)
+        || alsoMatch.some(p => location.pathname.startsWith(p));
 
     return (
         <Link
             to={to}
-            className={`relative flex items-center ${collapsed ? "justify-center" : "gap-3"} 
+            title={locked ? `${label} — not in your plan` : label}
+            className={`relative flex items-center ${collapsed ? "justify-center" : "gap-3"}
             px-4 py-2.5 text-sm font-medium transition rounded-md
             ${isActive
                     ? "text-white"
@@ -24,16 +28,24 @@ const NavItem = ({ to, icon, label, collapsed, badgeCount = 0 }) => {
                 <span className="absolute left-0 top-1 bottom-1 w-1 bg-blue-500 rounded-r"></span>
             )}
 
-            <i className={`${icon} text-base w-5 text-center`} />
+            <i className={`${icon} text-base w-5 text-center ${locked ? 'opacity-60' : ''}`} />
 
-            {!collapsed && label}
+            {!collapsed && <span className={locked ? 'opacity-60' : ''}>{label}</span>}
 
-            {badgeCount > 0 && !collapsed && (
+            {/* Locked (not in plan) → subtle lock; still clickable → upgrade wall. */}
+            {locked && !collapsed && (
+                <i className="fa-solid fa-lock ml-auto text-[10px] text-slate-500" />
+            )}
+            {locked && collapsed && (
+                <span className="absolute top-1.5 right-1.5 text-[8px] text-slate-500"><i className="fa-solid fa-lock" /></span>
+            )}
+
+            {!locked && badgeCount > 0 && !collapsed && (
                 <span className="ml-auto bg-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse shadow-lg shadow-orange-500/30">
                     {badgeCount}
                 </span>
             )}
-            {badgeCount > 0 && collapsed && (
+            {!locked && badgeCount > 0 && collapsed && (
                 <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-orange-500 rounded-full animate-pulse"></span>
             )}
         </Link>
@@ -58,13 +70,6 @@ const Sidebar = () => {
     const hasModule = (moduleName) => {
         if (user?.role === 'superadmin' || user?.role === 'agency') return true;
         return user?.activeModules?.length ? user.activeModules.includes(moduleName) : true;
-    };
-
-    const hasVoiceModule = () => {
-        if (user?.role === 'superadmin') return true;
-        if (user?.permissions?.aiVoiceAccess === true) return true;
-        if (user?.permissions?.aiVoiceAccess === false) return false;
-        return hasModule('voice');
     };
 
     const hasWhatsApp = (canManageTeam || user?.permissions?.viewWhatsApp === true) && hasModule('whatsapp');
@@ -126,6 +131,72 @@ const Sidebar = () => {
         if (confirmed) logout();
     };
 
+    // ─── Declarative nav model ────────────────────────────────────────────────
+    // Single source of truth for the sidebar. Grouped by the user's job/channel
+    // (industry-standard IA), NOT by permission level. Each item carries its own
+    // `show` predicate so rendering stays a pure map — no inline JSX conditionals.
+    // A group's heading is auto-hidden when none of its items are visible.
+    // (When the feature registry lands, `show` becomes a lookup against it.)
+    // `show`    = agent-permission visibility (an agent without viewX never sees it).
+    // `feature` = registry key for PLAN entitlement. Plan no longer HIDES an item —
+    //             a locked item stays visible with a lock and routes to the upgrade
+    //             wall on click (industry-standard soft paywall). No `feature` = never
+    //             plan-gated (Dashboard, Billing).
+    const NAV_GROUPS = [
+        {
+            heading: null, // top-level, no section label
+            items: [
+                { to: '/dashboard', icon: 'fa-solid fa-chart-line', label: 'Dashboard', badge: dueTaskCount,
+                  show: canManageTeam || user?.permissions?.viewDashboard !== false },
+            ],
+        },
+        {
+            heading: 'CRM',
+            items: [
+                { to: '/leads', icon: 'fa-solid fa-users', label: 'Leads', feature: 'leads',
+                  show: canManageTeam || user?.permissions?.viewLeads !== false },
+                { to: '/appointments', icon: 'fa-solid fa-calendar-check', label: 'Appointments', feature: 'appointments',
+                  show: canManageTeam || user?.permissions?.viewLeads !== false },
+            ],
+        },
+        {
+            heading: 'Conversations',
+            items: [
+                { to: '/whatsapp', icon: 'fa-brands fa-whatsapp', label: 'WhatsApp', badge: waUnreadCount, feature: 'whatsapp',
+                  show: canManageTeam || user?.permissions?.viewWhatsApp === true },
+                { to: '/email', icon: 'fa-solid fa-envelope', label: 'Email', feature: 'email',
+                  show: canManageTeam || user?.permissions?.viewEmails === true },
+                { to: '/voice-hub', icon: 'fa-solid fa-headset', label: 'AI Voice', feature: 'voice',
+                  show: canManageTeam },
+            ],
+        },
+        {
+            heading: 'Automation',
+            items: [
+                // Hub: Legacy Automation | Workflow | Sequences (see AutomationHub).
+                { to: '/automations', alsoMatch: ['/workflows', '/sequences'], icon: 'fa-solid fa-robot', label: 'Automation', feature: 'automation',
+                  show: canManageTeam },
+            ],
+        },
+        {
+            heading: 'Insights',
+            items: [
+                { to: '/reports', icon: 'fa-solid fa-chart-pie', label: 'Reports', feature: 'reports',
+                  show: canManageTeam || user?.permissions?.viewReports },
+            ],
+        },
+        {
+            heading: 'Admin',
+            items: [
+                { to: '/team', icon: 'fa-solid fa-user-group', label: 'Team', feature: 'team',
+                  show: canManageTeam },
+                // Billing — managers only. Agencies are lifetime-free; agents don't manage billing.
+                { to: '/billing', icon: 'fa-solid fa-credit-card', label: 'Billing',
+                  show: user?.role === 'manager' },
+            ],
+        },
+    ];
+
     return (
         <aside
             className={`${collapsed ? "w-16" : "w-64"} 
@@ -144,79 +215,33 @@ const Sidebar = () => {
                 )}
             </div>
 
-            {/* NAV */}
+            {/* NAV — rendered from the declarative NAV_GROUPS model above. */}
             <nav className="flex-1 overflow-y-auto py-4 space-y-1">
-
-                {(canManageTeam || user?.permissions?.viewDashboard !== false) && (
-                    <NavItem collapsed={collapsed} to="/dashboard" icon="fa-solid fa-chart-line" label="Dashboard" badgeCount={dueTaskCount} />
-                )}
-
-                {!collapsed && (
-                    <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Sales</p>
-                )}
-
-                {(canManageTeam || user?.permissions?.viewLeads !== false) && hasModule('leads') && (
-                    <NavItem collapsed={collapsed} to="/leads" icon="fa-solid fa-users" label="Leads" />
-                )}
-
-                {(canManageTeam || user?.permissions?.viewEmails === true || user?.permissions?.viewWhatsApp === true) && !collapsed && (hasModule('whatsapp') || hasModule('email')) && (
-                    <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Inbox</p>
-                )}
-
-                {(canManageTeam || user?.permissions?.viewWhatsApp === true) && hasModule('whatsapp') && (
-                    <NavItem collapsed={collapsed} to="/whatsapp" icon="fa-brands fa-whatsapp" label="WhatsApp" badgeCount={waUnreadCount} />
-                )}
-
-                {(canManageTeam || user?.permissions?.viewEmails === true) && hasModule('email') && (
-                    <NavItem collapsed={collapsed} to="/email" icon="fa-solid fa-envelope" label="Email" />
-                )}
-
-                {(canManageTeam || user?.permissions?.viewReports) && !collapsed && hasModule('reports') && (
-                    <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Analytics</p>
-                )}
-
-                {(canManageTeam || user?.permissions?.viewReports) && hasModule('reports') && (
-                    <NavItem collapsed={collapsed} to="/reports" icon="fa-solid fa-chart-pie" label="Reports" />
-                )}
-
-                {canManageTeam && !collapsed && (hasModule('team') || hasModule('automations')) && (
-                    <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Admin</p>
-                )}
-
-                {canManageTeam && hasModule('team') && (
-                    <NavItem collapsed={collapsed} to="/team" icon="fa-solid fa-user-group" label="Team" />
-                )}
-
-                {canManageTeam && hasModule('automations') && (
-                    <NavItem collapsed={collapsed} to="/automations" icon="fa-solid fa-robot" label="Automations" />
-                )}
-
-                {canManageTeam && hasModule('automations') && (
-                    <NavItem collapsed={collapsed} to="/workflows" icon="fa-solid fa-bolt" label="Workflows" />
-                )}
-
-                {canManageTeam && hasVoiceModule() && (
-                    <NavItem collapsed={collapsed} to="/voice-hub" icon="fa-solid fa-headset" label="AI Voice Hub" />
-                )}
-
-                {canManageTeam && hasModule('automations') && (
-                    <NavItem collapsed={collapsed} to="/sequences" icon="fa-solid fa-wand-magic-sparkles" label="Sequences" />
-                )}
-
-                {(canManageTeam || user?.permissions?.viewLeads !== false) && (
-                    <NavItem collapsed={collapsed} to="/appointments" icon="fa-solid fa-calendar-check" label="Appointments" />
-                )}
-
-                {/* Billing — managers only. Agencies are lifetime-free, agents don't manage billing. */}
-                {user?.role === 'manager' && (
-                    <>
-                        {!collapsed && (
-                            <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">Account</p>
-                        )}
-                        <NavItem collapsed={collapsed} to="/billing" icon="fa-solid fa-credit-card" label="Billing" />
-                    </>
-                )}
-
+                {NAV_GROUPS.map((group, gi) => {
+                    const visibleItems = group.items.filter(item => item.show);
+                    if (visibleItems.length === 0) return null;
+                    return (
+                        <div key={group.heading || `group-${gi}`} className="space-y-1">
+                            {group.heading && !collapsed && (
+                                <p className="text-xs text-slate-500 px-4 mt-6 mb-2 uppercase tracking-wider">
+                                    {group.heading}
+                                </p>
+                            )}
+                            {visibleItems.map(item => (
+                                <NavItem
+                                    key={item.to}
+                                    collapsed={collapsed}
+                                    to={item.to}
+                                    alsoMatch={item.alsoMatch}
+                                    icon={item.icon}
+                                    label={item.label}
+                                    badgeCount={item.badge || 0}
+                                    locked={item.feature ? !hasEntitlement(user, item.feature) : false}
+                                />
+                            ))}
+                        </div>
+                    );
+                })}
             </nav>
 
             {/* PROFILE */}

@@ -7,6 +7,8 @@ const {
     getAllCompanies,
     getCompanyById,
     updateCompany,
+    getClientPermissions,
+    updateClientPermissions,
     deleteCompany,
     freezeTenant,
     getCompanyLeads,
@@ -68,6 +70,9 @@ router.post('/companies', authMiddleware, requireSuperAdmin, createCompany);
 router.get('/companies', authMiddleware, requireSuperAdmin, getAllCompanies);
 router.get('/companies/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getCompanyById);
 router.put('/companies/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updateCompany);
+// 🌳 Module Permission Manager (feature-registry tree) — per client
+router.get('/companies/:id/permissions', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getClientPermissions);
+router.put('/companies/:id/permissions', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updateClientPermissions);
 router.delete('/companies/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deleteCompany);
 router.put('/companies/:id/freeze', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, freezeTenant);
 

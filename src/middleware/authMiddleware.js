@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const NodeCache = require('node-cache');
+const { resolveValues, getFeatureMeta } = require('../constants/featureRegistry');
 const tenantCache = new NodeCache({ stdTTL: 300, checkperiod: 120 }); // 5-min TTL
 // Separate short-lived cache for agent permissions. Keeps permissions fresh
 // (revocation takes effect within 5 minutes) without adding a DB query to every
@@ -76,6 +77,11 @@ const authMiddleware = async (req, res, next) => {
             req.workspace    = {};
             req.integrations = {};
         }
+
+        // 🌳 ENTITLEMENTS — resolved ONCE per request from the feature registry
+        // (module + planFeature + featureFlag), so requireFeature and any handler
+        // read a single { key: boolean } object instead of re-deriving each time.
+        req.entitlements = resolveValues(req.workspace);
 
         // --- 🔐 AGENT PERMISSION FRESHNESS ---
         // JWT permissions are baked in at login time. Without a fresh DB check,
@@ -192,19 +198,31 @@ const requireAgency = (req, res, next) => {
 // routes that still import it — enforcement is done via planExpiryDate above).
 const requireActiveSubscription = (req, res, next) => { next(); };
 
-// 🎚️ FEATURE GATE
-// Blocks the request if the tenant's planFeatures don't include the given feature.
-// Pass a single string key OR an array of keys — array is OR logic (any one enabled = pass).
+// 🎚️ FEATURE GATE (backend security boundary — the React gate is UX only)
+// Blocks the request if the tenant's plan doesn't include the given feature.
+// Accepts EITHER a registry node key (e.g. 'whatsapp.chatbot.ai') — resolved via
+// the request's cached entitlements (module/feature/flag aware) — OR a legacy
+// planFeatures key (e.g. 'aiChatbot') for backward compatibility. Array = OR.
 // Superadmin and agency are always exempt (they're the platform operators).
 const requireFeature = (featureKey) => (req, res, next) => {
     if (['superadmin', 'agency'].includes(req.user?.role)) return next();
-    const keys    = Array.isArray(featureKey) ? featureKey : [featureKey];
-    const enabled = keys.some(k => req.workspace?.planFeatures?.[k]);
+    const keys = Array.isArray(featureKey) ? featureKey : [featureKey];
+    const enabled = keys.some(k => {
+        // Registry node key → resolved entitlements (opt-out flags respected).
+        if (req.entitlements && k in req.entitlements) return req.entitlements[k] !== false;
+        // Legacy planFeatures key.
+        return !!req.workspace?.planFeatures?.[k];
+    });
     if (!enabled) {
-        const label = keys.join(' or ');
+        // Prefer the registry key for a richer, upgrade-oriented 403 payload.
+        const primary = keys.find(k => req.entitlements && k in req.entitlements) || keys[0];
+        const meta = getFeatureMeta(primary);
         return res.status(403).json({
-            error: 'feature_not_available',
-            message: `The "${label}" feature is not available on your current plan. Upgrade to unlock it.`
+            error: 'feature_locked',
+            feature: primary,
+            featureName: meta.name,
+            planHint: meta.planHint,
+            message: `${meta.name} is not included in your current plan. Upgrade to unlock it.`
         });
     }
     next();

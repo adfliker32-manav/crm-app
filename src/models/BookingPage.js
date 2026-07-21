@@ -58,6 +58,15 @@ const bookingPageSchema = new mongoose.Schema({
     maxAdvanceDays: { type: Number, default: 30 },
     // Gap in minutes to leave between back-to-back bookings
     bufferMinutes: { type: Number, default: 0 },
+    // Booking timezone as a fixed offset east of UTC, in minutes (330 = IST).
+    // Used to convert the picked date + "10:00 AM" into a real instant for
+    // reminders and past-date validation.
+    timezoneOffsetMinutes: { type: Number, default: 330 },
+    // Customers cannot book a slot starting sooner than this many minutes from now
+    // (0 = no restriction). Blocks last-minute "book 5 min from now" bookings.
+    minNoticeMinutes: { type: Number, default: 0 },
+    // Assumed length of an appointment, used for the calendar (.ics) invite's end time.
+    slotDurationMinutes: { type: Number, default: 30 },
     // Custom questions shown on the booking form; answers saved with appointment + lead
     customQuestions: { type: [customQuestionSchema], default: [] },
     // Message shown on the success screen after booking

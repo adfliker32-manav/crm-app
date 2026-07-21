@@ -116,6 +116,10 @@ const recordPayment = async (req, res) => {
                 leadLimit: appliedPlan.planFeatures?.leadLimit ?? 100,
                 agentLimit: appliedPlan.planFeatures?.agentLimit ?? 5
             };
+            // Registry sub-permissions (e.g. AI Chatbot off on Starter) — same as
+            // the autodebit path (applyPlanToWorkspace). Without this a cash payer
+            // would silently miss the plan's featureFlags.
+            workspaceSet.featureFlags = appliedPlan.featureFlags || {};
             workspaceSet.agentLimit = appliedPlan.planFeatures?.agentLimit ?? 5;
         }
 

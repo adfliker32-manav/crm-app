@@ -64,8 +64,13 @@ const getSheetSyncConfig = async (req, res) => {
     try {
         const ownerId = req.tenantId;
         // webhookSecret is select:false — must use '+' prefix to include it
+        // NOTE: do NOT project both `googleSheet` and `googleSheet.webhookSecret` —
+        // Mongoose 9 rejects a parent path + one of its subpaths as a projection
+        // collision (throws → 500). `+googleSheet.webhookSecret` alone keeps the
+        // default full-document selection AND adds the normally-hidden
+        // (select:false) webhookSecret, so `config.googleSheet` still comes through.
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('googleSheet +googleSheet.webhookSecret');
+            .select('+googleSheet.webhookSecret');
 
         const gs = config?.googleSheet || {};
 

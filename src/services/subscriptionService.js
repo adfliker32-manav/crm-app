@@ -47,6 +47,8 @@ const applyPlanToWorkspace = async (clientId, plan) => {
             leadLimit:  plan.planFeatures?.leadLimit  ?? 100,
             agentLimit: resolvedAgentLimit
         },
+        // Registry sub-permissions (e.g. AI Chatbot off on Starter) travel with the plan.
+        featureFlags: plan.featureFlags || {},
         subscriptionPlan: plan.name,
         // Single source of truth: top-level agentLimit must equal planFeatures.agentLimit.
         agentLimit: resolvedAgentLimit

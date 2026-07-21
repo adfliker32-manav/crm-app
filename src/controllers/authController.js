@@ -3,6 +3,7 @@ const WorkspaceSettings = require('../models/WorkspaceSettings');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const GlobalSetting = require('../models/GlobalSetting');
 const { TRIAL_DURATION_MS, DEFAULT_AGENT_LIMIT, DEFAULT_ACTIVE_MODULES } = require('../constants/trial');
+const { resolveValues } = require('../constants/featureRegistry');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
@@ -60,6 +61,11 @@ const buildLoginUserResponse = (user, workspace) => ({
     status: user.status,
     activeModules: workspace?.activeModules || [],
     planFeatures: workspace?.planFeatures || {},
+    featureFlags: workspace?.featureFlags || {},
+    // Resolved entitlements map { featureKey: boolean } — the frontend's single
+    // source of truth for what the plan unlocks. Locked features are NOT hidden;
+    // the UI shows them and gates access with an upgrade wall (see FeatureGate).
+    entitlements: workspace ? resolveValues(workspace) : {},
     subscriptionStatus: workspace?.subscriptionStatus || null,
     planExpiryDate: workspace?.planExpiryDate || null,
     accessLocked: isAccessLapsed(user, workspace),
@@ -72,6 +78,8 @@ const buildGoogleUserResponse = (user, workspace) => ({
     planExpiryDate: workspace?.planExpiryDate,
     activeModules: workspace?.activeModules || [],
     planFeatures: workspace?.planFeatures || {},
+    featureFlags: workspace?.featureFlags || {},
+    entitlements: workspace ? resolveValues(workspace) : {},
     termsAccepted: !!user.termsAcceptedAt
 });
 
