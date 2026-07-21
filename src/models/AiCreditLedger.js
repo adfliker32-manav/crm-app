@@ -9,8 +9,9 @@ const mongoose = require('mongoose');
 // the ledger top-to-bottom and see exactly where every credit went — which is
 // the whole point: "where did my credits go?" answered without a support ticket.
 //
-// Rows are never mutated or deleted. The wallet balance (User.aiCreditsBalance)
-// is the running total; this collection is the audit trail behind it.
+// Rows are never mutated. Mongo's TTL index auto-purges entries older than
+// 30 days to keep the collection lean — customers rarely need line-item
+// detail past that; aggregated monthly usage is retained separately.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const aiCreditLedgerSchema = new mongoose.Schema({
@@ -38,5 +39,8 @@ const aiCreditLedgerSchema = new mongoose.Schema({
 
 // Fast "recent activity for this tenant" and monthly-usage rollups.
 aiCreditLedgerSchema.index({ userId: 1, createdAt: -1 });
+
+// Auto-delete ledger entries after 30 days to keep the collection lean.
+aiCreditLedgerSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
 
 module.exports = mongoose.model('AiCreditLedger', aiCreditLedgerSchema);
