@@ -11,5 +11,9 @@
 module.exports = {
     TRIAL_DURATION_MS: 14 * 24 * 60 * 60 * 1000,
     DEFAULT_AGENT_LIMIT: 5,
-    DEFAULT_ACTIVE_MODULES: ['leads', 'team', 'reports', 'settings', 'whatsapp', 'email', 'automations', 'voice']
+    DEFAULT_ACTIVE_MODULES: ['leads', 'team', 'reports', 'settings', 'whatsapp', 'email', 'automations', 'voice'],
+    // Free AI credits granted once when a manager account is created, so trial
+    // users can actually use AI features (any model) during evaluation. Override
+    // via env without a redeploy. 1 credit ≈ ₹0.01, so 2000 ≈ ₹20 of AI spend.
+    SIGNUP_AI_CREDITS: Number(process.env.SIGNUP_AI_CREDITS) || 2000
 };

@@ -2,8 +2,9 @@ const User = require('../models/User');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const GlobalSetting = require('../models/GlobalSetting');
-const { TRIAL_DURATION_MS, DEFAULT_AGENT_LIMIT, DEFAULT_ACTIVE_MODULES } = require('../constants/trial');
+const { TRIAL_DURATION_MS, DEFAULT_AGENT_LIMIT, DEFAULT_ACTIVE_MODULES, SIGNUP_AI_CREDITS } = require('../constants/trial');
 const { resolveValues } = require('../constants/featureRegistry');
+const aiCreditService = require('../services/aiCreditService');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
@@ -294,11 +295,23 @@ exports.register = async (req, res) => {
             throw provisionErr;
         }
 
+        // Signup AI credits — granted once, best-effort. A failure here must never
+        // break registration (the account is already provisioned); it just means
+        // the user starts at 0 and can be topped up. Written to the ledger.
+        try {
+            await aiCreditService.grant(newUser._id, SIGNUP_AI_CREDITS, {
+                feature: 'signup_bonus',
+                note: 'Welcome credits — new account'
+            });
+        } catch (creditErr) {
+            console.error('Signup credit grant failed (non-fatal):', creditErr.message);
+        }
+
         auditLogger.log({
             actor: newUser,
             actionCategory: 'SECURITY',
             action: 'CLIENT_REGISTERED',
-            details: { email: normalizedEmail, companyName },
+            details: { email: normalizedEmail, companyName, signupCredits: SIGNUP_AI_CREDITS },
             req
         });
 

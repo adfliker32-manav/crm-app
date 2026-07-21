@@ -37,7 +37,7 @@ const {
 const COMPANY_ROLE_FILTER = { $in: ['manager', 'agency'] };
 // Trial-provisioning constants are shared with the public self-registration flow
 // (authController.register) so both paths spin up an identical 14-day trial.
-const { TRIAL_DURATION_MS, DEFAULT_AGENT_LIMIT, DEFAULT_ACTIVE_MODULES } = require('../constants/trial');
+const { TRIAL_DURATION_MS, DEFAULT_AGENT_LIMIT, DEFAULT_ACTIVE_MODULES, SIGNUP_AI_CREDITS } = require('../constants/trial');
 
 const findCompanyById = (id) => User.findOne({ _id: id, role: COMPANY_ROLE_FILTER });
 
@@ -133,6 +133,22 @@ const createCompany = async (req, res) => {
         }
 
         await Promise.all(createPromises);
+
+        // Signup AI credits — managers only (agencies are lifetime-free partners,
+        // not AI-consuming tenants). Best-effort: a failure must not break company
+        // creation. Matches the self-serve register flow.
+        if (!isAgency) {
+            try {
+                const aiCreditService = require('../services/aiCreditService');
+                await aiCreditService.grant(newCompany._id, SIGNUP_AI_CREDITS, {
+                    feature: 'signup_bonus',
+                    note: 'Welcome credits — new account',
+                    adminId: req.user?.userId
+                });
+            } catch (creditErr) {
+                console.error('Signup credit grant failed (non-fatal):', creditErr.message);
+            }
+        }
 
         res.status(201).json({
             success: true,
