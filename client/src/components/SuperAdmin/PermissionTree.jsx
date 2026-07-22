@@ -22,15 +22,18 @@ const Toggle = ({ checked, disabled, onChange }) => (
 
 const PermissionTree = ({ registry = [], values = {}, onChange, showEnforcedBadge = true }) => {
     const toggle = (node, newVal) => {
-        const next = { ...values, [node.key]: newVal };
-        if (!newVal && node.children) {
-            const cascadeOff = (nodes) => nodes.forEach((c) => {
-                next[c.key] = false;
-                if (c.children) cascadeOff(c.children);
-            });
-            cascadeOff(node.children);
-        }
-        onChange(next);
+        onChange((prevValues) => {
+            const currentValues = prevValues || {};
+            const next = { ...currentValues, [node.key]: newVal };
+            if (!newVal && node.children) {
+                const cascadeOff = (nodes) => nodes.forEach((c) => {
+                    next[c.key] = false;
+                    if (c.children) cascadeOff(c.children);
+                });
+                cascadeOff(node.children);
+            }
+            return next;
+        });
     };
 
     const renderNodes = (nodes, depth, parentOn) => nodes.map((node) => {

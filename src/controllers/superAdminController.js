@@ -2494,15 +2494,24 @@ const updateClientPermissions = async (req, res) => {
         // Overrides = only the nodes the admin set differently from the plan baseline.
         const baselineSource = await getBaselineSource(ws);
         const baselineValues = resolveValues(baselineSource);
-        const overrides = encodeOverrides(diffOverrides(values, baselineValues));
+        const diff = diffOverrides(values, baselineValues);
+        const overrides = encodeOverrides(diff);
+
+        // --- DEBUG LOGS FOR LIVE SERVER ---
+        console.log(\`[DEBUG] updateClientPermissions for Company ID: \${id}\`);
+        console.log(\`[DEBUG] Received values from UI:\`, Object.keys(values).filter(k => values[k]));
+        console.log(\`[DEBUG] diffOverrides calculated:\`, diff);
+        console.log(\`[DEBUG] Encoded overrides to save:\`, overrides);
 
         // Materialize plan baseline + overrides into the enforced buckets, preserving
         // this workspace's numeric limits and any non-tree planFeatures (base = ws).
         const eff = resolveEffective(baselineSource, overrides, ws.toObject());
+        console.log(\`[DEBUG] Effective planFeatures generated:\`, eff.planFeatures);
+        console.log(\`[DEBUG] ---------------------------------------------\`);
 
         ws.overrides = overrides;
         ws.activeModules = eff.activeModules;
-        Object.assign(ws.planFeatures, eff.planFeatures);
+        ws.set('planFeatures', eff.planFeatures); // Replaced Object.assign to guarantee Mongoose tracks mutations
         ws.featureFlags = eff.featureFlags;
         // Mixed/subdoc fields need an explicit dirty flag to persist mutations.
         ws.markModified('overrides');

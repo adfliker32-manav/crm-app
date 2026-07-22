@@ -307,7 +307,10 @@ const PlanCatalogView = () => {
                                     <PermissionTree
                                         registry={registry}
                                         values={editing.entitlementValues || {}}
-                                        onChange={(v) => setEditing({ ...editing, entitlementValues: v })}
+                                        onChange={(v) => setEditing((prev) => ({
+                                            ...prev,
+                                            entitlementValues: typeof v === 'function' ? v(prev.entitlementValues || {}) : v
+                                        }))}
                                         showEnforcedBadge={false}
                                     />
                                 </div>
