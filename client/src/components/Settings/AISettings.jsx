@@ -147,12 +147,20 @@ const AISettings = () => {
                 const response = await api.get('/ai/settings');
                 const data = response.data;
                 
-                setProvider(data.provider || 'gemini');
                 // If the saved model is a legacy ID not in the current lineup,
                 // gracefully fall back to the recommended Adfliker model.
                 const loadedModel = data.model || 'gemini-2.5-flash';
                 const isKnown = ADFLIKER_MODELS.some(m => m.id === loadedModel);
-                setModel(isKnown ? loadedModel : 'gemini-2.5-flash');
+                const finalModel = isKnown ? loadedModel : 'gemini-2.5-flash';
+                
+                setModel(finalModel);
+                
+                // Keep provider in sync with the model we just selected/fell back to
+                if (!isKnown) {
+                    setProvider('gemini');
+                } else {
+                    setProvider(data.provider || ADFLIKER_MODELS.find(m => m.id === finalModel)?.provider || 'gemini');
+                }
                 setAgentName(data.agentName || 'AI Assistant');
                 setSystemPrompt(data.systemPrompt || '');
                 setAiEnabled(data.aiEnabled || false);
