@@ -50,9 +50,9 @@ const AiCreditsView = () => {
             setTopupLoading(true);
             const res = await api.get('/superadmin/ai-credit-topups');
             setTopupData({
-                topups:   res.data.topups || [],
+                topups: res.data.topups || [],
                 byClient: res.data.byClient || [],
-                totals:   res.data.totals || { amountInr: 0, credits: 0, count: 0, manualCredits: 0, manualCount: 0 }
+                totals: res.data.totals || { amountInr: 0, credits: 0, count: 0, manualCredits: 0, manualCount: 0 }
             });
         } catch (err) {
             console.error('Failed to load AI credit top-ups:', err);
@@ -202,9 +202,8 @@ const AiCreditsView = () => {
                                 key={t.id}
                                 type="button"
                                 onClick={() => setTopupTab(t.id)}
-                                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 ${
-                                    topupTab === t.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                                }`}
+                                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 ${topupTab === t.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                                    }`}
                             >
                                 <i className={`fa-solid ${t.icon}`}></i> {t.label}
                             </button>
@@ -269,26 +268,25 @@ const AiCreditsView = () => {
                                 {topupData.topups.map(t => {
                                     const isManual = t.source === 'manual';
                                     return (
-                                    <tr key={String(t._id)} className="hover:bg-slate-50/60">
-                                        <td className="px-5 py-3 text-slate-600 whitespace-nowrap">{fmtDate(t.createdAt)}</td>
-                                        <td className="px-5 py-3">
-                                            <p className="font-bold text-slate-700">{t.clientName}</p>
-                                            <p className="text-xs text-slate-400">{t.clientEmail}</p>
-                                        </td>
-                                        <td className="px-5 py-3">
-                                            <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full ${
-                                                isManual ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'
-                                            }`}>
-                                                <i className={`fa-solid ${isManual ? 'fa-user-shield' : 'fa-indian-rupee-sign'} text-[9px]`}></i>
-                                                {isManual ? 'Admin grant' : 'Paid'}
-                                            </span>
-                                        </td>
-                                        <td className="px-5 py-3 text-right font-black text-emerald-600">{isManual ? '—' : fmtInr(t.amountInr)}</td>
-                                        <td className="px-5 py-3 text-right font-semibold text-slate-700">+{(t.credits || 0).toLocaleString()} cr</td>
-                                        <td className="px-5 py-3 font-mono text-xs text-slate-400 hidden lg:table-cell">
-                                            {isManual ? (t.note || 'Admin grant') : (t.razorpayPaymentId?.slice(0, 22) || '—')}
-                                        </td>
-                                    </tr>
+                                        <tr key={String(t._id)} className="hover:bg-slate-50/60">
+                                            <td className="px-5 py-3 text-slate-600 whitespace-nowrap">{fmtDate(t.createdAt)}</td>
+                                            <td className="px-5 py-3">
+                                                <p className="font-bold text-slate-700">{t.clientName}</p>
+                                                <p className="text-xs text-slate-400">{t.clientEmail}</p>
+                                            </td>
+                                            <td className="px-5 py-3">
+                                                <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full ${isManual ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'
+                                                    }`}>
+                                                    <i className={`fa-solid ${isManual ? 'fa-user-shield' : 'fa-indian-rupee-sign'} text-[9px]`}></i>
+                                                    {isManual ? 'Admin grant' : 'Paid'}
+                                                </span>
+                                            </td>
+                                            <td className="px-5 py-3 text-right font-black text-emerald-600">{isManual ? '—' : fmtInr(t.amountInr)}</td>
+                                            <td className="px-5 py-3 text-right font-semibold text-slate-700">+{(t.credits || 0).toLocaleString()} cr</td>
+                                            <td className="px-5 py-3 font-mono text-xs text-slate-400 hidden lg:table-cell">
+                                                {isManual ? (t.note || 'Admin grant') : (t.razorpayPaymentId?.slice(0, 22) || '—')}
+                                            </td>
+                                        </tr>
                                     );
                                 })}
                             </tbody>

@@ -24,7 +24,8 @@ const UsageLog = require('../models/UsageLog');
 const { invalidateConfigCache } = require('../utils/systemConfig');
 const auditLogger = require('../services/auditLogger');
 const VoiceTemplate = require('../models/VoiceTemplate');
-const { FEATURE_REGISTRY, resolveValues } = require('../constants/featureRegistry');
+const Plan = require('../models/Plan');
+const { FEATURE_REGISTRY, resolveValues, diffOverrides, resolveEffective, encodeOverrides } = require('../constants/featureRegistry');
 const mongoose = require('mongoose');
 const { deleteOwnedRecords } = require('../services/accountCleanupService');
 const {
@@ -283,7 +284,7 @@ const getAllCompanies = async (req, res) => {
                     registeredClients: { $ifNull: [{ $arrayElemAt: ['$_subClients.count', 0] }, 0] },
                     // Derived flags for frontend — `accountStatus` is the source of truth.
                     // Suspended = SuperAdmin freeze; Frozen = Agency freeze.
-                    isFrozen:    { $in: ['$accountStatus', ['Frozen', 'Suspended']] },
+                    isFrozen: { $in: ['$accountStatus', ['Frozen', 'Suspended']] },
                     isSuspended: { $eq: ['$accountStatus', 'Suspended'] }
                 }
             },
@@ -984,7 +985,7 @@ const getDashboardStats = async (req, res) => {
         const WhatsAppLog = require('../models/WhatsAppLog');
 
         const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const weekStart  = new Date(); weekStart.setDate(weekStart.getDate() - 7);
+        const weekStart = new Date(); weekStart.setDate(weekStart.getDate() - 7);
 
         // 🧮 Math invariants (must hold for the dashboard breakdown to add up):
         //   totalCompanies = totalAgencies + totalDirectClients + totalSubClients
@@ -1230,7 +1231,7 @@ const updateSettings = async (req, res) => {
             if (key.endsWith('_api_key') && value === '••••••••••••••••') {
                 continue;
             }
-            
+
             let finalValue = value;
             if (key.endsWith('_api_key') && typeof value === 'string' && value.trim() !== '') {
                 finalValue = encryptToken(value.trim());
@@ -1356,8 +1357,8 @@ const getCloudUsage = async (req, res) => {
                     $group: {
                         _id: null,
                         totalWhatsapp: { $sum: { $ifNull: ['$planLimits.whatsappMessagesPerMonth', 1000] } },
-                        totalEmail:    { $sum: { $ifNull: ['$planLimits.emailsPerMonth', 5000] } },
-                        count:         { $sum: 1 }
+                        totalEmail: { $sum: { $ifNull: ['$planLimits.emailsPerMonth', 5000] } },
+                        count: { $sum: 1 }
                     }
                 }
             ]).catch(() => [])
@@ -1365,13 +1366,13 @@ const getCloudUsage = async (req, res) => {
 
         const agg = limitAgg[0] || null;
         const totalWhatsappLimit = agg ? agg.totalWhatsapp : 6000;
-        const totalEmailLimit    = agg ? agg.totalEmail    : 30000;
+        const totalEmailLimit = agg ? agg.totalEmail : 30000;
 
         res.json({
             success: true,
             usage: {
                 whatsapp: { sent: whatsappSent, limit: totalWhatsappLimit },
-                email:    { sent: emailsSent,   limit: totalEmailLimit }
+                email: { sent: emailsSent, limit: totalEmailLimit }
             }
         });
     } catch (error) {
@@ -2061,7 +2062,7 @@ const topUpAiCredits = async (req, res) => {
     try {
         const { id } = req.params;
         const { amount } = req.body;
-        
+
         if (!amount || isNaN(amount) || amount <= 0) {
             return res.status(400).json({ message: "Valid amount is required." });
         }
@@ -2094,15 +2095,15 @@ const topUpAiCredits = async (req, res) => {
         if (granted) try {
             const AiCreditTopup = require('../models/AiCreditTopup');
             await AiCreditTopup.create({
-                userId:            id,
+                userId: id,
                 // Synthetic non-colliding ids so the unique paymentId index is happy.
-                razorpayOrderId:   'manual',
+                razorpayOrderId: 'manual',
                 razorpayPaymentId: `manual_${new mongoose.Types.ObjectId()}`,
-                amountInr:         0,
-                credits:           creditsToAdd,
-                balanceAfter:      typeof balanceAfter === 'number' ? balanceAfter : null,
-                status:            'granted',
-                source:            'manual',
+                amountInr: 0,
+                credits: creditsToAdd,
+                balanceAfter: typeof balanceAfter === 'number' ? balanceAfter : null,
+                status: 'granted',
+                source: 'manual',
                 adminId,
                 note
             });
@@ -2221,58 +2222,62 @@ const listAiCreditTopups = async (req, res) => {
             .lean();
 
         const topups = rows.map(t => ({
-            _id:               t._id,
-            clientId:          t.userId?._id || t.userId || null,
-            clientName:        t.userId?.companyName || t.userId?.name || '—',
-            clientEmail:       t.userId?.email || '',
-            source:            t.source || 'razorpay',   // 'razorpay' (paid) | 'manual' (admin grant)
-            amountInr:         t.amountInr,
-            credits:           t.credits,
-            note:              t.note || '',
+            _id: t._id,
+            clientId: t.userId?._id || t.userId || null,
+            clientName: t.userId?.companyName || t.userId?.name || '—',
+            clientEmail: t.userId?.email || '',
+            source: t.source || 'razorpay',   // 'razorpay' (paid) | 'manual' (admin grant)
+            amountInr: t.amountInr,
+            credits: t.credits,
+            note: t.note || '',
             razorpayPaymentId: t.razorpayPaymentId,
-            razorpayOrderId:   t.razorpayOrderId,
-            createdAt:         t.createdAt
+            razorpayOrderId: t.razorpayOrderId,
+            createdAt: t.createdAt
         }));
 
         // Conditional sums so PAID (razorpay) revenue is never mixed with free MANUAL
         // (admin) grants. ₹ totals count paid only; manual is tracked as its own stat.
-        const paidAmt    = { $cond: [{ $eq: ['$source', 'manual'] }, 0, '$amountInr'] };
-        const paidCr     = { $cond: [{ $eq: ['$source', 'manual'] }, 0, '$credits'] };
-        const paidOne    = { $cond: [{ $eq: ['$source', 'manual'] }, 0, 1] };
-        const manualCr   = { $cond: [{ $eq: ['$source', 'manual'] }, '$credits', 0] };
-        const manualOne  = { $cond: [{ $eq: ['$source', 'manual'] }, 1, 0] };
+        const paidAmt = { $cond: [{ $eq: ['$source', 'manual'] }, 0, '$amountInr'] };
+        const paidCr = { $cond: [{ $eq: ['$source', 'manual'] }, 0, '$credits'] };
+        const paidOne = { $cond: [{ $eq: ['$source', 'manual'] }, 0, 1] };
+        const manualCr = { $cond: [{ $eq: ['$source', 'manual'] }, '$credits', 0] };
+        const manualOne = { $cond: [{ $eq: ['$source', 'manual'] }, 1, 0] };
 
         // Grand totals across ALL granted top-ups (not just the returned page).
         const totalsAgg = await AiCreditTopup.aggregate([
             { $match: { status: 'granted' } },
-            { $group: {
-                _id: null,
-                amountInr:     { $sum: paidAmt },
-                credits:       { $sum: paidCr },
-                count:         { $sum: paidOne },
-                manualCredits: { $sum: manualCr },
-                manualCount:   { $sum: manualOne }
-            } }
+            {
+                $group: {
+                    _id: null,
+                    amountInr: { $sum: paidAmt },
+                    credits: { $sum: paidCr },
+                    count: { $sum: paidOne },
+                    manualCredits: { $sum: manualCr },
+                    manualCount: { $sum: manualOne }
+                }
+            }
         ]);
         const totals = {
-            amountInr:     totalsAgg[0]?.amountInr || 0,      // ₹ from paid purchases only
-            credits:       totalsAgg[0]?.credits || 0,        // credits sold (paid)
-            count:         totalsAgg[0]?.count || 0,          // paid purchases
+            amountInr: totalsAgg[0]?.amountInr || 0,      // ₹ from paid purchases only
+            credits: totalsAgg[0]?.credits || 0,        // credits sold (paid)
+            count: totalsAgg[0]?.count || 0,          // paid purchases
             manualCredits: totalsAgg[0]?.manualCredits || 0,  // free admin-granted credits
-            manualCount:   totalsAgg[0]?.manualCount || 0     // number of admin grants
+            manualCount: totalsAgg[0]?.manualCount || 0     // number of admin grants
         };
 
         // Per-client rollup — "clean per client" view: paid ₹/credits AND admin grants.
         const byClientAgg = await AiCreditTopup.aggregate([
             { $match: { status: 'granted' } },
-            { $group: {
-                _id: '$userId',
-                amountInr:     { $sum: paidAmt },
-                paidCredits:   { $sum: paidCr },
-                manualCredits: { $sum: manualCr },
-                count:         { $sum: 1 },
-                lastAt:        { $max: '$createdAt' }
-            } },
+            {
+                $group: {
+                    _id: '$userId',
+                    amountInr: { $sum: paidAmt },
+                    paidCredits: { $sum: paidCr },
+                    manualCredits: { $sum: manualCr },
+                    count: { $sum: 1 },
+                    lastAt: { $max: '$createdAt' }
+                }
+            },
             { $sort: { amountInr: -1, lastAt: -1 } },
             { $limit: 100 }
         ]);
@@ -2282,14 +2287,14 @@ const listAiCreditTopups = async (req, res) => {
         const byClient = byClientAgg.map(c => {
             const u = userMap.get(String(c._id));
             return {
-                clientId:      c._id,
-                clientName:    u?.companyName || u?.name || '—',
-                clientEmail:   u?.email || '',
-                amountInr:     c.amountInr,
-                paidCredits:   c.paidCredits,
+                clientId: c._id,
+                clientName: u?.companyName || u?.name || '—',
+                clientEmail: u?.email || '',
+                amountInr: c.amountInr,
+                paidCredits: c.paidCredits,
                 manualCredits: c.manualCredits,
-                count:         c.count,
-                lastAt:        c.lastAt
+                count: c.count,
+                lastAt: c.lastAt
             };
         });
 
@@ -2436,6 +2441,17 @@ const updateAccountPermissions = async (req, res) => {
 
 // GET /api/superadmin/companies/:id/permissions
 // Returns the canonical feature registry + this client's resolved on/off state.
+// The entitlement baseline a client's overrides layer on top of: their current
+// plan, or the trial defaults when they aren't on a paid plan yet. Returned as a
+// plan-like { activeModules, planFeatures, featureFlags } object.
+const getBaselineSource = async (ws) => {
+    if (ws?.currentPlanCode) {
+        const plan = await Plan.findOne({ code: ws.currentPlanCode }).lean();
+        if (plan) return plan;
+    }
+    return { activeModules: DEFAULT_ACTIVE_MODULES, planFeatures: {}, featureFlags: {} };
+};
+
 const getClientPermissions = async (req, res) => {
     try {
         const { id } = req.params;
@@ -2446,6 +2462,8 @@ const getClientPermissions = async (req, res) => {
         res.json({
             success: true,
             registry: FEATURE_REGISTRY,
+            // Effective (plan baseline + overrides) is exactly what the materialized
+            // WorkspaceSettings fields hold, so resolveValues(ws) is the display state.
             values: resolveValues(ws),
         });
     } catch (error) {
@@ -2456,9 +2474,10 @@ const getClientPermissions = async (req, res) => {
 
 // PUT /api/superadmin/companies/:id/permissions
 // Body: { values: { [nodeKey]: boolean } }
-// Maps each toggled node back onto its declared storage (activeModules /
-// planFeatures / featureFlags) so existing enforcement keeps working. Only keys
-// present in the registry are honoured — arbitrary keys are ignored.
+// Persists the admin's selection as a sparse OVERRIDE map (only deviations from the
+// tenant's plan baseline), then materializes plan+overrides into the enforced
+// activeModules / planFeatures / featureFlags. Storing overrides separately is what
+// lets them survive plan renewals & catalog edits (every plan-apply re-layers them).
 const updateClientPermissions = async (req, res) => {
     try {
         const { id } = req.params;
@@ -2472,26 +2491,21 @@ const updateClientPermissions = async (req, res) => {
         let ws = await WorkspaceSettings.findOne({ userId: id });
         if (!ws) ws = new WorkspaceSettings({ userId: id });
 
-        const activeModules = new Set(ws.activeModules || []);
-        if (!ws.featureFlags) ws.featureFlags = {};
+        // Overrides = only the nodes the admin set differently from the plan baseline.
+        const baselineSource = await getBaselineSource(ws);
+        const baselineValues = resolveValues(baselineSource);
+        const overrides = encodeOverrides(diffOverrides(values, baselineValues));
 
-        const apply = (nodes) => nodes.forEach((n) => {
-            if (n.storage && values[n.key] !== undefined) {
-                const on = !!values[n.key];
-                if (n.storage.type === 'module') {
-                    if (on) activeModules.add(n.storage.id); else activeModules.delete(n.storage.id);
-                } else if (n.storage.type === 'feature') {
-                    ws.planFeatures[n.storage.key] = on;
-                } else if (n.storage.type === 'flag') {
-                    ws.featureFlags[n.storage.key] = on;
-                }
-            }
-            if (n.children) apply(n.children);
-        });
-        apply(FEATURE_REGISTRY);
+        // Materialize plan baseline + overrides into the enforced buckets, preserving
+        // this workspace's numeric limits and any non-tree planFeatures (base = ws).
+        const eff = resolveEffective(baselineSource, overrides, ws.toObject());
 
-        ws.activeModules = [...activeModules];
+        ws.overrides = overrides;
+        ws.activeModules = eff.activeModules;
+        Object.assign(ws.planFeatures, eff.planFeatures);
+        ws.featureFlags = eff.featureFlags;
         // Mixed/subdoc fields need an explicit dirty flag to persist mutations.
+        ws.markModified('overrides');
         ws.markModified('featureFlags');
         ws.markModified('planFeatures');
         await ws.save(); // post-save hook busts the tenant cache
@@ -2503,7 +2517,7 @@ const updateClientPermissions = async (req, res) => {
             targetType: 'WorkspaceSettings',
             targetId: id,
             targetName: (await User.findById(id).select('companyName name email').lean())?.companyName || id,
-            details: { activeModules: ws.activeModules, planFeatures: ws.planFeatures, featureFlags: ws.featureFlags },
+            details: { activeModules: ws.activeModules, planFeatures: ws.planFeatures, featureFlags: ws.featureFlags, overrides: ws.overrides },
             req
         });
 
@@ -2531,14 +2545,14 @@ const getGlobalVoiceTemplates = async (req, res) => {
 const createGlobalVoiceTemplate = async (req, res) => {
     try {
         const tenantId = req.user.userId || req.user.id; // Super admin's ID
-        const templateData = { 
-            ...req.body, 
+        const templateData = {
+            ...req.body,
             tenantId,
             isGlobal: true // Force to global
         };
-        
+
         const template = await VoiceTemplate.create(templateData);
-        
+
         // Log action
         await auditLogger.log({
             actor: req.user,

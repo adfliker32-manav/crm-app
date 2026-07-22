@@ -125,6 +125,13 @@ const FEATURE_REGISTRY = [
     },
 ];
 
+// Granular flag keys are dot-paths (e.g. 'whatsapp.chatbot.flow'). MongoDB
+// rejects field names containing '.', so a `$set` that writes those verbatim
+// into the featureFlags Mixed map fails the whole save. We therefore encode the
+// dots when a flag key is used as a storage field name. This helper is the ONLY
+// place featureFlags keys are derived — read and write must both go through it.
+const flagStoreKey = (key) => key.replace(/\./g, '__');
+
 // Resolve a single storage-bearing node's on/off state from a workspace doc.
 function resolveNodeValue(storage, ws) {
     if (!storage) return undefined;
@@ -133,7 +140,14 @@ function resolveNodeValue(storage, ws) {
     // Flags are OPT-OUT: entitled unless the SuperAdmin has explicitly set false.
     // This keeps trial/existing tenants (empty featureFlags) fully unlocked and
     // makes enforcement backward-compatible — absence never strips access.
-    if (storage.type === 'flag')    return (ws.featureFlags || {})[storage.key] !== false;
+    if (storage.type === 'flag') {
+        const flags = ws.featureFlags || {};
+        // Prefer the encoded key; fall back to a raw dotted key for any legacy row.
+        const stored = flags[flagStoreKey(storage.key)] !== undefined
+            ? flags[flagStoreKey(storage.key)]
+            : flags[storage.key];
+        return stored !== false;
+    }
     return undefined;
 }
 
@@ -166,13 +180,54 @@ function applyValues(values = {}, base = {}) {
             } else if (n.storage.type === 'feature') {
                 planFeatures[n.storage.key] = on;
             } else if (n.storage.type === 'flag') {
-                featureFlags[n.storage.key] = on;
+                featureFlags[flagStoreKey(n.storage.key)] = on;
             }
         }
         if (n.children) walk(n.children);
     });
     walk(FEATURE_REGISTRY);
     return { activeModules: [...activeModules], planFeatures, featureFlags };
+}
+
+// ─── Per-client override layering ────────────────────────────────────────────
+// A tenant's effective entitlements = PLAN baseline + per-client overrides on top.
+// Overrides are stored sparsely as { nodeKey: boolean } (only the keys a SuperAdmin
+// deliberately changed away from the plan). Keeping them separate from the plan's
+// materialized values is what lets them SURVIVE plan renewals / catalog edits — every
+// plan-apply path re-layers them via resolveEffective().
+
+// Node keys contain dots (e.g. 'whatsapp.chatbot.flow'); MongoDB rejects dotted
+// field names, so the STORED override map is dot-encoded (same scheme as flags).
+// Encoding lives here so call sites always work in plain node-key space.
+const encodeOverrides = (raw = {}) => {
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) out[flagStoreKey(k)] = v;
+    return out;
+};
+const decodeOverrides = (stored = {}) => {
+    const out = {};
+    for (const [k, v] of Object.entries(stored)) out[k.replace(/__/g, '.')] = v;
+    return out;
+};
+
+// Reduce a full { nodeKey: bool } selection (as produced by the permission tree) to
+// only the keys that DEVIATE from the plan baseline — that sparse set is persisted.
+// Returns plain node-key space; encode with encodeOverrides() before storing.
+function diffOverrides(values = {}, baselineValues = {}) {
+    const out = {};
+    for (const [k, v] of Object.entries(values)) {
+        if (baselineValues[k] !== v) out[k] = v;
+    }
+    return out;
+}
+
+// Given a plan-like baseline source ({ activeModules, planFeatures, featureFlags })
+// and the STORED (encoded) override map, return the effective storage buckets to
+// persist and enforce. Overrides win over the plan. `base` seeds non-tree fields to
+// preserve (numeric limits like leadLimit/agentLimit live outside the registry tree).
+function resolveEffective(baseline = {}, storedOverrides = {}, base = baseline) {
+    const merged = { ...resolveValues(baseline), ...decodeOverrides(storedOverrides) };
+    return applyValues(merged, base);
 }
 
 // ─── Upsell metadata ─────────────────────────────────────────────────────────
@@ -224,4 +279,4 @@ function getFeatureMeta(key) {
     };
 }
 
-module.exports = { FEATURE_REGISTRY, FEATURE_META, resolveNodeValue, resolveValues, applyValues, flattenRegistry, getFeatureMeta };
+module.exports = { FEATURE_REGISTRY, FEATURE_META, flagStoreKey, resolveNodeValue, resolveValues, applyValues, diffOverrides, resolveEffective, encodeOverrides, decodeOverrides, flattenRegistry, getFeatureMeta };

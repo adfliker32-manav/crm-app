@@ -150,6 +150,18 @@ const workspaceSettingsSchema = new mongoose.Schema({
         default: {}
     },
 
+    // 🎚️ PER-CLIENT ENTITLEMENT OVERRIDES (SuperAdmin Module Permissions)
+    // Sparse { registryNodeKey: boolean } map of deliberate deviations from the
+    // tenant's PLAN baseline. Effective entitlements = plan baseline + these on top.
+    // Stored separately from the materialized activeModules/planFeatures/featureFlags
+    // so they SURVIVE plan renewals and catalog edits — every plan-apply path
+    // re-layers them (see featureRegistry.resolveEffective). Keys are dot-encoded
+    // registry node keys (MongoDB forbids '.' in field names).
+    overrides: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+    },
+
     agentLimit: { // Hard cap instance
         type: Number,
         default: 5 

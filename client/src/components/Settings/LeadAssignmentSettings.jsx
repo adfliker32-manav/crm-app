@@ -61,6 +61,7 @@ const LeadAssignmentSettings = () => {
     // Assignment rules
     const [allRules, setAllRules] = useState([]);
     const [rulesLoading, setRulesLoading] = useState(true);
+    const [rulesLocked, setRulesLocked] = useState(false); // 403 feature_locked → plan doesn't include Automation
     const [isBuilderOpen, setIsBuilderOpen] = useState(false);
     const [editingRule, setEditingRule] = useState(null);
 
@@ -119,8 +120,16 @@ const LeadAssignmentSettings = () => {
         try {
             const res = await api.get('/automations');
             setAllRules(res.data || []);
-        } catch {
-            showError('Failed to load automation rules');
+            setRulesLocked(false);
+        } catch (e) {
+            // A 403 feature_locked means this plan simply doesn't include Automation —
+            // that's an expected entitlement state, not an error. Show a quiet locked
+            // note instead of a scary red toast.
+            if (e.response?.data?.error === 'feature_locked') {
+                setRulesLocked(true);
+            } else {
+                showError('Failed to load automation rules');
+            }
         } finally {
             setRulesLoading(false);
         }
@@ -341,19 +350,21 @@ const LeadAssignmentSettings = () => {
                             <i className="fa-solid fa-robot text-violet-600 text-xs"></i>
                         </div>
                         <h3 className="text-sm font-bold text-slate-700 uppercase tracking-widest">Assignment Automation Rules</h3>
-                        {!rulesLoading && (
+                        {!rulesLoading && !rulesLocked && (
                             <span className="text-xs font-semibold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
                                 {assignmentRules.length}
                             </span>
                         )}
                     </div>
-                    <button
-                        onClick={() => { setEditingRule(null); setIsBuilderOpen(true); }}
-                        className="flex items-center gap-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-500/20 transition-all hover:-translate-y-0.5"
-                    >
-                        <i className="fa-solid fa-plus text-xs"></i>
-                        Create Assignment Rule
-                    </button>
+                    {!rulesLocked && (
+                        <button
+                            onClick={() => { setEditingRule(null); setIsBuilderOpen(true); }}
+                            className="flex items-center gap-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-500/20 transition-all hover:-translate-y-0.5"
+                        >
+                            <i className="fa-solid fa-plus text-xs"></i>
+                            Create Assignment Rule
+                        </button>
+                    )}
                 </div>
                 <p className="text-xs text-slate-500 mb-5 -mt-2">
                     Automation rules that include an "Assign to Agent" action. They fire after leads are created or change stage.
@@ -364,6 +375,16 @@ const LeadAssignmentSettings = () => {
                     <div className="flex items-center gap-3 p-6 bg-slate-50 rounded-2xl border border-slate-200">
                         <i className="fa-solid fa-spinner fa-spin text-violet-400"></i>
                         <span className="text-sm text-slate-500">Loading rules…</span>
+                    </div>
+                ) : rulesLocked ? (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-200 flex items-center justify-center mx-auto mb-3">
+                            <i className="fa-solid fa-lock text-slate-400 text-lg"></i>
+                        </div>
+                        <h4 className="font-semibold text-slate-600 mb-1">Automation isn't included in your plan</h4>
+                        <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                            You can still set a default agent per source above. Upgrade to build automated assignment rules.
+                        </p>
                     </div>
                 ) : assignmentRules.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-10 text-center">

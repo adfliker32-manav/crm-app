@@ -11,6 +11,7 @@ const auditLogger = require('./auditLogger');
 const CommissionLog = require('../models/CommissionLog');
 const WithdrawalRequest = require('../models/WithdrawalRequest');
 const SystemSetting = require('../models/SystemSetting');
+const { resolveEffective } = require('../constants/featureRegistry');
 
 
 // Domain logic shared by the billing controller, webhook handler, and cron
@@ -39,16 +40,20 @@ const stackExpiry = (currentExpiry, paymentDate, cycle) => {
 // permissions: every "customer is now on tier X" path goes through here.
 const applyPlanToWorkspace = async (clientId, plan) => {
     const resolvedAgentLimit = plan.planFeatures?.agentLimit ?? 3;
+    // Re-layer any SuperAdmin per-client overrides on top of the new plan baseline
+    // so manual grants/revocations survive renewals and plan changes.
+    const existing = await WorkspaceSettings.findOne({ userId: clientId }).select('overrides').lean();
+    const eff = resolveEffective(plan, existing?.overrides || {}, plan);
     const update = {
         currentPlanCode: plan.code,
-        activeModules: plan.activeModules || ['leads', 'team', 'reports'],
+        activeModules: eff.activeModules,
         planFeatures: {
-            ...(plan.planFeatures || {}),
+            ...eff.planFeatures,
             leadLimit:  plan.planFeatures?.leadLimit  ?? 100,
             agentLimit: resolvedAgentLimit
         },
         // Registry sub-permissions (e.g. AI Chatbot off on Starter) travel with the plan.
-        featureFlags: plan.featureFlags || {},
+        featureFlags: eff.featureFlags,
         subscriptionPlan: plan.name,
         // Single source of truth: top-level agentLimit must equal planFeatures.agentLimit.
         agentLimit: resolvedAgentLimit

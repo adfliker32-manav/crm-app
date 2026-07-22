@@ -17,6 +17,7 @@ const MetaFormAgentMapping = ({ teamUsers = [], onSaved }) => {
     const [savedRows, setSavedRows] = useState([]);   // last-saved snapshot (for dirty detection)
     const [loading, setLoading]     = useState(true);
     const [saving, setSaving]       = useState(false);
+    const [locked, setLocked]       = useState(false); // 403 feature_locked → plan has no Meta Lead Sync
 
     // ── Load existing mapping from backend ────────────────────────────────
     const load = useCallback(async () => {
@@ -26,8 +27,15 @@ const MetaFormAgentMapping = ({ teamUsers = [], onSaved }) => {
             const data = res.data?.formAgentMapping || [];
             setRows(data);
             setSavedRows(data);
-        } catch {
-            showError('Failed to load form-agent mapping');
+            setLocked(false);
+        } catch (e) {
+            // 403 feature_locked = Meta Lead Sync not on this plan. Hide the section
+            // quietly instead of raising a false "failed to load" error.
+            if (e.response?.data?.error === 'feature_locked') {
+                setLocked(true);
+            } else {
+                showError('Failed to load form-agent mapping');
+            }
         } finally {
             setLoading(false);
         }
@@ -83,6 +91,10 @@ const MetaFormAgentMapping = ({ teamUsers = [], onSaved }) => {
         const u = teamUsers.find(u => u._id?.toString() === id?.toString());
         return u ? `${u.name} (${u.role})` : null;
     };
+
+    // Meta Lead Sync isn't in this plan — the source-level default agent above is
+    // still usable, so we simply omit the per-form routing block entirely.
+    if (locked) return null;
 
     // ─── Render ────────────────────────────────────────────────────────────
     return (

@@ -120,13 +120,13 @@ const {
     getHealthSystemInfo
 } = require('../controllers/systemHealthController');
 
-router.get('/system-health',             authMiddleware, requireSuperAdmin, getHealthOverview);
-router.get('/system-health/api',         authMiddleware, requireSuperAdmin, getHealthApi);
-router.get('/system-health/database',    authMiddleware, requireSuperAdmin, getHealthDatabase);
-router.get('/system-health/redis',       authMiddleware, requireSuperAdmin, getHealthRedis);
-router.get('/system-health/queues',      authMiddleware, requireSuperAdmin, getHealthQueues);
-router.get('/system-health/webhooks',    authMiddleware, requireSuperAdmin, getHealthWebhooks);
-router.get('/system-health/logs',        authMiddleware, requireSuperAdmin, getHealthLogs);
+router.get('/system-health', authMiddleware, requireSuperAdmin, getHealthOverview);
+router.get('/system-health/api', authMiddleware, requireSuperAdmin, getHealthApi);
+router.get('/system-health/database', authMiddleware, requireSuperAdmin, getHealthDatabase);
+router.get('/system-health/redis', authMiddleware, requireSuperAdmin, getHealthRedis);
+router.get('/system-health/queues', authMiddleware, requireSuperAdmin, getHealthQueues);
+router.get('/system-health/webhooks', authMiddleware, requireSuperAdmin, getHealthWebhooks);
+router.get('/system-health/logs', authMiddleware, requireSuperAdmin, getHealthLogs);
 router.get('/system-health/system-info', authMiddleware, requireSuperAdmin, getHealthSystemInfo);
 
 // Audit Logs (Command Center)
@@ -204,7 +204,7 @@ const {
     updateClient: agencyUpdateClient,
     deleteClient: agencyDeleteClient,
     listPayments: agencyListPayments,
-    getPayment:   agencyGetPayment,
+    getPayment: agencyGetPayment,
     createPayment: agencyCreatePayment,
     updatePayment: agencyUpdatePayment,
     deletePayment: agencyDeletePayment,
@@ -234,8 +234,8 @@ const {
     getAvailableTemplates: getBillingReminderTemplates
 } = require('../controllers/billingReminderConfigController');
 
-router.get('/billing-reminder-config',           authMiddleware, requireSuperAdmin, getBillingReminderConfig);
-router.put('/billing-reminder-config',           authMiddleware, requireSuperAdmin, saveBillingReminderConfig);
+router.get('/billing-reminder-config', authMiddleware, requireSuperAdmin, getBillingReminderConfig);
+router.put('/billing-reminder-config', authMiddleware, requireSuperAdmin, saveBillingReminderConfig);
 router.get('/billing-reminder-config/templates', authMiddleware, requireSuperAdmin, getBillingReminderTemplates);
 
 // 🤝 PARTNER REVENUE SHARING — Withdrawals & Commission Tier Management
@@ -263,4 +263,4 @@ router.get('/partner/withdrawals', authMiddleware, requireSuperAdmin, listWithdr
 router.put('/partner/withdrawals/:id/process', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, processWithdrawal);
 
 module.exports = router;
-
+

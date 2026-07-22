@@ -11,7 +11,7 @@ const Coupon = require('../models/Coupon');
 const AiCreditTopup = require('../models/AiCreditTopup');
 const aiCreditService = require('../services/aiCreditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
-const { FEATURE_REGISTRY, resolveValues, applyValues } = require('../constants/featureRegistry');
+const { FEATURE_REGISTRY, resolveValues, applyValues, resolveEffective } = require('../constants/featureRegistry');
 
 // Self-serve AI-credit top-up bounds (INR). Credits are derived from the amount
 // at aiCreditService.CREDIT_VALUE_INR, so no separate price list to keep in sync.
@@ -694,30 +694,31 @@ const upsertPlan = async (req, res) => {
         );
 
         // Propagate to existing subscribers so catalog edits take effect immediately.
+        // Each subscriber's per-client overrides are re-layered on top of the new plan
+        // baseline, so a catalog edit never wipes manual SuperAdmin grants/revocations.
         let propagatedTo = 0;
         if (!doc.isCustom) {
+            const planObj = doc.toObject?.() || doc;
             const affected = await WorkspaceSettings.find({ currentPlanCode: doc.code })
-                .select('userId').lean();
+                .select('userId overrides').lean();
             if (affected.length) {
-                const featureSet = {};
-                for (const [k, v] of Object.entries(doc.planFeatures?.toObject?.() || doc.planFeatures || {})) {
-                    featureSet[`planFeatures.${k}`] = v;
-                }
-                featureSet['planFeatures.leadLimit']  = doc.planFeatures?.leadLimit  ?? 100;
-                featureSet['planFeatures.agentLimit'] = doc.planFeatures?.agentLimit ?? 5;
-
-                await WorkspaceSettings.updateMany(
-                    { currentPlanCode: doc.code },
-                    {
-                        $set: {
-                            subscriptionPlan: doc.name,
-                            activeModules:    doc.activeModules,
-                            featureFlags:     doc.featureFlags || {},
-                            agentLimit:       doc.planFeatures?.agentLimit ?? 5,
-                            ...featureSet
+                const leadLimit  = planObj.planFeatures?.leadLimit  ?? 100;
+                const agentLimit = planObj.planFeatures?.agentLimit ?? 5;
+                for (const w of affected) {
+                    const eff = resolveEffective(planObj, w.overrides || {}, planObj);
+                    await WorkspaceSettings.updateOne(
+                        { userId: w.userId },
+                        {
+                            $set: {
+                                subscriptionPlan: doc.name,
+                                activeModules:    eff.activeModules,
+                                featureFlags:     eff.featureFlags,
+                                planFeatures:     { ...eff.planFeatures, leadLimit, agentLimit },
+                                agentLimit
+                            }
                         }
-                    }
-                );
+                    );
+                }
                 try {
                     const { clearTenantCache } = require('../middleware/authMiddleware');
                     affected.forEach(w => clearTenantCache(w.userId));

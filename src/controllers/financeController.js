@@ -3,6 +3,7 @@ const Expense = require('../models/Expense');
 const User = require('../models/User');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const Plan = require('../models/Plan');
+const { resolveEffective } = require('../constants/featureRegistry');
 const auditLogger = require('../services/auditLogger');
 const mongoose = require('mongoose');
 
@@ -108,18 +109,21 @@ const recordPayment = async (req, res) => {
             if (!appliedPlan) {
                 return res.status(400).json({ message: `Plan "${planCode}" not found.` });
             }
+            // Re-layer any per-client overrides on top of the plan baseline so manual
+            // SuperAdmin grants/revocations survive this plan assignment (mirrors the
+            // autodebit path in subscriptionService.applyPlanToWorkspace).
+            const existingWs = await WorkspaceSettings.findOne({ userId: clientId }).select('overrides').lean();
+            const eff = resolveEffective(appliedPlan, existingWs?.overrides || {}, appliedPlan);
             workspaceSet.currentPlanCode = appliedPlan.code;
             workspaceSet.subscriptionPlan = appliedPlan.name;
-            workspaceSet.activeModules = appliedPlan.activeModules || ['leads', 'team', 'reports'];
+            workspaceSet.activeModules = eff.activeModules;
             workspaceSet.planFeatures = {
-                ...(appliedPlan.planFeatures || {}),
+                ...eff.planFeatures,
                 leadLimit: appliedPlan.planFeatures?.leadLimit ?? 100,
                 agentLimit: appliedPlan.planFeatures?.agentLimit ?? 5
             };
-            // Registry sub-permissions (e.g. AI Chatbot off on Starter) — same as
-            // the autodebit path (applyPlanToWorkspace). Without this a cash payer
-            // would silently miss the plan's featureFlags.
-            workspaceSet.featureFlags = appliedPlan.featureFlags || {};
+            // Registry sub-permissions (e.g. AI Chatbot off on Starter).
+            workspaceSet.featureFlags = eff.featureFlags;
             workspaceSet.agentLimit = appliedPlan.planFeatures?.agentLimit ?? 5;
         }
 
