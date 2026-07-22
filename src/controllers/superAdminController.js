@@ -2498,16 +2498,16 @@ const updateClientPermissions = async (req, res) => {
         const overrides = encodeOverrides(diff);
 
         // --- DEBUG LOGS FOR LIVE SERVER ---
-        console.log(\`[DEBUG] updateClientPermissions for Company ID: \${id}\`);
-        console.log(\`[DEBUG] Received values from UI:\`, Object.keys(values).filter(k => values[k]));
-        console.log(\`[DEBUG] diffOverrides calculated:\`, diff);
-        console.log(\`[DEBUG] Encoded overrides to save:\`, overrides);
+        console.log(`[DEBUG] updateClientPermissions for Company ID: ${id}`);
+        console.log(`[DEBUG] Received values from UI:`, Object.keys(values).filter(k => values[k]));
+        console.log(`[DEBUG] diffOverrides calculated:`, diff);
+        console.log(`[DEBUG] Encoded overrides to save:`, overrides);
 
         // Materialize plan baseline + overrides into the enforced buckets, preserving
         // this workspace's numeric limits and any non-tree planFeatures (base = ws).
         const eff = resolveEffective(baselineSource, overrides, ws.toObject());
-        console.log(\`[DEBUG] Effective planFeatures generated:\`, eff.planFeatures);
-        console.log(\`[DEBUG] ---------------------------------------------\`);
+        console.log(`[DEBUG] Effective planFeatures generated:`, eff.planFeatures);
+        console.log(`[DEBUG] ---------------------------------------------`);
 
         ws.overrides = overrides;
         ws.activeModules = eff.activeModules;
