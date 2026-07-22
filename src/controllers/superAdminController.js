@@ -2499,7 +2499,7 @@ const updateClientPermissions = async (req, res) => {
 
         // --- DEBUG LOGS FOR LIVE SERVER ---
         console.log(`[DEBUG] updateClientPermissions for Company ID: ${id}`);
-        console.log(`[DEBUG] Received values from UI:`, Object.keys(values).filter(k => values[k]));
+        console.log(`[DEBUG] Raw values received from UI:`, values);
         console.log(`[DEBUG] diffOverrides calculated:`, diff);
         console.log(`[DEBUG] Encoded overrides to save:`, overrides);
 
