@@ -11,7 +11,7 @@ const Coupon = require('../models/Coupon');
 const AiCreditTopup = require('../models/AiCreditTopup');
 const aiCreditService = require('../services/aiCreditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
-const { FEATURE_REGISTRY, resolveValues, applyValues, resolveEffective } = require('../constants/featureRegistry');
+const { FEATURE_REGISTRY, resolveValues, applyValues, resolveEffective, decodeOverrides } = require('../constants/featureRegistry');
 
 // Self-serve AI-credit top-up bounds (INR). Credits are derived from the amount
 // at aiCreditService.CREDIT_VALUE_INR, so no separate price list to keep in sync.
@@ -660,7 +660,9 @@ const upsertPlan = async (req, res) => {
         let resolvedFeatures = planFeatures || {};
         let resolvedFlags = {};
         if (entitlementValues && typeof entitlementValues === 'object') {
-            const applied = applyValues(entitlementValues, {});
+            // Frontend encodes dotted registry keys to '__' so the body sanitizer
+            // (express-mongo-sanitize) can't strip them — decode before folding.
+            const applied = applyValues(decodeOverrides(entitlementValues), {});
             resolvedModules = applied.activeModules;
             resolvedFeatures = {
                 ...applied.planFeatures,
@@ -669,6 +671,10 @@ const upsertPlan = async (req, res) => {
             };
             resolvedFlags = applied.featureFlags;
         }
+
+        console.log('[DEBUG upsertPlan] payload entitlementValues encoded:', req.body.entitlementValues);
+        console.log('[DEBUG upsertPlan] decoded:', decodeOverrides(entitlementValues));
+        console.log('[DEBUG upsertPlan] applied result:', { resolvedModules, resolvedFeatures, resolvedFlags });
 
         const doc = await Plan.findOneAndUpdate(
             { code: code.toLowerCase() },
