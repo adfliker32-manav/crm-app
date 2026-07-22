@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const workflowController          = require('../controllers/workflowController');
 const workflowExecutionController = require('../controllers/workflowExecutionController');
+const workflowLibraryController    = require('../controllers/workflowLibraryController');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const validateObjectId   = require('../middleware/validateObjectId');
 
@@ -72,6 +73,14 @@ router.patch('/:id/status',
 router.post('/:id/duplicate',
     validateObjectId({ params: ['id'] }),
     workflowController.duplicateWorkflow
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMMUNITY LIBRARY (share a sanitized copy for other tenants to clone)
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/:id/publish-to-library',
+    validateObjectId({ params: ['id'] }),
+    workflowLibraryController.publishToLibrary
 );
 
 // ─────────────────────────────────────────────────────────────────────────────

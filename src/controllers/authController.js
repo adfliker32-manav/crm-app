@@ -525,7 +525,7 @@ exports.resetPassword = async (req, res) => {
 
 exports.googleLogin = async (req, res) => {
     try {
-        const { credential, rememberMe } = req.body;
+        const { credential, rememberMe, allowNewUser } = req.body;
 
         if (!credential) {
             return res.status(400).json({ message: 'Google credential is required' });
@@ -553,6 +553,16 @@ exports.googleLogin = async (req, res) => {
         let user = await User.findOne({ $or: [{ googleId }, { email: normalizedEmail }] });
 
         if (!user) {
+            // Only auto-create if the caller explicitly allows new user creation
+            // (i.e., the request came from the Registration/Onboarding page).
+            // Login-page Google sign-ins pass allowNewUser=false → reject gracefully.
+            if (!allowNewUser) {
+                return res.status(404).json({
+                    message: 'No account found with this email. Please register first.',
+                    needsRegistration: true
+                });
+            }
+
             // Auto-create a new manager account from Google profile
             const googleName = googlePayload.name || normalizedEmail.split('@')[0];
             const newUser = await User.create({

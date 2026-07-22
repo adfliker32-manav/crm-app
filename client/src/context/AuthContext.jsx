@@ -122,7 +122,8 @@ export const AuthProvider = ({ children }) => {
             console.error("Google Login failed", error);
             return {
                 success: false,
-                message: error.response?.data?.message || 'Google login failed'
+                message: error.response?.data?.message || 'Google login failed',
+                needsRegistration: error.response?.data?.needsRegistration || false
             };
         }
     };

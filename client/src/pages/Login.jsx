@@ -9,6 +9,7 @@ const Login = () => {
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [needsRegistration, setNeedsRegistration] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { login, googleLogin } = useAuth();
   const navigate = useNavigate();
@@ -43,7 +44,13 @@ const Login = () => {
       else if (result.role === 'agency') navigate('/agency/dashboard');
       else navigate('/dashboard');
     } else {
-      setError(result.message);
+      if (result.needsRegistration) {
+        setNeedsRegistration(true);
+        setError('');
+      } else {
+        setNeedsRegistration(false);
+        setError(result.message);
+      }
       setIsLoading(false);
     }
   };
@@ -106,6 +113,15 @@ const Login = () => {
           {error && (
             <div className="bg-red-50 text-red-600 px-4 py-3 rounded-xl text-sm mb-6 border border-red-100">
               {error}
+            </div>
+          )}
+
+          {/* Needs registration prompt */}
+          {needsRegistration && (
+            <div className="bg-amber-50 text-amber-800 px-4 py-3 rounded-xl text-sm mb-6 border border-amber-200">
+              No account found with this email. Please{' '}
+              <Link to="/register" className="font-semibold underline hover:text-amber-900">register here</Link>
+              {' '}to get started.
             </div>
           )}
 

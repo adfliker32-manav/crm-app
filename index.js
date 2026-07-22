@@ -50,6 +50,7 @@ const aiProxyRoutes = require('./src/routes/aiProxyRoutes');
 const extApiRoutes    = require('./src/routes/extApiRoutes');    // Third-party CRM Integration API
 const extApiKeyRoutes = require('./src/routes/extApiKeyRoutes'); // Key management for External API
 const workflowRoutes  = require('./src/routes/workflowRoutes');  // Workflow Engine (n8n-style)
+const workflowLibraryRoutes = require('./src/routes/workflowLibraryRoutes'); // Community Workflow Library
 
 
 const app = express();
@@ -516,6 +517,7 @@ app.use('/api/features', require('./src/routes/featureRoutes'));
 // user can't reach these APIs directly even if the nav is hidden.
 app.use('/api/automations', authMiddleware, requireModule('automations'), automationRoutes);
 app.use('/api/workflows',   authMiddleware, workflowRoutes); // New Workflow Engine
+app.use('/api/workflow-library', authMiddleware, workflowLibraryRoutes); // Community Workflow Library
 app.use('/api/sequences', authMiddleware, requireModule('automations'), sequenceRoutes);
 app.use('/api/appointments', authMiddleware, appointmentRoutes);
 

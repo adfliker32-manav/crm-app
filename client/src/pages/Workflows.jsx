@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { useNotification } from '../context/NotificationContext';
 import { useConfirm } from '../context/ConfirmContext';
+import CommunityLibraryModal from '../components/Workflows/CommunityLibraryModal';
 
 const TRIGGER_META = {
     LEAD_CREATED:        { label: 'Lead Created',        icon: 'fa-user-plus',     color: '#3B82F6', bg: '#EFF6FF' },
@@ -26,13 +27,14 @@ const STATUS_META = {
 export default function Workflows() {
     const navigate = useNavigate();
     const { showNotification } = useNotification();
-    const { showDanger } = useConfirm();
+    const { showDanger, showInfo } = useConfirm();
 
     const [workflows, setWorkflows] = useState([]);
     const [loading, setLoading] = useState(true);
     const [analytics, setAnalytics] = useState(null);
     const [filterStatus, setFilterStatus] = useState('');
     const [filterTrigger, setFilterTrigger] = useState('');
+    const [libraryOpen, setLibraryOpen] = useState(false);
 
     const fetchWorkflows = async () => {
         try {
@@ -82,6 +84,20 @@ export default function Workflows() {
         } catch { showNotification('error', 'Status update failed'); }
     };
 
+    const handlePublishToLibrary = async (id, name) => {
+        const ok = await showInfo(
+            `Share "${name}" to the Community Library? Other businesses will be able to see and clone it. Your account name will be shown as the author.`,
+            'Share to Community'
+        );
+        if (!ok) return;
+        try {
+            await api.post(`/workflows/${id}/publish-to-library`);
+            showNotification('success', 'Shared to the Community Library');
+        } catch (err) {
+            showNotification('error', err.response?.data?.message || 'Failed to share workflow');
+        }
+    };
+
     const card = (label, value, icon, color) => (
         <div style={{ background: '#fff', borderRadius: 14, padding: '16px 20px', border: '1.5px solid #E2E8F0', flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -105,11 +121,18 @@ export default function Workflows() {
                     </h1>
                     <p style={{ color: '#64748B', margin: '4px 0 0', fontSize: 14 }}>Build n8n-style automations with a visual canvas editor</p>
                 </div>
-                <button
-                    onClick={() => navigate('/workflows/new/builder')}
-                    style={{ padding: '10px 20px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg, #6366F1, #8B5CF6)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 14px rgba(99,102,241,0.35)' }}>
-                    <i className="fa-solid fa-plus" /> New Workflow
-                </button>
+                <div style={{ display: 'flex', gap: 10 }}>
+                    <button
+                        onClick={() => setLibraryOpen(true)}
+                        style={{ padding: '10px 20px', borderRadius: 10, border: '1.5px solid #E2E8F0', background: '#fff', color: '#1E293B', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <i className="fa-solid fa-users" style={{ color: '#8B5CF6' }} /> Community Library
+                    </button>
+                    <button
+                        onClick={() => navigate('/workflows/new/builder')}
+                        style={{ padding: '10px 20px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg, #6366F1, #8B5CF6)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 14px rgba(99,102,241,0.35)' }}>
+                        <i className="fa-solid fa-plus" /> New Workflow
+                    </button>
+                </div>
             </div>
 
             {/* Analytics cards */}
@@ -209,6 +232,10 @@ export default function Workflows() {
                                             {wf.status === 'published' ? 'Pause' : 'Enable'}
                                         </button>
                                     )}
+                                    <button onClick={() => handlePublishToLibrary(wf._id, wf.name)} title="Share to Community"
+                                        style={{ width: 34, borderRadius: 8, border: '1.5px solid #E2E8F0', background: '#fff', color: '#8B5CF6', fontSize: 12, cursor: 'pointer' }}>
+                                        <i className="fa-solid fa-share-nodes" />
+                                    </button>
                                     <button onClick={() => handleDuplicate(wf._id)} title="Duplicate"
                                         style={{ width: 34, borderRadius: 8, border: '1.5px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: 12, cursor: 'pointer' }}>
                                         <i className="fa-solid fa-copy" />
@@ -223,6 +250,12 @@ export default function Workflows() {
                     })}
                 </div>
             )}
+
+            <CommunityLibraryModal
+                isOpen={libraryOpen}
+                onClose={() => setLibraryOpen(false)}
+                triggerMeta={TRIGGER_META}
+            />
         </div>
     );
 }
