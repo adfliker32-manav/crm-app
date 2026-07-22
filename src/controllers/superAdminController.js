@@ -2459,12 +2459,17 @@ const getClientPermissions = async (req, res) => {
         if (!company) return res.status(404).json({ message: 'Company not found' });
 
         const ws = await WorkspaceSettings.findOne({ userId: id }).lean() || {};
+        const valuesToSend = resolveValues(ws);
+        
+        console.log(`[DEBUG] getClientPermissions for Company ID: ${id}`);
+        console.log(`[DEBUG] Values being sent to UI:`, valuesToSend);
+
         res.json({
             success: true,
             registry: FEATURE_REGISTRY,
             // Effective (plan baseline + overrides) is exactly what the materialized
             // WorkspaceSettings fields hold, so resolveValues(ws) is the display state.
-            values: resolveValues(ws),
+            values: valuesToSend,
         });
     } catch (error) {
         console.error('getClientPermissions Error:', error);
