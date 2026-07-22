@@ -49,7 +49,16 @@ const PlanCatalogView = () => {
         if (!editing.code || !editing.name) { showError('Code and name are required'); return; }
         setSaving(true);
         try {
-            await api.post('/billing/superadmin/plans', editing);
+            // Registry node keys contain dots (e.g. 'leads.metaSync'). The server's
+            // body sanitizer (express-mongo-sanitize) strips any key with a '.', so
+            // encode entitlementValues keys to '__'; the backend decodes them back.
+            const payload = { ...editing };
+            if (editing.entitlementValues && typeof editing.entitlementValues === 'object') {
+                const enc = {};
+                for (const [k, v] of Object.entries(editing.entitlementValues)) enc[k.replace(/\./g, '__')] = v;
+                payload.entitlementValues = enc;
+            }
+            await api.post('/billing/superadmin/plans', payload);
             showSuccess(`Plan "${editing.name}" saved`);
             setEditing(null);
             load();
