@@ -34,7 +34,15 @@ const PermissionManagerModal = ({ isOpen, onClose, company, onSuccess }) => {
     const handleSave = async () => {
         try {
             setSaving(true);
-            await api.put(`/superadmin/companies/${company._id}/permissions`, { values });
+            
+            // Encode dot keys to double underscores to prevent WAFs (like Cloudflare) 
+            // from silently stripping NoSQL-like keys from the request body.
+            const encodedValues = {};
+            for (const [k, v] of Object.entries(values)) {
+                encodedValues[k.replace(/\./g, '__')] = v;
+            }
+
+            await api.put(`/superadmin/companies/${company._id}/permissions`, { values: encodedValues });
             showSuccess('Permissions updated');
             if (onSuccess) onSuccess();
             onClose();

@@ -2486,10 +2486,17 @@ const getClientPermissions = async (req, res) => {
 const updateClientPermissions = async (req, res) => {
     try {
         const { id } = req.params;
-        const { values } = req.body || {};
+        let { values } = req.body || {};
         if (!values || typeof values !== 'object') {
             return res.status(400).json({ message: 'values object is required' });
         }
+
+        // Decode keys that were encoded by the frontend to bypass WAF stripping
+        const decodedValues = {};
+        for (const [k, v] of Object.entries(values)) {
+            decodedValues[k.replace(/__/g, '.')] = v;
+        }
+        values = decodedValues;
 
         // Create a workspace on demand if the account doesn't have one yet (e.g. an
         // agency), so the permission manager works uniformly for every account type.
