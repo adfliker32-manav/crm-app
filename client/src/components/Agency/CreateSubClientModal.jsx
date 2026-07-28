@@ -10,7 +10,6 @@ const ALL_MODULES = [
     { id: 'team',        name: 'Team',                icon: 'fa-users',         desc: 'Add agents, set permissions' },
     { id: 'reports',     name: 'Reports',             icon: 'fa-chart-pie',     desc: 'Analytics dashboards' },
     { id: 'api',         name: 'API Access',          icon: 'fa-code',          desc: 'Programmatic access via tokens' },
-    { id: 'whitelabel',  name: 'White-Label',         icon: 'fa-palette',       desc: 'Custom branding & domain' },
     { id: 'settings',    name: 'Settings',            icon: 'fa-gear',          desc: 'Workspace configuration' }
 ];
 
@@ -53,8 +52,7 @@ const STEPS = [
     { n: 1, label: 'Contact' },
     { n: 2, label: 'Company' },
     { n: 3, label: 'Modules' },
-    { n: 4, label: 'Limits' },
-    { n: 5, label: 'Password' }
+    { n: 4, label: 'Password' }
 ];
 
 const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) => {
@@ -75,9 +73,6 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
         onboardingNotes: '',
         // Step 3 — Modules
         activeModules: ['leads', 'team', 'reports', 'settings'],
-        // Step 4 — Limits
-        leadLimit: 100,
-        agentLimit: 2,
         planFeatures: {
             aiChatbot: false,
             whatsappAutomation: false,
@@ -86,13 +81,12 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
             metaSync: false,
             advancedAnalytics: false
         },
-        // Step 5 — Password
+        // Step 4 — Password
         password: ''
     });
 
     const agencyModules  = agencyWorkspace?.activeModules || [];
     const agencyFeatures = agencyWorkspace?.planFeatures || {};
-    const maxAgentLimit  = agencyWorkspace?.agentLimit || 50;
 
     useEffect(() => {
         if (!isOpen) {
@@ -104,7 +98,6 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                 adminName: '', adminEmail: '', phone: '',
                 companyName: '', website: '', onboardingNotes: '',
                 activeModules: ['leads', 'team', 'reports', 'settings'],
-                leadLimit: 100, agentLimit: 2,
                 planFeatures: {
                     aiChatbot: false, whatsappAutomation: false, emailAutomation: false,
                     campaigns: false, metaSync: false, advancedAnalytics: false
@@ -152,7 +145,7 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
             if (!form.companyName.trim()) return 'Company name is required.';
         }
         if (s === 3 && form.activeModules.length === 0) return 'Select at least one module.';
-        if (s === 5) {
+        if (s === 4) {
             if (!form.password) return 'Password is required.';
             if (form.password.length < 8) return 'Password must be at least 8 characters.';
             if (pwInfo.score < 2) return 'Password is too weak. Use upper-case, numbers, or symbols.';
@@ -163,11 +156,11 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
     const handleNext = () => {
         const err = validateStep(step);
         if (err) return showError(err);
-        setStep(s => Math.min(5, s + 1));
+        setStep(s => Math.min(4, s + 1));
     };
 
     const handleSubmit = async () => {
-        const err = validateStep(1) || validateStep(2) || validateStep(3) || validateStep(5);
+        const err = validateStep(1) || validateStep(2) || validateStep(3) || validateStep(4);
         if (err) return showError(err);
         setSubmitting(true);
         try {
@@ -180,8 +173,6 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                 onboardingNotes: form.onboardingNotes.trim() || null,
                 password:        form.password,
                 activeModules:   form.activeModules,
-                leadLimit:       form.leadLimit,
-                agentLimit:      form.agentLimit,
                 planFeatures:    form.planFeatures
             });
             if (res.data?.success) {
@@ -437,59 +428,8 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                         </div>
                     )}
 
-                    {/* STEP 4: Limits */}
+                    {/* STEP 4: Password */}
                     {step === 4 && (
-                        <div className="space-y-5 animate-in fade-in duration-200">
-                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-2 text-xs text-blue-800">
-                                <i className="fa-solid fa-circle-info text-blue-600 mt-0.5" />
-                                <span>Set the monthly lead intake and number of agent seats for this client workspace.</span>
-                            </div>
-
-                            <div>
-                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-                                    <span>Monthly Lead Limit</span>
-                                    <span className="text-blue-600 font-black text-base">{form.leadLimit.toLocaleString()}</span>
-                                </label>
-                                <input type="range" min="50" max="10000" step="50"
-                                    value={form.leadLimit}
-                                    onChange={e => setForm({ ...form, leadLimit: parseInt(e.target.value) })}
-                                    className="w-full accent-blue-600"
-                                />
-                                <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-medium">
-                                    <span>50</span><span>2,500</span><span>5,000</span><span>10,000</span>
-                                </div>
-                                <div className="flex gap-2 mt-2">
-                                    {[100, 500, 1000, 5000].map(v => (
-                                        <button type="button" key={v} onClick={() => setForm({ ...form, leadLimit: v })}
-                                            className={`flex-1 py-1.5 rounded-lg text-xs font-bold border transition
-                                                ${form.leadLimit === v ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'}`}>
-                                            {v.toLocaleString()}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-                                    <span>Agent Seats</span>
-                                    <span className="text-blue-600 font-black text-base">{form.agentLimit}</span>
-                                </label>
-                                <input type="range" min="1" max={Math.max(20, maxAgentLimit)} step="1"
-                                    value={form.agentLimit}
-                                    onChange={e => setForm({ ...form, agentLimit: parseInt(e.target.value) })}
-                                    className="w-full accent-blue-600"
-                                />
-                                <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-medium">
-                                    <span>1</span>
-                                    <span>{Math.floor(Math.max(20, maxAgentLimit) / 2)}</span>
-                                    <span>{Math.max(20, maxAgentLimit)}</span>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* STEP 5: Password */}
-                    {step === 5 && (
                         <div className="space-y-5 animate-in fade-in duration-200">
                             <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-2 text-xs text-blue-800">
                                 <i className="fa-solid fa-key text-blue-600 mt-0.5" />
@@ -533,8 +473,6 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                                     <div className="flex justify-between"><span className="text-slate-500">Company</span><span className="font-bold text-slate-800">{form.companyName}</span></div>
                                     <div className="flex justify-between"><span className="text-slate-500">Modules</span><span className="font-bold text-slate-800">{form.activeModules.length}</span></div>
                                     <div className="flex justify-between"><span className="text-slate-500">Sub-permissions</span><span className="font-bold text-slate-800">{Object.values(form.planFeatures).filter(Boolean).length}</span></div>
-                                    <div className="flex justify-between"><span className="text-slate-500">Lead Limit</span><span className="font-bold text-slate-800">{form.leadLimit.toLocaleString()}/mo</span></div>
-                                    <div className="flex justify-between"><span className="text-slate-500">Agent Seats</span><span className="font-bold text-slate-800">{form.agentLimit}</span></div>
                                     <div className="flex justify-between"><span className="text-slate-500">Trial</span><span className="font-bold text-emerald-600">14 days — starts immediately</span></div>
                                 </div>
                             </div>
@@ -552,7 +490,7 @@ const CreateSubClientModal = ({ isOpen, onClose, agencyWorkspace, onSuccess }) =
                         <i className={`fa-solid ${step === 1 ? 'fa-times' : 'fa-arrow-left'} text-xs`} />
                         {step === 1 ? 'Cancel' : 'Back'}
                     </button>
-                    {step < 5 ? (
+                    {step < 4 ? (
                         <button
                             type="button"
                             onClick={handleNext}

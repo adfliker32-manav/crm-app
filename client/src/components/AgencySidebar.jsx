@@ -85,11 +85,6 @@ const AgencySidebar = () => {
                     <p className="text-[10px] text-slate-500 px-6 mt-6 mb-3 uppercase tracking-widest font-bold">Client Management</p>
                 )}
                 <NavItem collapsed={collapsed} to="/agency/clients" icon="fa-solid fa-buildings" label="Clients & Sub-accounts" />
-                
-                {!collapsed && (
-                    <p className="text-[10px] text-slate-500 px-6 mt-6 mb-3 uppercase tracking-widest font-bold">Platform Settings</p>
-                )}
-                <NavItem collapsed={collapsed} to="/agency/white-label" icon="fa-solid fa-palette" label="White-Label" />
 
                 {!collapsed && (
                     <p className="text-[10px] text-slate-500 px-6 mt-6 mb-3 uppercase tracking-widest font-bold">💰 Partner Program</p>

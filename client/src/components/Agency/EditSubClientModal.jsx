@@ -9,8 +9,7 @@ const ALL_MODULES = [
     { id: 'automations', name: 'Workflow Automations', icon: 'fa-bolt' },
     { id: 'team',        name: 'Team Management',      icon: 'fa-users' },
     { id: 'reports',     name: 'Advanced Reports',     icon: 'fa-chart-pie' },
-    { id: 'api',         name: 'API Access',           icon: 'fa-code' },
-    { id: 'whitelabel',  name: 'White-Label Branding', icon: 'fa-palette' }
+    { id: 'api',         name: 'API Access',           icon: 'fa-code' }
 ];
 
 const EditSubClientModal = ({ isOpen, onClose, client, agencyModules = [], onSuccess }) => {
@@ -20,9 +19,7 @@ const EditSubClientModal = ({ isOpen, onClose, client, agencyModules = [], onSuc
         name: '',
         email: '',
         phone: '',
-        activeModules: [],
-        leadLimit: 100,
-        agentLimit: 2
+        activeModules: []
     });
     const [loading, setLoading] = useState(false);
 
@@ -33,9 +30,7 @@ const EditSubClientModal = ({ isOpen, onClose, client, agencyModules = [], onSuc
                 name: client.name || '',
                 email: client.email || '',
                 phone: client.phone || '',
-                activeModules: client.activeModules || [],
-                leadLimit: client.planFeatures?.leadLimit || 100,
-                agentLimit: client.agentLimit || 2
+                activeModules: client.activeModules || []
             });
         }
     }, [client]);
@@ -116,29 +111,6 @@ const EditSubClientModal = ({ isOpen, onClose, client, agencyModules = [], onSuc
                             />
                         </div>
 
-                        <div>
-                            <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-2 ml-1">Lead Limit (Total)</label>
-                            <input
-                                type="number"
-                                name="leadLimit"
-                                value={formData.leadLimit}
-                                onChange={handleChange}
-                                min="0"
-                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all outline-none font-bold text-slate-700"
-                            />
-                        </div>
-
-                        <div>
-                            <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-2 ml-1">Agent Seat Limit</label>
-                            <input
-                                type="number"
-                                name="agentLimit"
-                                value={formData.agentLimit}
-                                onChange={handleChange}
-                                min="1"
-                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all outline-none font-bold text-slate-700"
-                            />
-                        </div>
                     </div>
 
                     {/* Module Grid */}

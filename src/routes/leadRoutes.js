@@ -85,6 +85,10 @@ router.post('/bulk-delete', authMiddleware, deleteLimiter, checkPermission('dele
 // 7.8 Bulk Status Update (single DB query — replaces N individual updates)
 router.post('/bulk-status', authMiddleware, checkPermission('editLeads'), leadController.bulkUpdateStatus);
 
+// 7.9 Bulk Export Leads (MUST BE BEFORE /:id routes!)
+// Owner-only + server-side audit logged. bulkLimiter throttles mass-export abuse.
+router.post('/export', authMiddleware, bulkLimiter, leadController.exportLeads);
+
 // 8. Get All Leads
 router.get('/', authMiddleware, checkPermission('viewLeads'), leadController.getLeads);
 

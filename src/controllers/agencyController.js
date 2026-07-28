@@ -2,78 +2,10 @@ const User = require('../models/User');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const AgencySettings = require('../models/AgencySettings');
-const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const auditLogger = require('../services/auditLogger');
 const mongoose = require('mongoose');
-
-// @desc    Impersonate Client
-// @route   GET /api/agency/impersonate/:clientId
-// @access  Private (Agency Only)
-const impersonateClient = async (req, res) => {
-    try {
-        const agencyId = req.user.userId || req.user.id;
-        const { clientId } = req.params;
-
-        // 1. Verify that the requested Client actually belongs to this Agency
-        const client = await User.findOne({ _id: clientId, parentId: agencyId, role: 'manager' });
-
-        if (!client) {
-            return res.status(404).json({ message: "Client not found or unassigned to your Agency." });
-        }
-
-        // 2. Generate a specialized JWT.
-        const payload = {
-            userId: client._id,
-            role: client.role,
-            tenantId: client._id,
-            permissions: client.permissions || {}
-        };
-
-        const impersonationToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '2h' });
-
-        // 3. AUDIT: Log every impersonation for forensic accountability
-        auditLogger.log({
-            actor: req.user,
-            actionCategory: 'AGENCY_MANAGEMENT',
-            action: 'AGENCY_IMPERSONATION',
-            targetType: 'Client',
-            targetId: client._id,
-            targetName: client.companyName || client.name,
-            details: {
-                agencyId,
-                agencyName: req.user.companyName || req.user.name || 'Unknown Agency',
-                clientEmail: client.email,
-                sessionDuration: '2h'
-            },
-            req
-        });
-
-        const workspace = await WorkspaceSettings.findOne({ userId: client._id }).lean();
-
-        res.status(200).json({
-            success: true,
-            message: `Securely hijacking session for ${client.companyName || client.name}...`,
-            token: impersonationToken,
-            user: {
-                _id: client._id,
-                name: client.name,
-                email: client.email,
-                role: client.role,
-                companyName: client.companyName,
-                permissions: client.permissions,
-                activeModules: workspace?.activeModules || [],
-                planFeatures: workspace?.planFeatures || {},
-                isImpersonated: true
-            }
-        });
-
-    } catch (error) {
-        console.error("Impersonation Error:", error);
-        res.status(500).json({ message: "Server error during session impersonation." });
-    }
-};
 
 // @desc    Get All Sub-Clients for the Agency
 // @route   GET /api/agency/clients
@@ -309,9 +241,8 @@ const toggleClientFreeze = async (req, res) => {
 //   website: string           — optional company website (mirrors self-registration)
 //   onboardingNotes: string   — optional business notes (mirrors self-registration)
 //   activeModules: string[]   — modules the agency wants to grant (filtered by inheritance)
-//   leadLimit: number         — monthly lead limit
-//   agentLimit: number        — agent seat limit
 //   planFeatures: object      — sub-permissions (e.g. { aiChatbot: true, webhooks: false })
+//   Note: lead/agent limits are platform-controlled — agencies cannot set them.
 const createClient = async (req, res) => {
     try {
         const agencyId = req.user.userId || req.user.id;
@@ -324,8 +255,6 @@ const createClient = async (req, res) => {
             website,
             onboardingNotes,
             activeModules,
-            leadLimit,
-            agentLimit,
             planFeatures
         } = req.body;
 
@@ -382,9 +311,10 @@ const createClient = async (req, res) => {
         // 3. Generate password (use provided or auto-generate)
         const rawPassword = password || crypto.randomBytes(5).toString('hex');
 
-        // 4. Resolve limits & sub-permissions (with safe bounds)
-        const resolvedLeadLimit = Math.max(0, parseInt(leadLimit, 10) || 100);
-        const resolvedAgentLimit = Math.max(1, parseInt(agentLimit, 10) || 2);
+        // 4. Resolve sub-permissions. Limits are platform-controlled — agencies
+        //    cannot set lead/agent limits, so new clients get the platform defaults.
+        const resolvedLeadLimit = 100;
+        const resolvedAgentLimit = 2;
 
         // Sub-permissions: only honor known boolean flags so we don't accept arbitrary input.
         // Agency cannot grant a sub-permission they themselves don't have.
@@ -580,7 +510,6 @@ const updateClient = async (req, res) => {
 };
 
 module.exports = {
-    impersonateClient,
     getAgencyClients,
     getAgencyAnalytics,
     toggleClientFreeze,

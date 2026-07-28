@@ -710,7 +710,9 @@ const Leads = () => {
                                             <i className="fa-solid fa-file-import w-4 text-center"></i> Import CSV
                                         </button>
                                     )}
-                                    {(user?.role === 'superadmin' || user?.role === 'manager' || user?.permissions?.exportLeads) && (
+                                    {/* Owner-only: bulk export is the top lead-exfiltration vector, so it is
+                                        restricted to the account owner and every export is audit-logged server-side. */}
+                                    {(user?.role === 'superadmin' || user?.role === 'manager') && (
                                         <button
                                             onClick={handleExportCSV}
                                             className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-green-50 hover:text-green-600 flex items-center gap-3 transition-colors"
@@ -1036,6 +1038,7 @@ const Leads = () => {
                 leads={exportSelectedLeads ?? leads}
                 stages={stages}
                 userTags={userTags}
+                selectedIds={exportSelectedLeads ? exportSelectedLeads.map(l => l._id) : null}
                 exportLabel={exportSelectedLeads ? `${exportSelectedLeads.length} Selected Leads` : undefined}
             />
         </div>

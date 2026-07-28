@@ -35,7 +35,8 @@ const activityLogSchema = new mongoose.Schema({
             'STAGE_DELETED',
             'AGENT_CREATED',
             'AGENT_DELETED',
-            'BULK_ACTION'
+            'BULK_ACTION',
+            'LEADS_EXPORTED'
         ],
         index: true
     },

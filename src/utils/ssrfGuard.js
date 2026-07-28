@@ -49,12 +49,59 @@ const ipToInt = (ip) => {
 /**
  * Check if an IPv4 address falls inside any blocked range.
  */
-const isPrivateIP = (ip) => {
-    if (!net.isIPv4(ip)) return false; // Allow IPv6 unless specifically known bad
+const isPrivateIPv4 = (ip) => {
     const int = ipToInt(ip);
     for (const { start, end } of BLOCKED_CIDR) {
         if (int >= ipToInt(start) && int <= ipToInt(end)) return true;
     }
+    return false;
+};
+
+/**
+ * Check if an IPv6 address falls inside a blocked/reserved range:
+ * loopback (::1), unspecified (::), unique local (fc00::/7),
+ * link-local (fe80::/10), and IPv4-mapped (::ffff:a.b.c.d — the embedded
+ * IPv4 address is re-checked against the IPv4 blocklist rather than being
+ * allowed through unchecked).
+ */
+const isPrivateIPv6 = (ip) => {
+    const normalized = ip.toLowerCase();
+    if (normalized === '::1' || normalized === '::') return true;
+
+    // Dotted form, e.g. from dns.lookup() output on some platforms.
+    const dottedV4Mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (dottedV4Mapped) return isPrivateIPv4(dottedV4Mapped[1]);
+
+    // WHATWG URL normalizes "::ffff:a.b.c.d" into pure-hex hextets
+    // (e.g. "::ffff:127.0.0.1" becomes "::ffff:7f00:1") — decode those back
+    // into a dotted IPv4 address before checking the blocklist.
+    const hexV4Mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hexV4Mapped) {
+        const hi = parseInt(hexV4Mapped[1], 16);
+        const lo = parseInt(hexV4Mapped[2], 16);
+        const v4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+        return isPrivateIPv4(v4);
+    }
+
+    // Compare the first hextet numerically (not by string prefix) so compressed
+    // forms like "fc0::1" (0x0fc0, NOT in range) aren't confused with "fc00::1"
+    // (0xfc00, in range).
+    const firstHextet = parseInt(normalized.split(':')[0] || '0', 16);
+    if (firstHextet >= 0xfc00 && firstHextet <= 0xfdff) return true; // fc00::/7 (ULA)
+    if (firstHextet >= 0xfe80 && firstHextet <= 0xfebf) return true; // fe80::/10 (link-local)
+
+    return false;
+};
+
+/**
+ * Check if an IP (v4 or v6) falls inside a blocked/reserved range.
+ * Accepts IPv6 literals with or without surrounding brackets (e.g. from a URL's
+ * `hostname`, which may retain "[::1]" form).
+ */
+const isPrivateIP = (ip) => {
+    const stripped = ip.replace(/^\[|\]$/g, '');
+    if (net.isIPv4(stripped)) return isPrivateIPv4(stripped);
+    if (net.isIPv6(stripped)) return isPrivateIPv6(stripped);
     return false;
 };
 
@@ -85,9 +132,9 @@ const validateOutboundUrl = async (rawUrl) => {
         throw new Error(`[SSRF Guard] Hostname "${hostname}" is not allowed.`);
     }
 
-    // 3. If hostname is an IP, validate it directly
-    if (net.isIP(hostname)) {
-        if (isPrivateIP(hostname) || hostname === '::1') {
+    // 3. If hostname is an IP, validate it directly (v4 or v6)
+    if (net.isIP(hostname.replace(/^\[|\]$/g, ''))) {
+        if (isPrivateIP(hostname)) {
             throw new Error(`[SSRF Guard] Direct IP access to private/reserved address "${hostname}" is blocked.`);
         }
         return; // Public IP — allowed
@@ -96,7 +143,7 @@ const validateOutboundUrl = async (rawUrl) => {
     // 4. Resolve hostname to IP and validate the resolved address
     try {
         const { address } = await dns.lookup(hostname);
-        if (isPrivateIP(address) || address === '::1') {
+        if (isPrivateIP(address)) {
             throw new Error(`[SSRF Guard] Hostname "${hostname}" resolves to private/reserved IP "${address}" — blocked.`);
         }
     } catch (err) {

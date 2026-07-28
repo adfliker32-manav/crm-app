@@ -37,7 +37,7 @@ const getStatusBadge = (client) => {
 
 const AgencyClients = () => {
     const { showDanger } = useConfirm();
-    const { user, loginWithToken } = useAuth();
+    const { user } = useAuth();
     const { showSuccess, showError } = useNotification();
 
     const [clients, setClients] = useState([]);
@@ -75,21 +75,6 @@ const AgencyClients = () => {
                 setAgencyWorkspace(response.data.agencyWorkspace);
             }
         } catch (error) { console.error('Failed to load agency workspace:', error); }
-    };
-
-    const handleImpersonate = async (clientId, companyName) => {
-        const confirmed = await showDanger(
-            `You are about to securely access ${companyName}'s CRM. This action is logged.`,
-            "Impersonate Client"
-        );
-        if (confirmed) {
-            try {
-                const response = await api.get(`/agency/impersonate/${clientId}`);
-                if (response.data?.success) loginWithToken(response.data.token, response.data.user);
-            } catch (error) {
-                showError("Impersonation failed: " + (error.response?.data?.message || error.message));
-            }
-        }
     };
 
     const handleToggleFreeze = async (clientId, companyName, currentAccountStatus) => {
@@ -271,15 +256,6 @@ const AgencyClients = () => {
                                                                 : 'bg-white border-slate-200 text-slate-400 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-600'
                                                         }`} title={client.accountStatus === 'Frozen' ? 'Unfreeze' : 'Freeze'}>
                                                         <i className={`fa-solid ${client.accountStatus === 'Frozen' ? 'fa-fire-flame-simple' : 'fa-snowflake'} text-xs`} />
-                                                    </button>
-                                                )}
-
-                                                {/* Impersonate — only for live accounts */}
-                                                {client.is_active && (
-                                                    <button onClick={() => handleImpersonate(client._id, client.companyName)}
-                                                        className="w-8 h-8 rounded-full bg-white border border-slate-200 text-blue-600 hover:bg-blue-50 outline-none flex items-center justify-center transition-all shadow-sm"
-                                                        title="Login As Client">
-                                                        <i className="fa-solid fa-right-to-bracket text-xs" />
                                                     </button>
                                                 )}
 

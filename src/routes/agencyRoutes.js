@@ -1,15 +1,11 @@
 const express = require('express');
 const validateObjectId = require('../middleware/validateObjectId');
 const router = express.Router();
-const { 
-    impersonateClient, getAgencyClients, getAgencyAnalytics, toggleClientFreeze, createClient, updateClient
+const {
+    getAgencyClients, getAgencyAnalytics, toggleClientFreeze, createClient, updateClient
 } = require('../controllers/agencyController');
-const { getAgencyBranding, updateAgencyBranding, getUsageStats } = require('../controllers/agencySettingsController');
 const { getPartnerEarnings, updateBankDetails, requestWithdrawal } = require('../controllers/partnerEarningsController');
 const { authMiddleware, requireAgency } = require('../middleware/authMiddleware');
-
-// @route   GET /api/agency/impersonate/:clientId
-router.get('/impersonate/:clientId', validateObjectId({ params: ['clientId'] }), authMiddleware, requireAgency, impersonateClient);
 
 // @route   GET /api/agency/clients
 router.get('/clients', authMiddleware, requireAgency, getAgencyClients);
@@ -25,15 +21,6 @@ router.put('/clients/:clientId', validateObjectId({ params: ['clientId'] }), aut
 
 // @route   GET /api/agency/analytics
 router.get('/analytics', authMiddleware, requireAgency, getAgencyAnalytics);
-
-// @route   GET /api/agency/branding/:agencyId
-router.get('/branding/:agencyId', validateObjectId({ params: ['agencyId'] }), getAgencyBranding);
-
-// @route   PUT /api/agency/branding
-router.put('/branding', authMiddleware, requireAgency, updateAgencyBranding);
-
-// @route   GET /api/agency/usage
-router.get('/usage', authMiddleware, requireAgency, getUsageStats);
 
 // ─── Partner Revenue Sharing ──────────────────────────────────────────────────
 // @route   GET /api/agency/partner/earnings

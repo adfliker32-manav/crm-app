@@ -97,13 +97,38 @@ const HttpRequestNode = {
             try { body = JSON.parse(interpolate(data.body)); } catch { body = interpolate(data.body); }
         }
 
-        try {
-            // WEAK #3 FIX: Validate the resolved URL against SSRF rules before making
-            // any network request. This blocks private IPs, localhost, cloud metadata
-            // endpoints (169.254.x.x), and non-HTTP protocols.
-            await validateOutboundUrl(url);
+        // SSRF FIX: a validated public URL can still 30x-redirect to a private/
+        // metadata address, and axios's built-in maxRedirects follows that hop
+        // without re-checking it. Follow redirects manually, bounded, re-validating
+        // every hop (including the first) against the SSRF guard before connecting.
+        const MAX_REDIRECTS = 5;
 
-            const response = await axios({ method, url, headers, data: body, timeout });
+        try {
+            let currentUrl = url;
+            let response;
+            for (let hop = 0; ; hop++) {
+                if (hop > MAX_REDIRECTS) throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
+
+                // WEAK #3 FIX: Validate the resolved URL against SSRF rules before making
+                // any network request. This blocks private IPs, localhost, cloud metadata
+                // endpoints (169.254.x.x), and non-HTTP protocols.
+                await validateOutboundUrl(currentUrl);
+
+                response = await axios({
+                    method, url: currentUrl, headers, data: body, timeout,
+                    maxRedirects: 0,        // never let axios auto-follow — every hop must be re-validated
+                    validateStatus: () => true // inspect the status ourselves instead of throwing on non-2xx
+                });
+
+                const isRedirect = [301, 302, 303, 307, 308].includes(response.status) && response.headers.location;
+                if (!isRedirect) break;
+
+                currentUrl = new URL(response.headers.location, currentUrl).href;
+            }
+
+            const ok = response.status >= 200 && response.status < 300;
+            if (!ok) throw Object.assign(new Error(`Request failed with status code ${response.status}`), { response });
+
             const responseData = typeof response.data === 'object' ? response.data : { raw: response.data };
 
             return {

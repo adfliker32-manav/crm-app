@@ -1749,6 +1749,93 @@ const bulkUpdateStatus = async (req, res) => {
     }
 };
 
+/**
+ * Bulk export of the company's leads as data ready for CSV download.
+ *
+ * SECURITY: This is the #1 lead-exfiltration vector, so the control lives on the
+ * server, not the browser:
+ *   1. Owner-only — agents (and agency resellers) are rejected. Only the account
+ *      owner (manager) or a platform superadmin can bulk-export.
+ *   2. Every export is written to the tamper-evident ActivityLog (who, how many
+ *      rows, applied filters, when, IP) BEFORE the data is returned. Because the
+ *      log is written server-side it cannot be skipped by the caller — so the
+ *      manager can always prove exactly what left the system.
+ */
+const exportLeads = async (req, res) => {
+    try {
+        // 1. Owner-only guard. Agents/agencies can never bulk-export.
+        if (!['manager', 'superadmin'].includes(req.user.role)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Only the account owner can export leads.'
+            });
+        }
+
+        const companyId = req.tenantId;
+
+        // 2. Optional filters (mirror the Export dialog). 'All'/empty = no filter.
+        const { stage, source, tag, ids } = req.body || {};
+        const query = { userId: companyId }; // always tenant-scoped — no cross-company leakage
+        if (stage && stage !== 'All') query.status = stage;
+        if (source && source !== 'All') query.source = source;
+        if (tag && tag !== 'All') query.tags = tag;
+
+        // Optional: export only an explicitly selected subset of leads (still scoped
+        // to this company, so the caller can never widen the set to other tenants).
+        let selectedSubset = false;
+        if (Array.isArray(ids) && ids.length > 0) {
+            const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+            if (validIds.length > 0) {
+                query._id = { $in: validIds };
+                selectedSubset = true;
+            }
+        }
+
+        // saasPlugin automatically excludes soft-deleted leads.
+        const leads = await Lead.find(query)
+            .select('name phone email source status tags createdAt date notes customData')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // 3. Unskippable server-side audit entry. logActivity swallows its own
+        //    errors and returns true/false (it never throws), so we MUST inspect the
+        //    result: if the export could not be recorded, we do NOT release the data.
+        //    No log ⇒ no export — that is the whole point of this endpoint.
+        const logged = await logActivity({
+            userId: getRequestUserId(req.user),
+            userName: await resolveActorName(req.user),
+            actionType: 'LEADS_EXPORTED',
+            entityType: 'Lead',
+            entityId: companyId, // stand-in target: the lead database as a whole
+            entityName: `Bulk export (${leads.length} leads)`,
+            metadata: {
+                count: leads.length,
+                format: 'csv',
+                scope: selectedSubset ? 'selected' : 'filtered',
+                filters: {
+                    stage: stage || 'All',
+                    source: source || 'All',
+                    tag: tag || 'All'
+                }
+            },
+            companyId,
+            ipAddress: req.ip
+        });
+
+        if (!logged) {
+            return res.status(500).json({
+                success: false,
+                message: 'Export blocked: the audit entry could not be recorded. Please try again.'
+            });
+        }
+
+        return res.json({ success: true, count: leads.length, leads });
+    } catch (err) {
+        console.error('exportLeads error:', err);
+        return res.status(500).json({ success: false, message: 'Failed to export leads' });
+    }
+};
+
 module.exports = {
     getLeads,
     getLeadById,
@@ -1777,5 +1864,6 @@ module.exports = {
     bulkAddTags,
     bulkRemoveTags,
     bulkDeleteLeads,
-    bulkUpdateStatus
+    bulkUpdateStatus,
+    exportLeads
 };

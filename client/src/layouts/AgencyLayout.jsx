@@ -11,7 +11,6 @@ const AgencyLayout = () => {
             // These dynamic imports tell the browser to download these chunks in the background
             import('../pages/Agency/AgencyDashboard');
             import('../pages/Agency/AgencyClients');
-            import('../pages/Agency/AgencyWhiteLabel');
             import('../pages/Agency/PartnerEarnings');
 
         };

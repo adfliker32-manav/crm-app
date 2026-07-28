@@ -11,6 +11,7 @@ import WebLeadSettings from '../components/Settings/WebLeadSettings';
 import ClaudeAISettings from '../components/Settings/ClaudeAISettings';
 import LeadAssignmentSettings from '../components/Settings/LeadAssignmentSettings';
 import ExternalApiSettings from '../components/Settings/ExternalApiSettings';
+import AuditLogSettings from '../components/Settings/AuditLogSettings';
 import FeatureGate from '../components/FeatureGate';
 
 const Settings = () => {
@@ -20,6 +21,8 @@ const Settings = () => {
 
     const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
     const canAccessSettings = canManageTeam || user?.permissions?.accessSettings === true;
+    // Audit Log is owner-only: it exposes every action (incl. lead exports) across the whole company.
+    const isOwner = user?.role === 'manager';
 
     // Read tab from query param if present
     const initialTab = searchParams.get('tab') || 
@@ -33,7 +36,7 @@ const Settings = () => {
     // Sync tab with URL search params
     useEffect(() => {
         const tab = searchParams.get('tab');
-        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead', 'claudeAI', 'leadAssignment', 'aiSettings', 'externalApi'].includes(tab)) {
+        if (tab && ['profile', 'tags', 'customFields', 'sheetSync', 'meta', 'webLead', 'claudeAI', 'leadAssignment', 'aiSettings', 'externalApi', 'auditLog'].includes(tab)) {
             setActiveTab(tab);
         }
     }, [searchParams]);
@@ -101,6 +104,8 @@ const Settings = () => {
         // AI Chatbot settings moved to WhatsApp → Chatbot → AI Settings.
         { id: 'leadAssignment', label: 'Lead Assignment',  icon: 'fa-user-tag' },
         { id: 'externalApi',    label: 'API Access',       icon: 'fa-plug' },
+        // Owner-only tab: full audit trail (who did what, incl. lead exports).
+        ...(isOwner ? [{ id: 'auditLog', label: 'Audit Log', icon: 'fa-shield-halved' }] : []),
     ];
 
     // Guard stale/removed tab deep-links (e.g. the old ?tab=aiSettings which now
@@ -302,6 +307,18 @@ const Settings = () => {
                             <FeatureGate feature="settings.apiAccess" featureLabel="API Access" source="sub-feature">
                                 <ExternalApiSettings />
                             </FeatureGate>
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'auditLog' && isOwner && (
+                    <div className="animate-in fade-in duration-300">
+                        <div className="p-8 border-b border-slate-100 bg-slate-50/50">
+                            <h2 className="text-xl font-bold text-slate-800">Audit Log</h2>
+                            <p className="text-sm text-slate-500 mt-1">A record of important actions in your workspace — including who exported leads, and when.</p>
+                        </div>
+                        <div className="p-8 bg-slate-50 min-h-[500px]">
+                            <AuditLogSettings />
                         </div>
                     </div>
                 )}

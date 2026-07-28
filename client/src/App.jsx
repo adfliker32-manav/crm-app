@@ -1,7 +1,6 @@
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
-import { BrandingProvider } from './context/BrandingContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { ConfirmProvider } from './context/ConfirmContext';
 import { PromptProvider } from './context/PromptContext';
@@ -26,7 +25,6 @@ const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 // Lazy loaded pages
 const AgencyDashboard = lazy(() => import('./pages/Agency/AgencyDashboard'));
 const AgencyClients = lazy(() => import('./pages/Agency/AgencyClients'));
-const AgencyWhiteLabel = lazy(() => import('./pages/Agency/AgencyWhiteLabel'));
 const PartnerEarnings = lazy(() => import('./pages/Agency/PartnerEarnings'));
 
 
@@ -59,8 +57,7 @@ function App() {
   return (
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <AuthProvider>
-        <BrandingProvider>
-          <NotificationProvider>
+        <NotificationProvider>
             <ConfirmProvider>
               <PromptProvider>
                 <BrowserRouter>
@@ -88,7 +85,6 @@ function App() {
                           <Route path="/agency" element={<AgencyLayout />}>
                             <Route path="dashboard" element={<AgencyDashboard />} />
                             <Route path="clients" element={<AgencyClients />} />
-                            <Route path="white-label" element={<AgencyWhiteLabel />} />
                             <Route path="partner-earnings" element={<PartnerEarnings />} />
                           </Route>
 
@@ -137,7 +133,6 @@ function App() {
               </PromptProvider>
             </ConfirmProvider>
           </NotificationProvider>
-        </BrandingProvider>
       </AuthProvider>
     </GoogleOAuthProvider>
   );

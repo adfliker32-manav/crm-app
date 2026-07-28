@@ -105,7 +105,7 @@ const AgencyDashboard = () => {
 
             <div className="mb-2">
                 <h1 className="text-3xl font-black text-slate-900 tracking-tight">Agency Overview</h1>
-                <p className="text-slate-500 font-medium mt-1">Manage your white-label platform and analyze sub-tenant growth.</p>
+                <p className="text-slate-500 font-medium mt-1">Manage your client workspaces and analyze sub-tenant growth.</p>
             </div>
 
             {/* Top Metric Cards */}

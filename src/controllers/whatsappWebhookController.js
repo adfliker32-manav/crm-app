@@ -111,25 +111,41 @@ const verifySignature = (req, appSecret) => {
 };
 
 // Resolve the app secret for a given WABA ID from the tenant's stored credentials.
+//
+// Two connect flows exist (see whatsappConfigController.js):
+//  - Manual credentials (WABA ID + Phone Number ID + Access Token only, no App ID/Secret
+//    collected — an intentional product choice for simpler onboarding). The WABA's webhook
+//    subscription is tied to whatever Meta App issued the tenant's own access token, which
+//    we never learn — there is no secret anywhere in this system that could verify it.
+//  - Embedded Signup — the OAuth exchange runs through THIS platform's own Meta App
+//    (META_APP_ID/META_APP_SECRET), so its webhooks genuinely are signed with
+//    process.env.META_APP_SECRET.
+// `embeddedSignupConnected` is the stored discriminator between the two. Returns
+// { secret, verifiable } — verifiable=false means "no signature check is possible for this
+// WABA by design", which must NOT be treated as a rejectable/fail-closed case.
 const resolveAppSecret = async (wabaId) => {
-    if (wabaId) {
-        try {
-            const { decryptToken } = require('../utils/encryptionUtils');
-            const config = await IntegrationConfig.findOne({ 'whatsapp.wabaId': wabaId })
-                .select('+whatsapp.waAppSecret');
-            const raw = config?.whatsapp?.waAppSecret;
-            if (raw) {
-                // Mongoose getters may or may not fire depending on access pattern —
-                // manually decrypt to be safe (same guard used in whatsappUtils.js).
-                return (raw.includes(':') && raw.split(':')[0].length === 32)
-                    ? decryptToken(raw)
-                    : raw;
-            }
-        } catch (e) {
-            console.warn('⚠️ [Webhook] Failed to look up per-tenant app secret:', e.message);
+    if (!wabaId) return { secret: null, verifiable: false };
+    try {
+        const { decryptToken } = require('../utils/encryptionUtils');
+        const config = await IntegrationConfig.findOne({ 'whatsapp.wabaId': wabaId })
+            .select('+whatsapp.waAppSecret whatsapp.embeddedSignupConnected');
+        const raw = config?.whatsapp?.waAppSecret;
+        if (raw) {
+            // Mongoose getters may or may not fire depending on access pattern —
+            // manually decrypt to be safe (same guard used in whatsappUtils.js).
+            const secret = (raw.includes(':') && raw.split(':')[0].length === 32)
+                ? decryptToken(raw)
+                : raw;
+            return { secret, verifiable: true };
         }
+        if (config?.whatsapp?.embeddedSignupConnected) {
+            return { secret: process.env.META_APP_SECRET || null, verifiable: true };
+        }
+        return { secret: null, verifiable: false };
+    } catch (e) {
+        console.warn('⚠️ [Webhook] Failed to look up per-tenant app secret:', e.message);
+        return { secret: null, verifiable: false };
     }
-    return null;
 };
 
 // Handle incoming webhook
@@ -151,15 +167,21 @@ exports.handleWebhook = async (req, res) => {
             // Resolve per-tenant app secret using the WABA ID in the payload,
             // then verify the HMAC signature before processing any content.
             const wabaIdFromPayload = req.body?.entry?.[0]?.id;
-            const resolvedSecret = await resolveAppSecret(wabaIdFromPayload);
-            if (resolvedSecret) {
-                if (!verifySignature(req, resolvedSecret)) {
-                    console.error(`❌ Invalid webhook signature - dropping request. WABA: ${wabaIdFromPayload} | Has rawBody: ${!!req.rawBody}`);
+            const { secret: resolvedSecret, verifiable } = await resolveAppSecret(wabaIdFromPayload);
+            if (verifiable) {
+                // Either an explicit per-tenant secret, or an Embedded Signup WABA that
+                // should be signed with META_APP_SECRET. A missing/invalid signature here
+                // IS suspicious — reject regardless of environment.
+                if (!resolvedSecret || !verifySignature(req, resolvedSecret)) {
+                    console.error(`❌ Invalid webhook signature - dropping request. WABA: ${wabaIdFromPayload} | Has rawBody: ${!!req.rawBody} | Had secret: ${!!resolvedSecret}`);
                     telemetryService.recordWebhook(false, false, 0);
                     return;
                 }
             } else {
-                console.warn(`⚠️ [Webhook] No app secret for WABA ${wabaIdFromPayload} — skipping signature verification.`);
+                // Manual-credentials connection (or unknown WABA) — no secret exists
+                // anywhere for us to check against; this is an accepted trade-off of
+                // that connect flow, not a misconfiguration. Do not fail closed here.
+                debug(`⚠️ [Webhook] WABA ${wabaIdFromPayload} has no verifiable app secret (manual-credentials connection) — processing without signature check.`);
             }
 
             const body = req.body;
