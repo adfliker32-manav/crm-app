@@ -1,55 +1,17 @@
 const fs = require('fs');
 const EmailTemplate = require('../models/EmailTemplate');
 const User = require('../models/User');
-const Lead = require('../models/Lead');
-const EmailConversation = require('../models/EmailConversation');
-const EmailMessage = require('../models/EmailMessage');
-const { sendEmail, sendEmailWithRetry } = require('./emailService');
-const { logEmail } = require('./emailLogService');
+const { sendEmailWithRetry } = require('./emailService');
 const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 
-// Upsert EmailConversation + create EmailMessage so automated emails appear in inbox
-const syncToInbox = async ({ userId, lead, subject, htmlBody, messageId, templateId }) => {
-    try {
-        const leadRecord = await Lead.findOne({ _id: lead._id || lead.id, userId }).lean();
-        if (!leadRecord) return;
+// Attachment paths are confined to the upload directory (see FIX S4 below).
+const ALLOWED_ATTACHMENT_PREFIX = 'uploads/email-attachments/';
 
-        let conversation = await EmailConversation.findOne({ userId, leadId: leadRecord._id });
-        if (!conversation) {
-            conversation = new EmailConversation({
-                userId,
-                leadId: leadRecord._id,
-                email: leadRecord.email,
-                displayName: leadRecord.name || leadRecord.email.split('@')[0]
-            });
-        }
-        conversation.lastMessage = subject;
-        conversation.lastMessageAt = new Date();
-        conversation.lastMessageDirection = 'outbound';
-        conversation.metadata = conversation.metadata || { totalMessages: 0, totalOutbound: 0, totalInbound: 0 };
-        conversation.metadata.totalMessages += 1;
-        conversation.metadata.totalOutbound += 1;
-        await conversation.save();
-
-        await new EmailMessage({
-            conversationId: conversation._id,
-            userId,
-            leadId: leadRecord._id,
-            messageId: messageId || null,
-            direction: 'outbound',
-            from: 'CRM',
-            to: leadRecord.email,
-            subject,
-            html: htmlBody,
-            status: 'sent',
-            isAutomated: true,
-            timestamp: new Date()
-        }).save();
-    } catch (err) {
-        console.error('⚠️ [EmailAuto] Inbox sync failed:', err.message);
-    }
-};
+// Inbox threading and analytics logging are handled centrally by
+// emailService.sendEmail() → emailSyncService. The local syncToInbox() copy
+// that used to live here has been removed; passing isAutomated/triggerType/
+// templateId/leadId through the send options is all that is needed now.
 
 // Send automated email when lead is created
 const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
@@ -100,45 +62,39 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                 const subject = replaceVariables(template.subject, templateData);
                 const body = replaceVariables(template.body, templateData);
 
-                // Prepare attachments — skip any whose file has been deleted
+                // Prepare attachments — skip any whose file has been deleted.
+                // FIX S4: also confine paths to the upload directory, matching
+                // the guard emailTemplateController already applies. Without it
+                // a tampered attachment row could exfiltrate an arbitrary file.
                 const attachments = (template.attachments || [])
-                    .filter(att => att.path && fs.existsSync(att.path))
+                    .filter(att => att.path
+                        && att.path.startsWith(ALLOWED_ATTACHMENT_PREFIX)
+                        && !att.path.includes('..')
+                        && fs.existsSync(att.path))
                     .map(att => ({ filename: att.originalName || att.filename, path: att.path }));
 
-                // Send email
+                // Send email — logging + inbox threading happen inside sendEmail
                 const emailOptions = {
                     to: lead.email,
                     subject: subject,
                     html: wrapEmailHtml(body),
+                    bodyForInbox: body,
                     attachments: attachments.length > 0 ? attachments : undefined,
-                    userId: userId // Pass userId to use user-specific email config
+                    userId: userId, // Pass userId to use user-specific email config
+                    isAutomated: true,
+                    triggerType: 'on_lead_create',
+                    templateId: template._id,
+                    leadId: lead._id
                 };
 
                 // Use retry for automation emails to handle transient connection issues
-                const result = await sendEmailWithRetry(emailOptions, 1); // Retry once
+                await sendEmailWithRetry(emailOptions, 1); // Retry once
                 console.log(`✅ Automated email sent to ${lead.email} using template: ${template.name}`);
-
-                // Log + sync to inbox
-                await Promise.all([
-                    logEmail({
-                        userId, to: lead.email, subject, body, status: 'sent',
-                        messageId: result.messageId, isAutomated: true,
-                        triggerType: 'on_lead_create', templateId: template._id,
-                        leadId: lead._id, attachments: template.attachments || []
-                    }),
-                    syncToInbox({ userId, lead, subject, htmlBody: emailOptions.html, messageId: result.messageId, templateId: template._id })
-                ]);
 
                 const { updateLeadScore } = require('./leadScoringService');
                 updateLeadScore(lead._id, 'EMAIL_SENT').catch(() => {});
             } catch (error) {
                 console.error(`❌ Error sending automated email for template ${template.name}:`, error.message);
-                await logEmail({
-                    userId, to: lead.email, subject: template.subject, body: template.body,
-                    status: 'failed', error: error.message, isAutomated: true,
-                    triggerType: 'on_lead_create', templateId: template._id,
-                    leadId: lead._id, attachments: template.attachments || []
-                });
             }
         }
         return templates.length > 0;
@@ -198,45 +154,39 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                 const subject = replaceVariables(template.subject, templateData);
                 const body = replaceVariables(template.body, templateData);
 
-                // Prepare attachments — skip any whose file has been deleted
+                // Prepare attachments — skip any whose file has been deleted.
+                // FIX S4: also confine paths to the upload directory, matching
+                // the guard emailTemplateController already applies. Without it
+                // a tampered attachment row could exfiltrate an arbitrary file.
                 const attachments = (template.attachments || [])
-                    .filter(att => att.path && fs.existsSync(att.path))
+                    .filter(att => att.path
+                        && att.path.startsWith(ALLOWED_ATTACHMENT_PREFIX)
+                        && !att.path.includes('..')
+                        && fs.existsSync(att.path))
                     .map(att => ({ filename: att.originalName || att.filename, path: att.path }));
 
-                // Send email
+                // Send email — logging + inbox threading happen inside sendEmail
                 const emailOptions = {
                     to: lead.email,
                     subject: subject,
                     html: wrapEmailHtml(body),
+                    bodyForInbox: body,
                     attachments: attachments.length > 0 ? attachments : undefined,
-                    userId: userId // Pass userId to use user-specific email config
+                    userId: userId, // Pass userId to use user-specific email config
+                    isAutomated: true,
+                    triggerType: 'on_stage_change',
+                    templateId: template._id,
+                    leadId: lead._id
                 };
 
                 // Use retry for automation emails to handle transient connection issues
-                const result = await sendEmailWithRetry(emailOptions, 1); // Retry once
+                await sendEmailWithRetry(emailOptions, 1); // Retry once
                 console.log(`✅ Automated email sent to ${lead.email} for stage change to ${newStage}`);
-
-                // Log + sync to inbox
-                await Promise.all([
-                    logEmail({
-                        userId, to: lead.email, subject, body, status: 'sent',
-                        messageId: result.messageId, isAutomated: true,
-                        triggerType: 'on_stage_change', templateId: template._id,
-                        leadId: lead._id, attachments: template.attachments || []
-                    }),
-                    syncToInbox({ userId, lead, subject, htmlBody: emailOptions.html, messageId: result.messageId, templateId: template._id })
-                ]);
 
                 const { updateLeadScore } = require('./leadScoringService');
                 updateLeadScore(lead._id, 'EMAIL_SENT').catch(() => {});
             } catch (error) {
                 console.error(`❌ Error sending automated email for template ${template.name}:`, error.message);
-                await logEmail({
-                    userId, to: lead.email, subject: template.subject, body: template.body,
-                    status: 'failed', error: error.message, isAutomated: true,
-                    triggerType: 'on_stage_change', templateId: template._id,
-                    leadId: lead._id, attachments: template.attachments || []
-                });
             }
         }
         return templates.length > 0;

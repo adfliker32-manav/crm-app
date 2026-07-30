@@ -89,6 +89,16 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     // so BullMQ retries and legitimate re-arrivals can still re-run it.
     claimedNodeIds: { type: [String], default: [] },
 
+    // C3 FIX: nodeId → the tokenId that won the claim for that node.
+    // `claimedNodeIds` alone cannot tell a genuine join arrival (two DIFFERENT
+    // branch tokens converging on one node) apart from BullMQ re-delivering the
+    // SAME job after its 30s lock expired on a slow node. Both look like "claim
+    // failed". The first must retire a branch token; the second must not — and
+    // retiring one for a re-delivery drove `activeBranches` to 0 and marked the
+    // execution 'completed' while the original attempt was still running,
+    // silently truncating the rest of the workflow.
+    nodeTokens: { type: mongoose.Schema.Types.Mixed, default: {} },
+
     // L5 FIX: idempotency ledger for side-effecting nodes. `claimedNodeIds` stops
     // two CONCURRENT arrivals from double-running a node, but a BullMQ RETRY (after
     // a post-send crash) releases the claim and re-runs the node — re-sending the
@@ -138,9 +148,49 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     // BullMQ job ID — stored so we can inspect/cancel the job if needed
     bullJobId:    { type: String, default: null },
 
+    // C4 FIX: this execution's own deadline, seeded from the workflow's
+    // settings.timeoutHours at creation. The timeout enforcer previously used a
+    // hardcoded 72h against `updatedAt`, and since a parked wait does not touch
+    // the document, ANY wait longer than 72h was guaranteed to be killed while
+    // its BullMQ resume job was still legitimately scheduled. settings.timeoutHours
+    // existed but was read nowhere. `null` marks a legacy row (pre-deploy), which
+    // the enforcer still expires on the old 72h `updatedAt` rule.
+    expiresAt: { type: Date, default: null, index: true },
+
+    // ── Row 27: loop support ─────────────────────────────────────────────────
+    // `claimedNodeIds` now holds ITERATION-SCOPED keys ('loop1#3/sendEmail') so a
+    // node can run once per loop item while still being claimed exactly once within
+    // each iteration. A top-level node's key is the bare nodeId, so nothing about
+    // existing executions or non-loop workflows changes.
+    //
+    // loopCounts:   loopKey → how many items that for_each fanned out (a join reads it)
+    // joinArrivals: nodeKey → how many tokens have reached that join so far
+    loopCounts:   { type: mongoose.Schema.Types.Mixed, default: {} },
+    joinArrivals: { type: mongoose.Schema.Types.Mixed, default: {} },
+
+    // H7 FIX: dedup key for executions that have NO contact. The existing
+    // maxExecutionsPerLead guard keys on (workflowId, contactId), so for a
+    // WEBHOOK_RECEIVED delivery that matched no lead — or any SCHEDULED_TRIGGER —
+    // contactId is null and there was no key at all: every duplicate webhook
+    // delivery (Stripe/Meta/Zapier all retry on timeout or 5xx) ran the whole
+    // workflow again. committedNodeIds does not help, being per-execution.
+    // Enforced by the partial unique index below.
+    idempotencyKey: { type: String, default: null },
+
+    // C8 FIX: causation lineage. Side-effecting nodes re-fire the very triggers
+    // they can be started by (update_stage → STAGE_CHANGED, add_tag → TAG_ADDED),
+    // so two workflows can ping-pong a lead between stages forever. Per-workflow
+    // cycle detection at publish cannot see a loop that closes through a side
+    // effect. Depth bounds the chain; the chain itself makes the loop diagnosable.
+    triggerDepth: { type: Number, default: 0 },
+    triggerChain: { type: [String], default: [] },
+
     // ── METADATA ──────────────────────────────────────────────────────────
     // How this execution was started: 'trigger' | 'manual' | 'test' | 'webhook' | 'cron'
-    startedBy:   { type: String, enum: ['trigger', 'manual', 'test', 'webhook', 'cron'], default: 'trigger' },
+    // L-16: 'api' added. extApiController fires triggers without setting startedBy, so
+    // external-API-driven runs defaulted to 'trigger' and were indistinguishable from
+    // internal CRM events — there was no way to attribute them.
+    startedBy:   { type: String, enum: ['trigger', 'manual', 'test', 'webhook', 'cron', 'api'], default: 'trigger' },
     completedAt: { type: Date, default: null },
     errorMessage:{ type: String, default: null }
 
@@ -151,7 +201,26 @@ const WorkflowExecutionSchema = new mongoose.Schema({
 WorkflowExecutionSchema.index({ status: 1, waitingUntil: 1 });
 // Fast lookup: is there already an active execution for this lead + workflow?
 WorkflowExecutionSchema.index({ workflowId: 1, contactId: 1, status: 1 });
-// Auto-delete executions after 90 days to prevent DB bloat
-WorkflowExecutionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 90 });
+// H7: duplicate-delivery guard. Partial, so the vast majority of executions (which
+// carry no key) are unconstrained and only keyed deliveries must be unique.
+WorkflowExecutionSchema.index(
+    { workflowId: 1, idempotencyKey: 1 },
+    { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } }
+);
+// C4/C5: the timeout enforcer + reconciler sweep on these two pairs every cycle.
+// Without them each cycle collection-scans every running/waiting execution.
+WorkflowExecutionSchema.index({ status: 1, expiresAt: 1 });
+WorkflowExecutionSchema.index({ status: 1, updatedAt: 1 });
+// M-DB5 FIX: TTL on completedAt, not createdAt, and only for SETTLED executions.
+// The old index expired on age alone regardless of status, so once C4 allowed waits
+// longer than 72h a still-'waiting' execution could be deleted out from under its own
+// pending signal (mergeVariablesAtomic already had to handle "execution vanished").
+WorkflowExecutionSchema.index(
+    { completedAt: 1 },
+    {
+        expireAfterSeconds: 60 * 60 * 24 * 90,
+        partialFilterExpression: { status: { $in: ['completed', 'failed', 'cancelled'] } }
+    }
+);
 
 module.exports = mongoose.model('WorkflowExecution', WorkflowExecutionSchema);

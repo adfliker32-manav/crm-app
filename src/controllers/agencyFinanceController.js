@@ -60,9 +60,23 @@ exports.createClient = async (req, res) => {
     }
 };
 
+// Mirrors the PAYMENT_UPDATABLE_FIELDS pattern used further down this file.
+// `lastBilledDate` is deliberately EXCLUDED — it is billing-engine state that
+// drives the 30-day auto-bill sweep. Letting it come from the request body
+// would allow a client's next invoice to be skipped or re-generated.
+const CLIENT_UPDATABLE_FIELDS = [
+    'name', 'email', 'phone', 'company', 'serviceType', 'monthlyFee',
+    'requirements', 'startDate', 'status', 'notes',
+    'billingAddress', 'gstNumber', 'billingDay', 'billingStartDate'
+];
+
 exports.updateClient = async (req, res) => {
     try {
-        const updateData = { ...req.body };
+        const updateData = {};
+        for (const field of CLIENT_UPDATABLE_FIELDS) {
+            if (req.body[field] !== undefined) updateData[field] = req.body[field];
+        }
+
         if (updateData.startDate === '') {
             updateData.startDate = undefined;
         } else if (updateData.startDate) {

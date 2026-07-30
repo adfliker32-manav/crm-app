@@ -38,7 +38,32 @@ const WorkflowLibraryItemSchema = new mongoose.Schema({
     authorTenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     authorName:     { type: String, default: 'A CRM user' },
 
-    cloneCount: { type: Number, default: 0, index: true }
+    cloneCount: { type: Number, default: 0, index: true },
+
+    // ── M-S3 / M-S5 FIX: moderation ──────────────────────────────────────────
+    // Anything published here is visible to EVERY tenant, and the sanitizer only
+    // strips ids/secrets/connection fields — free text (name, description, message
+    // bodies, subjects, AI prompts) went global verbatim. So a tenant could publish
+    // real customer PII, or a prompt-injection payload that then runs inside other
+    // tenants' AI nodes after cloning. Nothing was reviewable, reportable or
+    // deletable. Items now default to 'pending' and only 'approved' items are listed.
+    status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: process.env.WORKFLOW_LIBRARY_AUTO_APPROVE === 'true' ? 'approved' : 'pending',
+        index: true
+    },
+    moderatedAt: { type: Date, default: null },
+    moderatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    rejectionReason: { type: String, default: '' },
+
+    // Soft-delete so an author can withdraw a share without breaking clone counts.
+    deletedAt: { type: Date, default: null, index: true }
 }, { timestamps: true });
+
+// Browse query: approved, undeleted, ordered by popularity or recency.
+WorkflowLibraryItemSchema.index({ status: 1, deletedAt: 1, cloneCount: -1 });
+// An author's own shares, for the withdraw action.
+WorkflowLibraryItemSchema.index({ authorTenantId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('WorkflowLibraryItem', WorkflowLibraryItemSchema);

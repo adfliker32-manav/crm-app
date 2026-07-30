@@ -76,12 +76,28 @@ export default function Workflows() {
     };
 
     const handleToggleStatus = async (id, currentStatus) => {
-        const newStatus = currentStatus === 'published' ? 'disabled' : 'published';
+        const enabling = currentStatus !== 'published';
         try {
-            await api.patch(`/workflows/${id}/status`, { status: newStatus });
+            if (enabling) {
+                // Re-enabling means going live again, so it must go through the
+                // publish endpoint: PATCH /status no longer accepts 'published'
+                // because it skipped graph validation, the loop check and webhook
+                // secret minting. Re-validating here also catches a workflow that
+                // was edited into an invalid state while it was paused.
+                await api.post(`/workflows/${id}/publish`);
+            } else {
+                await api.patch(`/workflows/${id}/status`, { status: 'disabled' });
+            }
+            const newStatus = enabling ? 'published' : 'disabled';
             setWorkflows(ws => ws.map(w => w._id === id ? { ...w, status: newStatus } : w));
-            showNotification('success', `Workflow ${newStatus === 'published' ? 'enabled' : 'disabled'}`);
-        } catch { showNotification('error', 'Status update failed'); }
+            showNotification('success', `Workflow ${enabling ? 'enabled' : 'disabled'}`);
+        } catch (err) {
+            // Surface validation errors instead of a generic failure — the publish
+            // path can legitimately refuse (invalid node config, loop in graph).
+            const data = err?.response?.data;
+            const detail = data?.errors?.length ? data.errors.join(' ') : data?.message;
+            showNotification('error', detail || 'Status update failed');
+        }
     };
 
     const handlePublishToLibrary = async (id, name) => {

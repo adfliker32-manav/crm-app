@@ -27,15 +27,25 @@ const AddTagNode = {
         // Only fire TAG_ADDED when the tag is genuinely new — re-adding an existing
         // tag is a no-op and must not re-trigger tag-based workflows (loop guard).
         if (!(lead.tags || []).includes(tag)) {
-            await Lead.findByIdAndUpdate(lead._id, { $addToSet: { tags: tag } });
+            // M-N9 FIX: use the post-update document for the trigger payload. Building
+            // it from the context's lead (loaded at node start) meant a concurrent tag
+            // addition was missing from `tags`, so a TAG_ADDED workflow filtering on
+            // that other tag would not match.
+            const updated = await Lead.findByIdAndUpdate(
+                lead._id, { $addToSet: { tags: tag } }, { new: true }
+            );
             // L3 FIX: fire TAG_ADDED so tag-triggered workflows run for tags added
             // by automations too. Lazy require avoids the engine↔node circular dep.
             const { runInBackground } = require('../../../utils/controllerHelpers');
             runInBackground('Workflow Engine Error (TAG_ADDED):', () => {
                 const WorkflowEngine = require('../../WorkflowEngine');
                 return WorkflowEngine.fireTrigger('TAG_ADDED', {
-                    lead: { ...lead, tags: [...(lead.tags || []), tag] },
-                    addedTags: [tag]
+                    lead: updated || { ...lead, tags: [...(lead.tags || []), tag] },
+                    addedTags: [tag],
+                    // C8 FIX: propagate the causation chain so a tag-driven loop
+                    // across two workflows is bounded and diagnosable.
+                    _depth: context.getTriggerDepth() + 1,
+                    _chain: [...context.getTriggerChain(), `${context.workflowId}:tag=${tag}`]
                 });
             });
         }

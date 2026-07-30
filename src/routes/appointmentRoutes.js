@@ -4,6 +4,7 @@ const apptCtrl = require('../controllers/appointmentController');
 const bpCtrl   = require('../controllers/bookingPageController');
 const slotCtrl = require('../controllers/slotController');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 
 // ─── Specific named routes (must come BEFORE /:id) ──────────────────────────
 router.get('/stats',               apptCtrl.getAppointmentStats);
@@ -19,8 +20,9 @@ router.delete('/blocked-slots/:id', validateObjectId({ params: ['id'] }), slotCt
 // ─── Appointment CRUD ────────────────────────────────────────────────────────
 router.get('/',                                             apptCtrl.getAppointments);
 router.get('/:id', validateObjectId({ params: ['id'] }),    apptCtrl.getAppointment);
-router.post('/',                                            apptCtrl.createAppointment);
-router.put('/:id', validateObjectId({ params: ['id'] }),    apptCtrl.updateAppointment);
+router.post('/', validate(schemas.createAppointment),       apptCtrl.createAppointment);
+router.put('/:id', validateObjectId({ params: ['id'] }),
+                   validate(schemas.updateAppointment),     apptCtrl.updateAppointment);
 router.delete('/:id', validateObjectId({ params: ['id'] }), apptCtrl.deleteAppointment);
 
 module.exports = router;

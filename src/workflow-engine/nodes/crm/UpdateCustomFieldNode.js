@@ -14,11 +14,24 @@ const Lead = require('../../../models/Lead');
 //   - source        — lead source string
 //   - name          — lead name
 //   - phone / email — contact info (use with care)
-//   - tags          — array of tags (use AddTagNode instead for atomic adds)
+//
+// M-S2 FIX: this list previously claimed `tags` was allowed. It is not — `tags` is
+// in BLOCKED_EXACT_FIELDS below and is absent from ALLOWED_FIELD_PREFIXES. Use
+// AddTagNode, which adds atomically via $addToSet and fires TAG_ADDED.
 //
 // BLOCKED: userId, tenantId, createdAt, updatedAt, __v, _id, history, score,
 //          status (use UpdateStageNode), assignedTo (use AssignUserNode), etc.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// M-S1 FIX: `email` and `phone` are the CONTACT channel, not ordinary data. Allowing
+// a workflow to overwrite them from an interpolated value ({{webhook.*}}) creates an
+// exfiltration chain: a public webhook sets the lead's email to an attacker address,
+// and the next send_email node delivers tenant data there. They now require an
+// explicit opt-in AND the written value must look like a real email/phone.
+const CONTACT_FIELDS = new Set(['email', 'phone']);
+const CONTACT_WRITES_ENABLED = process.env.WORKFLOW_ALLOW_CONTACT_FIELD_WRITES === 'true';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const PHONE_RE = /^\+?[0-9][0-9\s\-()]{6,19}$/;
 
 const ALLOWED_FIELD_PREFIXES = [
     'customData.',
@@ -60,8 +73,27 @@ const isFieldKeyAllowed = (fieldKey) => {
     if (BLOCKED_EXACT_FIELDS.has(key)) {
         return { valid: false, reason: `Field "${key}" is a protected system field and cannot be modified by a workflow.` };
     }
+    // M-S1 FIX: rewriting the contact channel is off unless deliberately enabled.
+    if (CONTACT_FIELDS.has(key) && !CONTACT_WRITES_ENABLED) {
+        return {
+            valid: false,
+            reason: `Field "${key}" changes where messages are delivered and cannot be set by a workflow. ` +
+                    `Set WORKFLOW_ALLOW_CONTACT_FIELD_WRITES=true to permit it.`
+        };
+    }
+    // BUGFIX (found while testing M-S1): entries in ALLOWED_FIELD_PREFIXES that
+    // already END with a dot — i.e. 'customData.', the single most important one —
+    // were tested as key.startsWith('customData' + '.' + '.') === 'customData..',
+    // which never matches. So EVERY customData write was rejected as "not in the
+    // allowed field list", and this node could never do the thing its own schema
+    // description tells users to do. Handle both prefix forms explicitly.
     const isAllowed = ALLOWED_FIELD_PREFIXES.some(prefix =>
-        key === prefix || key.startsWith(prefix + '.')
+        prefix.endsWith('.')
+            // Namespace prefix: require at least one character after the dot, so a
+            // bare 'customData.' is still rejected.
+            ? (key.startsWith(prefix) && key.length > prefix.length)
+            // Exact field, optionally with a sub-path (e.g. 'notes', 'address.city').
+            : (key === prefix || key.startsWith(prefix + '.'))
     );
     if (!isAllowed) {
         return { valid: false, reason: `Field key "${key}" is not in the allowed field list. Use "customData.*" for custom fields.` };
@@ -126,6 +158,20 @@ const UpdateCustomFieldNode = {
         let value = data.value || '';
         const vars = context.getAll();
         value = value.replace(/\{\{([^}]+)\}\}/g, (_, key) => vars[key.trim()] ?? '');
+
+        // M-S1 FIX: if contact writes are enabled, the VALUE must still be well-formed.
+        // The value is interpolated from execution variables, which on a webhook path
+        // are attacker-controlled — an unvalidated write silently redirects delivery.
+        if (CONTACT_FIELDS.has(updateKey)) {
+            const re = updateKey === 'email' ? EMAIL_RE : PHONE_RE;
+            if (!re.test(String(value).trim())) {
+                console.warn(`[UpdateCustomFieldNode] Refusing to set ${updateKey} to a malformed value.`);
+                return {
+                    nextPort: 'error',
+                    output: { 'field.blocked': true, 'field.reason': `Malformed ${updateKey} value` }
+                };
+            }
+        }
 
         await Lead.findByIdAndUpdate(lead._id, { $set: { [updateKey]: value } });
         return { nextPort: 'output', output: { [`field.${updateKey}`]: value } };

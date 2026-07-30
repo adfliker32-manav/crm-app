@@ -47,19 +47,39 @@ const UpdateStageNode = {
 
         const stageName = data.stageName;
 
-        const leadDoc = await Lead.findById(lead._id);
-        if (leadDoc && leadDoc.status !== stageName) {
-            const oldStatus = leadDoc.status;
-            leadDoc.status = stageName;
-            leadDoc.stageEnteredAt = new Date();
-            leadDoc.history.push({
-                type: 'System',
-                subType: 'Stage Change',
-                content: `Stage changed to "${stageName}" by Workflow`,
-                date: new Date()
-            });
+        // ── M-DB7 + M-DB6 FIX: one atomic, capped update ────────────────────────
+        // This used to findById → mutate → save(), a read-modify-write that clobbered
+        // any concurrent edit to the lead, and pushed to `history` with no $slice so
+        // the array grew without bound (AssignUserNode already caps at 100). Making
+        // the status change part of the query condition also makes the "did it
+        // actually change?" test atomic, so two concurrent executions can't both
+        // believe they performed the transition and both fire STAGE_CHANGED.
+        const prev = await Lead.findOneAndUpdate(
+            { _id: lead._id, status: { $ne: stageName } },
+            {
+                $set:  { status: stageName, stageEnteredAt: new Date() },
+                $push: {
+                    history: {
+                        $each: [{
+                            type: 'System',
+                            subType: 'Stage Change',
+                            content: `Stage changed to "${stageName}" by Workflow`,
+                            date: new Date()
+                        }],
+                        $slice: -100
+                    }
+                }
+            },
+            { new: false }   // pre-image gives us the old status for the trigger payload
+        );
 
-            await leadDoc.save();
+        const leadDoc = prev ? await Lead.findById(lead._id) : null;   // post-image for downstream consumers
+
+        // `leadDoc` can be null if the lead was deleted between the update and this
+        // read; the downstream effects all dereference it, so skip them rather than
+        // throwing inside a background handler where the cause would be obscured.
+        if (prev && leadDoc) {
+            const oldStatus = prev.status;
 
             // Run post-stage-change effects in background, just like leadController
             const { runInBackground } = require('../../../utils/controllerHelpers');
@@ -75,7 +95,14 @@ const UpdateStageNode = {
                 return WorkflowEngine.fireTrigger('STAGE_CHANGED', {
                     lead: leadDoc,
                     fromStage: oldStatus,
-                    toStage: stageName
+                    toStage: stageName,
+                    // C8 FIX: carry the causation chain forward. Without this every
+                    // hop restarted at depth 0, so two workflows each moving a lead
+                    // into the stage the other watches ping-ponged forever — and the
+                    // per-workflow cycle check at publish cannot see a loop that
+                    // closes through a side effect like this one.
+                    _depth: context.getTriggerDepth() + 1,
+                    _chain: [...context.getTriggerChain(), `${context.workflowId}:stage=${stageName}`]
                 });
             });
 

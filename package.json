@@ -7,7 +7,11 @@
     "start": "node index.js",
     "build": "npm install && cd client && npm install && npm run build",
     "dev": "concurrently \"nodemon index.js\" \"cd client && npm run dev\"",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/email/*.test.js tests/security/*.test.js tests/workflow/*.test.js",
+    "test:email": "node --test tests/email/*.test.js",
+    "test:security": "node --test tests/security/*.test.js",
+    "test:workflow": "node --test tests/workflow/*.test.js",
+    "audit:ci": "npm audit --omit=dev --audit-level=high"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -38,13 +42,12 @@
     "mailparser": "^3.9.4",
     "mongoose": "^9.0.2",
     "multer": "^2.1.1",
-    "ngrok": "^5.0.0-beta.2",
     "node-cache": "^5.1.2",
     "node-cron": "^4.2.1",
-    "nodemailer": "^7.0.12",
+    "nodemailer": "^9.0.3",
     "openai": "^6.45.0",
     "papaparse": "^5.5.3",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "socket.io": "^4.8.3",
     "uuid": "^13.0.0"
   },

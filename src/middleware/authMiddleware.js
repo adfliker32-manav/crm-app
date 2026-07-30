@@ -7,6 +7,13 @@ const tenantCache = new NodeCache({ stdTTL: 300, checkperiod: 120 }); // 5-min T
 // request — the cache absorbs the cost after the first miss.
 const agentPermCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
+// 🔐 Session-generation cache. Holds User.tokenVersion so the revocation check
+// below costs a DB read only once per user per minute, not once per request.
+// TTL is deliberately SHORTER than the permission cache (60s vs 300s): this is
+// the control that logs out a compromised session, so the window between
+// "admin revokes" and "attacker is out" must be small.
+const tokenVersionCache = new NodeCache({ stdTTL: 60, checkperiod: 30 });
+
 // Export utilities to clear caches immediately when settings change.
 const clearTenantCache = (tenantId) => {
     if (tenantId) {
@@ -17,6 +24,12 @@ const clearTenantCache = (tenantId) => {
 
 const clearAgentPermCache = (agentId) => {
     if (agentId) agentPermCache.del(`perms_${agentId}`);
+};
+
+// Call immediately after bumping User.tokenVersion so revocation takes effect on
+// the very next request instead of waiting out the 60s TTL.
+const clearTokenVersionCache = (userId) => {
+    if (userId) tokenVersionCache.del(`tv_${userId}`);
 };
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -47,6 +60,58 @@ const authMiddleware = async (req, res, next) => {
         const User = require('../models/User'); // Lazy load models
         const WorkspaceSettings = require('../models/WorkspaceSettings');
         const IntegrationConfig = require('../models/IntegrationConfig');
+
+        // --- 🔐 SESSION REVOCATION + ABSOLUTE LIFETIME ---
+        // JWTs are stateless, so `jwt.verify` passing only proves the token was
+        // signed by us and has not hit its own exp. It says nothing about whether
+        // the session is still *allowed*. These two checks add that.
+        const authUserId = decoded.userId || decoded.id;
+
+        // (1) Absolute cap. rememberMe tokens are re-issued on every /auth/me call
+        // (sliding session), so without a hard ceiling a stolen token could be
+        // renewed forever. absExp is set once at login and copied forward, never
+        // extended, so the session dies 90 days after the ORIGINAL login.
+        if (decoded.absExp && Math.floor(Date.now() / 1000) > decoded.absExp) {
+            return res.status(401).json({
+                error: 'session_expired',
+                message: 'Session expired. Please log in again.'
+            });
+        }
+
+        // (2) Session generation. Compare the token's `tv` claim against the
+        // user's current tokenVersion. A password reset / permission change /
+        // deactivation bumps that counter and every older token stops working.
+        if (authUserId) {
+            let currentTv = tokenVersionCache.get(`tv_${authUserId}`);
+            if (currentTv === undefined) {
+                const userDoc = await User.findById(authUserId).select('tokenVersion is_active').lean();
+                // A deleted user must NOT keep access. Without this branch the
+                // lookup returns null, `?.tokenVersion || 0` collapses to 0, and a
+                // token minted with tv=0 would still match — so a removed agent
+                // would stay logged in until their token expired.
+                if (!userDoc) {
+                    return res.status(401).json({
+                        error: 'account_deleted',
+                        message: 'Account no longer exists. Please log in again.'
+                    });
+                }
+                if (userDoc.is_active === false) {
+                    return res.status(401).json({
+                        error: 'account_deactivated',
+                        message: 'Account has been deactivated. Please contact your administrator.'
+                    });
+                }
+                currentTv = userDoc.tokenVersion || 0;
+                tokenVersionCache.set(`tv_${authUserId}`, currentTv);
+            }
+
+            if ((decoded.tv || 0) !== currentTv) {
+                return res.status(401).json({
+                    error: 'session_revoked',
+                    message: 'Your password or account access was changed. Please log in again.'
+                });
+            }
+        }
 
         // RESOLVE TENANT
         if (req.user.tenantId) {
@@ -255,5 +320,6 @@ module.exports = {
     requireFeature,
     requirePermission,
     clearTenantCache,
-    clearAgentPermCache
+    clearAgentPermCache,
+    clearTokenVersionCache
 };

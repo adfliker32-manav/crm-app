@@ -40,7 +40,22 @@ const emailLogSchema = new mongoose.Schema({
     },
     triggerType: {
         type: String,
-        enum: ['on_lead_create', 'on_stage_change', 'manual', 'template'],
+        // Extended so every sender can be attributed. Previously only the four
+        // original values existed, which is part of why the workflow engine,
+        // sequences, follow-up cron, chatbot and external API logged nothing.
+        enum: [
+            'on_lead_create',
+            'on_stage_change',
+            'manual',
+            'template',
+            'workflow',
+            'automation_rule',
+            'sequence',
+            'follow_up',
+            'chatbot',
+            'api',
+            'campaign'
+        ],
         default: 'manual'
     },
     templateId: {

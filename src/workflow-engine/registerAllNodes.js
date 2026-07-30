@@ -18,11 +18,17 @@ require('./nodes/crm/UpdateStageNode');
 require('./nodes/crm/AssignUserNode');
 require('./nodes/crm/AddTagNode');
 require('./nodes/crm/UpdateCustomFieldNode');
+// Row 26: lets a SCHEDULED_TRIGGER select leads and run a workflow per lead.
+require('./nodes/crm/FindLeadsNode');
 
 // ── Logic ─────────────────────────────────────────────────────────────────────
 require('./nodes/logic/ConditionNode');
 require('./nodes/logic/SwitchNode');
 require('./nodes/logic/WaitNode');
+// Row 27: iteration + join. ForEach fans out one token per item into its own
+// iteration namespace; Merge waits for every branch (or iteration) to arrive.
+require('./nodes/logic/ForEachNode');
+require('./nodes/logic/MergeNode');
 
 // ── AI ────────────────────────────────────────────────────────────────────────
 require('./nodes/ai/AiClassifierNode');

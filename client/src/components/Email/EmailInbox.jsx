@@ -2,21 +2,70 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 // Theme: CRM blue (matches sidebar + WhatsApp inbox)
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { useConfirm } from '../../context/ConfirmContext';
+import useSocket from '../../hooks/useSocket';
+import { useAuth } from '../../context/AuthContext';
+import { hasEmailPermission } from './emailPermissions';
 import DOMPurify from 'dompurify';
+
+const PAGE_SIZE = 30;
+const MESSAGE_PAGE_SIZE = 50;
+// Sockets carry new mail now, so polling is only a safety net for a dropped
+// connection — it no longer needs to run every 15 seconds.
+const POLL_MS = 60000;
+
+// A reply subject must not stack "Re:" every round-trip.
+const buildReplySubject = (subject) => {
+    const base = (subject || 'Conversation').replace(/^\s*(re\s*:\s*)+/i, '').trim();
+    return `Re: ${base || 'Conversation'}`;
+};
+
+const formatBytes = (bytes) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
 
 const EmailInbox = () => {
     const { showSuccess, showError } = useNotification();
+    const { showDanger } = useConfirm();
+    const { socket } = useSocket();
+    const { user } = useAuth();
+    // Composing and replying are gated by sendEmails server-side; without it the
+    // send controls must not render at all.
+    const canSend = hasEmailPermission(user, 'sendEmails');
+
     const [conversations, setConversations] = useState([]);
+    const [totalUnread, setTotalUnread] = useState(0);
+    const [hasMoreConversations, setHasMoreConversations] = useState(false);
+    const [page, setPage] = useState(1);
+    const [loadingMore, setLoadingMore] = useState(false);
+
     const [selectedChat, setSelectedChat] = useState(null);
     const [messages, setMessages] = useState([]);
+    const [olderCursor, setOlderCursor] = useState(null);
+    const [loadingOlder, setLoadingOlder] = useState(false);
+
     const [newMessage, setNewMessage] = useState('');
     const [newSubject, setNewSubject] = useState('');
+    const [replyFiles, setReplyFiles] = useState([]);
+
     const [searchTerm, setSearchTerm] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
     const [loading, setLoading] = useState(true);
     const [sending, setSending] = useState(false);
     const [showContactPanel, setShowContactPanel] = useState(false);
     const [showNewChatModal, setShowNewChatModal] = useState(false);
+    const [showScheduled, setShowScheduled] = useState(false);
+    const [scheduled, setScheduled] = useState([]);
     const [filter, setFilter] = useState('all');
+    // Drafts — /email/drafts is a full CRUD API that nothing was calling.
+    const [showDrafts, setShowDrafts] = useState(false);
+    const [drafts, setDrafts] = useState([]);
+    const [draftId, setDraftId] = useState(null);
+    const [savingDraft, setSavingDraft] = useState(false);
+
     // Separate state for compose modal so it doesn't pollute the reply bar
     const [composeEmail, setComposeEmail] = useState('');
     const [composeCc, setComposeCc] = useState('');
@@ -24,88 +73,307 @@ const EmailInbox = () => {
     const [composeSubject, setComposeSubject] = useState('');
     const [composeMessage, setComposeMessage] = useState('');
     const [composeSchedule, setComposeSchedule] = useState('');
+    const [composeFiles, setComposeFiles] = useState([]);
 
     const scrollRef = useRef(null);
+    const replyFileInput = useRef(null);
+    const composeFileInput = useRef(null);
 
-    const fetchConversations = useCallback(async () => {
+    // Refs let the poll read current values without being re-created every time
+    // those values change — see the polling effect below.
+    const selectedChatIdRef = useRef(null);
+    const isFetchingRef = useRef(false);
+
+    // ── Debounced search ─────────────────────────────────────────────────────
+    // Every keystroke previously triggered a fresh unindexed $regex query
+    // against the conversations collection.
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(searchTerm.trim()), 350);
+        return () => clearTimeout(t);
+    }, [searchTerm]);
+
+    const fetchConversations = useCallback(async ({ silent = false, pageOverride } = {}) => {
+        const targetPage = pageOverride || 1;
+        if (isFetchingRef.current && silent) return;
+        isFetchingRef.current = true;
         try {
             const status = filter === 'archived' ? 'archived' : 'active';
-            const res = await api.get('/email-conversations', {
-                params: { status, search: searchTerm, limit: 30 }
-            });
-            setConversations(res.data.conversations || []);
+            const params = { status, limit: PAGE_SIZE, page: targetPage };
+            if (debouncedSearch) params.search = debouncedSearch;
+            // Unread is filtered server-side now: filtering the loaded page
+            // client-side hid every unread thread past the first 30.
+            if (filter === 'unread') params.unreadOnly = 'true';
+
+            const res = await api.get('/email-conversations', { params });
+            const list = res.data.conversations || [];
+
+            setConversations(prev => (targetPage > 1 ? [...prev, ...list] : list));
+            setTotalUnread(res.data.totalUnread || 0);
+            setHasMoreConversations(!!res.data.pagination?.hasMore);
+            setPage(targetPage);
         } catch (error) {
             console.error('Error fetching conversations:', error);
         } finally {
-            setLoading(false);
+            isFetchingRef.current = false;
+            if (!silent) setLoading(false);
         }
-    }, [searchTerm, filter]);
+    }, [debouncedSearch, filter]);
 
-    const fetchMessages = useCallback(async (conversationId) => {
+    const fetchMessages = useCallback(async (conversationId, { silent = false } = {}) => {
         try {
-            const res = await api.get(`/email-conversations/${conversationId}`);
+            const res = await api.get(`/email-conversations/${conversationId}`, {
+                params: { limit: MESSAGE_PAGE_SIZE }
+            });
             setMessages(res.data.messages || []);
             setSelectedChat(res.data.conversation);
-            await api.put(`/email-conversations/${conversationId}/read`);
-            setConversations(prev => prev.map(c =>
-                c._id === conversationId ? { ...c, unreadCount: 0 } : c
-            ));
+            setOlderCursor(res.data.pagination?.nextBefore || null);
+
+            // Only write to the DB when there is something to clear. This used
+            // to run on every 15s poll for every open inbox — an updateOne plus
+            // an updateMany each time, almost always changing nothing.
+            if (res.data.conversation?.unreadCount > 0) {
+                await api.put(`/email-conversations/${conversationId}/read`);
+                setConversations(prev => prev.map(c =>
+                    c._id === conversationId ? { ...c, unreadCount: 0 } : c
+                ));
+                setTotalUnread(prev => Math.max(0, prev - (res.data.conversation.unreadCount || 0)));
+            }
         } catch (error) {
             console.error('Error fetching messages:', error);
-            showError('Failed to load messages');
+            if (!silent) showError('Failed to load messages');
         }
     }, [showError]);
 
-    useEffect(() => { 
-        fetchConversations(); 
+    const loadOlderMessages = useCallback(async () => {
+        if (!selectedChat || !olderCursor || loadingOlder) return;
+        setLoadingOlder(true);
+        try {
+            const res = await api.get(`/email-conversations/${selectedChat._id}`, {
+                params: { limit: MESSAGE_PAGE_SIZE, before: olderCursor }
+            });
+            const older = res.data.messages || [];
+            setMessages(prev => [...older, ...prev]);
+            setOlderCursor(res.data.pagination?.nextBefore || null);
+        } catch {
+            showError('Failed to load older messages');
+        } finally {
+            setLoadingOlder(false);
+        }
+    }, [selectedChat, olderCursor, loadingOlder, showError]);
+
+    useEffect(() => {
+        setPage(1);
+        fetchConversations();
     }, [fetchConversations]);
 
-    // Poll for new emails — FIX G4: Pause when tab is not visible
+    // Keep the poll's view of the selected chat in a ref so the interval isn't
+    // torn down and rebuilt on every render. Previously `selectedChat` was a
+    // dependency and each poll replaced it with a fresh object, so the timer
+    // was destroyed and recreated continuously.
+    useEffect(() => {
+        selectedChatIdRef.current = selectedChat?._id || null;
+    }, [selectedChat]);
+
     useEffect(() => {
         const interval = setInterval(() => {
             if (document.hidden) return; // Skip poll if tab not focused
-            fetchConversations();
-            if (selectedChat) fetchMessages(selectedChat._id);
-        }, 15000); // Increased from 10s to 15s for less server load
+            fetchConversations({ silent: true });
+            if (selectedChatIdRef.current) {
+                fetchMessages(selectedChatIdRef.current, { silent: true });
+            }
+        }, POLL_MS);
         return () => clearInterval(interval);
-    }, [selectedChat, fetchConversations, fetchMessages]);
+    }, [fetchConversations, fetchMessages]);
+
+    // ── Real-time updates ────────────────────────────────────────────────────
+    // Email previously had no socket events at all — new mail (and anything an
+    // automation sent) only surfaced on the next poll. Handlers are attached
+    // with refs so they never carry a stale closure over `selectedChat`.
+    useEffect(() => {
+        if (!socket) return;
+
+        const handleNewMessage = ({ conversationId, message }) => {
+            // Append to the open thread if it belongs there.
+            if (conversationId && conversationId === String(selectedChatIdRef.current)) {
+                setMessages(prev => (
+                    prev.some(m => String(m._id) === String(message?._id))
+                        ? prev // ignore echoes of a message we already rendered
+                        : [...prev, message]
+                ));
+            }
+        };
+
+        const handleConversationUpdate = (payload) => {
+            const { conversationId, lastMessage, lastMessageAt, lastMessageDirection, unreadCount } = payload || {};
+            if (!conversationId) return;
+
+            setConversations(prev => {
+                const idx = prev.findIndex(c => String(c._id) === String(conversationId));
+                // A thread we don't have loaded (new contact) — pull the list.
+                if (idx === -1) {
+                    fetchConversations({ silent: true });
+                    return prev;
+                }
+                const isOpen = String(conversationId) === String(selectedChatIdRef.current);
+                const updated = {
+                    ...prev[idx],
+                    lastMessage,
+                    lastMessageAt,
+                    lastMessageDirection,
+                    // The open thread is being read right now, so don't badge it.
+                    unreadCount: isOpen ? 0 : (unreadCount ?? prev[idx].unreadCount)
+                };
+                // Move to the top — the list is sorted by lastMessageAt.
+                const rest = prev.filter((_, i) => i !== idx);
+                return [updated, ...rest];
+            });
+
+            if (lastMessageDirection === 'inbound' && String(conversationId) !== String(selectedChatIdRef.current)) {
+                setTotalUnread(prev => prev + 1);
+            }
+        };
+
+        socket.on('email:newMessage', handleNewMessage);
+        socket.on('email:conversationUpdate', handleConversationUpdate);
+
+        return () => {
+            socket.off('email:newMessage', handleNewMessage);
+            socket.off('email:conversationUpdate', handleConversationUpdate);
+        };
+    }, [socket, fetchConversations]);
 
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }, [messages]);
 
+    // Build the request body — multipart when files are attached, JSON otherwise.
+    const buildSendRequest = (payload, files) => {
+        if (!files || files.length === 0) return { data: payload, config: undefined };
+        const form = new FormData();
+        Object.entries(payload).forEach(([k, v]) => {
+            if (v !== undefined && v !== null && v !== '') form.append(k, v);
+        });
+        files.forEach(file => form.append('attachments', file));
+        return { data: form, config: { headers: { 'Content-Type': 'multipart/form-data' } } };
+    };
+
     const handleSendMessage = async (e) => {
         e.preventDefault();
-        if (!newMessage.trim() || !selectedChat) return;
+        if (!newMessage.trim() || !selectedChat || sending) return;
         setSending(true);
 
         try {
             const htmlBody = newMessage.trim().replace(/\n/g, '<br>');
             const payload = {
                 to: selectedChat.email,
-                subject: newSubject.trim() || `Re: ${selectedChat.lastMessage || 'Conversation'}`,
+                subject: newSubject.trim() || buildReplySubject(selectedChat.lastMessage),
                 html: htmlBody,
                 text: newMessage.trim()
             };
-            
-            await api.post('/email/send', payload);
-            
+
+            const { data, config } = buildSendRequest(payload, replyFiles);
+            await api.post('/email/send', data, config);
+
             // Re-fetch to get the newly mapped message from the DB
             await fetchMessages(selectedChat._id);
-            fetchConversations();
-            
+            fetchConversations({ silent: true });
+
             setNewMessage('');
             setNewSubject('');
+            setReplyFiles([]);
+            if (replyFileInput.current) replyFileInput.current.value = '';
         } catch (error) {
             showError(error.response?.data?.message || 'Failed to send email');
+            // The failed attempt is now recorded server-side, so refresh the
+            // thread to surface it rather than losing it behind the toast.
+            fetchMessages(selectedChat._id, { silent: true });
         } finally {
             setSending(false);
         }
     };
 
+    const resetCompose = () => {
+        setComposeEmail(''); setComposeSubject(''); setComposeMessage('');
+        setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); setComposeFiles([]);
+        setDraftId(null);
+        if (composeFileInput.current) composeFileInput.current.value = '';
+    };
+
+    const openCompose = () => { resetCompose(); setShowNewChatModal(true); };
+
+    // ── Drafts ───────────────────────────────────────────────────────────────
+    const loadDrafts = async () => {
+        try {
+            const res = await api.get('/email/drafts');
+            setDrafts(res.data.drafts || []);
+            setShowDrafts(true);
+        } catch {
+            showError('Failed to load drafts');
+        }
+    };
+
+    const handleSaveDraft = async () => {
+        if (savingDraft) return;
+        if (!composeEmail.trim() && !composeSubject.trim() && !composeMessage.trim()) {
+            showError('Nothing to save yet');
+            return;
+        }
+        setSavingDraft(true);
+        try {
+            const res = await api.post('/email/drafts', {
+                draftId: draftId || undefined,
+                to: composeEmail,
+                cc: composeCc,
+                bcc: composeBcc,
+                subject: composeSubject,
+                body: composeMessage
+            });
+            // Keep the id so repeated saves update rather than pile up copies.
+            setDraftId(res.data.draft?._id || null);
+            showSuccess('Draft saved');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to save draft');
+        } finally {
+            setSavingDraft(false);
+        }
+    };
+
+    const resumeDraft = (draft) => {
+        setComposeEmail(draft.to || '');
+        setComposeCc(draft.cc || '');
+        setComposeBcc(draft.bcc || '');
+        setComposeSubject(draft.subject || '');
+        setComposeMessage(draft.body || '');
+        setComposeSchedule('');
+        setComposeFiles([]);
+        setDraftId(draft._id);
+        setShowDrafts(false);
+        setShowNewChatModal(true);
+    };
+
+    const deleteDraft = async (id) => {
+        try {
+            await api.delete(`/email/drafts/${id}`);
+            setDrafts(prev => prev.filter(d => d._id !== id));
+            if (draftId === id) setDraftId(null);
+            showSuccess('Draft deleted');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to delete draft');
+        }
+    };
+
     const handleStartNewChat = async (e) => {
         e.preventDefault();
-        if (!composeEmail.trim()) return;
+        if (!composeEmail.trim() || sending) return;
+
+        if (composeSchedule && composeFiles.length > 0) {
+            showError('Attachments cannot be used with scheduled emails.');
+            return;
+        }
+        if (composeSchedule && new Date(composeSchedule).getTime() <= Date.now()) {
+            showError('Schedule time must be in the future.');
+            return;
+        }
 
         setSending(true);
         try {
@@ -121,17 +389,19 @@ const EmailInbox = () => {
             if (composeBcc.trim()) payload.bcc = composeBcc.trim();
             if (composeSchedule) payload.scheduledFor = new Date(composeSchedule).toISOString();
 
-            await api.post('/email/send', payload);
-            setShowNewChatModal(false);
-            setComposeEmail('');
-            setComposeCc('');
-            setComposeBcc('');
-            setComposeSchedule('');
-            setComposeSubject('');
-            setComposeMessage('');
+            const { data, config } = buildSendRequest(payload, composeFiles);
+            const res = await api.post('/email/send', data, config);
 
+            // A draft that has now been sent should not linger in the list.
+            if (draftId) {
+                await api.delete(`/email/drafts/${draftId}`).catch(() => {});
+                setDrafts(prev => prev.filter(d => d._id !== draftId));
+            }
+
+            setShowNewChatModal(false);
+            resetCompose();
             await fetchConversations();
-            showSuccess('Email sent successfully!');
+            showSuccess(res.data?.scheduled ? res.data.message : 'Email sent successfully!');
         } catch (error) {
             showError(error.response?.data?.message || 'Failed to start conversation');
         } finally {
@@ -141,9 +411,61 @@ const EmailInbox = () => {
 
     const handleSelectChat = (chat) => {
         setSelectedChat(chat);
-        setNewSubject(`Re: ${chat.lastMessage || 'Conversation'}`);
+        setMessages([]);
+        setOlderCursor(null);
+        setNewSubject(buildReplySubject(chat.lastMessage));
+        setReplyFiles([]);
         fetchMessages(chat._id);
         setShowContactPanel(false);
+    };
+
+    // ── Archive / restore ────────────────────────────────────────────────────
+    // The "Archived" tab and the model's status field both existed, but nothing
+    // could ever set it, so the tab was permanently empty.
+    const handleToggleArchive = async () => {
+        if (!selectedChat) return;
+        const archiving = selectedChat.status !== 'archived';
+
+        if (archiving) {
+            const ok = await showDanger(
+                'Archive this conversation? It moves to the Archived tab and returns automatically if the contact replies.',
+                'Archive Conversation'
+            );
+            if (!ok) return;
+        }
+
+        try {
+            await api.put(`/email-conversations/${selectedChat._id}/status`, {
+                status: archiving ? 'archived' : 'active'
+            });
+            setSelectedChat(null);
+            setMessages([]);
+            await fetchConversations();
+            showSuccess(archiving ? 'Conversation archived' : 'Conversation restored');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to update conversation');
+        }
+    };
+
+    // ── Scheduled outbox ─────────────────────────────────────────────────────
+    const loadScheduled = async () => {
+        try {
+            const res = await api.get('/email-conversations/scheduled');
+            setScheduled(res.data.scheduled || []);
+            setShowScheduled(true);
+        } catch {
+            showError('Failed to load scheduled emails');
+        }
+    };
+
+    const cancelScheduled = async (jobId) => {
+        try {
+            await api.delete(`/email-conversations/scheduled/${jobId}`);
+            setScheduled(prev => prev.filter(s => s.id !== jobId));
+            showSuccess('Scheduled email cancelled');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to cancel');
+        }
     };
 
     const formatTime = (date) => {
@@ -156,14 +478,6 @@ const EmailInbox = () => {
         if (diffDays < 7) return d.toLocaleDateString([], { weekday: 'short' });
         return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
     };
-
-    // 'archived' filter is handled server-side via status param.
-    // 'unread' is client-side since we already have the full page loaded.
-    const filteredConversations = filter === 'unread'
-        ? conversations.filter(c => c.unreadCount > 0)
-        : conversations;
-
-    const totalUnread = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
 
     if (loading) {
         return (
@@ -194,13 +508,31 @@ const EmailInbox = () => {
                             )}
                         </div>
                     </div>
-                    <button
-                        onClick={() => { setShowNewChatModal(true); setComposeEmail(''); setComposeSubject(''); setComposeMessage(''); setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); }}
-                        className="w-10 h-10 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-all duration-200 active:scale-95 border border-blue-100"
-                        title="Compose Email"
-                    >
-                        <i className="fa-solid fa-pen-to-square text-[14px]"></i>
-                    </button>
+                    {canSend && (
+                        <div className="flex items-center gap-1.5">
+                            <button
+                                onClick={loadDrafts}
+                                className="w-10 h-10 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-500 flex items-center justify-center transition-all duration-200 active:scale-95 border border-slate-200/60"
+                                title="Drafts"
+                            >
+                                <i className="fa-solid fa-file-pen text-[14px]"></i>
+                            </button>
+                            <button
+                                onClick={loadScheduled}
+                                className="w-10 h-10 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-500 flex items-center justify-center transition-all duration-200 active:scale-95 border border-slate-200/60"
+                                title="Scheduled emails"
+                            >
+                                <i className="fa-solid fa-clock text-[14px]"></i>
+                            </button>
+                            <button
+                                onClick={openCompose}
+                                className="w-10 h-10 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-all duration-200 active:scale-95 border border-blue-100"
+                                title="Compose Email"
+                            >
+                                <i className="fa-solid fa-pen-to-square text-[14px]"></i>
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 {/* Search */}
@@ -226,7 +558,7 @@ const EmailInbox = () => {
                     ].map(tab => (
                         <button
                             key={tab.id}
-                            onClick={() => setFilter(tab.id)}
+                            onClick={() => { setFilter(tab.id); setSelectedChat(null); setMessages([]); }}
                             className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition duration-200 active:scale-95 flex items-center ${filter === tab.id
                                 ? 'bg-blue-600 text-white shadow-sm'
                                 : 'bg-slate-100/70 text-slate-500 hover:bg-slate-100 border border-transparent'}`}
@@ -239,7 +571,7 @@ const EmailInbox = () => {
 
                 {/* Conversations List */}
                 <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50 p-3 space-y-1">
-                    {filteredConversations.map(chat => (
+                    {conversations.map(chat => (
                         <div
                             key={chat._id}
                             onClick={() => handleSelectChat(chat)}
@@ -279,7 +611,23 @@ const EmailInbox = () => {
                             </div>
                         </div>
                     ))}
-                    {filteredConversations.length === 0 && (
+
+                    {/* Pagination — conversations past the first 30 used to be unreachable */}
+                    {hasMoreConversations && (
+                        <button
+                            onClick={async () => {
+                                setLoadingMore(true);
+                                await fetchConversations({ silent: true, pageOverride: page + 1 });
+                                setLoadingMore(false);
+                            }}
+                            disabled={loadingMore}
+                            className="w-full py-2.5 mt-2 rounded-xl text-xs font-bold text-blue-600 bg-white border border-blue-100 hover:bg-blue-50 transition disabled:opacity-50"
+                        >
+                            {loadingMore ? <><i className="fa-solid fa-spinner fa-spin mr-1.5"></i>Loading...</> : 'Load more conversations'}
+                        </button>
+                    )}
+
+                    {conversations.length === 0 && (
                         <div className="p-12 text-center flex flex-col items-center justify-center h-full">
                             <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center mb-4 border border-slate-100 shadow-sm">
                                 <i className="fa-solid fa-envelope-open text-xl text-slate-300"></i>
@@ -314,6 +662,13 @@ const EmailInbox = () => {
                                         </span>
                                     )}
                                     <button
+                                        onClick={handleToggleArchive}
+                                        className="w-10 h-10 rounded-xl flex items-center justify-center text-sm transition-all duration-200 active:scale-95 border border-transparent hover:bg-slate-50 text-slate-400"
+                                        title={selectedChat.status === 'archived' ? 'Restore conversation' : 'Archive conversation'}
+                                    >
+                                        <i className={`fa-solid ${selectedChat.status === 'archived' ? 'fa-box-open' : 'fa-box-archive'}`}></i>
+                                    </button>
+                                    <button
                                         onClick={() => setShowContactPanel(v => !v)}
                                         className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm transition-all duration-200 active:scale-95 border
                                             ${showContactPanel ? 'bg-blue-50 text-blue-600 border-blue-100/50' : 'hover:bg-slate-50 text-slate-400 border-transparent bg-transparent'}`}
@@ -327,6 +682,22 @@ const EmailInbox = () => {
                             {/* Messages Area */}
                             <div className="flex-1 overflow-y-auto px-8 py-8 bg-slate-50 custom-scrollbar" ref={scrollRef}>
                                 <div className="space-y-5 max-w-3xl mx-auto">
+                                    {/* Older history — the thread now loads newest-first, so the
+                                        start of a long conversation is reached by paging back. */}
+                                    {olderCursor && (
+                                        <div className="flex justify-center">
+                                            <button
+                                                onClick={loadOlderMessages}
+                                                disabled={loadingOlder}
+                                                className="px-4 py-2 rounded-full text-[11px] font-bold text-slate-500 bg-white border border-slate-200 hover:bg-slate-50 transition disabled:opacity-50"
+                                            >
+                                                {loadingOlder
+                                                    ? <><i className="fa-solid fa-spinner fa-spin mr-1.5"></i>Loading...</>
+                                                    : <><i className="fa-solid fa-arrow-up mr-1.5"></i>Load earlier messages</>}
+                                            </button>
+                                        </div>
+                                    )}
+
                                     {messages.length === 0 && (
                                         <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
                                             <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-sm border border-slate-100">
@@ -339,6 +710,7 @@ const EmailInbox = () => {
                                         const showDate = index === 0 ||
                                             new Date(msg.timestamp).toDateString() !== new Date(messages[index - 1].timestamp).toDateString();
                                         const isOut = msg.direction === 'outbound';
+                                        const failed = msg.status === 'failed';
 
                                         return (
                                             <React.Fragment key={msg._id}>
@@ -356,12 +728,17 @@ const EmailInbox = () => {
                                                         </div>
                                                     )}
                                                     <div className={`max-w-[80%] rounded-2xl overflow-hidden border flex flex-col bg-white shadow-sm
-                                                        ${isOut ? 'border-blue-200 rounded-br-md' : 'border-slate-200/70 rounded-bl-md'}`}>
+                                                        ${failed ? 'border-rose-200 rounded-br-md' : isOut ? 'border-blue-200 rounded-br-md' : 'border-slate-200/70 rounded-bl-md'}`}>
                                                         {/* Subject strip */}
                                                         <div className={`px-5 pt-3 pb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider border-b
-                                                            ${isOut ? 'text-blue-600 border-blue-50' : 'text-slate-400 border-slate-50'}`}>
+                                                            ${failed ? 'text-rose-500 border-rose-50' : isOut ? 'text-blue-600 border-blue-50' : 'text-slate-400 border-slate-50'}`}>
                                                             <i className={`fa-solid ${isOut ? 'fa-paper-plane' : 'fa-inbox'} text-[9px] flex-shrink-0`}></i>
                                                             <span className="truncate">{msg.subject || '(No Subject)'}</span>
+                                                            {msg.isAutomated && (
+                                                                <span className="ml-auto flex items-center gap-1 text-[9px] text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                                                                    <i className="fa-solid fa-robot"></i> Auto
+                                                                </span>
+                                                            )}
                                                         </div>
                                                         {/* Body */}
                                                         {msg.html ? (
@@ -374,12 +751,35 @@ const EmailInbox = () => {
                                                                 {msg.text}
                                                             </div>
                                                         )}
+
+                                                        {/* Attachments */}
+                                                        {msg.attachments?.length > 0 && (
+                                                            <div className="px-5 pb-2 flex flex-wrap gap-1.5">
+                                                                {msg.attachments.map((att, i) => (
+                                                                    <span key={i} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 bg-slate-50 border border-slate-200/60 px-2 py-1 rounded-lg">
+                                                                        <i className="fa-solid fa-paperclip text-[9px]"></i>
+                                                                        <span className="truncate max-w-[140px]">{att.originalName || att.filename}</span>
+                                                                        {att.size > 0 && <span className="text-slate-300">{formatBytes(att.size)}</span>}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        )}
+
+                                                        {/* Failure reason */}
+                                                        {failed && msg.error && (
+                                                            <div className="px-5 pb-2">
+                                                                <p className="text-[10px] text-rose-500 font-semibold bg-rose-50 border border-rose-100 rounded-lg px-2.5 py-1.5 break-words">
+                                                                    <i className="fa-solid fa-circle-exclamation mr-1"></i>{msg.error}
+                                                                </p>
+                                                            </div>
+                                                        )}
+
                                                         {/* Timestamp */}
                                                         <div className={`px-5 pb-2.5 flex items-center justify-end gap-1.5 text-[10px] font-semibold
-                                                            ${isOut ? 'text-blue-400' : 'text-slate-300'}`}>
+                                                            ${failed ? 'text-rose-400' : isOut ? 'text-blue-400' : 'text-slate-300'}`}>
                                                             <span>{formatTime(msg.timestamp)}</span>
                                                             {isOut && (
-                                                                <i className={`fa-solid text-[10px] ${msg.status === 'failed' ? 'fa-circle-exclamation text-rose-400' : 'fa-check-double text-blue-400'}`}></i>
+                                                                <i className={`fa-solid text-[10px] ${failed ? 'fa-circle-exclamation text-rose-400' : 'fa-check-double text-blue-400'}`}></i>
                                                             )}
                                                         </div>
                                                     </div>
@@ -390,7 +790,15 @@ const EmailInbox = () => {
                                 </div>
                             </div>
 
-                            {/* Compose Bar */}
+                            {/* Compose Bar — read-only users get no send controls */}
+                            {!canSend ? (
+                                <div className="bg-white border-t border-slate-200/60 px-8 py-5 flex-shrink-0 text-center">
+                                    <p className="text-xs text-slate-400 font-semibold">
+                                        <i className="fa-solid fa-lock mr-1.5"></i>
+                                        You have read-only access to this inbox.
+                                    </p>
+                                </div>
+                            ) : (
                             <div className="bg-white border-t border-slate-200/60 px-8 py-5 flex-shrink-0">
                                 <form onSubmit={handleSendMessage}>
                                     <input
@@ -401,6 +809,26 @@ const EmailInbox = () => {
                                         className="w-full text-xs font-semibold text-slate-600 px-4 py-2.5 mb-2.5 bg-slate-50 border border-slate-200/60 rounded-xl focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 transition duration-200 outline-none"
                                         disabled={sending}
                                     />
+
+                                    {replyFiles.length > 0 && (
+                                        <div className="flex flex-wrap gap-1.5 mb-2.5">
+                                            {replyFiles.map((f, i) => (
+                                                <span key={i} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg">
+                                                    <i className="fa-solid fa-paperclip text-[9px]"></i>
+                                                    <span className="truncate max-w-[140px]">{f.name}</span>
+                                                    <span className="text-slate-400">{formatBytes(f.size)}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setReplyFiles(prev => prev.filter((_, idx) => idx !== i))}
+                                                        className="text-slate-400 hover:text-rose-500 ml-0.5"
+                                                    >
+                                                        <i className="fa-solid fa-xmark"></i>
+                                                    </button>
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+
                                     <div className="flex items-end gap-3 bg-slate-50 border border-slate-200/60 rounded-2xl px-4 py-3 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:bg-white transition-all duration-200">
                                         <textarea
                                             value={newMessage}
@@ -413,6 +841,22 @@ const EmailInbox = () => {
                                                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); }
                                             }}
                                         />
+                                        <input
+                                            ref={replyFileInput}
+                                            type="file"
+                                            multiple
+                                            className="hidden"
+                                            onChange={(e) => setReplyFiles(Array.from(e.target.files || []).slice(0, 5))}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => replyFileInput.current?.click()}
+                                            disabled={sending}
+                                            title="Attach files (max 5, 10MB each)"
+                                            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all duration-200 active:scale-95 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-40"
+                                        >
+                                            <i className="fa-solid fa-paperclip text-[13px]"></i>
+                                        </button>
                                         <button
                                             type="submit"
                                             disabled={!newMessage.trim() || sending}
@@ -425,6 +869,7 @@ const EmailInbox = () => {
                                     <p className="text-[10px] text-slate-400 text-right mt-2 font-medium">Enter to send · Shift+Enter new line</p>
                                 </form>
                             </div>
+                            )}
                         </div>
 
                         {/* ═══ Contact Panel (slide-in) ═══ */}
@@ -485,30 +930,136 @@ const EmailInbox = () => {
                     /* Empty State */
                     <div className="flex-1 flex flex-col items-center justify-center bg-slate-50/20 gap-6 h-full p-6 text-center select-none">
                         <div
-                            onClick={() => { setShowNewChatModal(true); setComposeEmail(''); setComposeSubject(''); setComposeMessage(''); setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); }}
-                            className="w-24 h-24 bg-white rounded-[24px] shadow-lg shadow-slate-100 flex items-center justify-center cursor-pointer hover:shadow-xl hover:scale-105 active:scale-95 border border-slate-100 transition-all duration-300"
+                            onClick={canSend ? openCompose : undefined}
+                            className={`w-24 h-24 bg-white rounded-[24px] shadow-lg shadow-slate-100 flex items-center justify-center border border-slate-100 transition-all duration-300 ${canSend ? 'cursor-pointer hover:shadow-xl hover:scale-105 active:scale-95' : ''}`}
                         >
                             <i className="fa-solid fa-envelope-open-text text-3xl text-blue-500"></i>
                         </div>
                         <div>
                             <h2 className="text-base font-black text-slate-800 mb-1">Select a conversation</h2>
-                            <p className="text-xs font-semibold text-slate-400 max-w-[280px] leading-relaxed mx-auto">Pick a thread on the left, or create a brand new conversation to start emailing.</p>
+                            <p className="text-xs font-semibold text-slate-400 max-w-[280px] leading-relaxed mx-auto">
+                                {canSend
+                                    ? 'Pick a thread on the left, or create a brand new conversation to start emailing.'
+                                    : 'Pick a thread on the left to read it. You have read-only access.'}
+                            </p>
                         </div>
-                        <button
-                            onClick={() => { setShowNewChatModal(true); setComposeEmail(''); setComposeSubject(''); setComposeMessage(''); setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); }}
-                            className="flex items-center gap-2 px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition duration-200 shadow-md shadow-blue-100 active:scale-95"
-                        >
-                            <i className="fa-solid fa-pen-to-square"></i> Compose New Email
-                        </button>
+                        {canSend && (
+                            <button
+                                onClick={openCompose}
+                                className="flex items-center gap-2 px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition duration-200 shadow-md shadow-blue-100 active:scale-95"
+                            >
+                                <i className="fa-solid fa-pen-to-square"></i> Compose New Email
+                            </button>
+                        )}
                     </div>
                 )}
             </div>
 
+            {/* Drafts modal */}
+            {showDrafts && (
+                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden animate-fade-in-up">
+                        <div className="px-6 py-4 bg-slate-800 flex justify-between items-center">
+                            <h3 className="font-bold text-white text-sm flex items-center gap-2">
+                                <i className="fa-solid fa-file-pen"></i> Drafts
+                            </h3>
+                            <button onClick={() => setShowDrafts(false)} className="text-white/80 hover:text-white transition duration-200">
+                                <i className="fa-solid fa-xmark text-base"></i>
+                            </button>
+                        </div>
+                        <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                            {drafts.length === 0 ? (
+                                <div className="text-center py-10">
+                                    <i className="fa-solid fa-file-pen text-3xl text-slate-200 mb-3"></i>
+                                    <p className="text-sm text-slate-400 font-medium">No saved drafts</p>
+                                    <p className="text-xs text-slate-300 mt-1">Use “Save Draft” in the compose window</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {drafts.map(d => (
+                                        <div key={d._id} className="flex items-center gap-3 p-3.5 bg-slate-50 border border-slate-200/60 rounded-xl">
+                                            <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-400 flex-shrink-0">
+                                                <i className="fa-solid fa-file-lines text-xs"></i>
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-[13px] font-semibold text-slate-700 truncate">{d.subject || '(No subject)'}</p>
+                                                <p className="text-[11px] text-slate-400 truncate">
+                                                    {d.to || 'No recipient'} · {new Date(d.updatedAt).toLocaleString()}
+                                                </p>
+                                            </div>
+                                            <button
+                                                onClick={() => resumeDraft(d)}
+                                                className="text-[11px] font-bold px-3 py-1.5 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 transition flex-shrink-0"
+                                            >
+                                                Resume
+                                            </button>
+                                            <button
+                                                onClick={() => deleteDraft(d._id)}
+                                                className="w-8 h-8 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition flex items-center justify-center flex-shrink-0"
+                                                title="Delete draft"
+                                            >
+                                                <i className="fa-solid fa-trash text-xs"></i>
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Scheduled outbox modal */}
+            {showScheduled && (
+                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden animate-fade-in-up">
+                        <div className="px-6 py-4 bg-slate-800 flex justify-between items-center">
+                            <h3 className="font-bold text-white text-sm flex items-center gap-2">
+                                <i className="fa-solid fa-clock"></i> Scheduled Emails
+                            </h3>
+                            <button onClick={() => setShowScheduled(false)} className="text-white/80 hover:text-white transition duration-200">
+                                <i className="fa-solid fa-xmark text-base"></i>
+                            </button>
+                        </div>
+                        <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                            {scheduled.length === 0 ? (
+                                <div className="text-center py-10">
+                                    <i className="fa-solid fa-clock text-3xl text-slate-200 mb-3"></i>
+                                    <p className="text-sm text-slate-400 font-medium">No emails are scheduled</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {scheduled.map(item => (
+                                        <div key={item.id} className="flex items-center gap-3 p-3.5 bg-slate-50 border border-slate-200/60 rounded-xl">
+                                            <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-400 flex-shrink-0">
+                                                <i className="fa-solid fa-paper-plane text-xs"></i>
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-[13px] font-semibold text-slate-700 truncate">{item.subject || '(No subject)'}</p>
+                                                <p className="text-[11px] text-slate-400 truncate">
+                                                    To {item.to} · {item.scheduledFor ? new Date(item.scheduledFor).toLocaleString() : 'pending'}
+                                                </p>
+                                            </div>
+                                            <button
+                                                onClick={() => cancelScheduled(item.id)}
+                                                className="text-[11px] font-bold px-3 py-1.5 rounded-lg text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-100 transition flex-shrink-0"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Compose New Email Modal — uses isolated compose state, never touches reply bar */}
             {showNewChatModal && (
                 <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-fade-in-up">
-                        <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 flex justify-between items-center">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-fade-in-up max-h-[92vh] flex flex-col">
+                        <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 flex justify-between items-center flex-shrink-0">
                             <h3 className="font-bold text-white text-sm flex items-center gap-2">
                                 <i className="fa-solid fa-pen-to-square"></i> Compose New Email
                             </h3>
@@ -516,7 +1067,7 @@ const EmailInbox = () => {
                                 <i className="fa-solid fa-xmark text-base"></i>
                             </button>
                         </div>
-                        <form onSubmit={handleStartNewChat} className="p-6 space-y-4">
+                        <form onSubmit={handleStartNewChat} className="p-6 space-y-4 overflow-y-auto custom-scrollbar">
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">To: Email Address <span className="text-red-500">*</span></label>
@@ -582,12 +1133,51 @@ const EmailInbox = () => {
                                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none min-h-[150px] resize-y text-xs font-medium text-slate-700 leading-relaxed"
                                 ></textarea>
                             </div>
+
+                            {/* Attachments */}
+                            <div>
+                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
+                                    Attachments {composeSchedule && <span className="text-slate-300 normal-case font-semibold">(not available for scheduled emails)</span>}
+                                </label>
+                                <input
+                                    ref={composeFileInput}
+                                    type="file"
+                                    multiple
+                                    disabled={!!composeSchedule}
+                                    onChange={(e) => setComposeFiles(Array.from(e.target.files || []).slice(0, 5))}
+                                    className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100 disabled:opacity-40"
+                                />
+                                {composeFiles.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5 mt-2">
+                                        {composeFiles.map((f, i) => (
+                                            <span key={i} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg">
+                                                <i className="fa-solid fa-paperclip text-[9px]"></i>
+                                                <span className="truncate max-w-[140px]">{f.name}</span>
+                                                <span className="text-slate-400">{formatBytes(f.size)}</span>
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
                             <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
-                                <button type="button" onClick={() => setShowNewChatModal(false)} className="px-5 py-2.5 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition">
+                                <button type="button" onClick={() => setShowNewChatModal(false)} className="px-5 py-2.5 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition text-xs">
                                     Cancel
                                 </button>
-                                <button type="submit" disabled={sending} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition shadow-md shadow-blue-100 flex items-center gap-2 text-xs">
-                                    {sending ? <><i className="fa-solid fa-spinner fa-spin"></i> Sending...</> : <><i className="fa-solid fa-paper-plane"></i> Send Email</>}
+                                <button
+                                    type="button"
+                                    onClick={handleSaveDraft}
+                                    disabled={savingDraft}
+                                    className="px-5 py-2.5 text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 rounded-xl transition flex items-center gap-2 text-xs disabled:opacity-50"
+                                >
+                                    {savingDraft
+                                        ? <><i className="fa-solid fa-spinner fa-spin"></i> Saving...</>
+                                        : <><i className="fa-solid fa-file-pen"></i> {draftId ? 'Update Draft' : 'Save Draft'}</>}
+                                </button>
+                                <button type="submit" disabled={sending} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition shadow-md shadow-blue-100 flex items-center gap-2 text-xs disabled:opacity-60">
+                                    {sending
+                                        ? <><i className="fa-solid fa-spinner fa-spin"></i> Sending...</>
+                                        : <><i className={`fa-solid ${composeSchedule ? 'fa-clock' : 'fa-paper-plane'}`}></i> {composeSchedule ? 'Schedule Email' : 'Send Email'}</>}
                                 </button>
                             </div>
                         </form>

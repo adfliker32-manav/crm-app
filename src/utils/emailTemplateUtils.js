@@ -67,7 +67,7 @@ const wrapEmailHtml = (body) => {
     <tr><td align="center">
       <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
         <tr><td style="padding:32px 40px;font-size:15px;line-height:1.7;color:#333333;">
-          ${content}
+          <!--body:start-->${content}<!--body:end-->
         </td></tr>
       </table>
     </td></tr>
@@ -76,4 +76,102 @@ const wrapEmailHtml = (body) => {
 </html>`;
 };
 
-module.exports = { replaceVariables, wrapEmailHtml };
+// Marker comment embedded in the wrapper so unwrapEmailHtml can reliably find
+// the content cell without fragile HTML parsing.
+const BODY_START = '<!--body:start-->';
+const BODY_END = '<!--body:end-->';
+
+/**
+ * Inverse of wrapEmailHtml — returns just the author-written body.
+ *
+ * The inbox thread renders messages inside a small chat bubble, so storing the
+ * full 600px table shell made automated emails render as a giant grey box.
+ * Falls back to the input unchanged when it isn't a wrapped document.
+ */
+const unwrapEmailHtml = (html) => {
+    if (!html) return '';
+    const start = html.indexOf(BODY_START);
+    const end = html.indexOf(BODY_END);
+    if (start !== -1 && end !== -1 && end > start) {
+        return html.slice(start + BODY_START.length, end).trim();
+    }
+    // Legacy rows written before the markers existed: strip the shell heuristically.
+    if (/^\s*<!DOCTYPE html>/i.test(html)) {
+        const td = html.match(/<td style="padding:32px 40px[^"]*">([\s\S]*?)<\/td>/i);
+        if (td) return td[1].trim();
+    }
+    return html;
+};
+
+/**
+ * Injects a fragment immediately before </body> (falling back to </html>, then
+ * append) so signatures and unsubscribe footers land INSIDE the document.
+ *
+ * Previously these were concatenated onto the end of a complete
+ * `<!DOCTYPE html>…</html>` string, which put them outside the document —
+ * Outlook and several other clients drop everything after </html>, silently
+ * removing the legally required unsubscribe link.
+ */
+const injectBeforeBodyEnd = (html, fragment) => {
+    if (!fragment) return html || '';
+    if (!html) return fragment;
+
+    const bodyClose = html.toLowerCase().lastIndexOf('</body>');
+    if (bodyClose !== -1) {
+        return html.slice(0, bodyClose) + fragment + html.slice(bodyClose);
+    }
+    const htmlClose = html.toLowerCase().lastIndexOf('</html>');
+    if (htmlClose !== -1) {
+        return html.slice(0, htmlClose) + fragment + html.slice(htmlClose);
+    }
+    return html + fragment;
+};
+
+/**
+ * FIX W1: adds open- and click-tracking to an outgoing HTML email.
+ *
+ * EmailLog has carried openedAt/opens/clickedAt/clicks/clickedLinks fields and
+ * /api/email/track/* endpoints (which even fire the EMAIL_OPENED workflow
+ * trigger) for a long time — but nothing ever embedded the pixel or rewrote the
+ * links, so every one of those counters was permanently zero and the
+ * EMAIL_OPENED trigger could never fire.
+ *
+ * Must run BEFORE the unsubscribe footer is appended, so the unsubscribe link
+ * itself is never rewritten through the click tracker.
+ *
+ * @param {string} html
+ * @param {string} logId      EmailLog _id this email will be stored under
+ * @param {string} backendUrl Public base URL of the API
+ */
+const injectTracking = (html, logId, backendUrl) => {
+    if (!html || !logId || !backendUrl) return html || '';
+
+    const base = String(backendUrl).replace(/\/+$/, '');
+
+    // ── Click tracking: wrap outbound links ──────────────────────────────────
+    const withLinks = html.replace(
+        /href\s*=\s*(["'])(https?:\/\/[^"']+)\1/gi,
+        (match, quote, url) => {
+            // Never rewrite links that already point at our own tracking or
+            // unsubscribe endpoints — that would double-wrap or break opt-out.
+            if (url.startsWith(`${base}/api/email/track/`) || url.includes('/api/email/unsubscribe')) {
+                return match;
+            }
+            const wrapped = `${base}/api/email/track/click/${logId}?url=${encodeURIComponent(url)}`;
+            return `href=${quote}${wrapped}${quote}`;
+        }
+    );
+
+    // ── Open tracking: 1x1 pixel as the last element in the body ─────────────
+    const pixel = `<img src="${base}/api/email/track/open/${logId}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;" />`;
+
+    return injectBeforeBodyEnd(withLinks, pixel);
+};
+
+module.exports = {
+    replaceVariables,
+    wrapEmailHtml,
+    unwrapEmailHtml,
+    injectBeforeBodyEnd,
+    injectTracking
+};

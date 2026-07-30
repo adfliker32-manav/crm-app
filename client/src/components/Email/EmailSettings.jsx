@@ -1,4 +1,4 @@
-/* eslint-disable no-unused-vars, no-empty, no-undef, react-hooks/exhaustive-deps */
+/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps */
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
@@ -26,6 +26,11 @@ const EmailSettings = () => {
         emailPassword: '',
         emailFromName: '',
         emailSignature: '',
+        businessAddress: '',
+        imapHost: '',
+        imapPort: 993,
+        imapEnabled: true,
+        inboundSupported: true,
         isConfigured: false
     });
     const [loading, setLoading] = useState(true);
@@ -48,6 +53,11 @@ const EmailSettings = () => {
                 emailPassword: res.data.emailPassword || '',
                 emailFromName: res.data.emailFromName || '',
                 emailSignature: res.data.emailSignature || '',
+                businessAddress: res.data.businessAddress || '',
+                imapHost: res.data.imapHost || '',
+                imapPort: res.data.imapPort || 993,
+                imapEnabled: res.data.imapEnabled !== false,
+                inboundSupported: res.data.inboundSupported !== false,
                 isConfigured: res.data.isConfigured || false
             }));
         } catch (error) {
@@ -74,7 +84,11 @@ const EmailSettings = () => {
                 smtpPort: parseInt(config.smtpPort, 10) || 587,
                 emailUser: config.emailUser.trim(),
                 emailFromName: config.emailFromName.trim(),
-                emailSignature: config.emailSignature
+                emailSignature: config.emailSignature,
+                businessAddress: config.businessAddress.trim(),
+                imapHost: config.imapHost.trim(),
+                imapPort: parseInt(config.imapPort, 10) || 993,
+                imapEnabled: config.imapEnabled
             };
             if (config.emailPassword.trim() && config.emailPassword !== '••••••••') {
                 payload.emailPassword = config.emailPassword.trim();
@@ -82,7 +96,12 @@ const EmailSettings = () => {
             const res = await api.put('/email/config', payload);
             if (res.data.success) {
                 showSuccess('Email configuration saved!');
-                setConfig(prev => ({ ...prev, emailPassword: '••••••••', isConfigured: true }));
+                setConfig(prev => ({
+                    ...prev,
+                    emailPassword: '••••••••',
+                    isConfigured: true,
+                    inboundSupported: res.data.inboundSupported !== false
+                }));
                 setShowCredentials(false);
             }
         } catch (error) {
@@ -162,6 +181,29 @@ const EmailSettings = () => {
                         <p className="text-sm font-bold text-amber-800">Not Configured</p>
                         <p className="text-xs text-amber-600">Fill in the form below to connect your email account.</p>
                     </div>
+                </div>
+            )}
+
+            {/* Send works, receive doesn't — make that explicit rather than
+                leaving the user to wonder why no replies ever arrive. */}
+            {config.isConfigured && !config.inboundSupported && (
+                <div className="flex items-start gap-4 bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4">
+                    <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                        <i className="fa-solid fa-inbox text-amber-600 text-lg"></i>
+                    </div>
+                    <div className="flex-1">
+                        <p className="text-sm font-bold text-amber-800">Sending only — replies won't reach your Inbox</p>
+                        <p className="text-xs text-amber-700 mt-0.5">
+                            This account has no IMAP server configured, so incoming email cannot be synced.
+                            Add an IMAP host under "Receiving" to enable two-way conversations.
+                        </p>
+                    </div>
+                    {!showCredentials && (
+                        <button type="button" onClick={() => setShowCredentials(true)}
+                            className="text-xs font-semibold px-3 py-2 bg-white hover:bg-amber-100 text-amber-700 border border-amber-200 rounded-xl transition flex-shrink-0">
+                            Configure
+                        </button>
+                    )}
                 </div>
             )}
 
@@ -261,6 +303,72 @@ const EmailSettings = () => {
                                 placeholder={'Best regards,\nYour Name'}
                                 className={`${inputCls} min-h-[90px] resize-y`} />
                         </Field>
+
+                        {/* The backend has always appended this to the unsubscribe
+                            footer, but there was no field to set it — so every
+                            marketing email went out without the postal address
+                            CAN-SPAM requires. */}
+                        <Field label="Business Postal Address" hint="required by law for marketing email">
+                            <textarea name="businessAddress" value={config.businessAddress} onChange={handleChange}
+                                placeholder={'123 Business Street, City, State 12345, Country'}
+                                className={`${inputCls} min-h-[60px] resize-y`} />
+                            <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+                                <i className="fa-solid fa-circle-info"></i>
+                                Shown in the unsubscribe footer of bulk and automated emails
+                            </p>
+                        </Field>
+                    </div>
+
+                    {/* Section: Receiving */}
+                    <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">4 — Receiving (IMAP)</p>
+                    </div>
+                    <div className="p-6 border-b border-slate-100 space-y-4">
+                        <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={config.imapEnabled}
+                                onChange={(e) => setConfig(p => ({ ...p, imapEnabled: e.target.checked }))}
+                                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="text-sm font-semibold text-slate-700">Sync incoming replies into the Inbox</span>
+                        </label>
+
+                        {config.emailServiceType === 'gmail' ? (
+                            <p className="text-xs text-slate-400 flex items-center gap-1.5">
+                                <i className="fa-solid fa-circle-check text-emerald-500"></i>
+                                Gmail uses imap.gmail.com automatically — no extra setup needed.
+                            </p>
+                        ) : (
+                            <>
+                                <div className="grid grid-cols-3 gap-3">
+                                    <div className="col-span-2">
+                                        <Field label="IMAP Host">
+                                            <input type="text" name="imapHost" value={config.imapHost} onChange={handleChange}
+                                                placeholder="imap.yourprovider.com" className={inputCls} />
+                                        </Field>
+                                    </div>
+                                    <Field label="IMAP Port">
+                                        <input type="number" name="imapPort" value={config.imapPort} onChange={handleChange}
+                                            placeholder="993" className={inputCls} />
+                                    </Field>
+                                </div>
+                                {/* Custom SMTP tenants were silently skipped by the sync
+                                    service, so their inbox was one-way with no explanation. */}
+                                {!config.imapHost && (
+                                    <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                                        <i className="fa-solid fa-triangle-exclamation text-amber-600 mt-0.5"></i>
+                                        <div>
+                                            <p className="text-xs font-bold text-amber-800">Incoming email is not configured</p>
+                                            <p className="text-xs text-amber-700 mt-0.5">
+                                                Without an IMAP host you can send email, but replies from your contacts
+                                                will never appear in the Inbox. Ask your provider for their IMAP server.
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        )}
                     </div>
 
                     {/* Actions */}

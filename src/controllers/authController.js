@@ -28,12 +28,21 @@ const getWorkspaceForUser = (user) => {
     return WorkspaceSettings.findOne({ userId: ownerId });
 };
 
+// Absolute ceiling on a sliding rememberMe session. The token itself is
+// re-issued on every /auth/me call, so without this a stolen token could be
+// renewed indefinitely and would never expire.
+const ABSOLUTE_SESSION_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+
 const buildAuthPayload = (user) => ({
     userId: user._id,
     role: user.role,
     name: user.name,
     permissions: user.permissions,
-    tenantId: user.role === 'agent' ? user.parentId : user._id
+    tenantId: user.role === 'agent' ? user.parentId : user._id,
+    // Session generation — authMiddleware compares this against the live
+    // User.tokenVersion and rejects the request if they differ. This is what
+    // makes a password reset actually log other sessions out.
+    tv: user.tokenVersion || 0
 });
 
 const buildBaseUserResponse = (user) => ({
@@ -86,12 +95,48 @@ const buildGoogleUserResponse = (user, workspace) => ({
 
 const getJwtSecret = () => process.env.JWT_SECRET;
 
-const signAuthToken = (user, rememberMe = false) => {
+/**
+ * Sign an auth token.
+ * @param {object} user
+ * @param {boolean} rememberMe
+ * @param {number} [inheritedAbsExp] - unix seconds. Pass the CURRENT token's
+ *   absExp when re-issuing (sliding session) so the 90-day ceiling is carried
+ *   forward rather than reset. Omit on a fresh login to start a new window.
+ */
+const signAuthToken = (user, rememberMe = false, inheritedAbsExp = null) => {
     const expiresIn = rememberMe ? '30d' : TOKEN_EXPIRY;
     // Carry the rememberMe choice forward in the JWT so /auth/me can re-issue
     // a fresh long-lived token on each visit (sliding session).
-    const payload = { ...buildAuthPayload(user), remember: !!rememberMe };
+    const payload = {
+        ...buildAuthPayload(user),
+        remember: !!rememberMe,
+        // Copied forward on renewal — never extended. A renewal that minted a
+        // new absExp would defeat the cap entirely.
+        absExp: inheritedAbsExp || Math.floor((Date.now() + ABSOLUTE_SESSION_MS) / 1000)
+    };
     return jwt.sign(payload, getJwtSecret(), { expiresIn });
+};
+
+/**
+ * Invalidate every JWT previously issued for a user by bumping their session
+ * generation, then evicting the middleware cache so it takes effect immediately
+ * rather than after the 60s TTL.
+ *
+ * Call this on password reset, password change, permission change, and
+ * deactivation — anywhere "all their existing sessions must stop working".
+ */
+const revokeUserSessions = async (userId) => {
+    if (!userId) return;
+    try {
+        await User.updateOne({ _id: userId }, { $inc: { tokenVersion: 1 } });
+        const { clearTokenVersionCache, clearAgentPermCache } = require('../middleware/authMiddleware');
+        clearTokenVersionCache(userId);
+        clearAgentPermCache(userId);
+    } catch (err) {
+        // Never let revocation bookkeeping fail the caller's operation, but do
+        // make it loud — a silent failure here means sessions stay alive.
+        console.error(`⚠️  Failed to revoke sessions for user ${userId}:`, err.message);
+    }
 };
 
 // password hashing is now handled by User model hooks
@@ -223,8 +268,11 @@ exports.getMe = async (req, res) => {
 
         // Sliding session: if the original login was a rememberMe login, refresh
         // the token to a new 30-day window so active users never get logged out.
+        // The original absExp is carried forward (not reset), so the session
+        // still dies 90 days after the FIRST login no matter how active the user
+        // is — otherwise a stolen token could be renewed forever.
         if (req.user.remember === true) {
-            response.token = signAuthToken(user, true);
+            response.token = signAuthToken(user, true, req.user.absExp || null);
         }
 
         res.json(response);
@@ -512,9 +560,20 @@ exports.resetPassword = async (req, res) => {
         user.password = password;
         user.passwordResetToken = null;
         user.passwordResetExpiry = null;
+
+        // 🔐 Kill every session issued before this reset. Without this a password
+        // reset is cosmetic: an attacker holding a stolen token keeps full access,
+        // which removes the standard incident-response action entirely.
+        user.tokenVersion = (user.tokenVersion || 0) + 1;
         await user.save();
 
-        return res.json({ message: 'Password updated successfully. You can now log in.' });
+        const { clearTokenVersionCache, clearAgentPermCache } = require('../middleware/authMiddleware');
+        clearTokenVersionCache(user._id);
+        clearAgentPermCache(user._id);
+
+        return res.json({
+            message: 'Password updated successfully. You have been signed out on all other devices — please log in again.'
+        });
     } catch (err) {
         console.error('resetPassword error:', err);
         res.status(500).json({ message: 'Server error. Please try again.' });
@@ -794,16 +853,25 @@ exports.updateAgent = async (req, res) => {
             updateData.password = password;
         }
 
+        // 🔐 A manager resetting an agent's password must terminate that agent's
+        // existing sessions — otherwise the old session survives the reset and
+        // the password change achieves nothing against a compromised device.
+        // A permissions-only edit does NOT bump the version: authMiddleware
+        // already re-reads agent permissions from the DB on every request, so
+        // clearing the cache is sufficient and avoids a needless forced re-login.
+        if (updateData.password) {
+            updateData.$inc = { tokenVersion: 1 };
+        }
+
         const updatedAgent = await User.findByIdAndUpdate(id, updateData, { new: true }).select('-password');
 
-        // Evict the agent's permission cache immediately so the next request
-        // picks up the new permissions from DB instead of the stale cache.
-        if (updateData.permissions) {
-            try {
-                const { clearAgentPermCache } = require('../middleware/authMiddleware');
-                clearAgentPermCache(id);
-            } catch { /* cache module optional */ }
-        }
+        // Evict the agent's caches immediately so the next request reflects the
+        // change instead of serving stale values for the rest of the TTL.
+        try {
+            const { clearAgentPermCache, clearTokenVersionCache } = require('../middleware/authMiddleware');
+            if (updateData.permissions) clearAgentPermCache(id);
+            if (updateData.password) clearTokenVersionCache(id);
+        } catch { /* cache module optional */ }
 
         res.json({
             success: true,
@@ -851,21 +919,40 @@ exports.updateProfile = async (req, res) => {
             user.name = name.trim();
         }
 
+        let passwordChanged = false;
         if (password && password.trim()) {
             if (!hasStrongPassword(password)) {
                 return res.status(400).json({ message: STRONG_PASSWORD_MESSAGE });
             }
 
             user.password = password;
+            // 🔐 A password change must invalidate sessions on other devices —
+            // that is the whole point of changing it after a suspected compromise.
+            user.tokenVersion = (user.tokenVersion || 0) + 1;
+            passwordChanged = true;
         }
 
         await user.save();
 
-        res.json({
+        const response = {
             success: true,
             message: 'Profile updated successfully',
             user: { id: user._id, name: user.name, email: user.email }
-        });
+        };
+
+        if (passwordChanged) {
+            const { clearTokenVersionCache, clearAgentPermCache } = require('../middleware/authMiddleware');
+            clearTokenVersionCache(user._id);
+            clearAgentPermCache(user._id);
+
+            // The caller just invalidated their OWN token too. Hand back a fresh
+            // one carrying the new tv so the user isn't logged out of the tab
+            // they're actively using while every other device is signed out.
+            response.token = signAuthToken(user, req.user.remember === true, req.user.absExp || null);
+            response.message = 'Profile updated. You have been signed out on all other devices.';
+        }
+
+        res.json(response);
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Server error' });

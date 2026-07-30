@@ -149,7 +149,17 @@ const executeStepAction = async (step, lead, sequenceName) => {
         const { sendEmail } = require('./emailService');
         const subject = replaceVariables(step.action.subject || '', templateData);
         const body = replaceVariables(step.action.body || '', templateData);
-        await sendEmail({ to: lead.email, subject, html: wrapEmailHtml(body), userId: lead.userId });
+        await sendEmail({
+            to: lead.email,
+            subject,
+            html: wrapEmailHtml(body),
+            bodyForInbox: body,
+            userId: lead.userId,
+            isAutomated: true,
+            triggerType: 'sequence',
+            leadId: lead._id,
+            maxRetries: 1 // FIX D6: background sends retry transient SMTP failures
+        });
         await Lead.findByIdAndUpdate(lead._id, {
             $push: {
                 history: {

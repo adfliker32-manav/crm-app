@@ -1,6 +1,5 @@
 const EmailTemplate = require('../models/EmailTemplate');
 const { sendEmail } = require('../services/emailService');
-const { logEmail } = require('../services/emailLogService');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -42,7 +41,7 @@ const upload = multer({
     }
 });
 
-const { replaceVariables } = require('../utils/emailTemplateUtils');
+const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
 
 // Get all email templates
 exports.getTemplates = async (req, res) => {
@@ -244,7 +243,13 @@ exports.removeAttachment = async (req, res) => {
 exports.sendTemplateEmail = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const { templateId, leadId, to, customData } = req.body;
+        const { leadId, to, customData } = req.body;
+
+        // FIX W3: the route is POST /email-templates/:id/send, but this handler
+        // read req.body.templateId — which the route never supplies — so the
+        // lookup always failed with 404. Accept the param, keeping the body
+        // field as a fallback for any older caller.
+        const templateId = req.params.id || req.body.templateId;
 
         const template = await EmailTemplate.findOne({ _id: templateId, userId });
         if (!template) {
@@ -301,31 +306,26 @@ exports.sendTemplateEmail = async (req, res) => {
                 path: att.path
             }));
 
-        // Send email
+        const recipient = to || leadData.leadEmail;
+        if (!recipient) {
+            return res.status(400).json({ message: 'No recipient — provide `to` or a lead with an email address.' });
+        }
+
+        // Send email. Wrapped in the standard shell for consistency with the
+        // automated senders; logging + Inbox threading happen inside sendEmail().
         const emailOptions = {
-            to: to || leadData.leadEmail,
+            to: recipient,
             subject: subject,
-            html: body,
+            html: wrapEmailHtml(body),
+            bodyForInbox: body,
             attachments: attachments.length > 0 ? attachments : undefined,
-            userId: userId // Pass userId to use user-specific email config
+            userId: userId, // Pass userId to use user-specific email config
+            triggerType: 'template',
+            templateId: template._id,
+            leadId: leadId || null
         };
 
         const result = await sendEmail(emailOptions);
-        
-        // Log successful email
-        await logEmail({
-            userId: userId,
-            to: to || leadData.leadEmail,
-            subject: subject,
-            body: body,
-            status: 'sent',
-            messageId: result.messageId,
-            isAutomated: false,
-            triggerType: 'template',
-            templateId: template._id,
-            leadId: leadId || null,
-            attachments: template.attachments || []
-        });
 
         res.json({
             success: true,
@@ -334,34 +334,8 @@ exports.sendTemplateEmail = async (req, res) => {
         });
     } catch (error) {
         console.error('Error sending template email:', error);
-        
-        // Ensure userId is defined
-        const safeUserId = (req.user?.userId || req.user?.id) || null;
-        const reqTo = req.body?.to || 'unknown';
-        const reqLeadId = req.body?.leadId || null;
-        const reqTemplateId = req.body?.templateId || null;
-
-        // Log failed email
-        try {
-            if (safeUserId) {
-                await logEmail({
-                    userId: safeUserId,
-                    to: reqTo,
-                    subject: 'Template Email Failed',
-                    body: '',
-                    status: 'failed',
-                    error: error.message || 'Server error',
-                    isAutomated: false,
-                    triggerType: 'template',
-                    templateId: reqTemplateId,
-                    leadId: reqLeadId,
-                    attachments: []
-                });
-            }
-        } catch (logError) {
-            console.error('Error logging failed email:', logError);
-        }
-        
+        // sendEmail() already recorded the failure in EmailLog and the Inbox
+        // thread — logging again here produced a duplicate row per failure.
         res.status(500).json({ message: 'Error sending email', error: 'Server error' });
     }
 };

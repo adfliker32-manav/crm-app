@@ -16,6 +16,7 @@ const { VOICE_OUTCOME_PORTS } = require('./voiceOutcomePorts');
 const VoiceCallNode = {
     type: 'voice_call',
     sideEffect: true, // L4/L5: real call — dry-run in Test Mode, idempotent on retry
+    slow: true,       // L-6: telephony provider latency
 
     meta: () => ({
         type:     'voice_call',
@@ -80,6 +81,28 @@ const VoiceCallNode = {
     execute: async (context, data) => {
         const lead = context.getLead();
 
+        // ── H21 FIX: guard the null lead, like every other lead-bound node ──────
+        // WEBHOOK_RECEIVED with no matching lead, and every SCHEDULED_TRIGGER, run
+        // with contactId null. `lead._id` below then threw a TypeError, which the
+        // engine caught and turned into a failed execution whose errorMessage was a
+        // raw "Cannot read properties of null" shown to the end user. WaitNode
+        // documents this exact hazard (BUG #2) — this node was simply never given
+        // the same treatment.
+        if (!lead?._id) {
+            console.warn('[VoiceCallNode] No lead in execution context — cannot place a call.');
+            return {
+                nextPort: 'error',
+                output: { 'voice.skipped': true, 'voice.error': 'no_lead_in_context' }
+            };
+        }
+        if (!lead.phone) {
+            console.warn(`[VoiceCallNode] Lead ${lead._id} has no phone number — cannot place a call.`);
+            return {
+                nextPort: 'error',
+                output: { 'voice.skipped': true, 'voice.error': 'no_phone' }
+            };
+        }
+
         // Build action in VoiceEngineService format
         const action = {
             executionMode: data.executionMode || 'static',
@@ -97,10 +120,13 @@ const VoiceCallNode = {
             { workflowId: context.workflowId }
         );
 
-        if (!success) {
+        // H21 FIX: also require the callLog. `callLog._id` is dereferenced below to
+        // key the wait signal, so a {success:true, callLog:undefined} response would
+        // throw the same TypeError one line later.
+        if (!success || !callLog?._id) {
             return {
                 nextPort: 'error',
-                output: { 'voice.error': error || 'Call initiation failed' }
+                output: { 'voice.error': error || 'Call initiation returned no call log' }
             };
         }
 

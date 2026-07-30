@@ -779,7 +779,16 @@ const runFollowUpTemplateSend = async () => {
                     };
                     const subject = replaceVariables(template.subject, templateData);
                     const body = replaceVariables(template.body, templateData);
-                    await sendEmailWithRetry({ to: lead.email, subject, html: wrapEmailHtml(body), userId: lead.userId.toString() }, 1);
+                    await sendEmailWithRetry({
+                        to: lead.email,
+                        subject,
+                        html: wrapEmailHtml(body),
+                        bodyForInbox: body,
+                        userId: lead.userId.toString(),
+                        isAutomated: true,
+                        triggerType: 'follow_up',
+                        leadId: lead._id
+                    }, 1);
                     await Lead.findByIdAndUpdate(lead._id, {
                         $set: { followUpTemplateSent: true, followUpTemplateType: null, followUpTemplateName: null },
                         $push: {

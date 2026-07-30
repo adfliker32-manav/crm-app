@@ -21,8 +21,16 @@
 const WorkflowExecution = require('../models/WorkflowExecution');
 const WorkflowWaitSignal = require('../models/WorkflowWaitSignal');
 
-const INTERVAL_MS = 30 * 60 * 1000; // Run every 30 minutes
-const DEFAULT_TIMEOUT_HOURS = 72;    // Max age for running/waiting executions
+// C5 FIX: a lost BullMQ delayed job is the ONLY thing standing between a parked
+// wait and its resume, so the reconciler must run on a minutes cadence, not every
+// 30 minutes. At 30 min a Redis restart cost every waiting workflow its timeout
+// branch entirely; at 2 min it costs a couple of minutes of latency.
+const INTERVAL_MS = Number(process.env.WORKFLOW_ENFORCER_INTERVAL_MS) || 2 * 60 * 1000;
+const DEFAULT_TIMEOUT_HOURS = 72;    // Fallback for legacy rows with no expiresAt
+
+// Grace period before treating an overdue signal as "the job was lost". Normal
+// queue latency between expectedBy and the worker draining the job is seconds.
+const OVERDUE_GRACE_MS = 60 * 1000;
 
 let _intervalHandle = null;
 
@@ -30,53 +38,133 @@ let _intervalHandle = null;
  * Run one enforcement cycle.
  * Returns summary stats for logging.
  */
-const runOnce = async () => {
-    const stats = { timedOutExecutions: 0, orphanSignalsCleaned: 0, errors: [] };
+const runOnce = async ({ skipLock = false } = {}) => {
+    const stats = { timedOutExecutions: 0, orphanSignalsCleaned: 0, recoveredSignals: 0, errors: [], skipped: false };
+
+    // ── L-9 FIX: only one instance reconciles per tick ───────────────────────
+    // Every app instance runs this interval. The expiry sweep is an idempotent
+    // updateMany so duplication was harmless, but the C5 recovery step now CALLS
+    // resolveTimeoutSignal — which is only atomic per signal, so N instances would
+    // race over the same overdue signals and waste work. A short Redis lock makes one
+    // instance the reconciler per cycle; if Redis is unavailable the lock fails open
+    // (correctness never depended on it).
+    let lockAcquired = false;
+    if (!skipLock) {
+        try {
+            const { getRedisCommandConnection } = require('../services/redisConnection');
+            const redis = getRedisCommandConnection();
+            // TTL slightly under the interval, so a dead holder cannot skip a cycle.
+            const ttl = Math.max(30, Math.floor(INTERVAL_MS / 1000) - 5);
+            lockAcquired = (await redis.set('wf:enforcer:lock', String(process.pid), 'EX', ttl, 'NX')) === 'OK';
+            if (!lockAcquired) {
+                stats.skipped = true;
+                return stats;   // another instance is reconciling this cycle
+            }
+        } catch {
+            lockAcquired = false;   // fail open: run anyway
+        }
+    }
 
     try {
-        // ── 1. Find and expire stale executions ─────────────────────────────
-        // We use the default timeout here for efficiency. Per-workflow timeout
-        // settings are respected by using the most permissive common cutoff.
-        const hardCutoff = new Date(Date.now() - DEFAULT_TIMEOUT_HOURS * 60 * 60 * 1000);
+        const now = new Date();
+
+        // ── 1. Expire executions past their OWN deadline ─────────────────────
+        // C4 FIX: this used a hardcoded 72h against `updatedAt`. A parked wait
+        // never touches its document, so elapsed wait time WAS now-updatedAt and
+        // every wait longer than 72h was guaranteed to be killed while its BullMQ
+        // resume job was still legitimately scheduled — silently breaking exactly
+        // the multi-day drip campaigns this engine exists for. Workflow
+        // settings.timeoutHours existed but was read nowhere.
+        const legacyCutoff = new Date(Date.now() - DEFAULT_TIMEOUT_HOURS * 60 * 60 * 1000);
 
         const staleResult = await WorkflowExecution.updateMany(
             {
-                status:    { $in: ['running', 'waiting'] },
-                updatedAt: { $lt: hardCutoff }          // Not touched in 72h
+                status: { $in: ['running', 'waiting'] },
+                $and: [
+                    // Past its own deadline. Rows created before expiresAt existed
+                    // fall back to the original 72h/updatedAt rule.
+                    { $or: [
+                        { expiresAt: { $ne: null, $lt: now } },
+                        { expiresAt: null, updatedAt: { $lt: legacyCutoff } }
+                    ] },
+                    // A wait whose deadline has NOT arrived yet is healthy, not
+                    // stale — never reap it no matter how long it has been parked.
+                    { $or: [
+                        { status: 'running' },
+                        { waitingUntil: null },
+                        { waitingUntil: { $lt: now } }
+                    ] }
+                ]
             },
             {
                 $set: {
                     status:       'failed',
-                    errorMessage: `Execution automatically expired after ${DEFAULT_TIMEOUT_HOURS} hours without completing. ` +
-                                  `This usually means a BullMQ job was lost (Redis restart) or a node hung indefinitely.`,
-                    completedAt:  new Date()
+                    errorMessage: 'Execution exceeded its configured timeout (workflow settings.timeoutHours) ' +
+                                  'without completing.',
+                    completedAt:  now
                 }
             }
         );
         stats.timedOutExecutions = staleResult.modifiedCount || 0;
 
-        // ── 2. Clean up orphan wait signals past their deadline ──────────────
-        // If an execution is expired but its wait signal is still 'pending',
-        // mark the signal as 'cancelled' so it doesn't ghost-match future events.
-        const orphanSignalResult = await WorkflowWaitSignal.updateMany(
-            {
-                status:     'pending',
-                expectedBy: { $lt: new Date() }   // Deadline passed
-            },
-            {
-                $set: {
-                    status:     'cancelled',
-                    receivedAt: new Date()
+        // ── 2a. RECOVER overdue wait signals ────────────────────────────────
+        // C5 FIX: this step used to cancel EVERY pending signal past expectedBy,
+        // with no reference to its execution (despite the comment claiming
+        // otherwise). resolveTimeoutSignal then found nothing 'pending' and
+        // returned silently, so the execution sat in 'waiting' forever and the
+        // timeout / no_reply branch — usually the revenue-critical one — never ran.
+        // A pending, overdue signal on a still-waiting execution means the delayed
+        // job was LOST (Redis restart) or badly delayed. Drive the timeout branch
+        // in-process instead of destroying it. resolveTimeoutSignal claims the
+        // signal atomically (pending → timeout), so this is safe to race against a
+        // late-arriving BullMQ delivery.
+        const overdue = await WorkflowWaitSignal.find({
+            status:     'pending',
+            expectedBy: { $lt: new Date(now.getTime() - OVERDUE_GRACE_MS) }
+        }).select('_id executionId nodeId').limit(500).lean();
+
+        if (overdue.length > 0) {
+            const WorkflowEngine = require('./WorkflowEngine');
+            const execIds = overdue.map(s => s.executionId);
+            const execs = await WorkflowExecution.find({ _id: { $in: execIds } })
+                .select('_id status').lean();
+            const statusById = new Map(execs.map(e => [String(e._id), e.status]));
+
+            for (const sig of overdue) {
+                const status = statusById.get(String(sig.executionId));
+                if (status !== 'waiting') continue;   // handled in 2b
+                try {
+                    await WorkflowEngine.resolveTimeoutSignal(
+                        String(sig.executionId), sig.nodeId, String(sig._id)
+                    );
+                    stats.recoveredSignals++;
+                } catch (e) {
+                    stats.errors.push(`recover ${sig._id}: ${e.message}`);
                 }
             }
-        );
-        stats.orphanSignalsCleaned = orphanSignalResult.modifiedCount || 0;
 
-        if (stats.timedOutExecutions > 0 || stats.orphanSignalsCleaned > 0) {
+            // ── 2b. CANCEL only signals whose execution is genuinely terminal ──
+            // These can never be resumed, so retiring them stops them
+            // ghost-matching a future event on the same channel.
+            const terminalIds = execs
+                .filter(e => ['failed', 'cancelled', 'completed'].includes(e.status))
+                .map(e => e._id);
+
+            if (terminalIds.length > 0) {
+                const orphanSignalResult = await WorkflowWaitSignal.updateMany(
+                    { status: 'pending', executionId: { $in: terminalIds } },
+                    { $set: { status: 'cancelled', receivedAt: now } }
+                );
+                stats.orphanSignalsCleaned = orphanSignalResult.modifiedCount || 0;
+            }
+        }
+
+        if (stats.timedOutExecutions > 0 || stats.orphanSignalsCleaned > 0 || stats.recoveredSignals > 0) {
             console.log(
                 `[WorkflowTimeoutEnforcer] Cycle complete — ` +
                 `expired ${stats.timedOutExecutions} stale executions, ` +
-                `cleaned ${stats.orphanSignalsCleaned} orphan wait signals.`
+                `recovered ${stats.recoveredSignals} overdue wait signals, ` +
+                `cancelled ${stats.orphanSignalsCleaned} orphan wait signals.`
             );
         }
 
@@ -102,13 +190,24 @@ const startTimeoutEnforcer = () => {
     runOnce().catch(err => console.error('[WorkflowTimeoutEnforcer] Startup run failed:', err.message));
 
     _intervalHandle = setInterval(() => {
-        runOnce().catch(err => console.error('[WorkflowTimeoutEnforcer] Interval run failed:', err.message));
+        runOnce()
+            .then(stats => {
+                // L-10: the cycle's own error list was computed and then discarded, so a
+                // repeatedly-failing recovery was invisible.
+                if (stats?.errors?.length) {
+                    console.error(
+                        `[WorkflowTimeoutEnforcer] Cycle completed with ${stats.errors.length} error(s): ` +
+                        stats.errors.slice(0, 5).join('; ')
+                    );
+                }
+            })
+            .catch(err => console.error('[WorkflowTimeoutEnforcer] Interval run failed:', err.message));
     }, INTERVAL_MS);
 
     // Ensure the interval doesn't block Node.js process shutdown
     if (_intervalHandle.unref) _intervalHandle.unref();
 
-    console.log(`✅ Workflow Timeout Enforcer started (runs every ${INTERVAL_MS / 60000} min)`);
+    console.log(`✅ Workflow Timeout Enforcer started (runs every ${(INTERVAL_MS / 60000).toFixed(1)} min)`);
 };
 
 /**

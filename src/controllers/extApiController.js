@@ -113,10 +113,16 @@ exports.createLead = async (req, res) => {
         runInBackground('Automation (LEAD_CREATED)', () => evaluateLead(lead, 'LEAD_CREATED'));
 
         // Fire new Workflow Engine trigger
-        runInBackground('Workflow Engine (LEAD_CREATED)', () => {
+        runInBackground('Workflow Engine (LEAD_CREATED)', async () => {
             const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-            WorkflowEngine.fireTrigger('LEAD_CREATED', { lead });
-            WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead });
+            // L-16: mark these as API-driven so they are attributable.
+            // L-18: await, so a failure surfaces through runInBackground's handler
+            // instead of becoming a detached promise.
+            await WorkflowEngine.fireTrigger('LEAD_CREATED', { lead, startedBy: 'api' });
+            // L-17: a brand-new lead has not changed stage. STAGE_CHANGED is fired
+            // here only for backwards compatibility with workflows built against the
+            // old behaviour, and is explicitly marked so filters can tell them apart.
+            await WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, startedBy: 'api', isInitialStage: true });
         });
 
         if (lead.email) {
@@ -274,7 +280,7 @@ exports.updateLead = async (req, res) => {
             runInBackground('Automation (STAGE_CHANGED)', () => evaluateLead(lead, 'STAGE_CHANGED'));
             runInBackground('Workflow Engine (STAGE_CHANGED)', () => {
                 const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-                return WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead });
+                return WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, startedBy: 'api' });
             });
             // Meta CAPI stage-change event (was missing on the External API path)
             runInBackground('Meta CAPI (STAGE_CHANGED)', () => {
@@ -496,7 +502,9 @@ exports.sendEmail = async (req, res) => {
             to:      toEmail,
             subject: subject.slice(0, 500),
             html:    body,
-            userId:  req.tenantId
+            userId:  req.tenantId,
+            triggerType: 'api',
+            leadId:  leadId || null
         });
 
         res.json({

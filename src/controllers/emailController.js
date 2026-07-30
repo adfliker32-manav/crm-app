@@ -1,7 +1,6 @@
 // src/controllers/emailController.js
 
 const { sendEmail } = require('../services/emailService');
-const { logEmail } = require('../services/emailLogService');
 
 // Send Email Controller
 const sendEmailController = async (req, res) => {
@@ -44,8 +43,21 @@ const sendEmailController = async (req, res) => {
 
         // Get userId
         const userId = req.user?.userId || req.user?.id;
-        
-        // Prepare email options (include userId for user-specific credentials)
+        // Conversations/leads belong to the tenant, not the individual agent.
+        const tenantId = req.tenantId || userId;
+
+        // FIX F5: attachments uploaded with the compose form (memory storage —
+        // handed straight to nodemailer, so nothing lands on disk).
+        const attachments = (req.files || []).map(file => ({
+            filename: file.originalname,
+            content: file.buffer,
+            contentType: file.mimetype,
+            size: file.size
+        }));
+
+        // Prepare email options (include userId for user-specific credentials).
+        // `conversational` marks this as a human-typed 1:1 message: no
+        // unsubscribe footer, and a marketing opt-out does not block the reply.
         const emailOptions = {
             to: to,
             subject: subject,
@@ -53,16 +65,19 @@ const sendEmailController = async (req, res) => {
             html: html,
             userId: userId, // Pass userId to use user-specific email config
             cc: cc || null,
-            bcc: bcc || null
+            bcc: bcc || null,
+            conversational: true,
+            attachments: attachments.length > 0 ? attachments : undefined
         };
 
         // FIX F4: Add In-Reply-To / References headers for proper email threading
         try {
             const Lead = require('../models/Lead');
             const EmailConversation = require('../models/EmailConversation');
-            const lead = await Lead.findOne({ email: to, userId }).lean();
+            const lead = await Lead.findOne({ email: to.toLowerCase().trim(), userId: tenantId }).select('_id').lean();
             if (lead) {
-                const conversation = await EmailConversation.findOne({ userId, leadId: lead._id }).lean();
+                const conversation = await EmailConversation.findOne({ userId: tenantId, leadId: lead._id })
+                    .select('lastInboundMessageId').lean();
                 if (conversation?.lastInboundMessageId) {
                     emailOptions.inReplyTo = conversation.lastInboundMessageId;
                     emailOptions.references = conversation.lastInboundMessageId;
@@ -75,93 +90,51 @@ const sendEmailController = async (req, res) => {
 
         // If scheduledFor is provided, queue the email instead of sending now
         if (scheduledFor) {
+            // Agenda persists job data in MongoDB, so file buffers cannot ride
+            // along — a 10MB attachment would be stored as BSON and blow the
+            // document limit. Reject the combination explicitly rather than
+            // silently dropping the files at send time.
+            if (attachments.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Attachments cannot be used with scheduled emails. Send now, or schedule without attachments.'
+                });
+            }
+
+            const sendAt = new Date(scheduledFor);
+
+            // FIX F6: a malformed or past date used to be accepted and then fire
+            // immediately, which looks to the user like the schedule was ignored.
+            if (isNaN(sendAt.getTime())) {
+                return res.status(400).json({ success: false, message: 'Invalid schedule date.' });
+            }
+            if (sendAt.getTime() <= Date.now()) {
+                return res.status(400).json({ success: false, message: 'Schedule time must be in the future.' });
+            }
+
             try {
                 const { scheduleEmail } = require('../services/emailQueueService');
-                await scheduleEmail(emailOptions, new Date(scheduledFor));
+                const job = await scheduleEmail(emailOptions, sendAt);
                 return res.status(200).json({
                     success: true,
-                    message: `Email scheduled for ${new Date(scheduledFor).toLocaleString()}`,
+                    message: `Email scheduled for ${sendAt.toLocaleString()}`,
                     scheduled: true,
-                    scheduledFor: scheduledFor
+                    scheduledFor: sendAt.toISOString(),
+                    jobId: job?.attrs?._id || null
                 });
             } catch (scheduleErr) {
                 console.error('❌ Email scheduling failed:', scheduleErr);
                 return res.status(500).json({
                     success: false,
-                    message: 'Failed to schedule email. Sending immediately instead.'
+                    message: 'Failed to schedule email. Please try again.'
                 });
             }
         }
 
-        // Send email
+        // Send email. Logging and Inbox threading now happen inside sendEmail()
+        // via emailSyncService, so every sender records identically — this
+        // controller no longer maintains its own copy of that logic.
         const result = await sendEmail(emailOptions);
-        
-        // Log successful email
-        if (userId) {
-            await logEmail({
-                userId: userId,
-                to: to,
-                subject: subject,
-                body: html || text || '',
-                status: 'sent',
-                messageId: result.messageId,
-                isAutomated: false,
-                triggerType: 'manual',
-                attachments: []
-            });
-
-            // NEW: 2-Way Sync Tracking
-            try {
-                const Lead = require('../models/Lead');
-                const EmailConversation = require('../models/EmailConversation');
-                const EmailMessage = require('../models/EmailMessage');
-                
-                let lead = await Lead.findOne({ email: to, userId: userId });
-                if (!lead) {
-                    lead = new Lead({ userId, email: to, name: to.split('@')[0], source: 'Email', status: 'New' });
-                    await lead.save();
-
-                    // Trigger lead arrival alerts (socket and WhatsApp alerts)
-                    try {
-                        const { sendLeadArrivalAlert } = require('../services/leadAlertService');
-                        sendLeadArrivalAlert(lead).catch(err => console.error('❌ Error sending email lead arrival alerts:', err.message));
-                    } catch (alertErr) {
-                        console.error('❌ Failed to trigger email lead arrival alerts:', alertErr.message);
-                    }
-                }
-                
-                let conversation = await EmailConversation.findOne({ userId, leadId: lead._id });
-                if (!conversation) {
-                    conversation = new EmailConversation({ userId, leadId: lead._id, email: to, displayName: lead.name });
-                    await conversation.save(); // FIX C2: Must save before referencing conversation._id
-                }
-                
-                const messageRecord = new EmailMessage({
-                    conversationId: conversation._id,
-                    userId: userId,
-                    leadId: lead._id,
-                    messageId: result.messageId,
-                    direction: 'outbound',
-                    from: 'CRM',
-                    to: to,
-                    subject: subject,
-                    text: text,
-                    html: html,
-                    status: 'sent',
-                    timestamp: new Date()
-                });
-                await messageRecord.save();
-                
-                conversation.lastMessage = subject || 'Outgoing Email';
-                conversation.lastMessageAt = new Date();
-                conversation.lastMessageDirection = 'outbound';
-                conversation.metadata.totalMessages += 1;
-                conversation.metadata.totalOutbound += 1;
-                await conversation.save();
-            } catch (err) {
-                console.error("Error saving outbound to EmailMessage sync:", err);
-            }
-        }
 
         console.log("✅ Email sent successfully to:", to);
 
@@ -175,27 +148,11 @@ const sendEmailController = async (req, res) => {
 
     } catch (error) {
         console.error("❌ Email Error:", error);
-        
-        // Log failed email — wrapped so a logging failure never prevents the 500 response
-        const userId = req.user?.userId || req.user?.id;
-        if (userId) {
-            try {
-                await logEmail({
-                    userId: userId,
-                    to: req.body?.to || 'unknown',
-                    subject: req.body?.subject || 'No subject',
-                    body: req.body?.html || req.body?.text || '',
-                    status: 'failed',
-                    error: 'Server error',
-                    isAutomated: false,
-                    triggerType: 'manual',
-                    attachments: []
-                });
-            } catch (logErr) {
-                console.error('Failed to log email error:', logErr.message);
-            }
-        }
-        
+
+        // The failure is already logged and threaded by sendEmail() — no
+        // controller-side logging here, which previously produced a second
+        // EmailLog row for the same failed send.
+
         // Handle specific error types
         let errorMessage = "Failed to send email";
         if (error.message.includes("not configured")) {
@@ -215,15 +172,197 @@ const sendEmailController = async (req, res) => {
     }
 };
 
-// Phase 3 Feature Stubs
-const sendBulkCampaign = async (req, res) => res.status(501).json({ message: "Bulk campaigns not yet implemented." });
-const getDrafts = async (req, res) => res.status(501).json({ message: "Drafts not yet implemented." });
-const saveDraft = async (req, res) => res.status(501).json({ message: "Drafts not yet implemented." });
-const deleteDraft = async (req, res) => res.status(501).json({ message: "Drafts not yet implemented." });
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX W7: these four handlers were routed and reachable but every one returned
+// 501 "not yet implemented".
+// ═══════════════════════════════════════════════════════════════════════════
 
-module.exports = { 
+const tenantOf = (req) => req.tenantId || req.user?.userId || req.user?.id;
+
+// ── Bulk campaigns ──────────────────────────────────────────────────────────
+
+const listCampaigns = async (req, res) => {
+    try {
+        const EmailCampaign = require('../models/EmailCampaign');
+        const campaigns = await EmailCampaign.find({ userId: tenantOf(req) })
+            .sort({ createdAt: -1 })
+            .limit(50)
+            .populate('templateId', 'name')
+            .lean();
+        res.json({ success: true, campaigns });
+    } catch (error) {
+        console.error('Error listing campaigns:', error);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+/**
+ * Reports how many leads an audience filter matches, so the user sees the blast
+ * radius before committing.
+ */
+const previewCampaignAudience = async (req, res) => {
+    try {
+        const { countAudience } = require('../services/campaignService');
+        const { statuses = [], tags = [] } = req.body || {};
+        const total = await countAudience({
+            userId: tenantOf(req),
+            audience: {
+                statuses: Array.isArray(statuses) ? statuses : [],
+                tags: Array.isArray(tags) ? tags : []
+            }
+        });
+        res.json({ success: true, total });
+    } catch (error) {
+        console.error('Error previewing audience:', error);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+const sendBulkCampaign = async (req, res) => {
+    try {
+        const EmailCampaign = require('../models/EmailCampaign');
+        const { launchCampaign, countAudience } = require('../services/campaignService');
+
+        const { name, subject, body, templateId, statuses = [], tags = [], launch = true } = req.body || {};
+
+        if (!name?.trim())    return res.status(400).json({ success: false, message: 'Campaign name is required' });
+        if (!subject?.trim()) return res.status(400).json({ success: false, message: 'Subject is required' });
+        if (!body?.trim())    return res.status(400).json({ success: false, message: 'Body is required' });
+
+        const userId = tenantOf(req);
+        const audience = {
+            statuses: Array.isArray(statuses) ? statuses.filter(Boolean) : [],
+            tags: Array.isArray(tags) ? tags.filter(Boolean) : []
+        };
+
+        // Fail fast on an empty audience rather than creating a campaign that
+        // immediately completes having sent nothing.
+        const total = await countAudience({ userId, audience });
+        if (total === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No leads match this audience — adjust the filters and try again.'
+            });
+        }
+
+        const campaign = await EmailCampaign.create({
+            userId,
+            createdBy: req.user?.userId || req.user?.id || null,
+            name: name.trim(),
+            subject: subject.trim(),
+            body,
+            templateId: templateId || null,
+            audience,
+            status: 'draft',
+            stats: { total, sent: 0, failed: 0, skipped: 0 }
+        });
+
+        if (!launch) {
+            return res.status(201).json({ success: true, campaign, message: 'Campaign saved as draft' });
+        }
+
+        await launchCampaign(campaign._id);
+        const started = await EmailCampaign.findById(campaign._id).lean();
+
+        res.status(201).json({
+            success: true,
+            campaign: started,
+            message: `Campaign started — sending to ${total} recipient${total === 1 ? '' : 's'}.`
+        });
+    } catch (error) {
+        console.error('Error starting campaign:', error);
+        res.status(500).json({ success: false, message: error.message || 'Failed to start campaign' });
+    }
+};
+
+const cancelCampaign = async (req, res) => {
+    try {
+        const EmailCampaign = require('../models/EmailCampaign');
+        const { cancelCampaign: doCancel } = require('../services/campaignService');
+
+        // Ownership check before touching the campaign.
+        const owned = await EmailCampaign.findOne({ _id: req.params.campaignId, userId: tenantOf(req) }).select('_id');
+        if (!owned) return res.status(404).json({ success: false, message: 'Campaign not found' });
+
+        const campaign = await doCancel(owned._id);
+        res.json({ success: true, campaign, message: 'Campaign cancelled' });
+    } catch (error) {
+        console.error('Error cancelling campaign:', error);
+        res.status(400).json({ success: false, message: error.message || 'Failed to cancel campaign' });
+    }
+};
+
+// ── Drafts ──────────────────────────────────────────────────────────────────
+
+const getDrafts = async (req, res) => {
+    try {
+        const EmailDraft = require('../models/EmailDraft');
+        const drafts = await EmailDraft.find({ userId: tenantOf(req) })
+            .sort({ updatedAt: -1 })
+            .limit(50)
+            .lean();
+        res.json({ success: true, drafts });
+    } catch (error) {
+        console.error('Error fetching drafts:', error);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+const saveDraft = async (req, res) => {
+    try {
+        const EmailDraft = require('../models/EmailDraft');
+        const { draftId, to = '', cc = '', bcc = '', subject = '', body = '', leadId = null } = req.body || {};
+
+        if (!to.trim() && !subject.trim() && !body.trim()) {
+            return res.status(400).json({ success: false, message: 'Draft is empty — nothing to save.' });
+        }
+
+        const userId = tenantOf(req);
+        const fields = { to, cc, bcc, subject, body, leadId: leadId || null };
+
+        // Updating an existing draft must not let one tenant write another's.
+        if (draftId) {
+            const updated = await EmailDraft.findOneAndUpdate(
+                { _id: draftId, userId },
+                { $set: fields },
+                { new: true }
+            ).lean();
+            if (!updated) return res.status(404).json({ success: false, message: 'Draft not found' });
+            return res.json({ success: true, draft: updated });
+        }
+
+        const draft = await EmailDraft.create({
+            userId,
+            createdBy: req.user?.userId || req.user?.id || null,
+            ...fields
+        });
+        res.status(201).json({ success: true, draft });
+    } catch (error) {
+        console.error('Error saving draft:', error);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+const deleteDraft = async (req, res) => {
+    try {
+        const EmailDraft = require('../models/EmailDraft');
+        const result = await EmailDraft.deleteOne({ _id: req.params.draftId, userId: tenantOf(req) });
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ success: false, message: 'Draft not found' });
+        }
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error deleting draft:', error);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+module.exports = {
     sendEmail: sendEmailController,
     sendBulkCampaign,
+    listCampaigns,
+    previewCampaignAudience,
+    cancelCampaign,
     getDrafts,
     saveDraft,
     deleteDraft

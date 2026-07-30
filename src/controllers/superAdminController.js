@@ -45,10 +45,23 @@ const findCompanyById = (id) => User.findOne({ _id: id, role: COMPANY_ROLE_FILTE
 const getAgentLimitValue = (workspace) => workspace?.agentLimit || DEFAULT_AGENT_LIMIT;
 
 // Helper for Token Generation (match authController logic)
-const generateToken = (id, role) => {
-    return jwt.sign({ id, role }, process.env.JWT_SECRET, {
-        expiresIn: '1d' // Impersonation session
-    });
+// ⚠️ `tokenVersion` MUST be included: authMiddleware compares the token's `tv`
+// claim against the target user's live User.tokenVersion and rejects on mismatch.
+// Omitting it would send every impersonation attempt into an instant 401 for any
+// user who has ever reset their password (tokenVersion > 0).
+const generateToken = (id, role, tokenVersion = 0) => {
+    return jwt.sign(
+        {
+            id,
+            role,
+            tv: tokenVersion || 0,
+            // Impersonation is a 1-day, non-sliding session, so the absolute cap
+            // simply matches its own expiry.
+            absExp: Math.floor((Date.now() + 24 * 60 * 60 * 1000) / 1000)
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: '1d' } // Impersonation session
+    );
 };
 
 // Internal Helper: Join User with WorkspaceSettings
@@ -694,12 +707,21 @@ const changeCompanyPassword = async (req, res) => {
             return res.status(404).json({ message: "Company not found" });
         }
 
-        // Password hashing is handled automatically by User model's pre('findOneAndUpdate') hook
-        await User.findByIdAndUpdate(id, { password: newPassword });
+        // Password hashing is handled automatically by User model's pre('findOneAndUpdate') hook.
+        // $inc tokenVersion revokes every JWT already issued to this company —
+        // an admin-forced password reset is usually a response to a compromise,
+        // so leaving the old sessions alive would defeat the point.
+        await User.findByIdAndUpdate(id, { password: newPassword, $inc: { tokenVersion: 1 } });
+
+        try {
+            const { clearTokenVersionCache, clearAgentPermCache } = require('../middleware/authMiddleware');
+            clearTokenVersionCache(id);
+            clearAgentPermCache(id);
+        } catch { /* cache module optional */ }
 
         res.json({
             success: true,
-            message: "Password updated successfully"
+            message: "Password updated successfully. All existing sessions for this account have been signed out."
         });
     } catch (error) {
         console.error("Change Password Error:", error);
@@ -889,14 +911,23 @@ const updateCompanyAgent = async (req, res) => {
             updateData.password = password;
         }
 
+        // A password reset must terminate the agent's existing sessions — otherwise
+        // the old session outlives the reset and the change protects nothing.
+        // A permissions-only edit needs no bump: authMiddleware re-reads agent
+        // permissions from the DB every request, so a cache evict is enough.
+        if (updateData.password) {
+            updateData.$inc = { tokenVersion: 1 };
+        }
+
         const updatedAgent = await User.findByIdAndUpdate(agentId, updateData, { new: true })
             .select('-password');
 
-        // Evict agent permission cache so revocation takes effect immediately.
+        // Evict agent caches so the change takes effect immediately.
         if (updateData.password !== undefined || updateData.permissions !== undefined) {
             try {
-                const { clearAgentPermCache } = require('../middleware/authMiddleware');
+                const { clearAgentPermCache, clearTokenVersionCache } = require('../middleware/authMiddleware');
                 clearAgentPermCache(agentId);
+                if (updateData.password) clearTokenVersionCache(agentId);
             } catch { /* cache module optional */ }
         }
 
@@ -1292,8 +1323,8 @@ const impersonateUser = async (req, res) => {
             return res.status(403).json({ message: "Cannot impersonate a Super Admin" });
         }
 
-        // Generate token for that user
-        const token = generateToken(targetUser._id, targetUser.role);
+        // Generate token for that user (carries their current session generation)
+        const token = generateToken(targetUser._id, targetUser.role, targetUser.tokenVersion);
 
         // Security Log
         console.log(`🚨 ALERT: Super Admin (${req.user.email}) is impersonating ${targetUser.email}`);
@@ -2566,8 +2597,14 @@ const getGlobalVoiceTemplates = async (req, res) => {
 const createGlobalVoiceTemplate = async (req, res) => {
     try {
         const tenantId = req.user.userId || req.user.id; // Super admin's ID
+
+        // Filter through the shared whitelist rather than spreading req.body.
+        // tenantId/isGlobal are forced below, but a raw spread would still let
+        // saasPlugin's `deletedAt` and `agencyId` be set from the request —
+        // a template created already soft-deleted, or scoped to another agency.
+        const { pickWritableTemplateFields } = require('./voiceTemplateController');
         const templateData = {
-            ...req.body,
+            ...pickWritableTemplateFields(req.body),
             tenantId,
             isGlobal: true // Force to global
         };

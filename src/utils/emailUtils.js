@@ -45,6 +45,26 @@ function decrypt(text) {
     }
 }
 
+/**
+ * Resolves the owning tenant for a user id (agents roll up to their manager).
+ *
+ * Every email artifact — conversations, messages, logs — must be stored against
+ * the tenant, not the individual agent. Storing them under the agent's own id
+ * created a parallel inbox that the manager (and other agents) could not see.
+ */
+async function resolveTenantId(userId) {
+    if (!userId) return null;
+    try {
+        const User = require('../models/User');
+        const user = await User.findById(userId).select('role parentId').lean();
+        if (!user) return userId;
+        return (user.role === 'agent' && user.parentId) ? user.parentId : userId;
+    } catch (error) {
+        console.error('Error resolving tenant id:', error.message);
+        return userId;
+    }
+}
+
 // Get user email credentials
 async function getUserEmailCredentials(userId) {
     try {
@@ -66,7 +86,8 @@ async function getUserEmailCredentials(userId) {
 
         // Must use '+' to include select:false fields (emailPassword)
         const config = await IntegrationConfig.findOne({ userId: tenantId })
-            .select('+email.emailPassword email.emailUser email.emailFromName email.emailSignature email.emailServiceType email.smtpHost email.smtpPort email.businessAddress');
+            .select('+email.emailPassword email.emailUser email.emailFromName email.emailSignature email.emailServiceType email.smtpHost email.smtpPort email.businessAddress')
+            .lean();
 
         if (!config || !config.email?.emailUser || !config.email?.emailPassword) {
             return null;
@@ -87,4 +108,4 @@ async function getUserEmailCredentials(userId) {
     }
 }
 
-module.exports = { getUserEmailCredentials, encrypt, decrypt, getEncryptionKey };
+module.exports = { getUserEmailCredentials, resolveTenantId, encrypt, decrypt, getEncryptionKey };

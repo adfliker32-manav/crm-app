@@ -165,7 +165,10 @@ const Sidebar = () => {
                 { to: '/whatsapp', icon: 'fa-brands fa-whatsapp', label: 'WhatsApp', badge: waUnreadCount, feature: 'whatsapp',
                   show: canManageTeam || user?.permissions?.viewWhatsApp === true },
                 { to: '/email', icon: 'fa-solid fa-envelope', label: 'Email', feature: 'email',
-                  show: canManageTeam || user?.permissions?.viewEmails === true },
+                  // Mirrors the server's checkPermission('viewEmails') gate — manager/
+                  // superadmin bypass, everyone else needs the explicit permission.
+                  // `manageTeam` used to grant it here but never on the backend.
+                  show: ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.viewEmails === true },
                 { to: '/voice-hub', icon: 'fa-solid fa-headset', label: 'AI Voice', feature: 'voice',
                   show: canManageTeam },
             ],

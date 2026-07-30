@@ -148,7 +148,8 @@ const getBullQueueHealth = async () => {
     return result;
 };
 
-const getWorkerStatus = () => {
+// M-Q5: async so it can read live queue metrics alongside the worker state.
+const getWorkerStatus = async () => {
     const workers = [];
 
     // Broadcast Worker
@@ -169,14 +170,21 @@ const getWorkerStatus = () => {
     // Workflow Worker — check the actual consumer instance, not just the
     // producer-side Queue (which stays truthy even if the worker crashed).
     try {
-        const { getWorkflowWorker } = require('../workflow-engine/WorkflowQueue');
+        const { getWorkflowWorker, getQueueMetrics } = require('../workflow-engine/WorkflowQueue');
         const w = getWorkflowWorker();
+        // M-Q5 FIX: surface queue depth + the stalled counter. A rising
+        // `stalledSinceBoot` is the earliest warning that a node is outrunning
+        // lockDuration — the precondition for the C3 silent-truncation bug — and
+        // there was previously no way to see it outside Bull Board.
+        let metrics = null;
+        try { metrics = await getQueueMetrics(); } catch (_) { /* non-fatal */ }
         workers.push({
             name: 'Workflow Worker',
             type: 'bullmq',
             running: w ? w.isRunning() : false,
             paused: w ? w.isPaused() : false,
-            concurrency: w?.opts?.concurrency || Number(process.env.WORKFLOW_WORKER_CONCURRENCY) || 10
+            concurrency: w?.opts?.concurrency || Number(process.env.WORKFLOW_WORKER_CONCURRENCY) || 10,
+            queue: metrics
         });
     } catch (_) {
         workers.push({ name: 'Workflow Worker', type: 'bullmq', running: false, error: 'Not loaded' });
@@ -583,7 +591,7 @@ const getHealthRedis = async (req, res) => {
 const getHealthQueues = async (req, res) => {
     try {
         const bullQueues = await getBullQueueHealth();
-        const workers    = getWorkerStatus();
+        const workers    = await getWorkerStatus();   // M-Q5: now async
 
         // Agenda queue
         let agenda = { total: 0, failed: 0, pending: 0, active: 0, automationFailures: 0 };

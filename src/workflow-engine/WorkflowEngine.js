@@ -23,10 +23,41 @@ const mongoose          = require('mongoose');
 const Workflow          = require('../models/Workflow');
 const WorkflowExecution = require('../models/WorkflowExecution');
 const WorkflowWaitSignal = require('../models/WorkflowWaitSignal');
+const WorkflowDropLog   = require('../models/WorkflowDropLog');
 const Lead              = require('../models/Lead');
 const NodeRegistry      = require('./NodeRegistry');
 const { isFeatureDisabled } = require('../utils/systemConfig');
-const { checkWorkflowExecutionRate } = require('../utils/workflowRateLimiter');
+const { checkWorkflowExecutionRate, acquireTenantSlot, releaseTenantSlot } = require('../utils/workflowRateLimiter');
+
+// C8 FIX: how many times a workflow-produced event may itself start another
+// workflow before we assume a cross-workflow loop and stop.
+const MAX_TRIGGER_DEPTH = Number(process.env.WORKFLOW_MAX_TRIGGER_DEPTH) || 5;
+
+// H23 FIX: ceiling on one execution's whole variable set (see mergeVariablesAtomic).
+const MAX_VARIABLES_BYTES = Number(process.env.WORKFLOW_MAX_VARIABLES_BYTES) || 262_144; // 256 KB
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ITERATION KEYS (row 27)
+// ─────────────────────────────────────────────────────────────────────────────
+// `claimedNodeIds` claims each node at most ONCE per execution, which is what makes
+// the dedup guard correct — and what made loops structurally impossible, so publish
+// had to reject any cycle outright.
+//
+// The fix is not to allow back-edges (that would break the claim invariant) but to
+// make the claim key richer: a node is claimed once per ITERATION PATH. A for_each
+// node emits one token per item with iterPath 'loopId#0', 'loopId#1', … so the body
+// subgraph runs once per item, each with its own independent claim namespace.
+// Nested loops compose: 'outer#2/inner#5'.
+//
+// An empty path is the top level, and its claim key is the bare nodeId — so every
+// pre-existing execution and every non-loop workflow keeps byte-identical keys and
+// is completely unaffected.
+const claimKey = (nodeId, iterPath) => (iterPath ? `${iterPath}/${nodeId}` : nodeId);
+
+// `nodeTokens` and `committedEffects` are Mixed maps addressed with a dotted $set
+// path, so a key containing '.' would be read as a nested path. Iteration keys use
+// '/' and '#', which are safe, but node ids are user-supplied — sanitise both.
+const tokenKeyFor = (key) => String(key).replace(/\./g, '_');
 
 // WorkflowQueue is lazy-loaded to avoid circular dependency on startup
 let _queue = null;
@@ -61,6 +92,13 @@ class ExecutionContext {
     }
 
     get(key) {
+        // Row 27: loop.* is ITERATION-LOCAL. It is deliberately not stored in
+        // `variables`, because that blob is shared by the whole execution and
+        // concurrent iterations would overwrite each other's item — the exact
+        // clobbering the CAS merge exists to prevent. It arrives with the job.
+        if (key === 'loop.item')  return this._iterItem;
+        if (key === 'loop.index') return this.getIterIndex();
+        if (key === 'loop.path')  return this.getIterPath();
         return this.variables[key];
     }
 
@@ -75,16 +113,21 @@ class ExecutionContext {
     }
 
     getAll() {
-        return { ...this.variables };
+        // Row 27: surface the iteration-local values for interpolation ({{loop.item}}),
+        // but only in the COPY — they are never merged back into the stored blob.
+        const all = { ...this.variables };
+        if (this._iterPath) {
+            all['loop.item']  = this._iterItem;
+            all['loop.index'] = this.getIterIndex();
+            all['loop.path']  = this._iterPath;
+        }
+        return all;
     }
 
-    // Finds all nodes that should execute AFTER the given node + port
-    getNextNodeIds(nodeId, outputPort = 'output') {
-        const conns = this._workflow.connections.filter(
-            c => c.sourceNodeId === nodeId && (c.sourcePort === outputPort || outputPort === 'output' && !c.sourcePort)
-        );
-        return conns.map(c => c.targetNodeId);
-    }
+    // M-E3 FIX: `getNextNodeIds` was removed. It was never called (executeNode inlines
+    // the same filter), and its predicate relied on `&&` binding tighter than `||` to
+    // mean `(A) || (B && C)` — correct only by luck of operand order, and a trap for
+    // anyone who edited it. Routing now has exactly one implementation.
 
     getNode(nodeId) {
         return this._workflow.nodes.find(n => n.id === nodeId);
@@ -99,6 +142,91 @@ class ExecutionContext {
     // performing a real send / lead mutation.
     isTestMode() {
         return this.startedBy === 'test';
+    }
+
+    // C8 FIX: side-effecting nodes that re-fire a trigger MUST pass these through
+    // to fireTrigger, otherwise every hop restarts the causation chain at zero and
+    // the cross-workflow loop guard can never engage.
+    getTriggerDepth() {
+        return this._execution.triggerDepth || 0;
+    }
+
+    getTriggerChain() {
+        return this._execution.triggerChain || [];
+    }
+
+    // M-E12 FIX: cancellation used to stop only FUTURE nodes — a node already inside
+    // execute() (a 20s HTTP call, a 90s AI call) ran to completion and performed its
+    // side effect after the user cancelled. Long-running nodes pass this signal to
+    // their client so an abort actually aborts.
+    getAbortSignal() {
+        return this._abortSignal || null;
+    }
+
+    setAbortSignal(signal) {
+        this._abortSignal = signal;
+    }
+
+    // ── Row 27: iteration context ────────────────────────────────────────────
+    setIteration(iterPath, nodeId, iterItem) {
+        this._iterPath = iterPath || '';
+        this._nodeId   = nodeId;
+        this._iterItem = iterItem;
+    }
+
+    /** '' at the top level, else e.g. 'loop1#3' or 'outer#1/inner#7'. */
+    getIterPath() {
+        return this._iterPath || '';
+    }
+
+    /** Zero-based index of the innermost iteration, or null outside a loop. */
+    getIterIndex() {
+        const last = this.getIterPath().split('/').pop();
+        const m = last && last.match(/#(\d+)$/);
+        return m ? Number(m[1]) : null;
+    }
+
+    /** The claim key for this node in this iteration — how per-node state is addressed. */
+    getNodeKey() {
+        return this._iterPath ? `${this._iterPath}/${this._nodeId}` : this._nodeId;
+    }
+
+    /** How many items the enclosing for_each fanned out, or null at the top level. */
+    getEnclosingLoopCount() {
+        const path = this.getIterPath();
+        if (!path) return null;
+        // Strip the '#index' from the innermost segment to recover the loop's own key.
+        const segments = path.split('/');
+        const innermost = segments[segments.length - 1].replace(/#\d+$/, '');
+        const loopKey = segments.length > 1
+            ? `${segments.slice(0, -1).join('/')}/${innermost}`
+            : innermost;
+        const counts = this._execution.loopCounts || {};
+        const sanitised = String(loopKey).replace(/\./g, '_');
+        return counts[sanitised] ?? null;
+    }
+
+    /** This node's own id, for join bookkeeping and logging. */
+    getNodeIdForJoin() {
+        return this._nodeId;
+    }
+
+    /** How many graph edges point at this node — the default join width. */
+    countIncomingConnections() {
+        return (this._workflow.connections || [])
+            .filter(c => c.targetNodeId === this._nodeId).length || 1;
+    }
+
+    /** Atomically count an arrival at a join node. Returns the new count. */
+    async recordJoinArrival(key) {
+        const WorkflowExecution = require('../models/WorkflowExecution');
+        const field = `joinArrivals.${String(key).replace(/\./g, '_')}`;
+        const doc = await WorkflowExecution.findOneAndUpdate(
+            { _id: this.executionId },
+            { $inc: { [field]: 1 } },
+            { new: true, projection: { joinArrivals: 1 } }
+        );
+        return doc?.joinArrivals?.[String(key).replace(/\./g, '_')] ?? 1;
     }
 }
 
@@ -146,22 +274,58 @@ const flattenVariables = (prefix, value, output) => {
     output[prefix] = value;
 };
 
+// ── H23 FIX: bound what a webhook payload can inject ─────────────────────────
+// The whole body was stringified into `webhook.body` AND flattened into one
+// variable per nested field, with no size or count limit. Since `variables` is
+// then merged on every node and (before H15) copied into every history entry, a
+// 50KB payload grew the execution document by ~50KB per node — heading for the
+// 16MB BSON ceiling, at which point the history $push fails and the node errors.
+const MAX_PAYLOAD_BYTES  = Number(process.env.WORKFLOW_MAX_PAYLOAD_BYTES) || 32_768;
+const MAX_FLATTENED_KEYS = Number(process.env.WORKFLOW_MAX_PAYLOAD_KEYS) || 200;
+
 const buildPayloadVariables = (payload) => {
     const variables = {};
 
+    // M-C10 FIX: prefix caller-supplied variables. These were Object.assign'd
+    // unprefixed, so anything reaching `payload.variables` could overwrite built-ins
+    // like `lead.id` or `tenant.id` — and webhookTrigger passes an attacker-controlled
+    // body two lines away from here. No current caller sets it, so this was latent;
+    // namespacing closes it before a refactor makes it live.
     if (payload.variables && typeof payload.variables === 'object') {
-        Object.assign(variables, payload.variables);
+        for (const [k, v] of Object.entries(payload.variables)) {
+            variables[k.startsWith('payload.') ? k : `payload.${k}`] = v;
+        }
     }
 
     if (payload.webhook && typeof payload.webhook === 'object') {
         const { body = {}, query = {} } = payload.webhook;
-        variables['webhook.body'] = JSON.stringify(body);
+
+        const rawBody = JSON.stringify(body);
+        if (rawBody && rawBody.length > MAX_PAYLOAD_BYTES) {
+            variables['webhook.body']          = rawBody.slice(0, MAX_PAYLOAD_BYTES);
+            variables['webhook.truncated']     = true;
+            variables['webhook.originalBytes'] = rawBody.length;
+            console.warn(
+                `[WorkflowEngine] Webhook payload truncated: ${rawBody.length} bytes ` +
+                `exceeds the ${MAX_PAYLOAD_BYTES}-byte cap.`
+            );
+        } else {
+            variables['webhook.body'] = rawBody;
+        }
         variables['webhook.query'] = JSON.stringify(query);
 
         for (const [key, value] of Object.entries(body)) {
+            if (Object.keys(variables).length >= MAX_FLATTENED_KEYS) {
+                variables['webhook.keysTruncated'] = true;
+                break;
+            }
             flattenVariables(`webhook.${key}`, value, variables);
         }
         for (const [key, value] of Object.entries(query)) {
+            if (Object.keys(variables).length >= MAX_FLATTENED_KEYS) {
+                variables['webhook.keysTruncated'] = true;
+                break;
+            }
             flattenVariables(`webhook.query.${key}`, value, variables);
         }
     }
@@ -201,7 +365,13 @@ const filterMatches = (filter, candidate) => {
     const allowed = (Array.isArray(filter) ? filter : [filter])
         .map(norm)
         .filter(Boolean);
-    if (allowed.length === 0) return true; // e.g. filter was [] or ['']
+    // L-22: an EXPLICITLY EMPTY list (the user cleared every value from a
+    // multi-select) previously fell through to "match everything" — the opposite of
+    // the intent, silently broadening the workflow's scope. An array that was given
+    // but contains nothing usable now matches nothing.
+    if (allowed.length === 0) {
+        return !Array.isArray(filter);   // [] / [''] → no match; a scalar '' stays a wildcard
+    }
     return allowed.includes(norm(candidate));
 };
 
@@ -220,6 +390,15 @@ const matchesTriggerConfig = (triggerType, triggerConfig, payload, lead) => {
 
     switch (triggerType) {
         case 'STAGE_CHANGED': {
+            // L-17: creating a lead fires BOTH LEAD_CREATED and STAGE_CHANGED, so a
+            // stage-change workflow ran on brand-new leads that had not changed stage.
+            // A workflow that narrows by `fromStage` clearly means a real transition,
+            // and an initial placement has no from-stage — so exclude it rather than
+            // letting the missing value be treated as a wildcard.
+            const cfgFrom = cfg.fromStage;
+            const hasFromFilter = !(cfgFrom === undefined || cfgFrom === null || cfgFrom === '');
+            if (payload.isInitialStage && hasFromFilter) return false;
+
             // toStage: the stage the lead moved INTO (payload.toStage, else lead.status).
             // fromStage: the stage the lead moved OUT OF (only known on the primary
             // lead-update path; wildcard-friendly elsewhere).
@@ -263,20 +442,44 @@ const matchesTriggerConfig = (triggerType, triggerConfig, payload, lead) => {
     }
 };
 
-/**
- * Append a node log entry to the execution history.
- * Returns the _id of the newly appended entry for later reference.
- * (BUG #3 FIX: We track by _id, not by nodeId+status search)
- */
-const appendHistory = (execution, logEntry) => {
-    // Cap history at 500 entries to prevent document bloat
-    if (execution.history.length >= 500) {
-        execution.history.shift();
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY REDACTION (H15 / H23 FIX)
+// ─────────────────────────────────────────────────────────────────────────────
+// Every node's history entry used to snapshot the COMPLETE variable set as its
+// `input`. Two problems:
+//   1. Secrets. There is no secret variable type, so an http_request node's
+//      Authorization header value and whatever the API returned (http.response)
+//      were copied into up to 500 embedded documents — all readable by any
+//      authenticated tenant user via GET /api/workflows/executions/:id.
+//   2. Size. The $slice cap bounds the NUMBER of entries, not their size, so a
+//      30KB webhook payload × 500 entries pushes the document at the 16MB BSON
+//      limit, at which point the $push fails and the node errors.
+// The debugger needs to see shape and values, not full payloads — so cap value
+// length and redact anything whose key looks like a credential.
+const SENSITIVE_KEY_RE = /secret|token|password|passwd|apikey|api_key|authorization|bearer|credential|private/i;
+const MAX_HISTORY_VALUE_CHARS = 256;
+
+const redactForHistory = (vars) => {
+    const out = {};
+    for (const [k, v] of Object.entries(vars || {})) {
+        if (SENSITIVE_KEY_RE.test(k)) { out[k] = '«redacted»'; continue; }
+        if (v === null || v === undefined || typeof v === 'number' || typeof v === 'boolean') {
+            out[k] = v;
+            continue;
+        }
+        const s = typeof v === 'string' ? v : JSON.stringify(v);
+        out[k] = (s && s.length > MAX_HISTORY_VALUE_CHARS)
+            ? `${s.slice(0, MAX_HISTORY_VALUE_CHARS)}…«truncated ${s.length} chars»`
+            : v;
     }
-    execution.history.push(logEntry);
-    // Return the _id of the just-pushed entry (Mongoose auto-assigns it)
-    return execution.history[execution.history.length - 1]._id;
+    return out;
 };
+
+// M-E1 FIX: `appendHistory` was removed here. It was dead code — executeNode pushes
+// history inline with an atomic $push/$slice — and it implemented a DIFFERENT cap
+// policy via in-memory shift() on a loaded document, i.e. exactly the non-atomic
+// read-modify-write that BUG #9 eliminated. Leaving it invited a future caller to
+// reintroduce sibling-branch clobbering.
 
 /**
  * BUG #9 FIX: Atomically merge a node's variable delta into the execution's
@@ -293,14 +496,77 @@ const appendHistory = (execution, logEntry) => {
  * @param {string} executionId
  * @param {object} delta — only the keys this node created/changed
  */
+// M-DB2 FIX: `$mergeObjects` in an aggregation-pipeline update merges the delta
+// SERVER-SIDE, so there is no read, no revision, and no contention at all — a
+// concurrent sibling cannot lose because there is no compare-and-swap to lose.
+//
+// It is attempted first and falls back permanently to the CAS loop if the server
+// rejects it. The fallback is not defensive padding: variables keys contain literal
+// dots ('lead.status'), and dotted field names inside a `$literal` are only accepted
+// by MongoDB 5.0+. Rather than assume the deployment's server version, the first
+// failure downgrades the process and everything keeps working.
+let _pipelineMergeSupported = true;
+
+const mergeVariablesPipeline = async (executionId, delta) => {
+    const res = await WorkflowExecution.updateOne(
+        { _id: executionId },
+        [
+            {
+                $set: {
+                    // $literal stops the delta's dotted keys being read as paths.
+                    variables: { $mergeObjects: [{ $ifNull: ['$variables', {}] }, { $literal: delta }] },
+                    varRev:    { $add: [{ $ifNull: ['$varRev', 0] }, 1] }
+                }
+            }
+        ]
+    );
+    return res.matchedCount === 1;
+};
+
 const mergeVariablesAtomic = async (executionId, delta) => {
     if (!delta || Object.keys(delta).length === 0) return;
 
-    for (let attempt = 0; attempt < 6; attempt++) {
+    if (_pipelineMergeSupported) {
+        try {
+            const projected = JSON.stringify(delta);
+            if (projected.length <= MAX_VARIABLES_BYTES) {
+                if (await mergeVariablesPipeline(executionId, delta)) return;
+                return; // matchedCount 0 → execution vanished (TTL); nothing to write
+            }
+        } catch (err) {
+            _pipelineMergeSupported = false;
+            console.warn(
+                `[WorkflowEngine] Server rejected the pipeline variable merge (${err.message}); ` +
+                `falling back to the compare-and-swap loop for the rest of this process.`
+            );
+        }
+    }
+
+    // H8 FIX: 6 attempts with a fixed 10/20/30/40/50ms ramp gave a total budget of
+    // 150ms. Under a wide fan-out every sibling write is a CAS conflict (the CAS
+    // covers the whole variables blob), so losers exhausted it routinely.
+    const MAX_ATTEMPTS = 25;
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         const cur = await WorkflowExecution.findById(executionId).select('variables varRev').lean();
         if (!cur) return; // execution vanished (e.g. TTL) — nothing to write
         const rev = cur.varRev || 0;
         const merged = { ...(cur.variables || {}), ...delta };
+
+        // H23 FIX: hard ceiling on the variable set. Growth is otherwise monotonic
+        // (nothing prunes it) and every CAS attempt rewrites the whole blob, so an
+        // unbounded set means both write amplification and an eventual BSON-limit
+        // failure mid-$push. Failing here is a clean, attributable node error.
+        if (attempt === 0) {
+            const projected = JSON.stringify(merged);
+            if (projected && projected.length > MAX_VARIABLES_BYTES) {
+                throw new Error(
+                    `Execution ${executionId} variable set would reach ${projected.length} bytes, ` +
+                    `over the ${MAX_VARIABLES_BYTES}-byte limit. Reduce the webhook payload size or ` +
+                    `the number of large node outputs.`
+                );
+            }
+        }
 
         // On the very first write the field may be 0 (new doc) or missing (legacy
         // in-flight doc) — accept both so the CAS can bootstrap.
@@ -312,11 +578,43 @@ const mergeVariablesAtomic = async (executionId, delta) => {
         );
         if (res.matchedCount === 1) return; // won the CAS
 
-        // Lost the race to a sibling branch — small backoff, then re-read & retry.
-        await new Promise(r => setTimeout(r, 10 * (attempt + 1)));
+        // Full jitter: a fixed ramp makes N contenders retry on the same schedule
+        // and collide again. Randomising decorrelates them.
+        const ceiling = Math.min(500, 10 * 2 ** Math.min(attempt, 5));
+        await new Promise(r => setTimeout(r, Math.random() * ceiling));
     }
-    console.warn(`[WorkflowEngine] mergeVariablesAtomic gave up after retries for execution ${executionId}`);
+
+    // H8 FIX: do NOT return quietly. A dropped variable is invisible but corrupting:
+    // the node's history still shows its output, while `variables` lacks the key, so a
+    // downstream condition reads '' and silently takes the WRONG branch. Throwing
+    // makes the node fail visibly and lets BullMQ retry it — and because a
+    // side-effect node has already ledgered in committedNodeIds, the retry replays
+    // the recorded result instead of re-sending.
+    throw new Error(
+        `mergeVariablesAtomic: could not persist ${Object.keys(delta).length} variable(s) ` +
+        `for execution ${executionId} after ${MAX_ATTEMPTS} attempts (write contention)`
+    );
 };
+
+/**
+ * The ONE implementation of port routing (see M-E3: routing must not be reimplemented).
+ *
+ * A connection saved with no explicit `sourcePort` is legacy data that means the
+ * primary 'output' port, so an emitted 'output' must also accept it. No other port
+ * may ever fall back to 'output' — that was BUG #6, where an unwired 'error' port
+ * routed a failed send down the success branch.
+ *
+ * The two resume paths (resumeFromSignal / resolveTimeoutSignal) used to compare
+ * `c.sourcePort === port` directly and so omitted the legacy fallback: a wait node
+ * wired with a legacy connection resumed to ZERO successors, silently ending the
+ * branch and completing the execution with the rest of the workflow never run.
+ */
+const connectionsFromPort = (connections, nodeId, port) =>
+    (connections || []).filter(c => {
+        if (c.sourceNodeId !== nodeId) return false;
+        if (port === 'output') return c.sourcePort === 'output' || !c.sourcePort;
+        return c.sourcePort === port;
+    });
 
 /**
  * L2 FIX: apply a branch-token delta and complete the execution when the last
@@ -375,6 +673,34 @@ const fireTrigger = async (triggerType, payload) => {
             return;
         }
 
+        // ── C8 FIX: break cross-workflow side-effect loops ──────────────────
+        // Side-effecting nodes re-fire the triggers they can themselves be
+        // started by (update_stage → STAGE_CHANGED, add_tag → TAG_ADDED), so two
+        // workflows can bounce a lead between stages forever. publishWorkflow's
+        // cycle check only sees edges INSIDE one workflow, so it cannot detect a
+        // loop that closes through a side effect. Depth bounds the chain.
+        const depth = Number(payload._depth) || 0;
+        if (depth >= MAX_TRIGGER_DEPTH) {
+            console.error(
+                `[WorkflowEngine] Trigger depth limit (${MAX_TRIGGER_DEPTH}) reached for ${triggerType}. ` +
+                `Causation chain: ${(payload._chain || []).join(' → ')}. ` +
+                `Dropping to break a cross-workflow loop — check these workflows for a stage/tag ping-pong.`
+            );
+            // H5 FIX: record it so the loop is diagnosable after the fact — the chain
+            // is the only thing that identifies WHICH workflows are ping-ponging.
+            const depthTenantId = payload.tenantId || payload.lead?.userId;
+            if (depthTenantId) {
+                await WorkflowDropLog.create({
+                    tenantId: depthTenantId,
+                    leadId:   payload.lead?._id || null,
+                    triggerType,
+                    reason:   'trigger_depth',
+                    detail:   { depth, maxDepth: MAX_TRIGGER_DEPTH, chain: payload._chain || [] }
+                }).catch(e => console.error('[WorkflowEngine] WorkflowDropLog write failed:', e.message));
+            }
+            return [];
+        }
+
         const { lead, workflowId } = payload;
         
         // tenantId can come from payload directly, or fallback to lead.userId
@@ -388,15 +714,13 @@ const fireTrigger = async (triggerType, payload) => {
             return;
         }
 
-        // ── ARCH #1: Per-tenant execution burst rate limit ─────────────────
-        const rateCheck = await checkWorkflowExecutionRate(tenantId.toString());
-        if (!rateCheck.allowed) {
-            console.warn(
-                `[WorkflowEngine] Tenant ${tenantId} exceeded execution burst limit ` +
-                `(${rateCheck.count}/${rateCheck.limit} in last 10 min). Trigger ${triggerType} dropped.`
-            );
-            return;
-        }
+        // H5 FIX: the burst-limit charge used to happen HERE, before the engine knew
+        // whether any workflow even matched. So every CRM event charged a slot even
+        // for a tenant with zero workflows — and leadController fires two triggers
+        // per lead creation, so a 300-lead import burned 600 slots against a limit of
+        // 500 and then silently disabled that tenant's automation. It also charged
+        // once per CALL rather than per execution, so it never measured what it
+        // capped. The check now lives inside the per-workflow loop below.
 
         // Find published workflows matching the trigger
         const query = {
@@ -423,6 +747,39 @@ const fireTrigger = async (triggerType, payload) => {
             // campaign) does not match this concrete event. An empty filter is a
             // wildcard, so unconfigured workflows behave exactly as before.
             if (!matchesTriggerConfig(triggerType, workflow.triggerConfig, payload, lead)) {
+                continue;
+            }
+
+            // ── H5 FIX: charge the burst limit per EXECUTION, after matching ──────
+            // C10 FIX retained: never let a degraded Redis stall the trigger path —
+            // a rate limit is a safety valve, not something worth hanging on.
+            const rateCheck = await Promise.race([
+                checkWorkflowExecutionRate(tenantId.toString()),
+                new Promise(r => setTimeout(() => r({ allowed: true, degraded: true, timedOut: true }), 2000))
+            ]);
+            if (rateCheck.timedOut) {
+                console.error(
+                    `[WorkflowEngine] Rate-limit check timed out for tenant ${tenantId}; ` +
+                    `proceeding WITHOUT burst limiting for ${triggerType}.`
+                );
+            }
+            if (!rateCheck.allowed) {
+                console.error(
+                    `[WorkflowEngine] Tenant ${tenantId} exceeded execution burst limit ` +
+                    `(${rateCheck.count}/${rateCheck.limit}). Dropping ${triggerType} for workflow "${workflow.name}".`
+                );
+                // Persist the drop: a console line is not a record. Without this the
+                // events were simply gone, with nothing to show the user or replay.
+                await WorkflowDropLog.create({
+                    tenantId,
+                    workflowId: workflow._id,
+                    leadId:     lead?._id || null,
+                    triggerType,
+                    reason:     'burst_limit',
+                    detail:     { count: rateCheck.count, limit: rateCheck.limit, workflowName: workflow.name }
+                }).catch(e => console.error('[WorkflowEngine] WorkflowDropLog write failed:', e.message));
+                // Try the remaining workflows rather than abandoning all of them —
+                // the limiter may admit the next one if this window is only just full.
                 continue;
             }
 
@@ -479,8 +836,26 @@ const fireTrigger = async (triggerType, payload) => {
                 connections: workflow.connections
             };
 
+            // C4 FIX: give the execution its OWN deadline from the workflow's
+            // settings.timeoutHours. The enforcer previously applied a hardcoded
+            // 72h to `updatedAt`, and a parked wait never touches the document —
+            // so every wait longer than 72h was killed while its resume job was
+            // still legitimately scheduled. settings.timeoutHours was read nowhere.
+            const timeoutHours = Number(workflow.settings?.timeoutHours) || 72;
+
+            // H7 FIX: scope the caller's idempotency key to this workflow so the
+            // partial unique index rejects a duplicate delivery. For a scheduled
+            // trigger, bucket by minute so two instances firing the same cron tick
+            // collapse into one execution (also covers M-Q3's init race).
+            let idempotencyKey = payload.idempotencyKey || null;
+            if (!idempotencyKey && triggerType === 'SCHEDULED_TRIGGER') {
+                idempotencyKey = `cron:${Math.floor(Date.now() / 60000)}`;
+            }
+
             // Create execution document
-            const execution = await WorkflowExecution.create({
+            let execution;
+            try {
+            execution = await WorkflowExecution.create({
                 tenantId,
                 workflowId:       workflow._id,
                 workflowVersion:  workflow.version,
@@ -491,8 +866,25 @@ const fireTrigger = async (triggerType, payload) => {
                 variables,
                 // L2 FIX: seed the branch-token counter with one token per start node.
                 activeBranches:   startNodes.length,
+                expiresAt:        new Date(Date.now() + timeoutHours * 3600 * 1000),
+                // C8 FIX: record where this execution sits in the causation chain.
+                triggerDepth:     depth,
+                triggerChain:     payload._chain || [],
+                idempotencyKey,                      // H7 FIX
                 startedBy:        payload.startedBy || 'trigger'
             });
+            } catch (createErr) {
+                // H7 FIX: the partial unique index is the arbiter — a duplicate
+                // delivery loses the race here rather than running the workflow twice.
+                if (createErr.code === 11000) {
+                    console.log(
+                        `[WorkflowEngine] Duplicate delivery (key ${idempotencyKey}) for workflow ` +
+                        `"${workflow.name}" — execution already exists. Skipping.`
+                    );
+                    continue;
+                }
+                throw createErr;
+            }
 
             // ── BUG #10 FIX: race-safe maxExecutionsPerLead enforcement ─────────
             // The pre-check above is only a fast-path (count-then-create is a TOCTOU
@@ -540,15 +932,19 @@ const fireTrigger = async (triggerType, payload) => {
                 $set: { lastExecutedAt: new Date() }
             });
 
-            // Return the execution ID so callers (e.g. testWorkflow) can use it
-            // (only meaningful when a single workflow matched the trigger)
-            execution._returnedId = execution._id;
+            // M-E2 FIX: dropped `execution._returnedId = execution._id` — it set a
+            // property on a local document that was never read or persisted.
+            // createdExecutionIds is the actual return channel.
             createdExecutionIds.push(execution._id);
         }
 
         return createdExecutionIds;
     } catch (err) {
-        console.error('[WorkflowEngine] fireTrigger error:', err.message);
+        // L-19: return the SAME type on every path. This used to return undefined on
+        // error and an array on success, so `(await fireTrigger(...)).length` threw at
+        // exactly the moment something had already gone wrong.
+        console.error(`[WorkflowEngine] fireTrigger(${triggerType}) error:`, err.message);
+        return [];
     }
 };
 
@@ -561,9 +957,14 @@ const fireTrigger = async (triggerType, payload) => {
  * @param {string} executionId
  * @param {string} nodeId
  */
-const executeNode = async (executionId, nodeId) => {
+const executeNode = async (executionId, nodeId, opts = {}) => {
+    const { tokenId = null, attempt = 1, maxAttempts = 1, iterPath = '', iterItem } = opts;
+    // Row 27: all per-node bookkeeping (claim, token owner, idempotency ledger) is
+    // keyed by this, so one node can run once per loop iteration.
+    const nodeKey = claimKey(nodeId, iterPath);
     let execution  = null;
     let histEntryId = null; // BUG #3 FIX: track exact history entry by _id
+    let slotTenantId = null; // H20: set once a per-tenant concurrency slot is held
 
     try {
         // Load execution + workflow in parallel
@@ -572,10 +973,45 @@ const executeNode = async (executionId, nodeId) => {
             console.warn(`[WorkflowEngine] Execution ${executionId} not found. Aborting.`);
             return;
         }
-        if (execution.status === 'cancelled' || execution.status === 'completed') {
+        // C7 FIX: 'failed' is terminal and MUST be included here. It was omitted,
+        // so after the catch block marked the execution failed, BullMQ's next retry
+        // sailed past this guard, re-ran the node, and kept enqueueing successors —
+        // an execution that reported 'failed' while still executing to completion.
+        if (['cancelled', 'completed', 'failed'].includes(execution.status)) {
             console.log(`[WorkflowEngine] Execution ${executionId} already ${execution.status}. Skipping node ${nodeId}.`);
             return;
         }
+
+        // ── H20 FIX: take a per-tenant in-flight slot before doing any work ─────
+        // Without this, one tenant could hold all 10 global worker slots and stall
+        // every other tenant's automation. Taken BEFORE the node claim so a deferral
+        // needs no claim/token unwinding. Fails open if Redis is unavailable.
+        const slot = await acquireTenantSlot(execution.tenantId.toString());
+        if (!slot.acquired) {
+            // Re-enqueue THIS token with a short jittered delay — the branch is
+            // untouched, just rescheduled behind the tenant's own work.
+            const delayMs = 250 + Math.floor(Math.random() * 750);
+            const nodeType = (execution.workflowSnapshot?.nodes || [])
+                .find(n => n.id === nodeId)?.type;
+            await getQueue().enqueueNode(executionId, nodeId, delayMs, nodeType, tokenId || undefined, iterPath, iterItem);
+            console.log(
+                `[WorkflowEngine] Tenant ${execution.tenantId} at concurrency limit ` +
+                `(${slot.count}/${slot.limit}); node "${nodeId}" rescheduled in ${delayMs}ms.`
+            );
+            return;
+        }
+        slotTenantId = execution.tenantId.toString();
+
+        // ── Row 27: join nodes are exempt from the single-claim guard ───────────
+        // The claim guard exists so a diamond's second arrival does not re-run a node.
+        // A JOIN node is the opposite: it must observe EVERY arrival in order to know
+        // when the last one has landed. It is an idempotent atomic counter, so running
+        // it per arrival is safe — exactly one arrival (the final one) proceeds, and
+        // the rest absorb their token.
+        const implForGuard = NodeRegistry.has(
+            (execution.workflowSnapshot?.nodes || []).find(n => n.id === nodeId)?.type || ''
+        ) ? NodeRegistry.get((execution.workflowSnapshot?.nodes || []).find(n => n.id === nodeId).type) : null;
+        const isJoinNode = !!implForGuard?.joinNode;
 
         // ── BUG #7 FIX: atomic per-node run guard (join / diamond dedup) ────────
         // Atomically claim this (execution, node) pair before doing any work.
@@ -586,17 +1022,45 @@ const executeNode = async (executionId, nodeId) => {
         // `claimedNodeIds: { $ne: nodeId }` only matches while the node is unclaimed,
         // so exactly one of two concurrent arrivals wins. The claim is released in
         // the catch block on failure so BullMQ retries can re-run the node.
-        const claimed = await WorkflowExecution.findOneAndUpdate(
-            { _id: executionId, claimedNodeIds: { $ne: nodeId } },
-            { $addToSet: { claimedNodeIds: nodeId } },
+        const claimed = isJoinNode ? execution : await WorkflowExecution.findOneAndUpdate(
+            { _id: executionId, claimedNodeIds: { $ne: nodeKey } },
+            {
+                $addToSet: { claimedNodeIds: nodeKey },
+                // C3 FIX: remember WHICH branch token won this node's claim.
+                // Row 27: nodeTokens is a Mixed map, and an iteration key contains
+                // '/' and '#', so it is stored under a sanitised key.
+                ...(tokenId ? { $set: { [`nodeTokens.${tokenKeyFor(nodeKey)}`]: tokenId } } : {})
+            },
             { new: true }
         );
         if (!claimed) {
+            // ── C3 FIX: distinguish a join arrival from a stalled re-delivery ──
+            // A failed claim has two very different causes:
+            //   (a) a DIFFERENT branch token converged on this node (a join) —
+            //       that token is absorbed here and must be retired, or the
+            //       branch counter over-counts and the execution never completes;
+            //   (b) BullMQ re-delivered THIS SAME token because the job's lock
+            //       expired while the node was legitimately still running (slow
+            //       AI/HTTP call). Retiring a token here was the bug: it drained
+            //       activeBranches to 0 and marked a live execution 'completed',
+            //       silently discarding the rest of the workflow.
+            // Read the owner FRESH rather than from the snapshot taken before the
+            // claim attempt — that snapshot can predate the winner's write.
+            const fresh = await WorkflowExecution.findById(executionId)
+                .select('nodeTokens activeBranches').lean();
+            const owner = fresh?.nodeTokens?.[tokenKeyFor(nodeKey)];
+            if (tokenId && owner && String(owner) === String(tokenId)) {
+                console.warn(
+                    `[WorkflowEngine] Node "${nodeId}" re-delivered for the SAME token ${tokenId} ` +
+                    `(execution ${executionId}) — the original attempt still owns it. Not settling.`
+                );
+                return;
+            }
             console.log(`[WorkflowEngine] Node "${nodeId}" already claimed for execution ${executionId} (duplicate join arrival). Skipping.`);
             // L2 FIX: this arrival's token is absorbed by the already-claimed node
             // (join semantics) — retire it so the branch counter stays accurate.
             // Legacy executions (no counter) keep the old no-op behavior.
-            if (typeof execution.activeBranches === 'number') {
+            if (typeof (fresh ?? execution).activeBranches === 'number') {
                 await settleBranches(executionId, -1);
             }
             return;
@@ -637,6 +1101,9 @@ const executeNode = async (executionId, nodeId) => {
         // Build execution context (variables here are a snapshot copy; the context
         // records only the keys this node mutates so we persist a minimal delta).
         const context = new ExecutionContext(execution, workflowGraph, lead);
+        // Row 27: expose the current iteration so a loop body can read loop.item /
+        // loop.index, and so a join can look up its loop's fan-out width.
+        context.setIteration(iterPath, nodeId, iterItem);
 
         // BUG #9 FIX: persist state with ATOMIC operators, never full-document
         // .save(). Concurrent fork branches of one execution used to read-modify-
@@ -658,7 +1125,8 @@ const executeNode = async (executionId, nodeId) => {
                             nodeName:  node.name || node.type,
                             status:    'running',
                             startedAt,
-                            input:     context.getAll()
+                            // H15 FIX: redacted + length-capped, not the raw variable set.
+                            input:     redactForHistory(context.getAll())
                         }],
                         $slice: -500   // cap history at the most recent 500 entries
                     }
@@ -674,47 +1142,142 @@ const executeNode = async (executionId, nodeId) => {
         // the idempotency ledger (L5) apply ONLY to those; pure logic nodes
         // (condition/switch/wait) are safe to run/re-run freely.
         let result;
+        let replayedFromLedger = false;   // M-E10
 
         if (context.isTestMode() && nodeImpl.sideEffect) {
             // ── L4 FIX: Test Mode dry-run ──────────────────────────────────────
             // A test run (the "Test" button) must never send real WhatsApp/email/
             // voice or mutate real lead data. Simulate a successful run and route
             // down the primary 'output' port so the tester can validate the graph.
-            console.log(`[WorkflowEngine] TEST MODE: simulating side-effect node "${nodeId}" (${node.type}) — no real action performed.`);
-            result = { nextPort: 'output', output: { 'test.simulated': node.type, 'test.mode': true } };
+            // M-N10 FIX: route to the node's FIRST DECLARED output port, not a
+            // hardcoded 'output'. http_request declares success/error and
+            // ai_classifier declares category ports — neither has an 'output' port,
+            // so a test run of any graph containing them routed down a port with no
+            // connections and stopped dead at that node. Test Mode was therefore
+            // useless for exactly the nodes most worth testing.
+            let simulatedPort = 'output';
+            try {
+                simulatedPort = nodeImpl.ports?.().outputs?.[0]?.id || 'output';
+            } catch { /* ports() is UI metadata; never let it break a run */ }
+            console.log(`[WorkflowEngine] TEST MODE: simulating side-effect node "${nodeId}" (${node.type}) → port "${simulatedPort}" — no real action performed.`);
+            result = { nextPort: simulatedPort, output: { 'test.simulated': node.type, 'test.mode': true } };
 
         } else if (nodeImpl.sideEffect
                    && Array.isArray(execution.committedNodeIds)
-                   && execution.committedNodeIds.includes(nodeId)) {
+                   && execution.committedNodeIds.includes(nodeKey)) {
             // ── L5 FIX: idempotency replay across BullMQ retries ───────────────
             // This node already committed its external action on a prior attempt
             // (e.g. the send succeeded but a later step crashed and BullMQ retried).
             // Reuse the recorded result instead of re-running execute() and
             // re-sending the message / re-hitting the API.
-            const prior = (execution.committedEffects && execution.committedEffects[nodeId]) || {};
+            const prior = (execution.committedEffects && execution.committedEffects[tokenKeyFor(nodeKey)]) || {};
             console.log(`[WorkflowEngine] Node "${nodeId}" already committed for execution ${executionId} — replaying result, skipping re-send (idempotency).`);
             result = { nextPort: prior.port || 'output', output: prior.output || {} };
+            // M-E10 FIX: the 'running' history entry was pushed before this branch was
+            // reached, so a replay produced a SECOND entry indistinguishable from a real
+            // execution — inflating apparent node runs and misleading the debugger.
+            // Mark it as what it is.
+            replayedFromLedger = true;
 
         } else {
+            // ── M-E12 FIX: make a cancel reach an in-flight side effect ──────────
+            // Poll the execution's status while the node runs; if it goes terminal
+            // (cancelled via the API, or failed by a sibling branch), abort. Nodes that
+            // honour the signal stop immediately; the rest are unaffected.
+            const abort = new AbortController();
+            context.setAbortSignal(abort.signal);
+            const cancelWatch = setInterval(async () => {
+                try {
+                    const cur = await WorkflowExecution.findById(executionId).select('status').lean();
+                    if (cur && ['cancelled', 'failed', 'completed'].includes(cur.status)) {
+                        console.warn(`[WorkflowEngine] Execution ${executionId} became ${cur.status} mid-node "${nodeId}" — aborting in-flight work.`);
+                        abort.abort();
+                    }
+                } catch { /* transient read failure — try again next tick */ }
+            }, 2000);
+            if (cancelWatch.unref) cancelWatch.unref();
+
             // Execute the node for real.
-            result = await nodeImpl.execute(context, node.data || {});
+            try {
+                result = await nodeImpl.execute(context, node.data || {});
+            } finally {
+                clearInterval(cancelWatch);
+            }
             // result: { nextPort: 'output' | 'true' | 'false' | string, output: {}, waitSignal: {...} }
 
             // L5 FIX: record the side effect as committed IMMEDIATELY after it
             // succeeds and BEFORE the failure-prone steps below (variable merge,
             // history update). A wait-signal result is not a completed side effect,
             // so it is never ledgered (the node re-runs cleanly on resume paths).
-            if (nodeImpl.sideEffect && !result?.waitSignal) {
+            // A deferral (H6 backpressure) is NOT a completed side effect — nothing
+            // was sent. Ledgering it would make the deferred re-run replay a
+            // fabricated {port:'output'} success and skip the send entirely, which is
+            // the very silent drop H6 exists to prevent. Same reasoning as waitSignal.
+            if (nodeImpl.sideEffect && !result?.waitSignal && !result?.retryAfterMs) {
                 await WorkflowExecution.updateOne(
                     { _id: executionId },
                     {
-                        $addToSet: { committedNodeIds: nodeId },
-                        $set: { [`committedEffects.${nodeId}`]: { port: result?.nextPort || 'output', output: result?.output || {} } }
+                        $addToSet: { committedNodeIds: nodeKey },
+                        $set: { [`committedEffects.${tokenKeyFor(nodeKey)}`]: { port: result?.nextPort || 'output', output: result?.output || {} } }
                     }
                 );
             }
         }
         // result: { nextPort, output, waitSignal? }
+
+        // ── Row 27: a join node that has not yet seen every arrival ─────────────
+        // This arrival's token is consumed by the barrier. Retire it and stop; the
+        // FINAL arrival is the one that routes onward.
+        if (result?.absorbToken) {
+            await WorkflowExecution.updateOne(
+                { _id: executionId, 'history._id': histEntryId },
+                { $set: {
+                    'history.$.status':     'skipped',
+                    'history.$.finishedAt': new Date(),
+                    'history.$.output':     redactForHistory(result.output || {})
+                } }
+            );
+            if (usesBranchCounting) await settleBranches(executionId, -1);
+            return;
+        }
+
+        // ── H6 FIX: backpressure defers the node, it does not drop the branch ──
+        // send_whatsapp / send_email used to convert a rate limit into a routing
+        // decision ('rate_limit' / 'limit_reached'). Those ports are optional on the
+        // canvas, so when unwired the branch simply terminated — reported as a
+        // COMPLETED execution with no message ever sent and no retry. A node can now
+        // ask to be re-run later instead: the token stays with this node.
+        if (result?.retryAfterMs) {
+            // Release the claim so the re-delivery can re-run this node. Do NOT
+            // settle — no token is consumed or produced here.
+            await WorkflowExecution.updateOne(
+                { _id: executionId },
+                { $pull: { claimedNodeIds: nodeKey }, $unset: { [`nodeTokens.${tokenKeyFor(nodeKey)}`]: '' } }
+            );
+            await WorkflowExecution.updateOne(
+                { _id: executionId, 'history._id': histEntryId },
+                { $set: {
+                    'history.$.status':     'skipped',
+                    'history.$.finishedAt': new Date(),
+                    'history.$.durationMs': Date.now() - startedAt.getTime(),
+                    'history.$.error':      `Deferred ${result.retryAfterMs}ms: ${result.retryReason || 'backpressure'}`,
+                    'history.$.output':     result.output || {}
+                } }
+            );
+            // A deferral can outlive the execution's deadline (an email deferred to
+            // the next UTC day), so push the deadline out to cover it.
+            await WorkflowExecution.updateOne(
+                { _id: executionId, expiresAt: { $ne: null, $lt: new Date(Date.now() + result.retryAfterMs) } },
+                { $set: { expiresAt: new Date(Date.now() + result.retryAfterMs + 3600 * 1000) } }
+            );
+            // Reuse THIS node's token so the re-run is not mistaken for a join arrival.
+            await getQueue().enqueueNode(executionId, nodeId, result.retryAfterMs, node.type, tokenId || undefined, iterPath, iterItem);
+            console.warn(
+                `[WorkflowEngine] Node "${nodeId}" deferred ${result.retryAfterMs}ms ` +
+                `(${result.retryReason || 'backpressure'}) for execution ${executionId}.`
+            );
+            return;
+        }
 
         const outputPort = result?.nextPort || 'output';
         const outputData = result?.output || {};
@@ -730,10 +1293,13 @@ const executeNode = async (executionId, nodeId) => {
         await WorkflowExecution.updateOne(
             { _id: executionId, 'history._id': histEntryId },
             { $set: {
-                'history.$.status':     'completed',
+                // M-E10 FIX: a ledger replay did no work — record it as 'skipped' so the
+                // timeline distinguishes it from a genuine execution of the node.
+                'history.$.status':     replayedFromLedger ? 'skipped' : 'completed',
                 'history.$.finishedAt': new Date(),
                 'history.$.durationMs': Date.now() - startedAt.getTime(),
-                'history.$.output':     outputData
+                // H15 FIX: node output can carry an API response body / credentials.
+                'history.$.output':     redactForHistory(outputData)
             } }
         );
 
@@ -741,6 +1307,18 @@ const executeNode = async (executionId, nodeId) => {
         // If the node needs to wait for an external signal, pause the execution
         if (result?.waitSignal) {
             const { signalType, channelId, waitUntil, resolvedPort } = result.waitSignal;
+
+            // ── H3 FIX: park the execution BEFORE the signal is discoverable ──
+            // The signal used to be created three awaits before status became
+            // 'waiting'. An inbound reply landing in that window claimed the signal,
+            // found the execution still 'running', warned and returned — consuming
+            // the signal and stranding the execution in 'waiting' forever (the
+            // timeout job then found nothing 'pending'). WhatsApp auto-replies and
+            // keyword replies land in exactly that window.
+            await WorkflowExecution.updateOne(
+                { _id: executionId, status: { $nin: ['failed', 'cancelled', 'completed'] } },
+                { $set: { status: 'waiting', waitingUntil: waitUntil, waitSignalType: signalType } }
+            );
 
             // Create the wait signal document
             const signal = await WorkflowWaitSignal.create({
@@ -752,7 +1330,14 @@ const executeNode = async (executionId, nodeId) => {
                 channelId:   channelId || null,
                 expectedBy:  waitUntil,
                 resolvedPort: resolvedPort || null,
-                status:      'pending'
+                status:      'pending',
+                // Row 27: carry the iteration across the park/resume boundary. A wait
+                // inside a For Each body is parked once per item, and both resume paths
+                // must re-enter the SAME iteration namespace — otherwise every
+                // iteration's successor collapses onto the bare nodeId claim key and
+                // all but the first are retired as phantom join arrivals.
+                iterPath:    iterPath || '',
+                iterItem
             });
 
             // Schedule a BullMQ timeout job
@@ -762,16 +1347,14 @@ const executeNode = async (executionId, nodeId) => {
             await WorkflowWaitSignal.findByIdAndUpdate(signal._id, {
                 $set: { timeoutBullJobId: timeoutJob.id }
             });
-
-            // Pause the execution (atomic $set — no full-document save).
-            await WorkflowExecution.updateOne(
-                { _id: executionId },
-                { $set: { status: 'waiting', waitingUntil: waitUntil, waitSignalType: signalType } }
-            );
+            // (H3: the execution was already parked above, before the signal existed.)
 
             console.log(`[WorkflowEngine] Execution ${executionId} paused at node "${nodeId}" waiting for ${signalType} until ${waitUntil}`);
             return;
         }
+
+        // Row 27: successors inherit this node's iteration unless it is itself a loop.
+        const nextIterPath = iterPath;
 
         // ── DETERMINE NEXT NODES ──────────────────────────────────────────
         // BUG #6 FIX (port-fallback misrouting): match ONLY connections leaving
@@ -786,11 +1369,55 @@ const executeNode = async (executionId, nodeId) => {
         // success branch — causing downstream "wait for reply" nodes to wait forever
         // for a reply to a message that was never sent. When an alternate/error port
         // is unwired, this branch is simply terminal (matches ConditionNode behavior).
-        const finalConns = workflowGraph.connections.filter(c => {
-            if (c.sourceNodeId !== nodeId) return false;
-            if (outputPort === 'output') return c.sourcePort === 'output' || !c.sourcePort;
-            return c.sourcePort === outputPort;
-        });
+        const finalConns = connectionsFromPort(workflowGraph.connections, nodeId, outputPort);
+
+        // ── Row 27: for_each fan-out ──────────────────────────────────────────
+        // A loop node emits one token per ITEM rather than one per successor. Each
+        // item gets its own iteration path, so the body subgraph's claim keys are
+        // independent and the same node can run once per item. No back-edge is
+        // involved, which is why the single-claim invariant (and the publish-time
+        // cycle rejection) stays intact.
+        if (result?.forEach) {
+            const items = Array.isArray(result.forEach.items) ? result.forEach.items : [];
+            const bodyConns = finalConns;   // connections leaving the port the node emitted
+
+            if (items.length === 0 || bodyConns.length === 0) {
+                // Nothing to iterate: this branch simply ends here.
+                if (usesBranchCounting) {
+                    const settled = await settleBranches(executionId, -1);
+                    if (!settled) return;
+                }
+                console.log(`[WorkflowEngine] for_each "${nodeId}" produced no iterations for execution ${executionId}.`);
+                return;
+            }
+
+            const total = items.length * bodyConns.length;
+            // Record the fan-out width so a downstream join knows what to wait for.
+            await WorkflowExecution.updateOne(
+                { _id: executionId },
+                { $set: { [`loopCounts.${tokenKeyFor(claimKey(nodeId, iterPath))}`]: items.length } }
+            );
+
+            if (usesBranchCounting) {
+                // This node consumed one token and produced `total`.
+                const settled = await settleBranches(executionId, total - 1);
+                if (!settled) {
+                    console.warn(`[WorkflowEngine] Execution ${executionId} is terminal; not fanning out "${nodeId}".`);
+                    return;
+                }
+            }
+
+            const q = getQueue();
+            for (let i = 0; i < items.length; i++) {
+                const childPath = `${iterPath ? `${iterPath}/` : ''}${nodeId}#${i}`;
+                for (const conn of bodyConns) {
+                    const targetNode = workflowGraph.nodes.find(n => n.id === conn.targetNodeId);
+                    await q.enqueueNode(executionId, conn.targetNodeId, 0, targetNode?.type, undefined, childPath, items[i]);
+                }
+            }
+            console.log(`[WorkflowEngine] for_each "${nodeId}" fanned out ${items.length} iteration(s) × ${bodyConns.length} branch(es) for execution ${executionId}.`);
+            return;
+        }
 
         // ── BRANCH LIFECYCLE (L2 FIX) ─────────────────────────────────────
         if (usesBranchCounting) {
@@ -801,7 +1428,18 @@ const executeNode = async (executionId, nodeId) => {
             // enqueued node can't drain the counter to zero before we've counted its
             // siblings (for finalConns.length >= 1 the delta is >= 0, so the counter
             // never dips here; a terminal node's -1 is the only decrement).
-            await settleBranches(executionId, finalConns.length - 1);
+            const settled = await settleBranches(executionId, finalConns.length - 1);
+            // C7 FIX: settleBranches returns null when the execution is ALREADY
+            // terminal (failed/cancelled/completed) — its only signal that we must
+            // stop. Both call sites discarded it, so a terminal execution kept
+            // enqueueing successors and ran on as a zombie.
+            if (!settled) {
+                console.warn(
+                    `[WorkflowEngine] Execution ${executionId} is already terminal; ` +
+                    `not enqueueing successors of "${nodeId}".`
+                );
+                return;
+            }
             if (finalConns.length === 0) {
                 console.log(`[WorkflowEngine] Branch ended at terminal node "${nodeId}" for execution ${executionId}.`);
                 return;
@@ -826,8 +1464,13 @@ const executeNode = async (executionId, nodeId) => {
         for (const conn of finalConns) {
             // ARCH #2: Pass the target node type so the queue can prioritize
             const targetNode = workflowGraph.nodes.find(n => n.id === conn.targetNodeId);
-            await queue.enqueueNode(executionId, conn.targetNodeId, 0, targetNode?.type);
-            console.log(`[WorkflowEngine] Queued next node "${conn.targetNodeId}" for execution ${executionId}`);
+            // C3 FIX: each successor is a distinct branch token (enqueueNode mints
+            // one when none is passed). Distinct tokens are what let the claim guard
+            // recognise a genuine join, while a re-delivery reuses its own token.
+            // Row 27: successors stay in the SAME iteration — only a for_each node
+            // opens a new one (it does its own enqueueing, below).
+            await queue.enqueueNode(executionId, conn.targetNodeId, 0, targetNode?.type, undefined, nextIterPath, iterItem);
+            console.log(`[WorkflowEngine] Queued next node "${conn.targetNodeId}"${nextIterPath ? ` [${nextIterPath}]` : ''} for execution ${executionId}`);
         }
 
     } catch (err) {
@@ -838,7 +1481,7 @@ const executeNode = async (executionId, nodeId) => {
         // hit the dedup guard above and be silently skipped, swallowing the retry.
         await WorkflowExecution.updateOne(
             { _id: executionId },
-            { $pull: { claimedNodeIds: nodeId } }
+            { $pull: { claimedNodeIds: nodeKey } }
         ).catch(() => { /* best-effort; original error is re-thrown below */ });
 
         if (execution) {
@@ -873,7 +1516,10 @@ const executeNode = async (executionId, nodeId) => {
                 const queue = getQueue();
                 for (const conn of errorConns) {
                     const targetNode = (workflowGraph?.nodes || []).find(n => n.id === conn.targetNodeId);
-                    await queue.enqueueNode(executionId, conn.targetNodeId, 0, targetNode?.type);
+                    // Row 27: the error branch stays in the failing node's iteration.
+                    // Dropping it here sent every iteration's error handler to the top
+                    // level, where they collided on one claim key.
+                    await queue.enqueueNode(executionId, conn.targetNodeId, 0, targetNode?.type, undefined, iterPath, iterItem);
                 }
 
                 if (usesBranchCounting) {
@@ -886,17 +1532,37 @@ const executeNode = async (executionId, nodeId) => {
                     return;
                 }
                 // Legacy execution: preserve the original (rethrow) behavior.
-            } else {
-                // Fail the execution (atomic $set, guarded so we don't overwrite a
-                // terminal state a sibling branch may have set). A hard failure ends
-                // the whole run, so no branch settling is needed.
+            } else if (attempt >= maxAttempts) {
+                // ── C7 FIX: only declare terminal failure once retries are spent ──
+                // Previously EVERY attempt set status:'failed' and then rethrew so
+                // BullMQ would retry — two contradictory policies at once. A
+                // transient blip on attempt 1 marked the run failed; attempt 2 then
+                // succeeded and carried on to completion, leaving an execution that
+                // permanently displayed 'failed' with completedAt set while every
+                // node actually ran. Analytics counted it as a failure, the timeout
+                // enforcer could not see it (not running/waiting), and a wait node
+                // could never resume it.
                 await WorkflowExecution.updateOne(
                     { _id: executionId, status: { $nin: ['completed', 'cancelled'] } },
                     { $set: {
                         status:       'failed',
-                        errorMessage: `Node "${nodeId}" failed: ${err.message}`,
+                        errorMessage: `Node "${nodeId}" failed after ${attempt} attempt(s): ${err.message}`,
                         completedAt:  new Date()
                     } }
+                );
+            } else {
+                // Transient: leave the execution 'running' so BullMQ's retry is a
+                // clean re-run of just this node. The claim was released above and
+                // committedNodeIds makes any already-performed side effect replay
+                // instead of repeat.
+                await WorkflowExecution.updateOne(
+                    { _id: executionId },
+                    { $inc: { retryCount: 1 },
+                      $set: { nextRetryAt: new Date(Date.now() + 2000 * 2 ** (attempt - 1)) } }
+                );
+                console.warn(
+                    `[WorkflowEngine] Node "${nodeId}" failed (attempt ${attempt}/${maxAttempts}) ` +
+                    `for execution ${executionId}; will retry: ${err.message}`
                 );
             }
         }
@@ -904,6 +1570,12 @@ const executeNode = async (executionId, nodeId) => {
         // Re-throw so BullMQ can handle retry logic (hard-failure path, and legacy
         // continueOnError executions).
         throw err;
+    } finally {
+        // H20 FIX: the slot MUST be returned on every exit path — success, deferral,
+        // early return and throw alike — or a tenant leaks capacity until the TTL.
+        if (slotTenantId) {
+            await releaseTenantSlot(slotTenantId);
+        }
     }
 };
 
@@ -933,15 +1605,28 @@ const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort,
 
         // BUG #2 FIX: Build a precise query that never accidentally matches signals
         // from other tenants or channels.
+        // ── M-E4 FIX: tenantId is now REQUIRED, not "optional extra safety" ──────
+        // With `channelId: null` (which is what WaitNode's duration mode creates —
+        // signalType TIMEOUT, no channel) and no tenant scope, this query matches
+        // EVERY tenant's null-channel pending signals. Both current callers do pass
+        // tenantId, so this was latent rather than live — but a future caller that
+        // forgot would silently resume other tenants' workflows. Fail loudly instead.
+        if (!tenantId) {
+            console.error(
+                `[WorkflowEngine] resolveWaitSignal called for ${signalType} without a tenantId — ` +
+                `refusing to run an unscoped, cross-tenant signal query.`
+            );
+            return;
+        }
+
         const signalQuery = {
+            tenantId,
             signalType,
             // When channelId is null/undefined, explicitly query for null — not { $exists: true }
             // This prevents cross-tenant signal leakage.
             channelId: channelId || null,
             status:    'pending'
         };
-        // Optional extra safety: scope to tenant if caller provides it
-        if (tenantId) signalQuery.tenantId = tenantId;
 
         // ── BUG #11 FIX: resume ALL workflows waiting on this channel ───────────
         // Previously this claimed only the OLDEST pending signal, so if several
@@ -961,6 +1646,25 @@ const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort,
                 { new: false, sort: { createdAt: 1 } } // Oldest pending signal first
             );
             if (!signal) break; // No (more) waiting signals — normal traffic.
+
+            // ── H10 FIX: never let a stale signal shadow a live one ─────────────
+            // The query has no execution-state filter, so a signal left 'pending' by
+            // a cancelled/failed execution still matches. It would be claimed here,
+            // discarded by resumeFromSignal, and consumed — meaning a genuinely
+            // waiting execution on the SAME channel never got this reply. Retire it
+            // and keep scanning instead.
+            const live = await WorkflowExecution.exists({ _id: signal.executionId, status: 'waiting' });
+            if (!live) {
+                await WorkflowWaitSignal.updateOne(
+                    { _id: signal._id },
+                    { $set: { status: 'cancelled', receivedAt: new Date() } }
+                );
+                console.warn(
+                    `[WorkflowEngine] Retired stale ${signal.signalType} signal ${signal._id} ` +
+                    `(execution ${signal.executionId} is no longer waiting).`
+                );
+                continue;
+            }
 
             // Resume each workflow in isolation so a failure on one does not stop
             // the others from resuming.
@@ -994,10 +1698,38 @@ const resumeFromSignal = async (signal, { payload, resolvedPort }) => {
             }
         }
 
-        // Resume the execution from the next node(s) after the wait node.
-        const execution = await WorkflowExecution.findById(signal.executionId);
-        if (!execution || execution.status !== 'waiting') {
-            console.warn(`[WorkflowEngine] Execution ${signal.executionId} is not in 'waiting' state. Ignoring signal.`);
+        // ── H3 FIX: claim the execution atomically, and re-arm rather than drop ──
+        // Previously a plain read + `status !== 'waiting'` check silently discarded
+        // the signal. With the parking order fixed the window is essentially closed,
+        // but a short retry keeps this correct even if the parker is mid-flight, and
+        // re-arming the signal on genuine failure means the reconciler or the next
+        // event can still resume the workflow instead of it being lost.
+        let execution = null;
+        for (let attempt = 0; attempt < 6; attempt++) {
+            execution = await WorkflowExecution.findOneAndUpdate(
+                { _id: signal.executionId, status: 'waiting' },
+                { $set: { status: 'running', waitingUntil: null, waitSignalType: null } },
+                { new: true }
+            );
+            if (execution) break;
+
+            const cur = await WorkflowExecution.findById(signal.executionId).select('status').lean();
+            if (!cur || ['completed', 'failed', 'cancelled'].includes(cur.status)) {
+                console.warn(`[WorkflowEngine] Execution ${signal.executionId} is ${cur?.status || 'gone'}; dropping signal.`);
+                return;
+            }
+            await new Promise(r => setTimeout(r, 50 * (attempt + 1)));
+        }
+        if (!execution) {
+            // Put the signal back so it is not consumed for nothing.
+            await WorkflowWaitSignal.updateOne(
+                { _id: signal._id, status: 'received' },
+                { $set: { status: 'pending', receivedAt: null } }
+            ).catch(() => {});
+            console.error(
+                `[WorkflowEngine] Could not claim execution ${signal.executionId} for ${signal.signalType}; ` +
+                `signal re-armed for the next event / reconciler.`
+            );
             return;
         }
 
@@ -1021,15 +1753,11 @@ const resumeFromSignal = async (signal, { payload, resolvedPort }) => {
             workflowGraph = { nodes: liveWf.nodes, connections: liveWf.connections };
         }
 
-        const nextConns = workflowGraph.connections.filter(
-            c => c.sourceNodeId === signal.nodeId && c.sourcePort === port
-        );
+        const nextConns = connectionsFromPort(workflowGraph.connections, signal.nodeId, port);
 
-        // Resume (atomic $set — no full-document save; BUG #9).
-        await WorkflowExecution.updateOne(
-            { _id: execution._id },
-            { $set: { status: 'running', waitingUntil: null, waitSignalType: null } }
-        );
+        // (H3: status was already flipped waiting → running by the atomic claim above,
+        // so the previous unconditional $set here is gone — it would have re-opened
+        // the very race the claim closes.)
 
         // L2 FIX: the parked wait token is consumed here and produces one per
         // next node (net = nextConns.length - 1). settleBranches completes the
@@ -1037,7 +1765,12 @@ const resumeFromSignal = async (signal, { payload, resolvedPort }) => {
         // (no counter) keep the original terminal-completes behavior.
         const usesBranchCounting = typeof execution.activeBranches === 'number';
         if (usesBranchCounting) {
-            await settleBranches(execution._id.toString(), nextConns.length - 1);
+            const settled = await settleBranches(execution._id.toString(), nextConns.length - 1);
+            // C7 FIX: null means the execution went terminal underneath us.
+            if (!settled) {
+                console.warn(`[WorkflowEngine] Execution ${execution._id} is terminal; not resuming after signal.`);
+                return;
+            }
             if (nextConns.length === 0) return; // branch ended; settleBranches handled completion
         } else if (nextConns.length === 0) {
             await WorkflowExecution.updateOne(
@@ -1050,7 +1783,12 @@ const resumeFromSignal = async (signal, { payload, resolvedPort }) => {
         const queue = getQueue();
         for (const conn of nextConns) {
             const targetNode = workflowGraph.nodes.find(n => n.id === conn.targetNodeId);
-            await queue.enqueueNode(execution._id.toString(), conn.targetNodeId, 0, targetNode?.type);
+            // Row 27: resume INTO the iteration the wait was parked in (recorded on
+            // the signal), not at the top level.
+            await queue.enqueueNode(
+                execution._id.toString(), conn.targetNodeId, 0, targetNode?.type,
+                undefined, signal.iterPath || '', signal.iterItem
+            );
         }
     } catch (err) {
         console.error(`[WorkflowEngine] resumeFromSignal error (exec ${signal?.executionId}):`, err.message);
@@ -1088,13 +1826,16 @@ const resolveTimeoutSignal = async (executionId, nodeId, signalId) => {
         }
 
         // Follow resolvedPort, or fallback to 'timeout'/'no_reply'
+        // A duration wait resolves to 'output', so it needs the same legacy-connection
+        // fallback as ordinary routing — comparing sourcePort directly made a legacy
+        // wait node resume to nothing and silently end the branch.
         const resolvedPort = signal.resolvedPort;
-        const timeoutConns = workflowGraph.connections.filter(
-            c => c.sourceNodeId === nodeId && (
-                (resolvedPort && c.sourcePort === resolvedPort) ||
-                (!resolvedPort && (c.sourcePort === 'timeout' || c.sourcePort === 'no_reply'))
-            )
-        );
+        const timeoutConns = resolvedPort
+            ? connectionsFromPort(workflowGraph.connections, nodeId, resolvedPort)
+            : [
+                ...connectionsFromPort(workflowGraph.connections, nodeId, 'timeout'),
+                ...connectionsFromPort(workflowGraph.connections, nodeId, 'no_reply')
+              ];
 
         // Resume from the timeout branch (atomic $set — no full-document save so we
         // don't clobber a concurrent sibling branch's variables/history; BUG #9).
@@ -1108,7 +1849,12 @@ const resolveTimeoutSignal = async (executionId, nodeId, signalId) => {
         // (no counter) keep the original terminal-completes behavior.
         const usesBranchCounting = typeof execution.activeBranches === 'number';
         if (usesBranchCounting) {
-            await settleBranches(executionId, timeoutConns.length - 1);
+            const settled = await settleBranches(executionId, timeoutConns.length - 1);
+            // C7 FIX: null means the execution went terminal underneath us.
+            if (!settled) {
+                console.warn(`[WorkflowEngine] Execution ${executionId} is terminal; not following the timeout branch.`);
+                return;
+            }
             if (timeoutConns.length === 0) return; // branch ended; settleBranches handled completion
         } else if (timeoutConns.length === 0) {
             await WorkflowExecution.findByIdAndUpdate(executionId, {
@@ -1120,7 +1866,11 @@ const resolveTimeoutSignal = async (executionId, nodeId, signalId) => {
         const queue = getQueue();
         for (const conn of timeoutConns) {
             const targetNode = workflowGraph.nodes.find(n => n.id === conn.targetNodeId);
-            await queue.enqueueNode(executionId, conn.targetNodeId, 0, targetNode?.type);
+            // Row 27: the timeout branch resumes in the iteration the wait belonged to.
+            await queue.enqueueNode(
+                executionId, conn.targetNodeId, 0, targetNode?.type,
+                undefined, signal.iterPath || '', signal.iterItem
+            );
         }
 
         console.log(`[WorkflowEngine] Timeout fired for execution ${executionId} at node "${nodeId}"`);

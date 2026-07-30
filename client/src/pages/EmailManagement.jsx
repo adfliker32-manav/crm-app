@@ -7,12 +7,22 @@ import EmailTemplates from '../components/Email/EmailTemplates';
 import EmailInbox from '../components/Email/EmailInbox';
 import EmailSettings from '../components/Email/EmailSettings';
 import EmailAnalytics from '../components/Email/EmailAnalytics';
+import EmailLogs from '../components/Email/EmailLogs';
+import EmailCampaigns from '../components/Email/EmailCampaigns';
+import { hasEmailPermission } from '../components/Email/emailPermissions';
 
-const TABS = [
+const ALL_TABS = [
     { id: 'inbox',     label: 'Inbox',      icon: 'fa-inbox' },
     { id: 'templates', label: 'Templates',   icon: 'fa-layer-group' },
+    { id: 'campaigns', label: 'Campaigns',   icon: 'fa-bullhorn' },
+    // Delivery log: the /email-logs/logs endpoint was fully implemented but had
+    // no UI, so a failed send showed only as a count with no way to see which
+    // message failed, to whom, or why.
+    { id: 'logs',      label: 'Delivery',    icon: 'fa-list-check' },
     { id: 'analytics', label: 'Analytics',   icon: 'fa-chart-pie' },
-    { id: 'settings',  label: 'Config',      icon: 'fa-sliders' },
+    // Config reads and writes need accessSettings on the server, so the tab is
+    // hidden without it rather than rendering a form that cannot save.
+    { id: 'settings',  label: 'Config',      icon: 'fa-sliders', requires: 'accessSettings' },
 ];
 
 const MiniStat = ({ value, label, color }) => (
@@ -24,8 +34,15 @@ const MiniStat = ({ value, label, color }) => (
 
 const EmailManagement = () => {
     const { user } = useAuth();
-    const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
-    const canViewEmails = canManageTeam || user?.permissions?.viewEmails === true;
+    // Must mirror the server gate exactly (checkPermission: manager/superadmin
+    // bypass, everyone else needs the explicit permission). Previously this also
+    // accepted `manageTeam`, so an agent with manageTeam but without viewEmails
+    // was shown the whole Email Center while every API call behind it returned
+    // 403 — a page of controls that could not do anything.
+    const canViewEmails = hasEmailPermission(user, 'viewEmails');
+
+    // Only render tabs whose backing endpoints this user may actually call.
+    const TABS = ALL_TABS.filter(t => !t.requires || hasEmailPermission(user, t.requires));
 
     const [activeTab, setActiveTab] = useState('inbox');
     const [stats, setStats] = useState({
@@ -34,6 +51,10 @@ const EmailManagement = () => {
     });
     const [lastFetched, setLastFetched] = useState(null);
     const [statsError, setStatsError] = useState(false);
+
+    // Inbox is a full-height email client — the stats bar (also on the Analytics
+    // tab) only steals its vertical space, so show the summary on Templates only.
+    const showStats = activeTab === 'templates';
 
     const fetchAnalytics = useCallback(async () => {
         try {
@@ -47,13 +68,15 @@ const EmailManagement = () => {
         }
     }, []);
 
-    useEffect(() => { fetchAnalytics(); }, [fetchAnalytics]);
+    // Only fetch when the summary is actually rendered. This ran on every mount
+    // regardless of tab, so opening the Email Center on the default Inbox tab
+    // fired a 4-query analytics aggregation whose result was never displayed —
+    // and opening the Analytics tab then ran the whole thing a second time.
+    useEffect(() => {
+        if (showStats) fetchAnalytics();
+    }, [showStats, fetchAnalytics]);
 
     if (!canViewEmails) return <Navigate to="/dashboard" replace />;
-
-    // Inbox is a full-height email client — the stats bar (also on the Analytics
-    // tab) only steals its vertical space, so show the summary on Templates only.
-    const showStats = activeTab === 'templates';
 
     return (
         <div className="h-full flex flex-col bg-slate-50/50 font-sans animate-fade-in-up overflow-hidden">
@@ -133,6 +156,8 @@ const EmailManagement = () => {
                 <div className={`h-full ${activeTab === 'inbox' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
                     {activeTab === 'inbox'     && <EmailInbox />}
                     {activeTab === 'templates' && <EmailTemplates />}
+                    {activeTab === 'campaigns' && <EmailCampaigns />}
+                    {activeTab === 'logs'      && <EmailLogs />}
                     {activeTab === 'analytics' && <EmailAnalytics />}
                     {activeTab === 'settings'  && <EmailSettings />}
                 </div>

@@ -28,6 +28,14 @@ const deleteLimiter = rateLimit({
     message: { success: false, error: 'rate_limit', message: 'Too many delete requests. Please wait.' }
 });
 
+// Dedicated limiter for bulk export. Kept separate from bulkLimiter so a legit
+// CSV import or sheet-sync does not consume the export budget (and vice-versa).
+const exportLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10,
+    message: { success: false, error: 'rate_limit', message: 'Too many exports. Please wait 15 minutes.' }
+});
+
 // ==========================
 // 📌 Lead Routes (With Permission Protection)
 // (Prefix '/api/leads' comes from index.js)
@@ -86,8 +94,8 @@ router.post('/bulk-delete', authMiddleware, deleteLimiter, checkPermission('dele
 router.post('/bulk-status', authMiddleware, checkPermission('editLeads'), leadController.bulkUpdateStatus);
 
 // 7.9 Bulk Export Leads (MUST BE BEFORE /:id routes!)
-// Owner-only + server-side audit logged. bulkLimiter throttles mass-export abuse.
-router.post('/export', authMiddleware, bulkLimiter, leadController.exportLeads);
+// Owner-only + server-side audit logged. exportLimiter throttles mass-export abuse.
+router.post('/export', authMiddleware, exportLimiter, leadController.exportLeads);
 
 // 8. Get All Leads
 router.get('/', authMiddleware, checkPermission('viewLeads'), leadController.getLeads);

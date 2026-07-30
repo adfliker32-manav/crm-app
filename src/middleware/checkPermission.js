@@ -9,7 +9,7 @@
  */
 
 const checkPermission = (permissionName) => {
-    return (req, res, next) => {
+    const middleware = (req, res, next) => {
         // Managers and Super Admins bypass all permission checks
         if (req.user.role === 'manager' || req.user.role === 'superadmin') {
             return next();
@@ -26,6 +26,14 @@ const checkPermission = (permissionName) => {
         // Permission granted
         next();
     };
+
+    // Naming the returned function makes the gate visible when walking an
+    // Express router stack, so a test can assert that a route is actually
+    // protected instead of trusting that someone remembered to add it.
+    Object.defineProperty(middleware, 'name', { value: `checkPermission:${permissionName}` });
+    middleware.permission = permissionName;
+
+    return middleware;
 };
 
 module.exports = checkPermission;

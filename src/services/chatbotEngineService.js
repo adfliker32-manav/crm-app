@@ -2956,7 +2956,14 @@ const executeAction = async (actionData, session, conversation) => {
                                 emailBody = emailBody.replace(new RegExp(`{{${key}}}`, 'g'), val);
                             });
                         }
-                        await sendEmail({ to: emailTo, subject: emailSubject, text: emailBody, userId: session.userId });
+                        await sendEmail({
+                            to: emailTo,
+                            subject: emailSubject,
+                            text: emailBody,
+                            userId: session.userId,
+                            isAutomated: true,
+                            triggerType: 'chatbot'
+                        });
                         console.log(`📧 Chatbot sent email to ${emailTo}`);
                     }
                 } catch (emailErr) {

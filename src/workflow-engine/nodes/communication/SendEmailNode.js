@@ -3,7 +3,17 @@ const User          = require('../../../models/User');
 const { sendEmail } = require('../../../services/emailService');
 const { replaceVariables, wrapEmailHtml } = require('../../../utils/emailTemplateUtils');
 // RATE #3 FIX: Per-tenant daily email limit tracking
-const { checkEmailDailyLimit } = require('../../../utils/workflowRateLimiter');
+// Read-only peek: the counter is actually consumed inside sendEmail() so that
+// every automated sender shares one per-tenant daily budget. Incrementing here
+// as well would charge two slots for a single email.
+//
+// M-N3 NOTE (accepted TOCTOU): peek-then-send means N concurrent branches can all
+// observe count < limit and all send, overshooting by up to the worker concurrency
+// (10). That is deliberate: the alternative — consuming a slot here — double-charges
+// every email, which is a worse bug. The 300/day cap already sits well under Gmail's
+// ~500/day, so a ~10 overshoot stays inside the safety margin. Tighten
+// WF_EMAIL_RATE_PER_DAY rather than moving the counter.
+const { peekEmailDailyLimit } = require('../../../utils/workflowRateLimiter');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SendEmailNode
@@ -17,6 +27,7 @@ const { checkEmailDailyLimit } = require('../../../utils/workflowRateLimiter');
 const SendEmailNode = {
     type: 'send_email',
     sideEffect: true, // L4/L5: real send — dry-run in Test Mode, idempotent on retry
+    slow: true,       // L-6: SMTP latency — lower queue priority than logic nodes
 
     meta: () => ({
         type:     'send_email',
@@ -69,21 +80,37 @@ const SendEmailNode = {
         const tenantId = context.tenantId.toString();
 
         if (!lead?.email) {
-            console.warn('[SendEmailNode] Lead has no email address. Skipping.');
-            return { nextPort: 'output', output: { 'email.skipped': true, 'email.reason': 'no_email' } };
+            // M-N1 FIX: was routing to 'output' (labelled "Sent"), so a lead with no
+            // email address counted as a successful send in both the graph and the
+            // analytics. The 'error' port is the honest signal.
+            console.warn('[SendEmailNode] Lead has no email address. Routing to error port.');
+            return { nextPort: 'error', output: { 'email.skipped': true, 'email.error': 'no_email' } };
         }
 
         // RATE #3 FIX: Check per-tenant daily email send limit before sending.
         // Gmail SMTP and most SMTP providers cap sending at a few hundred/day.
         // Exceeding this causes delivery failures and SMTP account blocks.
-        const dailyCheck = await checkEmailDailyLimit(tenantId);
+        const dailyCheck = await peekEmailDailyLimit(tenantId);
         if (!dailyCheck.allowed) {
+            // H6 FIX: DEFER until the daily counter rolls over instead of routing to
+            // the optional 'limit_reached' port. Unwired, that port terminated the
+            // branch, so once a tenant crossed the cap EVERY remaining email that day
+            // was silently dropped while executions reported 'completed'.
+            // The counter key is partitioned by UTC date (workflowRateLimiter
+            // todayKey()), so the next UTC midnight is when capacity returns.
+            const now = new Date();
+            const nextUtcMidnight = Date.UTC(
+                now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1
+            );
+            const retryAfterMs = Math.max(60_000, Math.min(nextUtcMidnight - now.getTime() + 60_000, 24 * 3600 * 1000));
             console.warn(
                 `[SendEmailNode] Tenant ${tenantId} daily email limit reached ` +
-                `(${dailyCheck.count}/${dailyCheck.limit}). Email to ${lead.email} skipped.`
+                `(${dailyCheck.count}/${dailyCheck.limit}). Deferring email to ${lead.email} ` +
+                `by ${Math.round(retryAfterMs / 60000)} min.`
             );
             return {
-                nextPort: 'limit_reached',
+                retryAfterMs,
+                retryReason: 'email_daily_limit',
                 output: {
                     'email.limitReached': true,
                     'email.dailyCount':   dailyCheck.count,
@@ -95,6 +122,18 @@ const SendEmailNode = {
         const user = await User.findById(tenantId).select('name companyName').lean();
 
         // Build template data from execution variables
+        // M-N2 FIX: this used to spread ALL execution variables (`...context.getAll()`)
+        // into the template data, so any accumulated value — an http.response body, a
+        // flattened webhook field, a credential-looking variable — could be
+        // interpolated into a customer-facing email. Pass an explicit allow-list plus
+        // the lead/webhook namespaces authors actually reference.
+        const allVars = context.getAll();
+        const SAFE_VAR_PREFIXES = ['lead.', 'webhook.', 'signal.', 'switch.', 'condition.', 'ai.classification'];
+        const safeVars = {};
+        for (const [k, v] of Object.entries(allVars)) {
+            if (SAFE_VAR_PREFIXES.some(p => k === p || k.startsWith(p))) safeVars[k] = v;
+        }
+
         const templateData = {
             leadName:    context.get('lead.name') || lead.name || '',
             leadEmail:   lead.email,
@@ -102,7 +141,7 @@ const SendEmailNode = {
             companyName: user?.companyName || '',
             userName:    user?.name || '',
             stageName:   context.get('lead.status') || lead.status || '',
-            ...context.getAll()
+            ...safeVars
         };
 
         const subject = replaceVariables(data.subject || '', templateData);
@@ -113,7 +152,13 @@ const SendEmailNode = {
                 to:     lead.email,
                 subject,
                 html:   wrapEmailHtml(body),
-                userId: tenantId
+                // Store the author-written body in the Inbox thread, not the
+                // 600px table shell wrapEmailHtml adds for the real email.
+                bodyForInbox: body,
+                userId: tenantId,
+                isAutomated: true,
+                triggerType: 'workflow',
+                leadId: lead._id
             });
         } catch (err) {
             console.error(`[SendEmailNode] Failed to send email to ${lead.email}:`, err.message);

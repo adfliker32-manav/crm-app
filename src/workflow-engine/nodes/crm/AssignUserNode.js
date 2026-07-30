@@ -1,5 +1,7 @@
+const mongoose = require('mongoose');
 const NodeRegistry = require('../../NodeRegistry');
 const Lead = require('../../../models/Lead');
+const User = require('../../../models/User');
 const { emitToUser } = require('../../../services/socketService');
 
 const AssignUserNode = {
@@ -32,6 +34,32 @@ const AssignUserNode = {
     execute: async (context, data) => {
         const lead = context.getLead();
         if (!lead) return { nextPort: 'output', output: {} };
+
+        // ── H1 FIX: the assignee MUST belong to this tenant ──────────────────
+        // The schema field is type:'user_select', so ownership was assumed to be
+        // enforced by the UI picker. But createWorkflow/updateWorkflow validate
+        // only the node TYPE (NodeRegistry.has) and never sanitise node.data, so a
+        // hand-crafted POST /api/workflows can set userId to a user in ANOTHER
+        // tenant. That both corrupted Lead.assignedTo across the tenant boundary
+        // and pushed the lead's id + name over Socket.IO into that foreign user's
+        // live session on every execution.
+        const tenantId = context.tenantId.toString();
+        const targetId = String(data.userId || '');
+
+        if (!mongoose.Types.ObjectId.isValid(targetId)) {
+            console.warn(`[AssignUserNode] Invalid userId "${targetId}" — skipping assignment.`);
+            return { nextPort: 'output', output: { 'assign.skipped': true, 'assign.reason': 'invalid_user_id' } };
+        }
+        // Valid assignees: the tenant owner itself, or one of its sub-users.
+        const inTenant = targetId === tenantId
+            || !!(await User.exists({ _id: targetId, parentId: tenantId }));
+        if (!inTenant) {
+            console.error(
+                `[AssignUserNode] Cross-tenant assignment BLOCKED: user ${targetId} ` +
+                `does not belong to tenant ${tenantId} (execution ${context.executionId}).`
+            );
+            return { nextPort: 'output', output: { 'assign.skipped': true, 'assign.reason': 'user_not_in_tenant' } };
+        }
 
         if (lead.assignedTo?.toString() !== data.userId?.toString()) {
             await Lead.findByIdAndUpdate(lead._id, {

@@ -4,6 +4,7 @@ const EmailLog = require('../models/EmailLog');
 const logEmail = async (logData) => {
     try {
         const {
+            _id, // optional pre-allocated id — the tracking pixel URL embeds it
             userId,
             to,
             subject,
@@ -24,6 +25,7 @@ const logEmail = async (logData) => {
         const wasTruncated = body ? body.length > MAX_BODY_LENGTH : false;
 
         const emailLog = new EmailLog({
+            ...(_id ? { _id } : {}),
             userId,
             to,
             subject,

@@ -88,28 +88,32 @@ app.use(helmet({
 
 // ⚠️ SECURITY: CORS must be restricted to known frontend origins.
 // Wide-open CORS allows any website to make authenticated API calls using stolen tokens.
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  'https://app.adfliker.com',
-  'http://localhost:5173',
-  'http://localhost:3000'
-].filter(Boolean);
+// The allowlist lives in src/config/allowedOrigins.js so the Express and
+// Socket.IO policies can never drift apart again.
+const { isAllowedOrigin } = require('./src/config/allowedOrigins');
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // No Origin header: server-to-server, curl, Meta/Razorpay webhooks.
+    // These carry no ambient browser credentials, so they are not a CORS risk.
+    if (!origin) return callback(null, true);
+
+    // ⚠️ EXACT match only — never startsWith(). A prefix test lets
+    // "https://app.adfliker.com.evil.com" and "http://localhost:3000.attacker.com"
+    // through, which hands an attacker's page read access to authenticated API
+    // responses (the browser honours the reflected Access-Control-Allow-Origin).
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  maxAge: 86400 // cache preflight 24h — removes a round-trip from every API call
+};
 
 // Apply CORS middleware only to API, Webhook, and Uploads endpoints.
 // Standard page navigations or redirects should not be blocked by CORS origin checks.
 app.use((req, res, next) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/webhook/') || req.path.startsWith('/uploads') || req.path.startsWith('/socket.io')) {
-    return cors({
-      origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, curl, Postman, webhooks)
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.some(allowed => origin.startsWith(allowed))) {
-          return callback(null, true);
-        }
-        callback(new Error('Not allowed by CORS'));
-      },
-      credentials: true
-    })(req, res, next);
+    return cors(corsOptions)(req, res, next);
   }
   next();
 });
@@ -332,6 +336,11 @@ mongoose.connect(MONGO_URI, {
       const { defineEmailJobs } = require('./src/services/emailQueueService');
       defineEmailJobs(agenda);
 
+      // Bulk email campaigns are drained in batches by Agenda so they survive
+      // restarts and can pause on the per-tenant daily cap.
+      const { defineCampaignJobs } = require('./src/services/campaignService');
+      defineCampaignJobs(agenda);
+
       // 4. Drip Sequence step jobs (PROCESS_SEQUENCE_STEP)
       const { defineSequenceJobs } = require('./src/services/sequenceService');
       defineSequenceJobs(agenda);
@@ -516,8 +525,18 @@ app.use('/api/features', require('./src/routes/featureRoutes'));
 // not a separate module). Mirrors the email/whatsapp/chatbot gates so a Basic-tier
 // user can't reach these APIs directly even if the nav is hidden.
 app.use('/api/automations', authMiddleware, requireModule('automations'), automationRoutes);
-app.use('/api/workflows',   authMiddleware, workflowRoutes); // New Workflow Engine
+// C1 FIX: NO mount-level authMiddleware here. workflowRoutes.js declares a public
+// POST /webhook/:id (authenticated by a per-workflow secret token) BEFORE its own
+// router.use(authMiddleware), and mount-level middleware runs first — so the
+// previous `app.use('/api/workflows', authMiddleware, ...)` 401'd every external
+// webhook delivery and made the WEBHOOK_RECEIVED trigger completely inert.
+// The router applies authMiddleware + requireModule('automations') to every other
+// route itself. Do not re-add auth on this line.
+app.use('/api/workflows',   workflowRoutes); // New Workflow Engine
 app.use('/api/workflow-library', authMiddleware, workflowLibraryRoutes); // Community Workflow Library
+// Rows 23 + 55: encrypted credential store for workflows. Auth + plan gate + the
+// manage capability are all applied inside the router.
+app.use('/api/workflow-secrets', require('./src/routes/workflowSecretRoutes'));
 app.use('/api/sequences', authMiddleware, requireModule('automations'), sequenceRoutes);
 app.use('/api/appointments', authMiddleware, appointmentRoutes);
 
@@ -729,10 +748,15 @@ const gracefulShutdown = async (signal, exitCode = 0) => {
 
   // Watchdog: if cleanup hangs (e.g. a stuck socket), force-exit so the platform
   // can restart a fresh process instead of leaving a half-dead one running.
+  // C2 FIX: 10s was shorter than a single slow workflow node (ai_classifier can
+  // legitimately run ~90s), so the watchdog killed the process mid-node and
+  // undid the graceful worker drain we now wait for. Must exceed the worst-case
+  // node duration; keep it under the platform's SIGKILL grace period.
+  const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS) || 45000;
   const watchdog = setTimeout(() => {
-    console.error('⏱️  Graceful shutdown timed out after 10s — forcing exit.');
+    console.error(`⏱️  Graceful shutdown timed out after ${SHUTDOWN_GRACE_MS / 1000}s — forcing exit.`);
     process.exit(exitCode);
-  }, 10000);
+  }, SHUTDOWN_GRACE_MS);
   watchdog.unref();
 
   // 1. Stop accepting new requests
@@ -748,6 +772,20 @@ const gracefulShutdown = async (signal, exitCode = 0) => {
       await worker.close();
       console.log('✅ BullMQ broadcast worker stopped');
     }
+  } catch (e) {
+    // Worker may not be initialized (e.g. REDIS_URL not set)
+  }
+
+  // 2b. Stop the Workflow Engine worker — MUST happen before Redis closes.
+  // C2 FIX: this was never called. The worker kept processing while step 3 tore
+  // down the Redis connection underneath it, so in-flight jobs neither completed
+  // nor failed; their locks expired and the next instance re-delivered them as
+  // stalled, which corrupted branch accounting and silently truncated every
+  // workflow that was mid-flight at deploy time.
+  try {
+    const { shutdownWorkflowQueue } = require('./src/workflow-engine/WorkflowQueue');
+    await shutdownWorkflowQueue();
+    console.log('✅ Workflow Engine worker stopped');
   } catch (e) {
     // Worker may not be initialized (e.g. REDIS_URL not set)
   }

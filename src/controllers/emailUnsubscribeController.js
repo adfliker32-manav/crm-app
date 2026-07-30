@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const EmailSuppression = require('../models/EmailSuppression');
 
 // HMAC tokens prove the unsubscribe link came from a real outgoing email.
@@ -100,12 +101,40 @@ exports.handleUnsubscribe = async (req, res) => {
 
 /**
  * Check if an email is suppressed (utility for use in send flows).
+ *
+ * FIX D2: must be scoped to the tenant. The model was designed for per-tenant
+ * suppression (`userId: null` means a platform-wide block), but the lookup
+ * matched on address alone — so when one tenant's contact unsubscribed, every
+ * other tenant on the platform was silently blocked from emailing that address.
+ *
+ * @param {string} email
+ * @param {string|ObjectId|null} tenantId Owning tenant; omit for global-only check
+ * @param {Object}  [opts]
+ * @param {boolean} [opts.conversational] True for a human-typed 1:1 reply
  */
-exports.isEmailSuppressed = async (email) => {
+exports.isEmailSuppressed = async (email, tenantId = null, opts = {}) => {
     if (!email) return false;
-    const suppression = await EmailSuppression.findOne({
-        email: email.toLowerCase().trim()
-    }).lean();
+
+    // Match a global suppression, or one belonging to this tenant — never
+    // another tenant's.
+    const scope = (tenantId && mongoose.Types.ObjectId.isValid(String(tenantId)))
+        ? { $in: [null, new mongoose.Types.ObjectId(String(tenantId))] }
+        : null;
+
+    const query = {
+        email: email.toLowerCase().trim(),
+        userId: scope
+    };
+
+    // FIX D3: "unsubscribe" means opted out of marketing — it does not mean a
+    // human can never reply to that person again. A 1:1 reply typed in the
+    // Inbox is still blocked for 'bounce' (address is dead) and 'complaint'
+    // (they reported us as spam), but not for a marketing opt-out.
+    if (opts.conversational) {
+        query.reason = { $in: ['bounce', 'complaint'] };
+    }
+
+    const suppression = await EmailSuppression.findOne(query).lean();
     return !!suppression;
 };
 

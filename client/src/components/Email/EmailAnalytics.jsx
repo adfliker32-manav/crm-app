@@ -72,6 +72,13 @@ const EmailAnalytics = () => {
     const totalSent = stats.allTime?.sent || 0;
     const totalFailed = stats.allTime?.failed || 0;
     const totalReceived = stats.allTime?.received || 0;
+
+    // These totals are bounded by the TTL indexes on EmailLog (90d) and
+    // EmailMessage (180d), so labelling them "all time" overstated them — and
+    // the reply rate divides a 180-day numerator by a 90-day denominator, which
+    // is why it is presented as indicative rather than exact.
+    const logDays = stats.retention?.logDays || 90;
+    const messageDays = stats.retention?.messageDays || 180;
     const deliveryRate = (totalSent + totalFailed) > 0
         ? ((totalSent / (totalSent + totalFailed)) * 100).toFixed(1)
         : 100;
@@ -176,7 +183,9 @@ const EmailAnalytics = () => {
             <div className="flex items-center justify-between">
                 <div>
                     <h2 className="text-lg font-bold text-slate-800">Performance Overview</h2>
-                    <p className="text-sm text-slate-400 mt-0.5">All-time metrics and 7-day activity</p>
+                    <p className="text-sm text-slate-400 mt-0.5">
+                        Sent/failed cover the last {logDays} days · received covers the last {messageDays} days
+                    </p>
                 </div>
                 <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-100">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse inline-block"></span>
@@ -189,7 +198,7 @@ const EmailAnalytics = () => {
                 <KpiCard
                     label="Total Sent"
                     value={totalSent.toLocaleString()}
-                    sub="all time"
+                    sub={`last ${logDays} days`}
                     icon="fa-paper-plane"
                     color="text-blue-600"
                     bg="bg-blue-50"
@@ -197,7 +206,7 @@ const EmailAnalytics = () => {
                 <KpiCard
                     label="Replies Received"
                     value={totalReceived.toLocaleString()}
-                    sub={`${replyRate}% reply rate`}
+                    sub={`~${replyRate}% reply rate`}
                     icon="fa-reply-all"
                     color="text-emerald-600"
                     bg="bg-emerald-50"

@@ -53,6 +53,21 @@ const integrationConfigSchema = new mongoose.Schema({
         emailSignature: { type: String, default: null },
         smtpHost: { type: String, default: null },
         smtpPort: { type: Number, default: 587 },
+
+        // FIX W6: CAN-SPAM requires a physical postal address in bulk email.
+        // emailService has always read `businessAddress` when building the
+        // footer, but the field did not exist on this schema (and had no UI),
+        // so the address block silently rendered empty on every send.
+        businessAddress: { type: String, default: null },
+
+        // FIX W5/F2: inbound sync was hardcoded to Gmail. imapService read
+        // `config.imapHost` but nothing ever supplied it, and custom-SMTP
+        // tenants were skipped entirely — giving them a permanently one-way
+        // inbox with no indication why.
+        imapHost: { type: String, default: null },
+        imapPort: { type: Number, default: 993 },
+        imapEnabled: { type: Boolean, default: true },
+
         // Highest IMAP UID processed for this mailbox. Persisted so a server
         // restart doesn't trigger a full re-sync of every unseen email.
         lastImapUid: { type: Number, default: 0 }

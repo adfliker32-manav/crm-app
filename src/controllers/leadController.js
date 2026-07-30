@@ -390,12 +390,16 @@ const sendManualEmail = async (req, res) => {
             return res.status(404).json({ message: "Lead not found or access denied" });
         }
 
-        // Send Email
+        // Send Email. Logging + Inbox threading happen inside sendEmail(); this
+        // path previously did neither, so emails sent from the lead detail view
+        // never showed up in the Email Center at all.
         await sendEmail({
             to,
             subject,
             text: message,
-            userId
+            userId,
+            conversational: true, // human-typed 1:1 message
+            leadId: leadToUpdate._id
         });
 
         // Log to History

@@ -4,9 +4,13 @@ const mongoose = require('mongoose');
 const { escapeRegex } = require('../utils/controllerHelpers');
 
 // Get email analytics - Optimized with single aggregation pipeline
+// Email data is owned by the tenant; agents must see the same figures as their
+// manager rather than an empty dashboard scoped to their own id.
+const tenantOf = (req) => req.tenantId || req.user.userId || req.user.id;
+
 exports.getAnalytics = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const userId = tenantOf(req);
         const now = new Date();
         
         // Today's start
@@ -123,12 +127,25 @@ exports.getAnalytics = async (req, res) => {
             },
             thisMonth: {
                 sent: getCount(monthData, 'sent'),
-                failed: getCount(monthData, 'failed')
+                failed: getCount(monthData, 'failed'),
+                // FIX F8: the UI has always rendered thisMonth.automated.sent,
+                // but the response never included an `automated` block here —
+                // so the "automated" figure on the month card read 0 forever.
+                automated: {
+                    sent: getCount(monthData, 'sent', true),
+                    failed: getCount(monthData, 'failed', true)
+                }
             },
             allTime: {
                 sent: getCount(allTimeData, 'sent'),
                 failed: getCount(allTimeData, 'failed'),
                 received: totalInbound
+            },
+            // FIX F9: these totals are bounded by the TTL indexes on the
+            // underlying collections, so the UI must not label them "all time".
+            retention: {
+                logDays: 90,      // EmailLog TTL
+                messageDays: 180  // EmailMessage TTL
             },
             chartData: volumeChart,
             recentActivity: recentActivity
@@ -142,7 +159,7 @@ exports.getAnalytics = async (req, res) => {
 // Get email logs (inbox)
 exports.getLogs = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const userId = tenantOf(req);
         const { 
             page = 1, 
             limit = 50, 
@@ -200,7 +217,7 @@ exports.getLogs = async (req, res) => {
 // Get single email log
 exports.getLog = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
+        const userId = tenantOf(req);
         const log = await EmailLog.findOne({ _id: req.params.id, userId })
             .populate('templateId', 'name subject body')
             .populate('leadId', 'name email phone status')

@@ -348,10 +348,15 @@ function WorkflowBuilderInner() {
             const workflowId = savedWorkflow?._id || workflow?._id;
             if (!workflowId) throw new Error('Save workflow before publishing');
             const res = await api.post(`/workflows/${workflowId}/publish`);
-            setWorkflow(w => ({ ...w, ...(res.data.workflow || savedWorkflow), status: 'published' }));
+            // M-V3: publish promotes the draft into the live definition and clears it.
+            setWorkflow(w => ({ ...w, ...(res.data.workflow || savedWorkflow), status: 'published', draft: null }));
             showNotification('success', 'Workflow published! It will now execute automatically.');
         } catch (err) {
-            showNotification('error', err.response?.data?.message || err.message || 'Publish failed');
+            // Publish validation returns a list of specific problems — showing only the
+            // generic message would hide which step is actually wrong.
+            const data = err.response?.data;
+            const detail = data?.errors?.length ? data.errors.join(' ') : (data?.message || err.message);
+            showNotification('error', detail || 'Publish failed');
         } finally {
             setPublishing(false);
         }
@@ -405,27 +410,34 @@ function WorkflowBuilderInner() {
                     <button onClick={() => setShowTestModal(true)} style={{ padding: '7px 14px', borderRadius: 8, border: '1.5px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                         <i className="fa-solid fa-play" style={{ fontSize: 10 }} /> Test Run
                     </button>
-                    <button onClick={handleSave} disabled={saving || workflow?.status === 'published'} style={{ padding: '7px 14px', borderRadius: 8, border: '1.5px solid #E2E8F0', background: '#fff', color: workflow?.status === 'published' ? '#94A3B8' : '#1E293B', fontSize: 13, fontWeight: 600, cursor: workflow?.status === 'published' ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {saving ? <i className="fa-solid fa-spinner fa-spin" /> : <i className="fa-solid fa-floppy-disk" />} Save
+                    {/* M-V3: a published workflow is now editable — edits are saved as an
+                        unpublished draft while the live version keeps running. */}
+                    <button onClick={handleSave} disabled={saving} style={{ padding: '7px 14px', borderRadius: 8, border: '1.5px solid #E2E8F0', background: '#fff', color: '#1E293B', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {saving ? <i className="fa-solid fa-spinner fa-spin" /> : <i className="fa-solid fa-floppy-disk" />}
+                        {workflow?.status === 'published' ? 'Save Draft' : 'Save'}
                     </button>
-                    <button onClick={handlePublish} disabled={publishing || workflow?.status === 'published'} style={{
+                    <button onClick={handlePublish} disabled={publishing} style={{
                         padding: '7px 16px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                        background: workflow?.status === 'published' ? '#F0FDF4' : 'linear-gradient(135deg,#3B82F6,#6366F1)',
-                        color: workflow?.status === 'published' ? '#22C55E' : '#fff',
+                        background: 'linear-gradient(135deg,#3B82F6,#6366F1)', color: '#fff',
                         display: 'flex', alignItems: 'center', gap: 6, opacity: publishing ? 0.7 : 1
                     }}>
-                        {publishing ? <i className="fa-solid fa-spinner fa-spin" /> : <i className={workflow?.status === 'published' ? 'fa-solid fa-check' : 'fa-solid fa-rocket'} />}
-                        {workflow?.status === 'published' ? 'Published' : 'Publish'}
+                        {publishing ? <i className="fa-solid fa-spinner fa-spin" /> : <i className="fa-solid fa-rocket" />}
+                        {workflow?.status === 'published' ? 'Publish Changes' : 'Publish'}
                     </button>
                 </div>
             </div>
 
             {/* ── Main area: NodePanel + Canvas + ConfigSidebar ── */}
             <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', position: 'relative' }}>
+                {/* M-V3: unpublishing to edit used to stop every trigger for the whole
+                    editing session, silently dropping real events. Edits are now held as
+                    a draft while the published version keeps running. */}
                 {workflow?.status === 'published' && (
-                    <div style={{ background: '#FEF3C7', color: '#92400E', padding: '8px 20px', fontSize: 13, fontWeight: 600, textAlign: 'center', borderBottom: '1px solid #FCD34D' }}>
-                        <i className="fa-solid fa-triangle-exclamation" style={{ marginRight: 6 }} />
-                        This workflow is published. You must unpublish to edit nodes.
+                    <div style={{ background: workflow?.draft ? '#DBEAFE' : '#F0FDF4', color: workflow?.draft ? '#1E40AF' : '#166534', padding: '8px 20px', fontSize: 13, fontWeight: 600, textAlign: 'center', borderBottom: `1px solid ${workflow?.draft ? '#93C5FD' : '#86EFAC'}` }}>
+                        <i className={workflow?.draft ? 'fa-solid fa-pen-to-square' : 'fa-solid fa-circle-check'} style={{ marginRight: 6 }} />
+                        {workflow?.draft
+                            ? 'You have unpublished changes. The live version keeps running until you publish.'
+                            : 'This workflow is live. Edits are saved as a draft and only go live when you publish.'}
                     </div>
                 )}
                 <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>

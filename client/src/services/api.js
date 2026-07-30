@@ -53,10 +53,34 @@ api.interceptors.response.use(
 
             // Only logout if we have a token but server says it's invalid
             if (token && !isAuthEndpoint) {
+                const errorCode = error.response?.data?.error || '';
                 const errorMessage = error.response?.data?.message || '';
-                if (errorMessage.includes('Token') || errorMessage.includes('token') ||
-                    errorMessage.includes('Authorization') || errorMessage.includes('expired')) {
-                    console.warn('Session expired, logging out:', errorMessage);
+
+                // Machine-readable codes are checked FIRST. The message-substring
+                // check below is a legacy fallback and is fragile — a revoked
+                // session ("Your password or account access was changed") matches
+                // none of those substrings, so without the code check the user
+                // would sit in a broken UI hitting 401s forever instead of being
+                // sent to /login.
+                const terminalAuthCodes = [
+                    'session_revoked',
+                    'session_expired',
+                    'account_deleted',
+                    'account_deactivated'
+                ];
+
+                const shouldLogout =
+                    terminalAuthCodes.includes(errorCode) ||
+                    errorMessage.includes('Token') || errorMessage.includes('token') ||
+                    errorMessage.includes('Authorization') || errorMessage.includes('expired');
+
+                if (shouldLogout) {
+                    console.warn('Session ended, logging out:', errorCode || errorMessage);
+                    // Surface the reason on the login page so a forced logout
+                    // doesn't look like a random glitch.
+                    try {
+                        sessionStorage.setItem('logout_reason', errorMessage || 'Your session has ended.');
+                    } catch { /* sessionStorage may be unavailable */ }
                     localStorage.removeItem('token');
                     localStorage.removeItem('user');
                     window.location.replace('/login');

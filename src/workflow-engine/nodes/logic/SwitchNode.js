@@ -1,6 +1,11 @@
 const NodeRegistry     = require('../../NodeRegistry');
 // WEAK #6 FIX: Use shared operators module instead of duplicating logic
-const { evaluateCondition } = require('./operators');
+const { evaluateCondition, isKnownOperator } = require('./operators');
+
+// M-C7 FIX: port names are free text and become the routing key. These collide with
+// engine/canvas semantics — notably 'output', which the engine also matches for
+// connections that have no explicit sourcePort.
+const RESERVED_PORT_NAMES = new Set(['output', 'input', 'error', 'default', 'timeout', 'no_reply']);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SwitchNode (Multi-Branch)
@@ -44,10 +49,25 @@ const SwitchNode = {
         if (!data.cases || !Array.isArray(data.cases) || data.cases.length === 0) {
             errors.push('At least one routing case is required');
         } else {
+            const seen = new Set();
             data.cases.forEach((c, index) => {
-                if (!c.portName?.trim()) errors.push(`Case ${index + 1}: Port Name is required`);
+                const port = c.portName?.trim();
+                if (!port) {
+                    errors.push(`Case ${index + 1}: Port Name is required`);
+                } else if (RESERVED_PORT_NAMES.has(port.toLowerCase())) {
+                    errors.push(`Case ${index + 1}: "${port}" is a reserved port name — choose another.`);
+                } else if (seen.has(port.toLowerCase())) {
+                    // Duplicates make routing depend on array order.
+                    errors.push(`Case ${index + 1}: Duplicate port name "${port}".`);
+                } else {
+                    seen.add(port.toLowerCase());
+                }
                 if (!c.variable?.trim()) errors.push(`Case ${index + 1}: Variable is required`);
-                if (!c.operator)         errors.push(`Case ${index + 1}: Operator is required`);
+                if (!c.operator) {
+                    errors.push(`Case ${index + 1}: Operator is required`);
+                } else if (!isKnownOperator(c.operator)) {
+                    errors.push(`Case ${index + 1}: Unknown operator "${c.operator}"`);
+                }
             });
         }
         return { valid: errors.length === 0, errors };

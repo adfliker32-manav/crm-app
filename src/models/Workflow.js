@@ -75,7 +75,18 @@ const WorkflowSchema = new mongoose.Schema({
     // ── SETTINGS ──────────────────────────────────────────────────────────
     settings: {
         maxExecutionsPerLead: { type: Number, default: 1 },   // Prevent re-firing on same lead
+
+        // M-E9 NOTE: this governs THROWN errors only — a node that crashes is routed
+        // down its 'error' port instead of failing the whole execution. Nodes that
+        // *return* an error port (send_whatsapp, send_email, http_request,
+        // update_custom_field) always route there regardless of this flag, because
+        // that is a normal result rather than an exception. Changing that would alter
+        // routing for every existing workflow, so the two paths stay distinct and
+        // this is documented rather than "unified".
         continueOnError:      { type: Boolean, default: false },
+
+        // Read by fireTrigger (seeds WorkflowExecution.expiresAt) and enforced by
+        // WorkflowTimeoutEnforcer. Must be >= the longest wait in the graph.
         timeoutHours:         { type: Number, default: 72 }    // Auto-fail stale executions
     },
 
@@ -88,6 +99,30 @@ const WorkflowSchema = new mongoose.Schema({
     },
     version:     { type: Number, default: 1 },
     publishedAt: { type: Date, default: null },
+
+    // ── M-V3 FIX: edit-while-live ────────────────────────────────────────────
+    // Editing a published workflow used to be forbidden, so the only way to change
+    // one was status → draft → edit → publish. During that window `fireTrigger`
+    // (which matches on status:'published') stopped selecting it entirely, so every
+    // trigger was silently dropped for as long as the user had the editor open.
+    //
+    // Edits to a published workflow now land HERE instead. The live fields above are
+    // never touched, so triggers keep firing the last-published definition the whole
+    // time; publish promotes this into them. `null` means no unpublished changes.
+    draft: {
+        type: new mongoose.Schema({
+            name:          { type: String },
+            description:   { type: String },
+            trigger:       { type: String },
+            triggerConfig: { type: mongoose.Schema.Types.Mixed },
+            nodes:         [WorkflowNodeSchema],
+            connections:   [WorkflowConnectionSchema],
+            variables:     { type: mongoose.Schema.Types.Mixed },
+            settings:      { type: mongoose.Schema.Types.Mixed },
+            updatedAt:     { type: Date, default: Date.now }
+        }, { _id: false }),
+        default: null
+    },
     createdBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 
     // Stats — incremented by the engine, never written by the UI

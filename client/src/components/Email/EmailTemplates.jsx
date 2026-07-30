@@ -4,6 +4,8 @@ import TemplateModal from './TemplateModal';
 import TemplateDetailsModal from './TemplateDetailsModal';
 import { useConfirm } from '../../context/ConfirmContext';
 import { useNotification } from '../../context/NotificationContext';
+import { useAuth } from '../../context/AuthContext';
+import { hasEmailPermission } from './emailPermissions';
 
 const TRIGGER_META = {
     on_lead_create: { label: 'On Lead Create', icon: 'fa-user-plus', color: 'text-violet-600', bg: 'bg-violet-50' },
@@ -11,7 +13,7 @@ const TRIGGER_META = {
     manual: { label: 'Manual', icon: 'fa-hand-pointer', color: 'text-slate-500', bg: 'bg-slate-100' }
 };
 
-const TemplateCard = ({ template, onView, onEdit, onDelete }) => {
+const TemplateCard = ({ template, onView, onEdit, onDelete, canManage }) => {
     const trigger = TRIGGER_META[template.triggerType] || TRIGGER_META.manual;
 
     return (
@@ -62,18 +64,24 @@ const TemplateCard = ({ template, onView, onEdit, onDelete }) => {
                 >
                     <i className="fa-solid fa-eye"></i> View
                 </button>
-                <button
-                    onClick={() => onEdit(template)}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-700 hover:text-white text-slate-600 transition-all duration-150"
-                >
-                    <i className="fa-solid fa-pen"></i> Edit
-                </button>
-                <button
-                    onClick={() => onDelete(template._id)}
-                    className="w-9 flex items-center justify-center py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-rose-500 hover:text-white text-slate-400 transition-all duration-150"
-                >
-                    <i className="fa-solid fa-trash"></i>
-                </button>
+                {/* Hidden without manageEmailTemplates — the server rejects these,
+                    so rendering them would just produce 403s. */}
+                {canManage && (
+                    <>
+                        <button
+                            onClick={() => onEdit(template)}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-700 hover:text-white text-slate-600 transition-all duration-150"
+                        >
+                            <i className="fa-solid fa-pen"></i> Edit
+                        </button>
+                        <button
+                            onClick={() => onDelete(template._id)}
+                            className="w-9 flex items-center justify-center py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-rose-500 hover:text-white text-slate-400 transition-all duration-150"
+                        >
+                            <i className="fa-solid fa-trash"></i>
+                        </button>
+                    </>
+                )}
             </div>
         </div>
     );
@@ -82,6 +90,9 @@ const TemplateCard = ({ template, onView, onEdit, onDelete }) => {
 const EmailTemplates = () => {
     const { showDanger } = useConfirm();
     const { showError, showSuccess } = useNotification();
+    const { user } = useAuth();
+    const canManage = hasEmailPermission(user, 'manageEmailTemplates');
+    const canSend = hasEmailPermission(user, 'sendEmails');
     const [templates, setTemplates] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -199,12 +210,14 @@ const EmailTemplates = () => {
                 </div>
 
                 {/* New Template */}
-                <button
-                    onClick={handleCreateClick}
-                    className="flex-shrink-0 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-md shadow-blue-200 hover:shadow-blue-300"
-                >
-                    <i className="fa-solid fa-plus"></i> New Template
-                </button>
+                {canManage && (
+                    <button
+                        onClick={handleCreateClick}
+                        className="flex-shrink-0 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-md shadow-blue-200 hover:shadow-blue-300"
+                    >
+                        <i className="fa-solid fa-plus"></i> New Template
+                    </button>
+                )}
             </div>
 
             {/* Grid */}
@@ -221,7 +234,7 @@ const EmailTemplates = () => {
                             {search || filterTab !== 'all' ? 'Try a different search or filter' : 'Create a reusable email template to get started'}
                         </p>
                     </div>
-                    {!search && filterTab === 'all' && (
+                    {!search && filterTab === 'all' && canManage && (
                         <button
                             onClick={handleCreateClick}
                             className="mt-2 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition shadow-md"
@@ -239,6 +252,7 @@ const EmailTemplates = () => {
                             onView={handleViewClick}
                             onEdit={handleEditClick}
                             onDelete={handleDeleteClick}
+                            canManage={canManage}
                         />
                     ))}
                 </div>
@@ -257,6 +271,8 @@ const EmailTemplates = () => {
                 onEdit={handleEditClick}
                 onDelete={handleDeleteClick}
                 onRefresh={fetchTemplates}
+                canManage={canManage}
+                canSend={canSend}
             />
         </div>
     );

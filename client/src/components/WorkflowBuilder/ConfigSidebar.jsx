@@ -281,8 +281,11 @@ export default function ConfigSidebar({
     // Trigger configuration panel
     if (selectedNode.type === 'trigger') {
         const webhookSecret = workflow?.triggerConfig?.webhookSecret || '';
+        // M-S6 FIX: the token is no longer put in the URL. A query-string secret leaks
+        // into server logs, CDN logs, browser history and Referer headers — the server
+        // now accepts it only via the X-Webhook-Token header (or a _token body field).
         const webhookUrl = workflow?._id
-            ? `${window.location.origin}/api/workflows/webhook/${workflow._id}${webhookSecret ? `?token=${webhookSecret}` : ''}`
+            ? `${window.location.origin}/api/workflows/webhook/${workflow._id}`
             : 'Save workflow to get webhook URL';
 
         // Shared styles for trigger-filter fields (L1 FIX).
@@ -350,13 +353,25 @@ export default function ConfigSidebar({
                                 Send a POST request to this URL to trigger this workflow. Payload data will be available as variables.
                             </p>
                             {webhookSecret ? (
-                                <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 8, lineHeight: 1.4 }}>
-                                    🔒 This URL includes a secret token. Requests without it are rejected.
-                                    You can also send the token as the <code>X-Webhook-Token</code> header instead of the query string.
-                                </p>
+                                <div style={{ marginTop: 10 }}>
+                                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>
+                                        X-Webhook-Token (required header)
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={webhookSecret}
+                                        readOnly
+                                        style={{ width: '100%', padding: '8px 10px', borderRadius: 8, fontSize: 12, border: '1.5px solid #E2E8F0', outline: 'none', background: '#F8FAFC', boxSizing: 'border-box', color: '#64748B', fontFamily: 'monospace' }}
+                                    />
+                                    <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 6, lineHeight: 1.4 }}>
+                                        🔒 Send this as the <code>X-Webhook-Token</code> header. Requests without it are
+                                        rejected. It is no longer accepted in the URL, because query strings are recorded
+                                        in server, proxy and browser logs.
+                                    </p>
+                                </div>
                             ) : (
                                 <p style={{ fontSize: 11, color: '#B45309', marginTop: 8, lineHeight: 1.4 }}>
-                                    ⚠️ Publish this workflow to secure the webhook with a secret token.
+                                    ⚠️ Publish this workflow to generate its secret token. Until then the webhook is rejected.
                                 </p>
                             )}
                         </div>

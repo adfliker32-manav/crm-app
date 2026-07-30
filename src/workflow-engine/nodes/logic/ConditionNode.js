@@ -1,6 +1,6 @@
 const NodeRegistry     = require('../../NodeRegistry');
 // WEAK #6 FIX: Use shared operators module instead of duplicating logic
-const { evaluateCondition } = require('./operators');
+const { evaluateCondition, isKnownOperator } = require('./operators');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ConditionNode (If / Else)
@@ -58,7 +58,13 @@ const ConditionNode = {
         } else {
             data.conditions.forEach((cond, index) => {
                 if (!cond.variable?.trim()) errors.push(`Condition ${index + 1}: Variable is required`);
-                if (!cond.operator)         errors.push(`Condition ${index + 1}: Operator is required`);
+                if (!cond.operator) {
+                    errors.push(`Condition ${index + 1}: Operator is required`);
+                } else if (!isKnownOperator(cond.operator)) {
+                    // M-C5 FIX: an unrecognised operator evaluates to false forever,
+                    // so the workflow silently always takes the 'false' branch.
+                    errors.push(`Condition ${index + 1}: Unknown operator "${cond.operator}"`);
+                }
             });
         }
         return { valid: errors.length === 0, errors };

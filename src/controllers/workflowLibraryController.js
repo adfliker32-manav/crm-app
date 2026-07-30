@@ -79,6 +79,29 @@ exports.publishToLibrary = async (req, res) => {
             return res.status(400).json({ message: 'Add at least one node before sharing this workflow' });
         }
 
+        // M-S3 FIX: cap shares per tenant per day. There was no limit at all, so the
+        // global library could be flooded by one account.
+        const MAX_SHARES_PER_DAY = Number(process.env.WORKFLOW_LIBRARY_MAX_PER_DAY) || 5;
+        const since = new Date(Date.now() - 24 * 3600 * 1000);
+        const recent = await WorkflowLibraryItem.countDocuments({
+            authorTenantId: tenantId, createdAt: { $gte: since }
+        });
+        if (recent >= MAX_SHARES_PER_DAY) {
+            return res.status(429).json({
+                message: `You can share up to ${MAX_SHARES_PER_DAY} workflows per day. Try again tomorrow.`
+            });
+        }
+
+        // Don't allow the same workflow to be shared twice over.
+        const already = await WorkflowLibraryItem.findOne({
+            authorTenantId: tenantId, name: workflow.name, deletedAt: null
+        }).select('_id').lean();
+        if (already) {
+            return res.status(409).json({
+                message: 'You have already shared a workflow with this name. Withdraw it first to re-share.'
+            });
+        }
+
         const author     = await User.findById(tenantId).select('name companyName').lean();
         const authorName = author?.companyName || author?.name || 'A CRM user';
 
@@ -92,10 +115,57 @@ exports.publishToLibrary = async (req, res) => {
             authorName
         });
 
-        res.status(201).json({ libraryItem });
+        // H19 FIX: this pushes tenant content into a GLOBAL, cross-tenant collection.
+        // It was completely unaudited, so there was no way to trace who published
+        // what if the content turned out to contain customer data.
+        require('../services/auditLogger').log({
+            actor: req.user, actionCategory: 'SYSTEM', action: 'WORKFLOW_PUBLISHED_TO_LIBRARY',
+            targetType: 'WorkflowLibraryItem', targetId: String(libraryItem._id),
+            targetName: workflow.name,
+            details: { sourceWorkflowId: String(workflow._id), authorName },
+            req
+        });
+
+        res.status(201).json({
+            libraryItem,
+            message: libraryItem.status === 'approved'
+                ? 'Shared to the Community Library.'
+                : 'Submitted to the Community Library — it will appear once reviewed.'
+        });
     } catch (err) {
         console.error('[workflowLibraryController] publishToLibrary:', err);
         res.status(500).json({ message: 'Failed to share workflow to the community library' });
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /api/workflow-library/:id
+// M-S5 FIX: withdraw a share. There was no way to remove a published item — so
+// content that turned out to contain customer data was permanently global.
+// ─────────────────────────────────────────────────────────────────────────────
+exports.withdrawFromLibrary = async (req, res) => {
+    try {
+        const tenantId = req.tenantId;
+        const { id }   = req.params;
+
+        // Only the author may withdraw their own item.
+        const item = await WorkflowLibraryItem.findOneAndUpdate(
+            { _id: id, authorTenantId: tenantId, deletedAt: null },
+            { $set: { deletedAt: new Date() } },
+            { new: true }
+        );
+        if (!item) return res.status(404).json({ message: 'Shared template not found' });
+
+        require('../services/auditLogger').log({
+            actor: req.user, actionCategory: 'SYSTEM', action: 'WORKFLOW_WITHDRAWN_FROM_LIBRARY',
+            targetType: 'WorkflowLibraryItem', targetId: String(item._id), targetName: item.name,
+            req
+        });
+
+        res.json({ message: 'Withdrawn from the Community Library' });
+    } catch (err) {
+        console.error('[workflowLibraryController] withdrawFromLibrary:', err);
+        res.status(500).json({ message: 'Failed to withdraw the shared workflow' });
     }
 };
 
@@ -108,14 +178,18 @@ exports.getLibrary = async (req, res) => {
         const { sort = 'popular', page = 1, limit = 24 } = req.query;
         const sortSpec = sort === 'newest' ? { createdAt: -1 } : { cloneCount: -1, createdAt: -1 };
 
+        // M-S3 / M-S5 FIX: only approved, undeleted items are browsable. Previously
+        // find({}) exposed every submission to every tenant with no review step.
+        const visible = { status: 'approved', deletedAt: null };
+
         const [items, total] = await Promise.all([
-            WorkflowLibraryItem.find({})
+            WorkflowLibraryItem.find(visible)
                 .sort(sortSpec)
                 .skip((Number(page) - 1) * Number(limit))
                 .limit(Number(limit))
                 .select('-nodes -connections') // list view: omit heavy graph fields, mirrors listWorkflows
                 .lean(),
-            WorkflowLibraryItem.countDocuments({})
+            WorkflowLibraryItem.countDocuments(visible)
         ]);
 
         res.json({ items, total, page: Number(page), limit: Number(limit) });
@@ -135,8 +209,26 @@ exports.cloneFromLibrary = async (req, res) => {
         const userId   = req.user.userId || req.user.id;
         const { id }   = req.params;
 
-        const item = await WorkflowLibraryItem.findById(id).lean();
+        // M-S3 FIX: an unapproved or withdrawn item must not be clonable by id.
+        const item = await WorkflowLibraryItem.findOne({
+            _id: id, status: 'approved', deletedAt: null
+        }).lean();
         if (!item) return res.status(404).json({ message: 'Template not found' });
+
+        // ── M-S4 FIX: re-validate node types on the way in ────────────────────
+        // Library items are stored graphs that may predate a node type being renamed
+        // or removed. NodeRegistry.get() THROWS on an unknown type, so an unchecked
+        // clone produced a workflow that failed at runtime with an internal error.
+        const NodeRegistry = require('../workflow-engine/NodeRegistry');
+        const unknownTypes = [...new Set((item.nodes || [])
+            .map(n => n.type)
+            .filter(t => !NodeRegistry.has(t)))];
+        if (unknownTypes.length > 0) {
+            return res.status(422).json({
+                message: 'This template uses steps that are no longer available and cannot be cloned.',
+                errors: unknownTypes.map(t => `Unknown step type: "${t}"`)
+            });
+        }
 
         const workflow = await Workflow.create({
             tenantId,

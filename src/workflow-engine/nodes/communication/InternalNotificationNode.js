@@ -73,7 +73,17 @@ const InternalNotificationNode = {
             const query = data.targetRole === 'manager'
                 ? { parentId: tenantId, role: 'manager' }
                 : { parentId: tenantId };
-            const users = await User.find(query).select('_id').lean();
+            // M-DB8 FIX: this was an unbounded find + a synchronous emit loop, so a
+            // tenant with thousands of sub-users blocked the event loop inside a
+            // worker slot on every execution.
+            const MAX_NOTIFY_USERS = Number(process.env.WORKFLOW_MAX_NOTIFY_USERS) || 500;
+            const users = await User.find(query).select('_id').limit(MAX_NOTIFY_USERS).lean();
+            if (users.length === MAX_NOTIFY_USERS) {
+                console.warn(
+                    `[InternalNotificationNode] Notify list truncated at ${MAX_NOTIFY_USERS} users ` +
+                    `for tenant ${tenantId}.`
+                );
+            }
             for (const u of users) {
                 emitToUser(u._id.toString(), 'workflow:notification', payload);
             }

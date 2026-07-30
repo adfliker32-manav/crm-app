@@ -10,13 +10,18 @@ exports.getEmailConfig = async (req, res) => {
         const ownerId = req.tenantId;
         // Must use '+' to include select:false fields (emailPassword)
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('+email.emailPassword email.emailUser email.emailFromName email.emailSignature email.emailServiceType email.smtpHost email.smtpPort');
+            .select('+email.emailPassword email.emailUser email.emailFromName email.emailSignature email.emailServiceType email.smtpHost email.smtpPort email.businessAddress email.imapHost email.imapPort email.imapEnabled');
 
         if (!config || !config.email) {
             return res.json({
                 emailUser: '',
                 emailPassword: '',
                 emailFromName: '',
+                businessAddress: '',
+                imapHost: '',
+                imapPort: 993,
+                imapEnabled: true,
+                inboundSupported: true,
                 isConfigured: false
             });
         }
@@ -25,15 +30,26 @@ exports.getEmailConfig = async (req, res) => {
         // The UI only needs to know IF a password is set, not the actual value.
         const hasPassword = !!config.email.emailPassword;
 
+        const serviceType = config.email.emailServiceType || 'gmail';
+        const imapHost = config.email.imapHost || '';
+
         res.json({
             emailUser: config.email.emailUser || '',
             emailPassword: hasPassword ? '••••••••' : '', // Masked — never expose real password
             hasPassword: hasPassword,
             emailFromName: config.email.emailFromName || '',
             emailSignature: config.email.emailSignature || '',
-            emailServiceType: config.email.emailServiceType || 'gmail',
+            emailServiceType: serviceType,
             smtpHost: config.email.smtpHost || '',
             smtpPort: config.email.smtpPort || 587,
+            businessAddress: config.email.businessAddress || '',
+            imapHost,
+            imapPort: config.email.imapPort || 993,
+            imapEnabled: config.email.imapEnabled !== false,
+            // FIX F2: the UI presented "Custom SMTP" as equivalent to Gmail while
+            // inbound sync silently skipped those tenants. Tell the client
+            // whether replies can actually be received with this configuration.
+            inboundSupported: serviceType !== 'smtp' || !!imapHost,
             isConfigured: !!(config.email.emailUser && hasPassword)
         });
     } catch (error) {
@@ -49,7 +65,11 @@ exports.updateEmailConfig = async (req, res) => {
         if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized to modify email settings' });
 
         const ownerId = req.tenantId;
-        const { emailUser, emailPassword, emailFromName, emailSignature, emailServiceType, smtpHost, smtpPort } = req.body;
+        const {
+            emailUser, emailPassword, emailFromName, emailSignature,
+            emailServiceType, smtpHost, smtpPort,
+            businessAddress, imapHost, imapPort, imapEnabled
+        } = req.body;
 
         // Validation
         if (!emailUser) {
@@ -69,11 +89,20 @@ exports.updateEmailConfig = async (req, res) => {
             'email.emailSignature': emailSignature !== undefined ? emailSignature : null,
             'email.emailServiceType': emailServiceType || 'gmail',
             'email.smtpHost': smtpHost || null,
-            'email.smtpPort': smtpPort || 587
+            'email.smtpPort': smtpPort || 587,
+            'email.businessAddress': businessAddress || null,
+            'email.imapHost': imapHost || null,
+            'email.imapPort': imapPort || 993,
+            'email.imapEnabled': imapEnabled !== false
         };
 
         if (emailPassword) {
             updateData['email.emailPassword'] = encrypt(emailPassword);
+
+            // Changing the mailbox invalidates the incremental IMAP cursor —
+            // otherwise the new account resumes from the old account's UID and
+            // skips everything below it.
+            updateData['email.lastImapUid'] = 0;
         }
 
         const config = await IntegrationConfig.findOneAndUpdate(
@@ -94,6 +123,11 @@ exports.updateEmailConfig = async (req, res) => {
             emailServiceType: config.email.emailServiceType,
             smtpHost: config.email.smtpHost,
             smtpPort: config.email.smtpPort,
+            businessAddress: config.email.businessAddress,
+            imapHost: config.email.imapHost,
+            imapPort: config.email.imapPort,
+            imapEnabled: config.email.imapEnabled !== false,
+            inboundSupported: config.email.emailServiceType !== 'smtp' || !!config.email.imapHost,
             isConfigured: true
         });
     } catch (error) {

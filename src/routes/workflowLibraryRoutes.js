@@ -16,4 +16,11 @@ router.post('/:id/clone',
     workflowLibraryController.cloneFromLibrary
 );
 
+// M-S5 FIX: authors can withdraw their own share (ownership enforced in the
+// controller). Previously a published item could never be removed.
+router.delete('/:id',
+    validateObjectId({ params: ['id'] }),
+    workflowLibraryController.withdrawFromLibrary
+);
+
 module.exports = router;

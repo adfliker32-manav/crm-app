@@ -100,7 +100,17 @@ const executeRuleActions = async (rule, lead) => {
                     };
                     const subject = replaceVariables(action.subject || '', templateData);
                     const body = replaceVariables(action.body || '', templateData);
-                    await sendEmail({ to: lead.email, subject, html: wrapEmailHtml(body), userId: lead.userId });
+                    await sendEmail({
+                        to: lead.email,
+                        subject,
+                        html: wrapEmailHtml(body),
+                        bodyForInbox: body,
+                        userId: lead.userId,
+                        isAutomated: true,
+                        triggerType: 'automation_rule',
+                        leadId: lead._id,
+                        maxRetries: 1 // FIX D6: background sends retry transient SMTP failures
+                    });
                     historyEntries.push({ type: 'Email', subType: 'Auto', content: `Automated Email Sent (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
                 }

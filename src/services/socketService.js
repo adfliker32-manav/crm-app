@@ -17,11 +17,10 @@ let io = null;
 const initSocket = (httpServer) => {
     // ⚠️ SECURITY: Socket.IO CORS MUST match Express CORS.
     // Previously origin: '*' which allowed any website to open WebSocket connections.
-    const allowedOrigins = [
-        process.env.FRONTEND_URL,
-        'http://localhost:5173',
-        'http://localhost:3000'
-    ].filter(Boolean);
+    // Now sourced from the shared allowlist rather than a second hand-maintained
+    // copy — the local copy had already drifted, omitting the production domain
+    // 'https://app.adfliker.com'. Socket.IO compares array entries exactly.
+    const { ALLOWED_ORIGINS: allowedOrigins } = require('../config/allowedOrigins');
 
     io = new Server(httpServer, {
         cors: {
@@ -53,10 +52,10 @@ const initSocket = (httpServer) => {
     });
 
     // ── JWT Authentication Middleware ──
-    io.use((socket, next) => {
+    io.use(async (socket, next) => {
         const token = socket.handshake.auth?.token || socket.handshake.query?.token;
         console.log(`🔌 [Socket.IO] Connection attempt from socket ${socket.id}. Token present: ${!!token}`);
-        
+
         if (!token) {
             console.warn(`❌ [Socket.IO] Authentication failed: No token provided for socket ${socket.id}`);
             return next(new Error('Authentication required'));
@@ -65,7 +64,34 @@ const initSocket = (httpServer) => {
         try {
             const cleanToken = token.replace(/^Bearer\s+/i, '').trim();
             const decoded = jwt.verify(cleanToken, process.env.JWT_SECRET);
-            socket.userId = decoded.userId || decoded.id;
+            const userId = decoded.userId || decoded.id;
+
+            // ⚠️ jwt.verify only proves the token was signed by us and hasn't hit
+            // its own exp. The REST layer additionally enforces session revocation
+            // and the absolute session cap; without the same checks here a revoked
+            // token would lose API access but keep this real-time channel open —
+            // which streams WhatsApp messages, email, and support conversations.
+            if (decoded.absExp && Math.floor(Date.now() / 1000) > decoded.absExp) {
+                console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: session past absolute cap`);
+                return next(new Error('Session expired'));
+            }
+
+            const User = require('../models/User');
+            const userDoc = await User.findById(userId).select('tokenVersion is_active').lean();
+            if (!userDoc) {
+                console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: user no longer exists`);
+                return next(new Error('Account no longer exists'));
+            }
+            if (userDoc.is_active === false) {
+                console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: account deactivated`);
+                return next(new Error('Account deactivated'));
+            }
+            if ((decoded.tv || 0) !== (userDoc.tokenVersion || 0)) {
+                console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: session revoked`);
+                return next(new Error('Session revoked'));
+            }
+
+            socket.userId = userId;
             socket.userRole = decoded.role;
             console.log(`✅ [Socket.IO] Authentication successful for user: ${socket.userId}`);
             next();

@@ -68,9 +68,14 @@ const emailMessageSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 emailMessageSchema.index({ conversationId: 1, timestamp: 1 });
-emailMessageSchema.index({ messageId: 1 });
+// Inbound dedupe looks up { messageId, userId } on every fetched email.
+emailMessageSchema.index({ messageId: 1, userId: 1 });
 // FIX D2: userId is used in almost every query but was not indexed
 emailMessageSchema.index({ userId: 1, conversationId: 1, timestamp: 1 });
+// FIX L5: the analytics endpoint counts inbound mail per tenant on every load
+// (countDocuments({ userId, direction })). No existing index covered that, so
+// it scanned every message the tenant owned.
+emailMessageSchema.index({ userId: 1, direction: 1, timestamp: -1 });
 // FIX D1: Auto-delete messages after 180 days to prevent unbounded growth
 emailMessageSchema.index({ timestamp: 1 }, { expireAfterSeconds: 180 * 24 * 60 * 60 });
 

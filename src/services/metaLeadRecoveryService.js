@@ -254,6 +254,7 @@ async function sendDropAlert(userId, leadgenId, reason, alreadySent) {
 
         await sendEmail({
             to: user.email,
+            transactional: true, // internal ops alert, not contact correspondence
             subject: '⚠️ Meta Lead Drop Alert — Action Required',
             html: `
                 <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;">

@@ -225,6 +225,20 @@ const userSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    },
+
+    // 🔐 SESSION GENERATION — the mechanism that makes JWTs revocable.
+    // JWTs are stateless, so without this there is NO way to invalidate an issued
+    // token: a password reset would not log an attacker out, and the only remedy
+    // would be rotating JWT_SECRET (which signs every user out platform-wide).
+    //
+    // Every token embeds the value of this counter as its `tv` claim. Bumping it
+    // instantly invalidates every token previously issued for this user.
+    // Bump it whenever all existing sessions must die:
+    //   password reset · password change · permission change · deactivation.
+    tokenVersion: {
+        type: Number,
+        default: 0
     }
 
 });

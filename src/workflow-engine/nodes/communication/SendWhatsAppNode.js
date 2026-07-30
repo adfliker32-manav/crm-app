@@ -15,6 +15,7 @@ const { checkWhatsAppRate } = require('../../../utils/workflowRateLimiter');
 const SendWhatsAppNode = {
     type: 'send_whatsapp',
     sideEffect: true, // L4/L5: real send — dry-run in Test Mode, idempotent on retry
+    slow: true,       // L-6: the queue reads this instead of keeping its own hardcoded list
 
     meta: () => ({
         type:     'send_whatsapp',
@@ -55,8 +56,12 @@ const SendWhatsAppNode = {
     execute: async (context, data) => {
         const lead = context.getLead();
         if (!lead?.phone) {
-            console.warn('[SendWhatsAppNode] Lead has no phone number. Skipping.');
-            return { nextPort: 'output', output: { 'whatsapp.skipped': true, 'whatsapp.reason': 'no_phone' } };
+            // M-N1 FIX: was routing to 'output' (labelled "Sent"). That is the same
+            // defect BUG #4 fixed for unapproved templates below — a downstream
+            // "wait for reply" node would wait forever for a reply to a message that
+            // was never sent, and analytics counted it as delivered.
+            console.warn('[SendWhatsAppNode] Lead has no phone number. Routing to error port.');
+            return { nextPort: 'error', output: { 'whatsapp.skipped': true, 'whatsapp.error': 'no_phone' } };
         }
 
         const templateName = data.templateName;
@@ -67,17 +72,21 @@ const SendWhatsAppNode = {
         // temporary phone number suspension. We cap at 20 messages/second/tenant.
         const rateCheck = await checkWhatsAppRate(tenantId);
         if (!rateCheck.allowed) {
+            // H6 FIX: DEFER, don't route away. This used to return the 'rate_limit'
+            // port, which is optional on the canvas — so when unwired the branch
+            // terminated and the message was silently lost while the execution
+            // reported 'completed'. (The old comment here claimed "queued for retry";
+            // nothing was queued.) The engine now re-runs this node after the delay.
+            // Jitter prevents a burst from re-colliding on the same tick.
+            const retryAfterMs = 1000 + Math.floor(Math.random() * 1000);
             console.warn(
                 `[SendWhatsAppNode] Tenant ${tenantId} WhatsApp rate limit hit ` +
-                `(${rateCheck.count}/${rateCheck.limit} per second). Message queued for retry.`
+                `(${rateCheck.count}/${rateCheck.limit} per second). Deferring ${retryAfterMs}ms.`
             );
-            // Return rate_limit port so the workflow can handle backpressure
             return {
-                nextPort: 'rate_limit',
-                output: {
-                    'whatsapp.rateLimited': true,
-                    'whatsapp.retryAfterMs': 1000
-                }
+                retryAfterMs,
+                retryReason: 'whatsapp_rate_limit',
+                output: { 'whatsapp.rateLimited': true }
             };
         }
 

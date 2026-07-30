@@ -6,7 +6,7 @@
  * instead of making a duplicate DB query.
  */
 const requireModule = (moduleName) => {
-    return async (req, res, next) => {
+    const middleware = async (req, res, next) => {
         try {
             // Super Admins always bypass module restrictions
             if (req.user && req.user.role === 'superadmin') {
@@ -50,6 +50,12 @@ const requireModule = (moduleName) => {
             res.status(500).json({ message: "Server error validating module access constraints." });
         }
     };
+
+    // Named so a router-stack walk can assert the gate is actually mounted.
+    Object.defineProperty(middleware, 'name', { value: `requireModule:${moduleName}` });
+    middleware.module = moduleName;
+
+    return middleware;
 };
 
 module.exports = requireModule;

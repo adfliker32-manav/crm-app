@@ -1,7 +1,6 @@
 // src/services/emailQueueService.js
 
 const { sendEmail } = require('./emailService');
-const { logEmail } = require('./emailLogService');
 
 let sharedAgenda = null;
 
@@ -21,100 +20,13 @@ const defineEmailJobs = (agenda) => {
             }
             
             console.log(`⏱️ Executing scheduled email to ${emailOptions.to}`);
-            const result = await sendEmail(emailOptions);
-            
-            // FIX C1: Scheduled emails must be logged just like immediate sends
-            if (emailOptions.userId) {
-                try {
-                    await logEmail({
-                        userId: emailOptions.userId,
-                        to: emailOptions.to,
-                        subject: emailOptions.subject,
-                        body: emailOptions.html || emailOptions.text || '',
-                        status: 'sent',
-                        messageId: result.messageId,
-                        isAutomated: false,
-                        triggerType: 'manual',
-                        attachments: []
-                    });
 
-                    // Create conversation/message record for 2-way sync
-                    const Lead = require('../models/Lead');
-                    const EmailConversation = require('../models/EmailConversation');
-                    const EmailMessage = require('../models/EmailMessage');
-
-                    let lead = await Lead.findOne({ email: emailOptions.to, userId: emailOptions.userId });
-                    if (!lead) {
-                        lead = new Lead({
-                            userId: emailOptions.userId,
-                            email: emailOptions.to,
-                            name: emailOptions.to.split('@')[0],
-                            source: 'Email',
-                            status: 'New'
-                        });
-                        await lead.save();
-                    }
-
-                    let conversation = await EmailConversation.findOne({ userId: emailOptions.userId, leadId: lead._id });
-                    if (!conversation) {
-                        conversation = new EmailConversation({
-                            userId: emailOptions.userId,
-                            leadId: lead._id,
-                            email: emailOptions.to,
-                            displayName: lead.name
-                        });
-                        await conversation.save();
-                    }
-
-                    const messageRecord = new EmailMessage({
-                        conversationId: conversation._id,
-                        userId: emailOptions.userId,
-                        leadId: lead._id,
-                        messageId: result.messageId,
-                        direction: 'outbound',
-                        from: 'CRM',
-                        to: emailOptions.to,
-                        subject: emailOptions.subject,
-                        text: emailOptions.text,
-                        html: emailOptions.html,
-                        status: 'sent',
-                        timestamp: new Date()
-                    });
-                    await messageRecord.save();
-
-                    conversation.lastMessage = emailOptions.subject || 'Scheduled Email';
-                    conversation.lastMessageAt = new Date();
-                    conversation.lastMessageDirection = 'outbound';
-                    conversation.metadata.totalMessages += 1;
-                    conversation.metadata.totalOutbound += 1;
-                    await conversation.save();
-                } catch (logErr) {
-                    console.error('⚠️ Scheduled email sent but logging failed:', logErr.message);
-                }
-            }
-            
+            // Logging and Inbox threading (success and failure alike) happen
+            // inside sendEmail() via emailSyncService — this job used to carry
+            // its own 50-line copy of that logic.
+            await sendEmail(emailOptions);
         } catch (error) {
             console.error(`❌ Scheduled email execution failed:`, error.message);
-
-            // Log the failure
-            if (job.attrs.data?.emailOptions?.userId) {
-                try {
-                    await logEmail({
-                        userId: job.attrs.data.emailOptions.userId,
-                        to: job.attrs.data.emailOptions.to || 'unknown',
-                        subject: job.attrs.data.emailOptions.subject || 'Scheduled Email',
-                        body: '',
-                        status: 'failed',
-                        error: error.message,
-                        isAutomated: false,
-                        triggerType: 'manual',
-                        attachments: []
-                    });
-                } catch (logErr) {
-                    console.error('⚠️ Failed to log scheduled email failure:', logErr.message);
-                }
-            }
-
             throw error; // Let agenda know the job failed
         }
     });
@@ -137,7 +49,58 @@ const scheduleEmail = async (emailOptions, scheduleDate) => {
     return job;
 };
 
+/**
+ * Lists a tenant's pending scheduled emails.
+ *
+ * FIX F6: scheduling was fire-and-forget — the UI reported success and the mail
+ * then became invisible and uncancellable.
+ */
+const listScheduledEmails = async (userIds) => {
+    if (!sharedAgenda) return [];
+
+    const ids = (Array.isArray(userIds) ? userIds : [userIds]).filter(Boolean).map(String);
+    if (ids.length === 0) return [];
+
+    const jobs = await sharedAgenda.jobs({
+        name: 'send_scheduled_email',
+        lastFinishedAt: { $exists: false },
+        'data.emailOptions.userId': { $in: ids }
+    });
+
+    return jobs
+        .map(job => ({
+            id: String(job.attrs._id),
+            to: job.attrs.data?.emailOptions?.to || '',
+            subject: job.attrs.data?.emailOptions?.subject || '',
+            scheduledFor: job.attrs.nextRunAt,
+            failedAt: job.attrs.failedAt || null,
+            failReason: job.attrs.failReason || null
+        }))
+        .sort((a, b) => new Date(a.scheduledFor) - new Date(b.scheduledFor));
+};
+
+/**
+ * Cancels a pending scheduled email. Ownership is enforced by matching the
+ * job's stored userId against the caller's allowed ids.
+ */
+const cancelScheduledEmail = async (jobId, userIds) => {
+    if (!sharedAgenda) throw new Error('Agenda is not initialized.');
+
+    const ids = (Array.isArray(userIds) ? userIds : [userIds]).filter(Boolean).map(String);
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(String(jobId))) return 0;
+
+    return sharedAgenda.cancel({
+        _id: new mongoose.Types.ObjectId(String(jobId)),
+        name: 'send_scheduled_email',
+        lastFinishedAt: { $exists: false },
+        'data.emailOptions.userId': { $in: ids }
+    });
+};
+
 module.exports = {
     defineEmailJobs,
-    scheduleEmail
+    scheduleEmail,
+    listScheduledEmails,
+    cancelScheduledEmail
 };
