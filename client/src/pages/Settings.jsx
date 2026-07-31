@@ -31,6 +31,9 @@ const Settings = () => {
     const [name, setName] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
+    // Re-authentication for a password change — the server rejects the change
+    // without it, so a stolen token cannot become account takeover.
+    const [currentPassword, setCurrentPassword] = useState('');
     const [loading, setLoading] = useState(false);
 
     // Sync tab with URL search params
@@ -73,9 +76,20 @@ const Settings = () => {
             return;
         }
 
+        // The server now requires the current password before it will set a new
+        // one, so a stolen session cannot silently take the account over.
+        if (password && !currentPassword) {
+            showError("Enter your current password to set a new one");
+            setLoading(false);
+            return;
+        }
+
         try {
             const updateData = { name };
-            if (password) updateData.password = password;
+            if (password) {
+                updateData.password = password;
+                updateData.currentPassword = currentPassword;
+            }
 
             await api.put('/auth/profile', updateData);
 
@@ -85,6 +99,7 @@ const Settings = () => {
             showSuccess("Profile updated successfully");
             setPassword('');
             setConfirmPassword('');
+            setCurrentPassword('');
         } catch (error) {
             console.error("Update failed", error);
             showError(error.response?.data?.message || "Failed to update profile");
@@ -185,6 +200,17 @@ const Settings = () => {
                                     <h3 className="text-lg font-bold text-slate-800 mb-5 flex items-center gap-2">
                                         <i className="fa-solid fa-shield-halved text-blue-500"></i> Change Password
                                     </h3>
+                                    <div className="mb-6">
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Current Password</label>
+                                        <input
+                                            type="password"
+                                            value={currentPassword}
+                                            onChange={(e) => setCurrentPassword(e.target.value)}
+                                            placeholder="Required only when setting a new password"
+                                            autoComplete="current-password"
+                                            className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition shadow-sm"
+                                        />
+                                    </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                         <div>
                                             <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">New Password (Optional)</label>

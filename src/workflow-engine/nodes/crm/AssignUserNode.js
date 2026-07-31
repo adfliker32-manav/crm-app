@@ -16,7 +16,15 @@ const AssignUserNode = {
 
     ports: () => ({
         inputs:  [{ id: 'input',  label: 'In' }],
-        outputs: [{ id: 'output', label: 'Done' }]
+        outputs: [
+            { id: 'output', label: 'Assigned' },
+            // WF-M4: an assignment that was REFUSED (invalid id, or a user outside
+            // this tenant — see H1) used to leave down the success port, so the rest
+            // of the workflow ran as though the lead had an owner: "notify the
+            // assigned agent" then silently notified nobody. A refusal needs its own
+            // branch so the author can fall back or escalate.
+            { id: 'error',  label: 'Not Assigned' }
+        ]
     }),
 
     schema: () => ({
@@ -33,7 +41,14 @@ const AssignUserNode = {
 
     execute: async (context, data) => {
         const lead = context.getLead();
-        if (!lead) return { nextPort: 'output', output: {} };
+        // WF-M4: no lead means no assignment happened — that is the error branch, not
+        // the success one (matches how every other lead-bound node now reports it).
+        if (!lead) {
+            return {
+                nextPort: 'error',
+                output: { 'assign.skipped': true, 'assign.reason': 'no_lead_in_context' }
+            };
+        }
 
         // ── H1 FIX: the assignee MUST belong to this tenant ──────────────────
         // The schema field is type:'user_select', so ownership was assumed to be
@@ -48,7 +63,8 @@ const AssignUserNode = {
 
         if (!mongoose.Types.ObjectId.isValid(targetId)) {
             console.warn(`[AssignUserNode] Invalid userId "${targetId}" — skipping assignment.`);
-            return { nextPort: 'output', output: { 'assign.skipped': true, 'assign.reason': 'invalid_user_id' } };
+            // WF-M4: route the refusal, don't pretend it succeeded.
+            return { nextPort: 'error', output: { 'assign.skipped': true, 'assign.reason': 'invalid_user_id' } };
         }
         // Valid assignees: the tenant owner itself, or one of its sub-users.
         const inTenant = targetId === tenantId
@@ -58,7 +74,9 @@ const AssignUserNode = {
                 `[AssignUserNode] Cross-tenant assignment BLOCKED: user ${targetId} ` +
                 `does not belong to tenant ${tenantId} (execution ${context.executionId}).`
             );
-            return { nextPort: 'output', output: { 'assign.skipped': true, 'assign.reason': 'user_not_in_tenant' } };
+            // WF-M4: a blocked cross-tenant assignment is a failure, and continuing
+            // down "Assigned" hid it from the author entirely.
+            return { nextPort: 'error', output: { 'assign.skipped': true, 'assign.reason': 'user_not_in_tenant' } };
         }
 
         if (lead.assignedTo?.toString() !== data.userId?.toString()) {

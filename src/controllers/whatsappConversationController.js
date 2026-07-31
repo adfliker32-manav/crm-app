@@ -735,6 +735,28 @@ exports.downloadMediaProxy = async (req, res) => {
         const userId = req.user.userId || req.user.id;
         const { mediaId } = req.params;
 
+        // ⚠️ TENANT ISOLATION: this used to hand `mediaId` straight to Meta with no
+        // local ownership check, delegating isolation entirely to Meta's token
+        // scoping. That delegation fails whenever two workspaces share one WABA
+        // phone number, and it also meant the on-disk media cache
+        // (uploads/whatsapp/<mediaId>.<ext>) could be populated/served for a media
+        // id belonging to someone else. Prove the caller's own workspace actually
+        // has a message carrying this media id before fetching anything.
+        if (!mediaId || !/^\d{5,40}$/.test(String(mediaId))) {
+            return res.status(400).json({ message: 'Invalid media id' });
+        }
+
+        const { getCompanyUserIds } = require('../utils/whatsappUtils');
+        const companyUserIds = await getCompanyUserIds(userId);
+        const owns = await WhatsAppMessage.exists({
+            'content.mediaId': String(mediaId),
+            userId: { $in: companyUserIds }
+        });
+        if (!owns) {
+            console.warn(`🛑 [Media] Denied: user ${userId} -> mediaId ${mediaId}`);
+            return res.status(404).json({ message: 'Media not found' });
+        }
+
         const { downloadMedia } = require('../services/whatsappService');
         const result = await downloadMedia(mediaId, userId);
         const buffer = Buffer.from(result.data);

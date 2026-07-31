@@ -22,7 +22,92 @@ const getCredentials = async (userId = null) => {
     };
 };
 
-const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null, languageCode = 'en_US') => {
+// ─────────────────────────────────────────────────────────────────────────────
+// TEMPLATE LANGUAGE RESOLUTION
+// ─────────────────────────────────────────────────────────────────────────────
+// Meta identifies a template by the PAIR (name, language). Ask for a language the
+// template was not created in and it answers 132001 — "template name does not
+// exist in the translation" — and the message is never delivered.
+//
+// This parameter used to default to 'en_US' while WhatsAppTemplate.language
+// defaults to 'en' (and the template builder UI creates 'en'). Eleven of the
+// sixteen call sites omit the argument — every automation rule, appointment and
+// follow-up cron, drip sequence step, and the workflow engine's send node — so
+// they all asked Meta for en_US against an en template and failed silently. It
+// looked like it worked only because broadcasts, the external API and the
+// conversation view happen to pass the language explicitly.
+//
+// The template row is authoritative, and { userId, name } is UNIQUE, so there is
+// exactly one answer. Callers that already hold the template still pass it
+// directly, which skips this lookup on bulk paths like broadcasts.
+const resolveTemplateLanguage = async (templateName, userId, explicitLanguage) => {
+    if (explicitLanguage) return explicitLanguage;
+    if (!userId) return 'en_US';
+
+    try {
+        const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+        const tpl = await WhatsAppTemplate.findOne({ userId, name: templateName })
+            .select('language')
+            .lean();
+        if (tpl?.language) return tpl.language;
+    } catch (err) {
+        console.error(`[WhatsApp] Could not resolve language for template "${templateName}":`, err.message);
+    }
+
+    // Not a template we know about — an unsynced one, or Meta's 'hello_world'
+    // sample, which really is en_US. Keep the historical default rather than
+    // guessing 'en', so nothing that works today starts failing.
+    console.warn(
+        `[WhatsApp] Template "${templateName}" not found for tenant ${userId}; ` +
+        `falling back to en_US. If this template exists in Meta, re-sync templates ` +
+        `so its real language is used.`
+    );
+    return 'en_US';
+};
+
+/**
+ * Is this template safe to send right now, and what language is it?
+ *
+ * Meta refuses anything that is not APPROVED, so firing at it and handling the
+ * rejection wastes a call, produces a confusing error, and — for a template Meta
+ * has PAUSED for quality — repeats an attempt that is actively harming the WABA's
+ * standing. Meta's template-status webhook keeps `status` current, so the stored
+ * value is trustworthy for the not-approved case.
+ *
+ * A template we have NO row for is treated as sendable rather than blocked: it may
+ * exist in Meta and simply not be synced here, and refusing it would silently stop
+ * sends that work today. Meta stays the final arbiter for that case — we just warn.
+ *
+ * @returns {{ok: boolean, reason: string, template: object|null}}
+ */
+const checkTemplateSendable = async (userId, templateName) => {
+    try {
+        const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+        const template = await WhatsAppTemplate.findOne({ userId, name: templateName })
+            .select('language status')
+            .lean();
+
+        if (!template) {
+            console.warn(
+                `[WhatsApp] Template "${templateName}" is not in the CRM for tenant ${userId}. ` +
+                `Sending anyway — re-sync templates so its status and language are known.`
+            );
+            return { ok: true, reason: 'not_in_crm', template: null };
+        }
+
+        if (template.status !== 'APPROVED') {
+            return { ok: false, reason: `status_${template.status}`, template };
+        }
+
+        return { ok: true, reason: 'approved', template };
+    } catch (err) {
+        // A lookup failure must not silently swallow a send the caller expects.
+        console.error(`[WhatsApp] Template pre-check failed for "${templateName}":`, err.message);
+        return { ok: true, reason: 'precheck_error', template: null };
+    }
+};
+
+const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null, languageCode = null) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
             console.log(`🛑 WHATSAPP KILL SWITCH ACTIVE. Blocked template '${templateName}' to ${to}`);
@@ -32,6 +117,8 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
         const { phoneNumberId, accessToken } = await getCredentials(userId);
         const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
 
+        const resolvedLanguage = await resolveTemplateLanguage(templateName, userId, languageCode);
+
         const data = {
             messaging_product: "whatsapp",
             to: to,
@@ -39,7 +126,7 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
             template: {
                 name: templateName,
                 language: {
-                    code: languageCode
+                    code: resolvedLanguage
                 }
             }
         };
@@ -67,6 +154,17 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
         // 🔑 TOKEN EXPIRY DETECTION: Surface clear error for expired/invalid tokens
         if (error.response?.data?.error?.code === 190) {
             console.error(`🔑 WhatsApp token EXPIRED for user ${userId}. Code 190: ${error.response.data.error.message}`);
+        }
+        // 132001 means the (name, language) pair does not exist at Meta. Nothing in
+        // the raw Meta payload says "language", so this failure used to read as a
+        // generic send error and was mistaken for a template-approval problem.
+        if (error.response?.data?.error?.code === 132001) {
+            console.error(
+                `🌐 WhatsApp template MISMATCH for user ${userId}: Meta has no template ` +
+                `"${templateName}" in language "${languageCode || '(resolved from the stored template)'}". ` +
+                `Check that the template's language in CRM matches the one approved in Meta ` +
+                `(a template created as 'en' cannot be sent as 'en_US').`
+            );
         }
         console.error('❌ FAILED TO SEND WHATSAPP:', error.response?.data || error.message);
         throw error;
@@ -610,6 +708,7 @@ const uploadMediaForSending = async (userId, filePath, mimeType, fileName) => {
 
 module.exports = {
     sendWhatsAppMessage,
+    checkTemplateSendable,
     sendWhatsAppTextMessage,
     sendMediaMessage,
     sendInteractiveMessage,

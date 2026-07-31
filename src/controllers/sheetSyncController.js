@@ -41,9 +41,13 @@ const updateSheetSyncConfig = async (req, res) => {
             { new: true, upsert: true }
         ).select('googleSheet');
 
-        // Build the webhook URL for the user
+        // Build the webhook URL for the user.
+        // The secret is NO LONGER embedded in the query string — it is returned
+        // separately so the generated Apps Script sends it as the x-webhook-secret
+        // header. A credential in a URL ends up in access logs, proxy logs and
+        // browser history, and gets pasted into support tickets verbatim.
         const backendUrl = process.env.BACKEND_URL || process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`;
-        const webhookUrl = `${backendUrl}/api/webhooks/google-sheet/${ownerId}?secret=${config.googleSheet.webhookSecret}`;
+        const webhookUrl = `${backendUrl}/api/webhooks/google-sheet/${ownerId}`;
 
         res.json({
             success: true,
@@ -51,7 +55,8 @@ const updateSheetSyncConfig = async (req, res) => {
                 ? 'Google Sheet Push Sync enabled'
                 : 'Google Sheet Push Sync disabled',
             googleSheetSync: config.googleSheet,
-            webhookUrl: config.googleSheet.syncEnabled ? webhookUrl : null
+            webhookUrl:    config.googleSheet.syncEnabled ? webhookUrl : null,
+            webhookSecret: config.googleSheet.syncEnabled ? config.googleSheet.webhookSecret : null
         });
     } catch (err) {
         console.error('Sheet Sync Config Error:', err);
@@ -74,16 +79,18 @@ const getSheetSyncConfig = async (req, res) => {
 
         const gs = config?.googleSheet || {};
 
-        // Build webhook URL if enabled
+        // Build webhook URL if enabled. The secret travels as a separate field, not
+        // in the query string — see updateSheetSyncConfig for the reasoning.
         let webhookUrl = null;
         if (gs.syncEnabled && gs.webhookSecret) {
             const backendUrl = process.env.BACKEND_URL || process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`;
-            webhookUrl = `${backendUrl}/api/webhooks/google-sheet/${ownerId}?secret=${gs.webhookSecret}`;
+            webhookUrl = `${backendUrl}/api/webhooks/google-sheet/${ownerId}`;
         }
 
         res.json({
             googleSheetSync: gs,
-            webhookUrl
+            webhookUrl,
+            webhookSecret: webhookUrl ? gs.webhookSecret : null
         });
     } catch (err) {
         console.error('Get Sheet Sync Config Error:', err);
@@ -144,12 +151,13 @@ const regenerateWebhookSecret = async (req, res) => {
         ).select('googleSheet');
 
         const backendUrl = process.env.BACKEND_URL || process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`;
-        const webhookUrl = `${backendUrl}/api/webhooks/google-sheet/${ownerId}?secret=${newSecret}`;
+        const webhookUrl = `${backendUrl}/api/webhooks/google-sheet/${ownerId}`;
 
         res.json({
             success: true,
-            message: 'Webhook secret regenerated. Update your Google Apps Script with the new URL.',
-            webhookUrl
+            message: 'Webhook secret regenerated. Re-copy the Apps Script and paste it into your sheet — the old secret no longer works.',
+            webhookUrl,
+            webhookSecret: newSecret
         });
     } catch (err) {
         console.error('Regenerate Secret Error:', err);

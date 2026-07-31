@@ -8,6 +8,13 @@ const EmailSuppression = require('../models/EmailSuppression');
 // (email + JWT_SECRET) so existing infra doesn't need a new secret.
 const getUnsubscribeSecret = () => process.env.UNSUBSCRIBE_SECRET || process.env.JWT_SECRET || '';
 
+const escapeHtml = (str) => String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 const buildUnsubscribeToken = (email) => {
     const secret = getUnsubscribeSecret();
     if (!secret) return '';
@@ -83,9 +90,13 @@ exports.handleUnsubscribe = async (req, res) => {
 
         console.log(`📧 Email unsubscribed: ${email}`);
 
+        // Escape before interpolating: the email regex above permits < > " ' (it
+        // only excludes whitespace and @), so `a<img/src=x/onerror=...>@b.co` is a
+        // "valid" address by that check. The HMAC gate makes this unreachable for
+        // an attacker today, but the escaping is what actually makes it safe.
         return res.status(200).send(buildPage(
             'Successfully Unsubscribed',
-            `<strong>${email}</strong> has been removed from our mailing list. You will no longer receive emails from us.`,
+            `<strong>${escapeHtml(email)}</strong> has been removed from our mailing list. You will no longer receive emails from us.`,
             'success'
         ));
 

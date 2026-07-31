@@ -90,7 +90,18 @@ exports.updateSettings = async (req, res) => {
         if (aiFallbackEnabled !== undefined) config.ai.aiFallbackEnabled = aiFallbackEnabled;
         if (aiButtonMappingEnabled !== undefined) config.ai.aiButtonMappingEnabled = aiButtonMappingEnabled;
         if (aiSupportEnabled !== undefined) config.ai.aiSupportEnabled = aiSupportEnabled;
-        if (maxTurns !== undefined) config.ai.maxTurns = maxTurns;
+        // Backend enforcement, same reasoning as the systemPrompt cap above: every
+        // extra turn is another billed round trip against the tenant's AI credit
+        // wallet. This was written straight through unvalidated, so a non-numeric
+        // value could poison the config and a large one multiplied spend per
+        // conversation with nothing to stop it.
+        if (maxTurns !== undefined) {
+            const n = Math.floor(Number(maxTurns));
+            if (!Number.isFinite(n) || n < 1 || n > 50) {
+                return res.status(400).json({ error: 'maxTurns must be a whole number between 1 and 50.' });
+            }
+            config.ai.maxTurns = n;
+        }
 
         // Voice Automation settings from the same page
         const voicePayload = req.body.voiceAutomation;

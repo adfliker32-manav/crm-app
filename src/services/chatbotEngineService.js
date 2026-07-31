@@ -228,14 +228,11 @@ const triggerChatbotLeadCreatedEffects = (lead, userId, leadStatus = null) => {
             const { enrollLeadInSequences } = require('./sequenceService');
             enrollLeadInSequences(lead, 'LEAD_CREATED').catch(e => console.error('[Chatbot] Sequence enrollment error:', e));
 
-            const IntegrationConfig = require('../models/IntegrationConfig');
-            const config = await IntegrationConfig.findOne({ userId })
-                .select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
-
-            if (config?.meta?.metaCapiEnabled) {
-                const { sendMetaEvent } = require('./metaConversionService');
-                sendMetaEvent(config, lead, leadStatus || lead.status, null).catch(e => console.error('[Chatbot] Meta CAPI error:', e));
-            }
+            // Outbox-backed entry point — resolves config from lead.userId (incl.
+            // agent → parent fallback) and guarantees delivery or visible failure.
+            const { sendMetaEventForLead } = require('./metaConversionService');
+            sendMetaEventForLead(lead, leadStatus || lead.status, null)
+                .catch(e => console.error('[Chatbot] Meta CAPI error:', e));
         } catch (err) {
             console.error('[Chatbot] Background trigger error:', err);
         }
@@ -1509,12 +1506,11 @@ const evaluateSmartLead = async (session, flow, conversation) => {
                     const { enrollLeadInSequences } = require('./sequenceService');
                     enrollLeadInSequences(updatedLead, 'STAGE_CHANGED', bestRule.changeStageTo).catch(e => console.error('[Chatbot] Sequence enrollment (STAGE_CHANGED) error:', e));
 
-                    const IntegrationConfig = require('../models/IntegrationConfig');
-                    const config = await IntegrationConfig.findOne({ userId: session.userId }).select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
-                    if (config?.meta?.metaCapiEnabled) {
-                        const { sendMetaEvent } = require('./metaConversionService');
-                        sendMetaEvent(config, updatedLead, bestRule.changeStageTo, null).catch(e => console.error('[Chatbot] Meta CAPI error:', e));
-                    }
+                    // Outbox-backed entry point — resolves config from the lead's
+                    // owner and guarantees delivery or visible failure.
+                    const { sendMetaEventForLead } = require('./metaConversionService');
+                    sendMetaEventForLead(updatedLead, bestRule.changeStageTo, null)
+                        .catch(e => console.error('[Chatbot] Meta CAPI error:', e));
                 } catch(err) {
                     console.error('[Chatbot] Background trigger error:', err);
                 }

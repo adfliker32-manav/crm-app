@@ -8,7 +8,7 @@ const User = require('../models/User');
 const ActivityLog = require('../models/ActivityLog'); // Required by continueWorkflowAfterVoice
 const VoiceEngineService = require('./VoiceEngineService');
 const { sendEmail } = require('./emailService');
-const { sendWhatsAppMessage } = require('./whatsappService');
+const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
 const { logActivity } = require('./auditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
@@ -80,7 +80,10 @@ const executeRuleActions = async (rule, lead) => {
                     if (!waTemplate || waTemplate.status !== 'APPROVED') {
                         console.warn(`⚠️ [Automation] SEND_WHATSAPP skipped — template "${templateName}" is not APPROVED (Rule: ${rule.name})`);
                     } else {
-                        await sendWhatsAppMessage(lead.phone, templateName, lead.userId);
+                        // waTemplate is already loaded for the approval check above —
+                        // pass its language so Meta is not asked for en_US against an
+                        // en template (error 132001, message never delivered).
+                        await sendWhatsAppMessage(lead.phone, templateName, lead.userId, null, waTemplate.language);
                         historyEntries.push({ type: 'WhatsApp', subType: 'Auto', content: `Automated WhatsApp Sent (Rule: ${rule.name})`, date: new Date() });
                         changesMade = true;
                     }
@@ -487,9 +490,23 @@ const handleWatcherReply = async (conversationId) => {
             }
         }
 
-        // Send follow-up template if configured
+        // Send follow-up template if configured.
+        // Gate on approval the same way the SEND_WHATSAPP action above does —
+        // Meta rejects anything not APPROVED, so this was a guaranteed API failure
+        // whenever the configured template had been rejected or quality-paused.
         if (watcher.ifRepliedAction?.sendTemplateId && lead.phone) {
-            await sendWhatsAppMessage(lead.phone, watcher.ifRepliedAction.sendTemplateId, lead.userId.toString());
+            const repliedGate = await checkTemplateSendable(lead.userId.toString(), watcher.ifRepliedAction.sendTemplateId);
+            if (repliedGate.ok) {
+                await sendWhatsAppMessage(
+                    lead.phone, watcher.ifRepliedAction.sendTemplateId, lead.userId.toString(),
+                    null, repliedGate.template?.language
+                );
+            } else {
+                console.warn(
+                    `[Automation] Reply follow-up skipped — template ` +
+                    `"${watcher.ifRepliedAction.sendTemplateId}" is ${repliedGate.reason}.`
+                );
+            }
         }
 
         // Release the per-(rule, lead) lock, in case it's still held

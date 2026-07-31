@@ -105,7 +105,11 @@ const SendWhatsAppNode = {
         // Without this, BullMQ catches the throw, retries 3x, then marks the execution 'failed'.
         // The 'error' port on the canvas is never used. Now failures route there instead.
         try {
-            await sendWhatsAppMessage(lead.phone, templateName, tenantId);
+            // Pass the template's own language. The template was just loaded above,
+            // so this costs nothing — and omitting it meant Meta was asked for
+            // 'en_US' while the template is created as 'en', which fails with 132001
+            // and routed every workflow WhatsApp send to the error port.
+            await sendWhatsAppMessage(lead.phone, templateName, tenantId, null, template.language);
         } catch (err) {
             console.error(`[SendWhatsAppNode] Meta API send failed:`, err.message);
             return {

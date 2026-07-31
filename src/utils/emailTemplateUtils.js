@@ -128,6 +128,26 @@ const injectBeforeBodyEnd = (html, fragment) => {
 };
 
 /**
+ * HMAC that binds a tracked URL to the specific EmailLog it was embedded in, so
+ * the redirect endpoint can prove the destination is one WE put in that email.
+ * Reuses JWT_SECRET (as the unsubscribe tokens already do) rather than adding
+ * another secret to provision.
+ */
+// Stand-in "url" for the open pixel, which has no destination of its own. Kept as
+// a constant so the signer and the verifier can never drift apart.
+const OPEN_SENTINEL = 'open';
+
+const signTrackedUrl = (logId, url) => {
+    const secret = process.env.EMAIL_TRACKING_SECRET || process.env.JWT_SECRET || '';
+    if (!secret) return '';
+    return require('crypto')
+        .createHmac('sha256', secret)
+        .update(`${logId}:${url}`)
+        .digest('hex')
+        .slice(0, 24);
+};
+
+/**
  * FIX W1: adds open- and click-tracking to an outgoing HTML email.
  *
  * EmailLog has carried openedAt/opens/clickedAt/clicks/clickedLinks fields and
@@ -157,13 +177,28 @@ const injectTracking = (html, logId, backendUrl) => {
             if (url.startsWith(`${base}/api/email/track/`) || url.includes('/api/email/unsubscribe')) {
                 return match;
             }
-            const wrapped = `${base}/api/email/track/click/${logId}?url=${encodeURIComponent(url)}`;
+            // The signature is what stops /api/email/track/click from being a
+            // general-purpose open redirect: without it, anyone could point the
+            // ?url= parameter anywhere and get a 302 issued from our own domain.
+            const sig = signTrackedUrl(logId, url);
+            const wrapped = `${base}/api/email/track/click/${logId}`
+                + `?url=${encodeURIComponent(url)}`
+                + (sig ? `&s=${sig}` : '');
             return `href=${quote}${wrapped}${quote}`;
         }
     );
 
     // ── Open tracking: 1x1 pixel as the last element in the body ─────────────
-    const pixel = `<img src="${base}/api/email/track/open/${logId}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;" />`;
+    // The pixel is signed for the same reason the click links are. /track/open is
+    // public and unauthenticated, and it both writes to an EmailLog and fires the
+    // EMAIL_OPENED workflow trigger. Unsigned, anyone who guessed a 24-hex id
+    // could inflate another tenant's open stats and, worse, remotely fire their
+    // workflows. OPEN_SENTINEL stands in for the click tracker's `url` argument so
+    // the same HMAC helper covers both.
+    const openSig = signTrackedUrl(logId, OPEN_SENTINEL);
+    const pixelUrl = `${base}/api/email/track/open/${logId}`
+        + (openSig ? `?s=${openSig}` : '');
+    const pixel = `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;" />`;
 
     return injectBeforeBodyEnd(withLinks, pixel);
 };
@@ -173,5 +208,7 @@ module.exports = {
     wrapEmailHtml,
     unwrapEmailHtml,
     injectBeforeBodyEnd,
-    injectTracking
+    injectTracking,
+    signTrackedUrl,
+    OPEN_SENTINEL
 };

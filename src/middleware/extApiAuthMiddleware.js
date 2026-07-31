@@ -188,8 +188,10 @@ const extApiAuthMiddleware = async (req, res, next) => {
             return res.status(429).json({
                 success: false,
                 error: 'rate_limit',
+                // The daily window is a rolling 24h from the first request in it —
+                // NOT a calendar day — so don't promise a midnight UTC reset.
                 message: limitResult.reason === 'daily_cap'
-                    ? `Daily request limit (${DAILY_CAP}/day) reached. Resets at midnight UTC.`
+                    ? `Daily request limit (${DAILY_CAP} per rolling 24 hours) reached. Try again after ${new Date(limitResult.resetAt).toISOString()}.`
                     : `Rate limit exceeded (${MAX_PER_MIN} requests/minute per API key).`
             });
         }

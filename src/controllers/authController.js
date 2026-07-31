@@ -187,6 +187,39 @@ const blockUnapprovedLogin = (user, res) => {
 const findManagedAgent = (managerId, agentId) =>
     User.findOne({ _id: agentId, parentId: managerId, role: 'agent' });
 
+/**
+ * The workspace owner every team operation must be scoped to.
+ *
+ * `manageTeam` is a grantable AGENT permission, so the actor is not always the
+ * owner. Using the actor's own id (the old behaviour) made an agent with
+ * manageTeam create agents parented to *themselves*: those users resolved to a
+ * tenant with no WorkspaceSettings (every requireModule gate 404s, and every
+ * opt-out feature flag defaults to unlocked), and the seat-limit count ran
+ * against the wrong parent so `agentLimit` was never enforced. `req.tenantId`
+ * is the owner for managers and agents alike.
+ */
+const getTeamOwnerId = (req) => req.tenantId || getRequestUserId(req.user);
+
+// An agent with manageTeam is themselves a row under this owner, so the generic
+// "does this agent belong to me" lookup would happily match their OWN record —
+// letting them grant themselves viewAllLeads, exportLeads and the rest. Team
+// management never includes managing yourself.
+const isSelf = (req, targetId) => String(getRequestUserId(req.user)) === String(targetId);
+
+/**
+ * Owners (manager / superadmin) may grant anything. A delegated agent may only
+ * grant permissions they already hold themselves — otherwise `manageTeam` is a
+ * self-escalation primitive by proxy: create a second agent with viewAllLeads +
+ * exportLeads, log in as it, and you have escaped your own restrictions.
+ * Returns the offending key, or null when the grant is allowed.
+ */
+const findOverreachingPermission = (req, requested) => {
+    if (['superadmin', 'manager', 'agency'].includes(req.user.role)) return null;
+    if (!requested || typeof requested !== 'object') return null;
+    const held = req.user.permissions || {};
+    return Object.keys(requested).find(k => requested[k] === true && held[k] !== true) || null;
+};
+
 const sendWelcomeEmail = async (user) => {
     try {
         const { sendEmail } = require('../services/emailService');
@@ -260,7 +293,12 @@ const sendWelcomeEmail = async (user) => {
 // 1.5. GET ME — returns fresh user + workspace data (used to refresh cached permissions)
 exports.getMe = async (req, res) => {
     try {
-        const user = await User.findById(req.user.userId).select('-password');
+        // Never pass a possibly-undefined id to findById: Mongoose casts it away and
+        // the query degenerates to `{}`, returning an arbitrary user's record.
+        const userId = getRequestUserId(req.user);
+        if (!userId) return res.status(401).json({ message: 'Invalid session token' });
+
+        const user = await User.findById(userId).select('-password');
         if (!user) return res.status(404).json({ message: 'User not found' });
 
         const workspace = await getWorkspaceForUser(user);
@@ -608,6 +646,15 @@ exports.googleLogin = async (req, res) => {
             return res.status(400).json({ message: 'Unable to get email from Google account' });
         }
 
+        // An unverified Google address proves nothing about who controls that mailbox.
+        // Below we link this identity onto any pre-existing account with a matching
+        // email, so accepting an unverified address would be an account-takeover path.
+        if (googlePayload.email_verified !== true) {
+            return res.status(403).json({
+                message: 'Your Google account email is not verified. Verify it with Google, then try again.'
+            });
+        }
+
         const normalizedEmail = normalizeEmail(email);
         let user = await User.findOne({ $or: [{ googleId }, { email: normalizedEmail }] });
 
@@ -690,12 +737,28 @@ exports.googleLogin = async (req, res) => {
             await user.save();
         }
 
+        // 🔐 Same lifecycle gate the password login runs. Without this, "Sign in with
+        // Google" was a complete bypass: a pending, rejected or deactivated account
+        // got a fully valid session. authMiddleware only re-checks `is_active` — it
+        // never looks at `approved_by_admin` or `status === 'rejected'`.
+        if (blockUnapprovedLogin(user, res)) {
+            return;
+        }
+
         const workspace = await getWorkspaceForUser(user);
         if (!getJwtSecret()) {
             return res.status(500).json({ error: 'Server configuration error' });
         }
 
         const token = signAuthToken(user, !!rememberMe);
+
+        auditLogger.log({
+            actor: user,
+            actionCategory: 'SECURITY',
+            action: 'LOGIN_SUCCESS',
+            details: { provider: 'google' },
+            req
+        });
 
         res.json({
             token,
@@ -727,7 +790,7 @@ exports.createAgent = async (req, res) => {
             return res.status(400).json({ message: 'User already exists' });
         }
 
-        const managerId = getRequestUserId(req.user);
+        const managerId = getTeamOwnerId(req);
         const workspace = await WorkspaceSettings.findOne({ userId: managerId }).select('agentLimit');
         // A limit of 0 means UNLIMITED (higher tiers may set it). Use ?? so a
         // genuine 0 is preserved (not coerced to the default 5 by ||), then skip
@@ -745,6 +808,13 @@ exports.createAgent = async (req, res) => {
 
         const agentPermissions = permissions || BASIC_AGENT;
 
+        const overreach = findOverreachingPermission(req, agentPermissions);
+        if (overreach) {
+            return res.status(403).json({
+                message: `You cannot grant '${overreach}' because you do not hold it yourself.`
+            });
+        }
+
         user = await User.create({
             name,
             email: normalizedEmail,
@@ -757,6 +827,19 @@ exports.createAgent = async (req, res) => {
             is_active: true,
             status: 'approved'
         });
+
+        // The count-then-create check above is not atomic, so two concurrent requests
+        // can both pass it and overshoot the plan's seat limit. Re-count after the
+        // write and roll back the loser — cheap, and it makes the cap actually hold.
+        if (limit > 0) {
+            const confirmedCount = await User.countDocuments({ parentId: managerId, role: 'agent' });
+            if (confirmedCount > limit) {
+                await User.deleteOne({ _id: user._id });
+                return res.status(403).json({
+                    message: `Upgrade required. You have reached your current plan limit of ${limit} agents.`
+                });
+            }
+        }
 
         res.json({
             success: true,
@@ -788,7 +871,11 @@ exports.deleteAgent = async (req, res) => {
             return res.status(403).json({ message: 'Unauthorized to manage team' });
         }
 
-        const managerId = getRequestUserId(req.user);
+        if (isSelf(req, agentId)) {
+            return res.status(403).json({ message: 'You cannot delete your own account.' });
+        }
+
+        const managerId = getTeamOwnerId(req);
         const agent = await findManagedAgent(managerId, agentId);
 
         if (!agent) {
@@ -828,7 +915,13 @@ exports.updateAgent = async (req, res) => {
             return res.status(403).json({ message: 'Unauthorized to manage team' });
         }
 
-        const managerId = getRequestUserId(req.user);
+        // Blocks the self-escalation path: an agent holding manageTeam is a row under
+        // this same owner, so without this they could grant themselves any permission.
+        if (isSelf(req, id)) {
+            return res.status(403).json({ message: 'You cannot edit your own permissions. Ask your administrator.' });
+        }
+
+        const managerId = getTeamOwnerId(req);
         const agent = await findManagedAgent(managerId, id);
 
         if (!agent) {
@@ -842,6 +935,12 @@ exports.updateAgent = async (req, res) => {
         }
 
         if (permissions) {
+            const overreach = findOverreachingPermission(req, permissions);
+            if (overreach) {
+                return res.status(403).json({
+                    message: `You cannot grant '${overreach}' because you do not hold it yourself.`
+                });
+            }
             updateData.permissions = permissions;
         }
 
@@ -887,7 +986,7 @@ exports.updateAgent = async (req, res) => {
 // 6. GET MY TEAM
 exports.getMyTeam = async (req, res) => {
     try {
-        const managerId = getRequestUserId(req.user);
+        const managerId = getTeamOwnerId(req);
         const agents = await User.find({ parentId: managerId, role: 'agent' }).select('-password');
 
         if (req.query.includeManager === 'true') {
@@ -907,7 +1006,7 @@ exports.getMyTeam = async (req, res) => {
 // 6. UPDATE PROFILE (User apna naam/password change kar sakta hai)
 exports.updateProfile = async (req, res) => {
     try {
-        const { name, password } = req.body;
+        const { name, password, currentPassword } = req.body;
         const userId = getRequestUserId(req.user);
 
         const user = await User.findById(userId);
@@ -921,6 +1020,19 @@ exports.updateProfile = async (req, res) => {
 
         let passwordChanged = false;
         if (password && password.trim()) {
+            // Re-authenticate before changing the password. Without this, anyone
+            // holding a valid token — a stolen session, a borrowed unlocked laptop,
+            // an XSS-exfiltrated JWT — could set a new password without knowing the
+            // old one and take the account over permanently. Proof of the current
+            // password is what makes the session revocation below meaningful.
+            if (!currentPassword || typeof currentPassword !== 'string') {
+                return res.status(400).json({ message: 'Enter your current password to set a new one.' });
+            }
+            const currentMatches = await bcrypt.compare(currentPassword, user.password);
+            if (!currentMatches) {
+                return res.status(401).json({ message: 'Your current password is incorrect.' });
+            }
+
             if (!hasStrongPassword(password)) {
                 return res.status(400).json({ message: STRONG_PASSWORD_MESSAGE });
             }
@@ -1028,7 +1140,10 @@ exports.getPaymentStatus = async (req, res) => {
 // 10. ACCEPT TERMS & CONDITIONS (Protected)
 exports.acceptTerms = async (req, res) => {
     try {
-        const userId = req.user.userId;
+        // See getMe: an undefined id here would write to an arbitrary user document.
+        const userId = getRequestUserId(req.user);
+        if (!userId) return res.status(401).json({ message: 'Invalid session token' });
+
         await User.findByIdAndUpdate(userId, { $set: { termsAcceptedAt: new Date() } });
         res.json({ success: true, termsAccepted: true });
     } catch (err) {

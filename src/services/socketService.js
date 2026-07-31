@@ -77,7 +77,12 @@ const initSocket = (httpServer) => {
             }
 
             const User = require('../models/User');
-            const userDoc = await User.findById(userId).select('tokenVersion is_active').lean();
+            // `parentId` is selected here so the join:company guard below can be
+            // built from server-resolved state. It MUST come from the database:
+            // reading it off the socket (or the token) leaves it undefined, and an
+            // undefined value in a query filter is dropped by BSON rather than
+            // matching nothing — which silently turns the guard into a no-op.
+            const userDoc = await User.findById(userId).select('tokenVersion is_active parentId').lean();
             if (!userDoc) {
                 console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: user no longer exists`);
                 return next(new Error('Account no longer exists'));
@@ -93,6 +98,9 @@ const initSocket = (httpServer) => {
 
             socket.userId = userId;
             socket.userRole = decoded.role;
+            // Normalized to a string id or null — never undefined. The join guard
+            // relies on this distinction.
+            socket.parentId = userDoc.parentId ? String(userDoc.parentId) : null;
             console.log(`✅ [Socket.IO] Authentication successful for user: ${socket.userId}`);
             next();
         } catch (err) {
@@ -114,26 +122,63 @@ const initSocket = (httpServer) => {
         // This is handled lazily — the frontend sends a join request
         // ⚠️ SECURITY: Validate ownership before joining company rooms.
         // Previously any user could join ANY user's room by sending arbitrary IDs.
+        // ⚠️ SECURITY: `socket.parentId` was previously never assigned, so the
+        // "parent manager" branch below was `{ _id: undefined }`. BSON DROPS an
+        // undefined value rather than serializing it, so that branch reached Mongo
+        // as an empty predicate `{}` — which matches every document. The $or was
+        // therefore always satisfied and the whole query collapsed to
+        // `User.find({ _id: { $in: companyUserIds } })`: any id the client sent was
+        // accepted, letting any tenant join any other tenant's room and receive
+        // their live WhatsApp/email/lead/notification stream.
+        //
+        // The branches are now assembled from server-resolved state and only ever
+        // contain defined values. Anything not provably in the caller's own company
+        // tree is rejected and logged.
         socket.on('join:company', async (companyUserIds) => {
-            if (!Array.isArray(companyUserIds)) return;
+            if (!Array.isArray(companyUserIds) || companyUserIds.length === 0) return;
+            // Bound the request so one client can't ask us to resolve a huge set.
+            if (companyUserIds.length > 200) {
+                console.warn(`🛑 [Socket.IO] join:company rejected for ${userId}: oversized request (${companyUserIds.length})`);
+                return;
+            }
+
             try {
                 const User = require('../models/User');
-                // Only allow joining rooms of users that belong to your company
+
+                // Reject anything that isn't a well-formed ObjectId before it can
+                // reach the query layer (also blocks operator-injection probes such
+                // as { $ne: null }, which are objects and fail this test).
+                const requestedIds = companyUserIds
+                    .filter(id => typeof id === 'string' || typeof id === 'object')
+                    .map(id => String(id))
+                    .filter(id => /^[a-f\d]{24}$/i.test(id));
+                if (requestedIds.length === 0) return;
+
+                // Allowed relationships, built WITHOUT any possibly-undefined value:
+                //   1. self
+                //   2. direct children (agents under this manager)
+                //   3. the caller's own parent manager — only when one actually exists
+                const branches = [
+                    { _id: userId },
+                    { parentId: userId }
+                ];
+                if (socket.parentId) {
+                    branches.push({ _id: socket.parentId });
+                }
+
                 const validUsers = await User.find({
-                    _id: { $in: companyUserIds },
-                    $or: [
-                        { _id: userId },           // Self
-                        { parentId: userId },       // Direct children (agents under this manager)
-                        { _id: socket.parentId }    // Parent manager
-                    ]
+                    _id: { $in: requestedIds },
+                    $or: branches
                 }).select('_id').lean();
-                
-                const validIds = new Set(validUsers.map(u => u._id.toString()));
-                companyUserIds.forEach(id => {
-                    if (validIds.has(id.toString())) {
+
+                const validIds = new Set(validUsers.map(u => String(u._id)));
+                for (const id of requestedIds) {
+                    if (validIds.has(id)) {
                         socket.join(`user:${id}`);
+                    } else {
+                        console.warn(`🛑 [Socket.IO] Denied room join: user ${userId} -> user:${id}`);
                     }
-                });
+                }
             } catch (err) {
                 console.error('Socket join:company error:', err.message);
             }

@@ -12,11 +12,23 @@ function buildEmbedCode(apiKey, backendUrl) {
   var ADFLIKER_KEY  = '${apiKey}';
   var ADFLIKER_API  = '${backendUrl}/api/web-leads/capture';
 
+  // Meta attribution: read _fbc/_fbp cookies (set by the Meta Pixel) and the
+  // fbclid URL param so ad-click leads match back to the campaign in Meta.
+  function adfGetCookie(n) {
+    var m = document.cookie.match('(^|;)\\\\s*' + n + '\\\\s*=\\\\s*([^;]+)');
+    return m ? decodeURIComponent(m[2]) : null;
+  }
+
   window.adflikerCaptureLead = function(data) {
     if (!data || !data.name || (!data.phone && !data.email)) {
       console.warn('[Adfliker] name + phone/email required');
       return Promise.reject('missing fields');
     }
+    try {
+      if (!data.fbc)    data.fbc    = adfGetCookie('_fbc') || undefined;
+      if (!data.fbp)    data.fbp    = adfGetCookie('_fbp') || undefined;
+      if (!data.fbclid) data.fbclid = new URLSearchParams(window.location.search).get('fbclid') || undefined;
+    } catch (e) {}
     return fetch(ADFLIKER_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': ADFLIKER_KEY },

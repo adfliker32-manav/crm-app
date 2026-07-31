@@ -109,16 +109,42 @@ const getWorkflowQueue = () => {
  * 'completed'. A token-derived jobId makes re-delivery of the same token
  * self-identifying (and BullMQ-deduplicated).
  *
+ * ── WF-C1 FIX: a re-delivery of the SAME token needs a NEW jobId ─────────────
+ * BullMQ refuses to add a job whose key already exists — addDelayedJob-9.lua:
+ *   `if rcall("EXISTS", jobIdKey) == 1 then return handleDuplicatedJob(...) end`
+ * handleDuplicatedJob emits a 'duplicated' event and adds NOTHING. The engine's two
+ * re-delivery paths (tenant-concurrency backpressure and a node's own retryAfterMs
+ * deferral) both re-enqueue the SAME token from INSIDE the currently-active job, so
+ * the key was always present and the re-enqueue was a silent no-op: the branch token
+ * was neither rescheduled nor retired, `activeBranches` never drained, and the
+ * execution hung until its deadline and was reaped as 'failed' — with the message
+ * never sent and nothing in the DLQ.
+ *
+ * The branch TOKEN and the JOB IDENTITY are two different things. The token stays
+ * stable (the engine compares it against nodeTokens to tell a re-delivery from a
+ * join arrival — see C3); only the jobId gets a nonce so Redis sees a new job.
+ *
  * @param {string} executionId
  * @param {string} nodeId
  * @param {number} [delayMs=0]
  * @param {string} [nodeType] — used to determine job priority (ARCH #2)
  * @param {string} [tokenId]  — branch token; minted here when not supplied (start nodes)
+ * @param {string} [iterPath='']
+ * @param {*}      [iterItem]
+ * @param {number} [requeueAttempt=0] — >0 when re-delivering an existing token
  */
-const enqueueNode = async (executionId, nodeId, delayMs = 0, nodeType = undefined, tokenId = undefined, iterPath = '', iterItem = undefined) => {
+const enqueueNode = async (
+    executionId, nodeId, delayMs = 0, nodeType = undefined, tokenId = undefined,
+    iterPath = '', iterItem = undefined, requeueAttempt = 0
+) => {
     const q = getWorkflowQueue();
     const priority = getJobPriority(nodeType);
     const token = tokenId || new mongoose.Types.ObjectId().toString();
+    // WF-C1: the nonce must be unique per re-delivery, not merely per attempt number —
+    // a node can be deferred, run, and be deferred again at the same attempt count.
+    const suffix = requeueAttempt > 0
+        ? `_rq${requeueAttempt}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+        : '';
     const job = await q.add(
         'EXECUTE_NODE',
         // Row 27: iterPath scopes every per-node claim, so the same node can run once
@@ -126,13 +152,24 @@ const enqueueNode = async (executionId, nodeId, delayMs = 0, nodeType = undefine
         // iterItem travels WITH THE JOB rather than through the execution's shared
         // `variables` blob — concurrent iterations would otherwise overwrite each
         // other's loop.item, which is the exact class of bug the CAS merge exists for.
-        { executionId, nodeId, tokenId: token, iterPath, iterItem },
+        { executionId, nodeId, tokenId: token, iterPath, iterItem, requeueAttempt },
         {
             delay:    delayMs,
             priority,          // ARCH #2: fast nodes (priority 1) run before slow nodes (priority 10)
-            jobId:    `exec_${executionId}_node_${nodeId}_tok_${token}`
+            jobId:    `exec_${executionId}_node_${nodeId}_tok_${token}${suffix}`
         }
     );
+    // WF-C1: prove the job was really scheduled. A duplicate add returns the EXISTING
+    // job (already completed/active), so its state would not be waiting/delayed — the
+    // exact silent failure this fix removes. Loud, because a lost token is invisible.
+    if (requeueAttempt > 0 && job?.id && !job.id.endsWith(suffix)) {
+        console.error(
+            `[WorkflowQueue] Re-delivery of node "${nodeId}" (execution ${executionId}) was ` +
+            `DEDUPLICATED by BullMQ — expected a job id ending in "${suffix}", got "${job.id}". ` +
+            `The branch would be lost; failing loudly instead.`
+        );
+        throw new Error(`Re-delivery of node "${nodeId}" was rejected as a duplicate job`);
+    }
     return job;
 };
 
@@ -292,7 +329,7 @@ const startWorkflowWorker = () => {
             const { name, data } = job;
 
             if (name === 'EXECUTE_NODE') {
-                const { executionId, nodeId, tokenId, iterPath, iterItem } = data;
+                const { executionId, nodeId, tokenId, iterPath, iterItem, requeueAttempt } = data;
                 console.log(`[WorkflowWorker] Executing node "${nodeId}"${iterPath ? ` [${iterPath}]` : ''} for execution ${executionId}`);
                 // C3/C7 FIX: the engine needs the branch token (to tell a re-delivery
                 // from a join arrival) and the attempt counters (so it only declares
@@ -302,6 +339,10 @@ const startWorkflowWorker = () => {
                     tokenId,
                     iterPath:    iterPath || '',
                     iterItem,
+                    // WF-C1/WF-H6: how many times this token has already been re-delivered,
+                    // so the next re-delivery gets a fresh jobId and the engine can bound
+                    // an unresolvable defer loop.
+                    requeueAttempt: Number(requeueAttempt) || 0,
                     attempt:     job.attemptsMade + 1,
                     maxAttempts: job.opts?.attempts || 1
                 });
@@ -314,7 +355,20 @@ const startWorkflowWorker = () => {
             } else if (name === 'TRIGGER_SCHEDULED') {
                 const { workflowId } = data;
                 console.log(`[WorkflowWorker] Firing scheduled trigger for workflow ${workflowId}`);
-                await WorkflowEngine.fireTrigger('SCHEDULED_TRIGGER', { workflowId, startedBy: 'cron' });
+                // ── WF-H5 FIX: dedupe on the TICK, not on the wall-clock minute ──
+                // fireTrigger fell back to `cron:<minutes since epoch>`, which is
+                // unique per tick only for schedules of one minute or slower. BullMQ
+                // patterns accept a seconds field, so a */30-second schedule produced
+                // two ticks in the same minute and the second was rejected by the
+                // idempotency index as a duplicate delivery — silently losing half
+                // the runs. The scheduler stamps each produced job with its own tick
+                // time, which is exactly the identity we want.
+                const tick = job.opts?.repeat?.offset ?? job.timestamp;
+                await WorkflowEngine.fireTrigger('SCHEDULED_TRIGGER', {
+                    workflowId,
+                    startedBy: 'cron',
+                    ...(tick ? { idempotencyKey: `cron:${tick}` } : {})
+                });
                 
             } else {
                 console.warn(`[WorkflowWorker] Unknown job type: ${name}`);

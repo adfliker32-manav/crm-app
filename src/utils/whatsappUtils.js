@@ -48,13 +48,57 @@ async function getUserWhatsAppCredentials(userId) {
 // Cache to reduce DB load
 const companyUserIdsCache = new Map(); // key: userId, value: { ids, expiresAt }
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_MAX_ENTRIES = 5000;     // hard ceiling — see pruneCache below
 
-// Helper: Get all user IDs within the same company tree (cached)
+// The Map only ever grew: entries were overwritten or read past their TTL, never
+// evicted, so memory scaled with total distinct users forever. Prune expired rows
+// (and, if still over the ceiling, the oldest) whenever we insert.
+const pruneCache = () => {
+    const now = Date.now();
+    for (const [k, v] of companyUserIdsCache.entries()) {
+        if (v.expiresAt <= now) companyUserIdsCache.delete(k);
+    }
+    if (companyUserIdsCache.size > CACHE_MAX_ENTRIES) {
+        const overflow = companyUserIdsCache.size - CACHE_MAX_ENTRIES;
+        let i = 0;
+        for (const k of companyUserIdsCache.keys()) {
+            if (i++ >= overflow) break;
+            companyUserIdsCache.delete(k);
+        }
+    }
+};
+
+/**
+ * Drop cached scopes for a workspace. Call after connecting/disconnecting
+ * WhatsApp or changing team membership, otherwise the stale scope survives for
+ * the full TTL and keeps reading (or stops reading) the wrong rows.
+ */
+const invalidateCompanyUserIds = (...userIds) => {
+    for (const id of userIds) {
+        if (id) companyUserIdsCache.delete(id.toString());
+    }
+};
+
+/**
+ * All user IDs whose WhatsApp records belong to this caller's workspace: the
+ * owner plus their agents.
+ *
+ * ⚠️ TENANT ISOLATION: this previously ALSO unioned in every IntegrationConfig
+ * on the platform sharing the same `whatsapp.waPhoneNumberId`, with no tenant
+ * filter. Two unrelated workspaces that connect the same WABA phone number —
+ * a reseller provisioning one number for two clients, or one business running
+ * two workspaces — were merged into a single data scope, giving each full read
+ * access to the other's conversations, messages, unread counts and analytics.
+ *
+ * The stated reason for that lookup was that records may be owned by any agent's
+ * userId. Agents are already in the company tree below, so intersecting the two
+ * sets is exactly the tree — the global lookup added no legitimate rows and only
+ * ever widened the scope past the tenant boundary. It is gone.
+ */
 const getCompanyUserIds = async (userId) => {
     const mongoose = require('mongoose');
     const User = require('../models/User');
-    const IntegrationConfig = require('../models/IntegrationConfig');
-    
+
     const cacheKey = userId.toString();
     const cached = companyUserIdsCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -66,43 +110,23 @@ const getCompanyUserIds = async (userId) => {
 
     const companyManagerId = currentUser.role === 'agent' ? currentUser.parentId : userId;
 
-    const tenantConfig = await IntegrationConfig.findOne({ userId: companyManagerId })
-        .select('whatsapp.waPhoneNumberId').lean();
+    const teamUsers = await User.find(
+        { $or: [{ _id: companyManagerId }, { parentId: companyManagerId }] },
+        { _id: 1 }
+    ).lean();
 
-    let userIds = [new mongoose.Types.ObjectId(userId)];
+    let userIds = teamUsers.map(u => new mongoose.Types.ObjectId(u._id));
 
-    if (tenantConfig?.whatsapp?.waPhoneNumberId) {
-        const sharedConfigs = await IntegrationConfig.find(
-            { 'whatsapp.waPhoneNumberId': tenantConfig.whatsapp.waPhoneNumberId },
-            { userId: 1 }
-        ).lean();
-        const configUserIds = sharedConfigs.map(c => c.userId);
-
-        const teamUsers = await User.find(
-            { $or: [{ _id: companyManagerId }, { parentId: companyManagerId }] },
-            { _id: 1 }
-        ).lean();
-
-        const mergedSet = new Set([
-            ...configUserIds.map(id => id.toString()),
-            ...teamUsers.map(u => u._id.toString())
-        ]);
-        userIds = [...mergedSet].map(id => new mongoose.Types.ObjectId(id));
-    } else {
-        const teamUsers = await User.find(
-            { $or: [{ _id: companyManagerId }, { parentId: companyManagerId }] },
-            { _id: 1 }
-        ).lean();
-        userIds = teamUsers.map(u => new mongoose.Types.ObjectId(u._id));
-    }
-
+    // An agent whose parentId is stale/missing would otherwise fall out of their
+    // own scope entirely and see nothing.
     if (!userIds.some(id => id.equals(new mongoose.Types.ObjectId(userId)))) {
         userIds.push(new mongoose.Types.ObjectId(userId));
     }
 
+    pruneCache();
     companyUserIdsCache.set(cacheKey, { ids: userIds, expiresAt: Date.now() + CACHE_TTL_MS });
 
     return userIds;
 };
 
-module.exports = { getUserWhatsAppCredentials, getCompanyUserIds };
+module.exports = { getUserWhatsAppCredentials, getCompanyUserIds, invalidateCompanyUserIds };

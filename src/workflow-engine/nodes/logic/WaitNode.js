@@ -5,6 +5,10 @@ const WhatsAppConversation = require('../../../models/WhatsAppConversation');
 // settings.timeoutHours, or the timeout enforcer reaps the execution mid-wait.
 const MAX_WAIT_HOURS = Number(process.env.WORKFLOW_MAX_WAIT_HOURS) || 720; // 30 days
 
+// WF-H4: what a wait collapses to under Test Mode. enqueueTimeout floors the delay
+// at 1s, so anything below that just resumes on the next tick.
+const TEST_MODE_WAIT_MS = Number(process.env.WORKFLOW_TEST_WAIT_MS) || 1000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // WaitNode
 // Pauses execution for a configurable duration or until an external signal.
@@ -96,6 +100,30 @@ const WaitNode = {
     execute: async (context, data) => {
         const waitType = data.waitType;
 
+        // ── WF-H4 FIX: a Test run must not park for the real duration ───────────
+        // `wait` is not a side-effect node, so Test Mode ran it for real: testing a
+        // 3-day drip parked the test execution for 3 days, and testWorkflow refuses
+        // to start another run while one is live (M-V6) — so a single test locked
+        // the author out of testing that workflow for the whole duration. The point
+        // of a test is to walk the graph, not to measure the clock.
+        const testWait = () => {
+            const waitUntil = new Date(Date.now() + TEST_MODE_WAIT_MS);
+            console.log(
+                `[WaitNode] TEST MODE: collapsing the wait to ${TEST_MODE_WAIT_MS}ms ` +
+                `(execution ${context.executionId}).`
+            );
+            return {
+                nextPort: 'output',
+                output: {
+                    'wait.resumedAt':  waitUntil.toISOString(),
+                    'wait.testMode':   true,
+                    'wait.simulated':  true
+                },
+                waitSignal: { signalType: 'TIMEOUT', resolvedPort: 'output', waitUntil }
+            };
+        };
+        if (context.isTestMode()) return testWait();
+
         if (waitType === 'duration') {
             const minutes  = Number(data.duration) || 60;
             const waitUntil = new Date(Date.now() + minutes * 60 * 1000);
@@ -125,11 +153,20 @@ const WaitNode = {
                 };
             }
 
-            // Find the lead's active WhatsApp conversation
-            const conversation = await WhatsAppConversation.findOne({
-                leadId: lead._id,
-                status: 'active'
-            }).lean();
+            // ── WF-M9 FIX: don't require status 'active' ────────────────────────
+            // The signal is keyed on this conversation's _id, and the inbound webhook
+            // resolves against the conversation the message actually landed on. A
+            // conversation that is merely archived/closed right now still receives the
+            // reply on the SAME document, so requiring 'active' here meant the wait
+            // took the 'no_conversation' port for a lead who was perfectly reachable —
+            // or, worse, parked against a conversation that was later archived while a
+            // reply on it resolved nothing. Prefer the active one, fall back to the
+            // most recent, and bind to whichever the reply will actually arrive on.
+            const conversation =
+                await WhatsAppConversation.findOne({ leadId: lead._id, status: 'active' })
+                    .sort({ lastMessageAt: -1, updatedAt: -1 }).lean()
+                || await WhatsAppConversation.findOne({ leadId: lead._id })
+                    .sort({ lastMessageAt: -1, updatedAt: -1 }).lean();
 
             if (!conversation) {
                 // WEAK #5 FIX: Route to dedicated 'no_conversation' port instead of 'timeout'.

@@ -125,6 +125,20 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     // The type of wait signal that can also resolve this execution (e.g. 'WHATSAPP_REPLY')
     waitSignalType: { type: String, default: null },
 
+    // ── WF-C3 FIX: how many branches are parked right now ───────────────────
+    // `status` is ONE field but waits are PER BRANCH. A fan-out (or a For Each) can
+    // park several branches at once; the first one to resume flipped status to
+    // 'running', and both resume paths gated on status === 'waiting' — so every
+    // other parked branch became unresumable. Its timeout consumed the signal and
+    // returned silently, and the stale-signal sweeper actively CANCELLED sibling
+    // signals on the same channel. The branches were lost and the execution hung to
+    // its deadline.
+    //
+    // The authoritative claim is now the wait SIGNAL (already atomic per document);
+    // `status` is descriptive, and this counter is what says whether anything is
+    // still parked.
+    waitingBranches: { type: Number, default: 0 },
+
     // ── LIVE VARIABLES ─────────────────────────────────────────────────────
     // Holds all variables for this execution. Nodes read and write to this.
     // Pre-populated with lead fields on creation.
@@ -138,6 +152,16 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     // ── NODE EXECUTION HISTORY ─────────────────────────────────────────────
     // Capped at 500 entries — sufficient for virtually any workflow depth.
     history: {
+        type: [NodeExecutionLogSchema],
+        default: []
+    },
+
+    // WF-M5 FIX: the pinned OPENING of the run. `history` caps by COUNT, so a single
+    // For Each over 500 items overruns it in one loop and evicts the entry nodes and
+    // the loop node itself — the entries you actually need to read the timeline. This
+    // is filled with a POSITIVE $slice (keep the first N, ignore later pushes), so it
+    // costs one extra array on the same atomic update and never needs a read.
+    historyHead: {
         type: [NodeExecutionLogSchema],
         default: []
     },
@@ -166,7 +190,23 @@ const WorkflowExecutionSchema = new mongoose.Schema({
     // loopCounts:   loopKey → how many items that for_each fanned out (a join reads it)
     // joinArrivals: nodeKey → how many tokens have reached that join so far
     loopCounts:   { type: mongoose.Schema.Types.Mixed, default: {} },
+    // WF-H3 FIX: joinArrivals used to be a plain per-key COUNTER incremented with
+    // $inc. A merge node is exempt from the single-claim guard (it must observe every
+    // arrival), so a BullMQ retry of a merge job that failed AFTER the increment
+    // counted the same token twice — pushing the count past `expected` and letting the
+    // merge route onward more than once. It is now the SET of branch tokens that have
+    // arrived, so a retry of the same token is a no-op and the size is the true count.
     joinArrivals: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // WF-H3: nodeKey → the SET of branch tokens that have arrived at that join.
+    // Separate from the legacy numeric `joinArrivals` so an execution that was
+    // mid-join across the deploy keeps its count (the two are summed once).
+    joinTokens:   { type: mongoose.Schema.Types.Mixed, default: {} },
+
+    // WF-H6 FIX: how many times each node key has asked to be deferred (rate limit,
+    // daily cap, low AI balance). Lives here rather than in the job payload so the
+    // count survives a retry, a worker restart and a DLQ replay — otherwise a
+    // condition that never clears re-defers forever while pushing `expiresAt` out.
+    deferCounts:  { type: mongoose.Schema.Types.Mixed, default: {} },
 
     // H7 FIX: dedup key for executions that have NO contact. The existing
     // maxExecutionsPerLead guard keys on (workflowId, contactId), so for a

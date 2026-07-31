@@ -97,6 +97,12 @@ const integrationConfigSchema = new mongoose.Schema({
         // FIX 1.4: metaTestEventCode was being saved by updateCapiSettings but silently
         // discarded by Mongoose because it wasn't declared in the schema.
         metaTestEventCode: { type: String, default: null },
+        // When the test code was last saved. A leftover code silently taints
+        // production events, so the sender ignores it 24h after this timestamp.
+        metaTestEventCodeSetAt: { type: Date, default: null },
+        // ISO 4217 currency for Purchase event value — was hardcoded 'INR',
+        // which misreported revenue (and ROAS) for non-Indian tenants.
+        metaDefaultCurrency: { type: String, default: 'INR' },
         metaStageMapping: {
             type: {
                 first: String,

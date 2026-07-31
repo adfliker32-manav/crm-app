@@ -80,8 +80,22 @@ const executeStepAction = async (step, lead, sequenceName) => {
     };
 
     if (step.action.type === 'SEND_WHATSAPP' && lead.phone && step.action.templateId) {
-        const { sendWhatsAppMessage } = require('./whatsappService');
-        const result = await sendWhatsAppMessage(lead.phone, step.action.templateId, lead.userId.toString());
+        const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
+
+        // Meta rejects anything not APPROVED, so a rejected or quality-paused
+        // template was previously retried against the API on every enrolled lead.
+        const gate = await checkTemplateSendable(lead.userId.toString(), step.action.templateId);
+        if (!gate.ok) {
+            console.warn(
+                `[Sequence] Step skipped — template "${step.action.templateId}" is ${gate.reason} ` +
+                `(lead ${lead._id}). Get it approved in Meta, then re-enrol.`
+            );
+            return;
+        }
+
+        const result = await sendWhatsAppMessage(
+            lead.phone, step.action.templateId, lead.userId.toString(), null, gate.template?.language
+        );
 
         // FIX: Sync to conversation DB so sequence WA sends appear in inbox
         // (previously ghost messages — sent via Meta API but not recorded)

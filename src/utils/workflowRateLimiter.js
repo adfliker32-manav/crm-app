@@ -204,7 +204,20 @@ const checkAIRate = async (tenantId) => {
 // firing 200 slow http_request nodes occupied all 10 slots for minutes and every
 // other tenant's welcome email queued behind it (head-of-line blocking across the
 // tenant boundary), while staying inside every configured rate limit.
-const MAX_CONCURRENT_PER_TENANT = Number(process.env.WF_MAX_CONCURRENT_PER_TENANT) || 4;
+//
+// ── WF-M1 FIX: derive the cap from the worker, don't hardcode it below it ─────
+// This was a flat 4 while the worker runs at concurrency 10, so a single active
+// tenant could never use more than 40% of the worker — the other 6 slots sat idle
+// while that tenant's own nodes were bounced onto the re-delivery path. (That path
+// was also silently dropping them; see WF-C1.) The goal of H20 is only to stop ONE
+// tenant occupying EVERY slot, which needs a reserve, not a hard 40% ceiling.
+//
+// Reserving 2 slots keeps another tenant's welcome email moving at all times while
+// letting a busy tenant use the rest of the worker.
+const WORKER_CONCURRENCY = Number(process.env.WORKFLOW_WORKER_CONCURRENCY) || 10;
+const TENANT_SLOT_RESERVE = Number(process.env.WF_TENANT_SLOT_RESERVE) || 2;
+const MAX_CONCURRENT_PER_TENANT = Number(process.env.WF_MAX_CONCURRENT_PER_TENANT)
+    || Math.max(4, WORKER_CONCURRENCY - TENANT_SLOT_RESERVE);
 
 /**
  * Try to take one in-flight slot for this tenant.

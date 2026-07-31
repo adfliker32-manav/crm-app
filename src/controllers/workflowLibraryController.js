@@ -187,7 +187,14 @@ exports.getLibrary = async (req, res) => {
                 .sort(sortSpec)
                 .skip((Number(page) - 1) * Number(limit))
                 .limit(Number(limit))
-                .select('-nodes -connections') // list view: omit heavy graph fields, mirrors listWorkflows
+                // list view: omit heavy graph fields, mirrors listWorkflows.
+                // ⚠️ `authorTenantId` is EXCLUDED deliberately: it is a workspace
+                // owner's User._id, and this endpoint is readable by every tenant.
+                // Returning it handed any authenticated account a directory of other
+                // tenants' owner ids — the exact input needed to target them in
+                // id-based attacks elsewhere. `authorName` is stored separately and
+                // is what the UI actually renders, so nothing is lost here.
+                .select('-nodes -connections -authorTenantId')
                 .lean(),
             WorkflowLibraryItem.countDocuments(visible)
         ]);

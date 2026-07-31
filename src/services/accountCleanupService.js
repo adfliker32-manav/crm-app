@@ -45,17 +45,39 @@ const USER_OWNED_MODELS = [
     UsageLog,
     // 🔴 FIX: Previously missing — credentials and settings were orphaned on delete
     WorkspaceSettings,
-    IntegrationConfig,
-    AgencySettings
+    IntegrationConfig
+    // NOTE: AgencySettings is deliberately NOT here — it is keyed by `agencyId`,
+    // not `userId`, and is deleted separately in deleteOwnedRecords below.
 ];
 
+/**
+ * ⚠️ DESTRUCTIVE-QUERY GUARD — do not remove.
+ *
+ * Every filter built here feeds a deleteMany() across 20+ collections. If any id
+ * is undefined, BSON DROPS the key during serialization rather than sending null,
+ * so `deleteMany({ userId: undefined })` reaches MongoDB as `deleteMany({})` —
+ * which deletes EVERY DOCUMENT OF EVERY TENANT in that collection.
+ *
+ * All current callers pass an ownership-checked id, so this was never live. It is
+ * one careless refactor away from total data loss, so the invariant is enforced
+ * here rather than trusted at each call site. Fail loudly, never silently widen.
+ */
 const buildUserIdFilter = (userIds) => {
-    if (Array.isArray(userIds)) {
-        if (userIds.length === 1) {
-            return userIds[0];
-        }
+    const isUsableId = (v) =>
+        v !== undefined && v !== null && String(v).length > 0;
 
-        return { $in: userIds };
+    if (Array.isArray(userIds)) {
+        if (userIds.length === 0) {
+            throw new Error('accountCleanupService: refusing to delete with an empty id list');
+        }
+        if (!userIds.every(isUsableId)) {
+            throw new Error('accountCleanupService: refusing to delete — id list contains an empty/undefined entry');
+        }
+        return userIds.length === 1 ? userIds[0] : { $in: userIds };
+    }
+
+    if (!isUsableId(userIds)) {
+        throw new Error('accountCleanupService: refusing to delete with an empty/undefined userId');
     }
 
     return userIds;
@@ -63,6 +85,7 @@ const buildUserIdFilter = (userIds) => {
 
 const deleteOwnedRecords = async (userIds, options = {}) => {
     const { companyId } = options;
+    // Throws before ANY delete runs if the scope is not usable.
     const userIdFilter = buildUserIdFilter(userIds);
 
     const deletions = USER_OWNED_MODELS.map((model) =>
@@ -71,6 +94,12 @@ const deleteOwnedRecords = async (userIds, options = {}) => {
 
     // Also clean up tenant-scoped models (use tenantId field)
     deletions.push(AutomationRule.deleteMany({ tenantId: userIdFilter }));
+
+    // AgencySettings keys off `agencyId`, NOT `userId` — see middleware/usageMeter.js,
+    // which reads it as AgencySettings.findOne({ agencyId }). It used to be in
+    // USER_OWNED_MODELS above, so it was deleted by a field it does not have: the
+    // query matched nothing and every agency's settings row was orphaned on delete.
+    deletions.push(AgencySettings.deleteMany({ agencyId: userIdFilter }));
 
     const activityScope = companyId
         ? { $or: [{ userId: userIdFilter }, { companyId }] }

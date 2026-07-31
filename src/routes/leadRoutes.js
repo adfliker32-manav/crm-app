@@ -44,13 +44,18 @@ const exportLimiter = rateLimit({
 // ⚠️ IMPORTANT: Non-parameterized routes MUST come BEFORE parameterized routes!
 
 // 0. Google Sheet Push Sync Config (MUST BE BEFORE /:id routes!)
-router.get('/sheet-sync-config', authMiddleware, sheetSyncController.getSheetSyncConfig);
-router.put('/sheet-sync-config', authMiddleware, sheetSyncController.updateSheetSyncConfig);
-router.post('/google-sheets-list', authMiddleware, sheetSyncController.listGoogleSheets);
-router.post('/sheet-headers', authMiddleware, sheetSyncController.fetchSheetHeaders);
-router.post('/sheet-sync-config/regenerate-secret', authMiddleware, sheetSyncController.regenerateWebhookSecret);
+// SECURITY: these carried authMiddleware ONLY. The config response embeds the
+// Google Sheet webhook secret — the credential that authenticates the PUBLIC
+// lead-injection endpoint — so any authenticated agent could read it, or rotate
+// it and break the tenant's sheet sync. `accessSettings` defaults to false for
+// agents and is the same gate tagRoutes/emailRoutes already use.
+router.get('/sheet-sync-config', authMiddleware, checkPermission('accessSettings'), sheetSyncController.getSheetSyncConfig);
+router.put('/sheet-sync-config', authMiddleware, checkPermission('accessSettings'), sheetSyncController.updateSheetSyncConfig);
+router.post('/google-sheets-list', authMiddleware, checkPermission('accessSettings'), sheetSyncController.listGoogleSheets);
+router.post('/sheet-headers', authMiddleware, checkPermission('accessSettings'), sheetSyncController.fetchSheetHeaders);
+router.post('/sheet-sync-config/regenerate-secret', authMiddleware, checkPermission('accessSettings'), sheetSyncController.regenerateWebhookSecret);
 // Used by LeadAssignmentSettings to patch defaultAssignedAgent without changing the full sync config
-router.post('/update-sheet-sync-config', authMiddleware, sheetSyncController.updateSheetSyncConfig);
+router.post('/update-sheet-sync-config', authMiddleware, checkPermission('accessSettings'), sheetSyncController.updateSheetSyncConfig);
 
 // 1. Sync Google Sheet (Manual — MUST BE BEFORE /:id routes!)
 router.post('/sync-sheet', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.syncLeads);

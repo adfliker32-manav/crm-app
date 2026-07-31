@@ -49,10 +49,17 @@ const getAgentLimitValue = (workspace) => workspace?.agentLimit || DEFAULT_AGENT
 // claim against the target user's live User.tokenVersion and rejects on mismatch.
 // Omitting it would send every impersonation attempt into an instant 401 for any
 // user who has ever reset their password (tokenVersion > 0).
+//
+// ⚠️ `userId` MUST be included alongside `id`. Controllers across the codebase read
+// `req.user.userId` directly, and Mongoose resolves `findById(undefined)` to the
+// filter `{}` — i.e. the FIRST document in the collection. A token carrying only
+// `id` therefore turned `/auth/me` into "return an arbitrary user" and
+// `/auth/accept-terms` into "write to an arbitrary user". Emit both claims.
 const generateToken = (id, role, tokenVersion = 0) => {
     return jwt.sign(
         {
             id,
+            userId: id,
             role,
             tv: tokenVersion || 0,
             // Impersonation is a 1-day, non-sliding session, so the absolute cap
@@ -1312,6 +1319,16 @@ const updateSettings = async (req, res) => {
 const impersonateUser = async (req, res) => {
     try {
         const { userId } = req.body; // Target ID
+
+        // ⚠️ MUST be validated before the lookup. BSON drops an undefined value
+        // rather than serializing it as null, so User.findById(undefined) becomes
+        // findOne({}) and returns an ARBITRARY user — which this handler would then
+        // mint a valid impersonation token for. The route-level validateObjectId
+        // treats BODY fields as optional (only params are required), so a request
+        // that simply omits userId passes it. This check is the authoritative one.
+        if (typeof userId !== 'string' || !/^[a-f\d]{24}$/i.test(userId)) {
+            return res.status(400).json({ message: "A valid userId is required to impersonate." });
+        }
 
         const targetUser = await User.findById(userId);
         if (!targetUser) {

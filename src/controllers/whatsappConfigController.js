@@ -3,6 +3,20 @@ const WorkspaceSettings = require('../models/WorkspaceSettings');
 const axios = require('axios');
 const { encryptToken } = require('../utils/encryptionUtils');
 const { extractCountryCodeFromDisplayPhone } = require('../utils/phoneUtils');
+const { invalidateCompanyUserIds } = require('../utils/whatsappUtils');
+const User = require('../models/User');
+
+// Evict the cached WhatsApp data scope for a workspace owner AND every agent
+// under them — each caches its own key, so clearing only the owner leaves the
+// agents reading a stale scope for the rest of the TTL.
+const invalidateCompanyScope = async (ownerId) => {
+    try {
+        const agents = await User.find({ parentId: ownerId }, { _id: 1 }).lean();
+        invalidateCompanyUserIds(ownerId, ...agents.map(a => a._id));
+    } catch (e) {
+        console.warn('[WhatsAppConfig] scope cache eviction failed:', e.message);
+    }
+};
 
 // Connect WhatsApp via manual credentials (WABA ID, Phone Number ID, Access Token, App ID, App Secret)
 exports.connectWhatsAppManual = async (req, res) => {
@@ -88,6 +102,8 @@ exports.connectWhatsAppManual = async (req, res) => {
             console.warn(`⚠️ Webhook subscription failed for WABA ${wabaId}:`, subErr.response?.data?.error?.message || subErr.message);
         }
 
+        await invalidateCompanyScope(ownerId);
+
         console.log(`✅ WhatsApp manual connect for tenant ${ownerId}: WABA ${wabaId}, Phone ${phoneNumberId}`);
         res.json({
             success: true,
@@ -126,6 +142,10 @@ exports.disconnectWhatsApp = async (req, res) => {
                 }
             }
         );
+        // The company scope is cached for 5 minutes; evict it so the change is
+        // visible on the next request instead of at the end of the TTL.
+        await invalidateCompanyScope(ownerId);
+
         console.log(`✅ WhatsApp disconnected for tenant ${ownerId}`);
         res.json({ success: true, message: 'WhatsApp disconnected successfully' });
     } catch (error) {
@@ -444,6 +464,8 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
                 );
             }
         } catch (e) { /* non-fatal */ }
+
+        await invalidateCompanyScope(ownerId);
 
         // Subscribe the WABA to receive webhook events (incoming messages)
         let webhookSubscribed = false;

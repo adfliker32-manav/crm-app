@@ -71,8 +71,29 @@ const ConditionNode = {
     },
 
     execute: async (context, data) => {
-        const conditions = data.conditions || [];
+        const conditions = Array.isArray(data.conditions) ? data.conditions : [];
         const matchType  = data.matchType || 'ALL';
+
+        // ── WF-M8 FIX: no conditions is not "true" ──────────────────────────────
+        // `finalResult` seeds to true for matchType ALL, so an empty condition list
+        // fell straight through to the 'true' port — a vacuous truth that reads as a
+        // working filter. validate() rejects this at publish, but updateWorkflow only
+        // checks node TYPES, so a draft (or an imported / API-written workflow) can
+        // carry `data: {}` and reach the worker. Route it to 'false' and say why: an
+        // unconfigured filter must never let every lead through.
+        if (conditions.length === 0) {
+            console.warn(
+                `[ConditionNode] No conditions configured (execution ${context.executionId}) — ` +
+                `routing to 'false' rather than letting everything through.`
+            );
+            return {
+                nextPort: 'false',
+                output: {
+                    'condition.result': false,
+                    'condition.error':  'no_conditions_configured'
+                }
+            };
+        }
 
         // WEAK #6 FIX: Use shared evaluateCondition() from operators.js
         // Previously parseValue + OPERATORS were copy-pasted from SwitchNode.

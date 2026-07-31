@@ -21,7 +21,13 @@ const InternalNotificationNode = {
 
     ports: () => ({
         inputs:  [{ id: 'input',  label: 'In' }],
-        outputs: [{ id: 'output', label: 'Sent' }]
+        outputs: [
+            { id: 'output', label: 'Sent' },
+            // WF-M3: "nobody to notify" is a real outcome an author needs to handle
+            // (fall back to the owner, raise a task, escalate). It used to report the
+            // same success as a delivered notification.
+            { id: 'no_recipient', label: 'No Recipient' }
+        ]
     }),
 
     schema: () => ({
@@ -67,8 +73,30 @@ const InternalNotificationNode = {
             timestamp: new Date()
         };
 
-        if (data.targetRole === 'assigned_agent' && lead?.assignedTo) {
+        // WF-M3 FIX: count who was actually notified. This node returned
+        // `notification.sent: true` unconditionally — including when targetRole was
+        // 'assigned_agent' and the lead had no assignee, in which case NOTHING was
+        // emitted at all. The history, the variables and the canvas all showed a
+        // successful notification for a message nobody received.
+        let notified = 0;
+
+        if (data.targetRole === 'assigned_agent') {
+            if (!lead?.assignedTo) {
+                console.warn(
+                    `[InternalNotificationNode] Lead ${lead?._id ?? 'N/A'} has no assigned agent — ` +
+                    `nothing to notify (execution ${context.executionId}).`
+                );
+                return {
+                    nextPort: 'no_recipient',
+                    output: {
+                        'notification.sent':      false,
+                        'notification.recipients': 0,
+                        'notification.reason':    'lead_has_no_assignee'
+                    }
+                };
+            }
             emitToUser(lead.assignedTo.toString(), 'workflow:notification', payload);
+            notified = 1;
         } else if (data.targetRole === 'manager' || data.targetRole === 'all') {
             const query = data.targetRole === 'manager'
                 ? { parentId: tenantId, role: 'manager' }
@@ -89,11 +117,19 @@ const InternalNotificationNode = {
             }
             // Also notify the owner
             emitToUser(tenantId, 'workflow:notification', payload);
+            notified = users.length + 1;
         }
 
+        // WF-M3: Socket.IO delivery is best-effort — an agent who is offline right now
+        // simply never sees this. Say so in the output rather than implying delivery,
+        // so `notification.recipients` means "addressed", not "read".
         return {
             nextPort: 'output',
-            output: { 'notification.sent': true }
+            output: {
+                'notification.sent':       notified > 0,
+                'notification.recipients': notified,
+                'notification.message':    message
+            }
         };
     }
 };

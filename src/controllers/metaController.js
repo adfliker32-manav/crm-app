@@ -872,7 +872,7 @@ const getCapiSettings = async (req, res) => {
         const ownerId = req.tenantId;
         // Must use '+' prefix to include select:false fields (metaCapiAccessToken)
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('+meta.metaCapiAccessToken meta.metaPixelId meta.metaTestEventCode meta.metaCapiEnabled meta.metaStageMapping');
+            .select('+meta.metaCapiAccessToken meta.metaPixelId meta.metaTestEventCode meta.metaCapiEnabled meta.metaStageMapping meta.metaDefaultCurrency');
 
         const meta = config?.meta || {};
 
@@ -889,6 +889,7 @@ const getCapiSettings = async (req, res) => {
             hasAccessToken,
             testEventCode: meta.metaTestEventCode,
             capiEnabled: meta.metaCapiEnabled,
+            currency: meta.metaDefaultCurrency || 'INR',
             stageMapping: meta.metaStageMapping || {
                 first: 'New',
                 middle: 'Contacted',
@@ -906,7 +907,7 @@ const getCapiSettings = async (req, res) => {
 const updateCapiSettings = async (req, res) => {
     try {
         const ownerId = req.tenantId;
-        const { pixelId, capiAccessToken, testEventCode, capiEnabled, stageMapping } = req.body;
+        const { pixelId, capiAccessToken, testEventCode, capiEnabled, stageMapping, currency } = req.body;
 
         const updateData = {};
 
@@ -917,8 +918,18 @@ const updateCapiSettings = async (req, res) => {
         if (capiAccessToken !== undefined && !String(capiAccessToken).startsWith('••••')) {
             updateData['meta.metaCapiAccessToken'] = String(capiAccessToken).trim();
         }
-        if (testEventCode !== undefined) updateData['meta.metaTestEventCode'] = String(testEventCode).trim();
+        if (testEventCode !== undefined) {
+            updateData['meta.metaTestEventCode'] = String(testEventCode).trim();
+            // Stamp when a (non-empty) code was saved — the sender ignores codes
+            // older than 24h so a forgotten test code can't taint production events.
+            updateData['meta.metaTestEventCodeSetAt'] = String(testEventCode).trim() ? new Date() : null;
+        }
         if (capiEnabled !== undefined) updateData['meta.metaCapiEnabled'] = !!capiEnabled;
+        // ISO 4217 code for Purchase value reporting; anything malformed falls back to INR
+        if (currency !== undefined) {
+            const cur = String(currency).trim().toUpperCase();
+            updateData['meta.metaDefaultCurrency'] = /^[A-Z]{3}$/.test(cur) ? cur : 'INR';
+        }
         // Whitelist the 4 known keys and coerce to trimmed strings — a malformed
         // body would otherwise CastError (500) or store junk shapes in the config.
         if (stageMapping !== undefined && typeof stageMapping === 'object' && stageMapping !== null) {

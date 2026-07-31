@@ -39,6 +39,7 @@ const MetaConfigSection = () => {
         pixelId: '',
         capiAccessToken: '',
         testEventCode: '',
+        currency: 'INR',
         capiEnabled: false,
         stageMapping: {
             first: 'New',
@@ -166,6 +167,7 @@ const MetaConfigSection = () => {
                 pixelId: res.data.pixelId || '',
                 capiAccessToken: res.data.capiAccessToken || '',
                 testEventCode: res.data.testEventCode || '',
+                currency: res.data.currency || 'INR',
                 capiEnabled: res.data.capiEnabled || false,
                 stageMapping: res.data.stageMapping || {
                     first: 'New',
@@ -889,7 +891,26 @@ const MetaConfigSection = () => {
                                 className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
                             />
                             <p className="text-xs text-slate-500 mt-1">
-                                Get from Events Manager → Test Events tab. Remove after testing.
+                                Get from Events Manager → Test Events tab. Auto-expires 24h after saving so it can't affect live events.
+                            </p>
+                        </div>
+
+                        {/* Purchase Currency */}
+                        <div>
+                            <label className="block text-sm font-semibold text-slate-700 mb-2">
+                                Purchase Currency
+                            </label>
+                            <select
+                                value={capiSettings.currency}
+                                onChange={(e) => setCapiSettings(prev => ({ ...prev, currency: e.target.value }))}
+                                className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none bg-white"
+                            >
+                                {['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD'].map(c => (
+                                    <option key={c} value={c}>{c}</option>
+                                ))}
+                            </select>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Currency reported with the deal value on qualified-stage (Purchase) events — used by Meta for ROAS.
                             </p>
                         </div>
 

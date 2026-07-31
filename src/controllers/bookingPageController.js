@@ -14,8 +14,21 @@ const { normalizePhoneForWhatsApp, getWorkspaceCountryCode } = require('../utils
 const { replaceVariables } = require('../utils/emailTemplateUtils');
 
 const slugify    = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-const buildSlug  = (userId, prefix) => {
-    const suffix = userId.toString().slice(-8);
+// The suffix exists only to make the slug unique — it is NOT an identifier.
+// It used to be `userId.toString().slice(-8)`, which published 8 hex characters of
+// the workspace owner's User._id on a page that is public by design, narrowing the
+// search space for anyone trying to guess that id. A random suffix is unique just
+// as well and discloses nothing.
+//
+// `existingSuffix` keeps the public URL STABLE: the old scheme was derived from the
+// userId, so rebuilding a slug always produced the same suffix. A purely random one
+// would mint a new public URL every time the page config is saved and silently break
+// every link already handed to customers. So renames reuse the suffix they already had.
+const SLUG_SUFFIX_RE = /-([a-f\d]{8})$/i;
+const buildSlug = (prefix, existingSuffix) => {
+    const suffix = (existingSuffix && /^[a-f\d]{8}$/i.test(existingSuffix))
+        ? existingSuffix
+        : require('crypto').randomBytes(4).toString('hex');
     const clean  = prefix ? slugify(prefix) : '';
     return clean ? `${clean}-${suffix}` : `book-${suffix}`;
 };
@@ -295,12 +308,15 @@ const submitBooking = async (req, res) => {
                         WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: leadDoc }).catch(err =>
                             console.error('[Booking Page] WorkflowEngine LEAD_CREATED error:', err.message)
                         );
-                        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc }).catch(err =>
+                        // isInitialStage: placed in a stage on creation, not moved
+                        // between two — stops it satisfying a `fromStage` filter.
+                        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc, isInitialStage: true }).catch(err =>
                             console.error('[Booking Page] WorkflowEngine STAGE_CHANGED error:', err.message)
                         );
                     } else if (stageNameToSet && lead.status !== stageNameToSet) {
-                        // 2. If stage changed, fire STAGE_CHANGED
-                        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc }).catch(err =>
+                        // 2. A real transition — no isInitialStage, and the previous
+                        // stage is known here, so pass it for `fromStage` filters.
+                        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc, fromStage: lead.status, toStage: stageNameToSet }).catch(err =>
                             console.error('[Booking Page] WorkflowEngine STAGE_CHANGED error:', err.message)
                         );
                     }
@@ -455,7 +471,7 @@ const getMyBookingPage = async (req, res) => {
 
         if (!page) {
             const user = await User.findById(userId).select('name').lean();
-            const slug = buildSlug(userId, user?.name || '');
+            const slug = buildSlug(user?.name || '');
             const newPage = new BookingPage({
                 userId,
                 slug,
@@ -502,9 +518,17 @@ const updateMyBookingPage = async (req, res) => {
             updates.confirmationTemplateId = coerced;
         }
 
-        // Regenerate slug when user changes the slug prefix
+        // Regenerate the slug only when the prefix ACTUALLY changes. The client
+        // posts the whole config on every save, so rebuilding unconditionally would
+        // re-mint the public URL each time and break links already in customers'
+        // hands. The existing random suffix is carried over so a rename keeps the
+        // same suffix rather than inventing a new one.
         if ('slugPrefix' in updates) {
-            updates.slug = buildSlug(userId, updates.slugPrefix);
+            const current = await BookingPage.findOne({ userId }).select('slug slugPrefix').lean();
+            if (!current || current.slugPrefix !== updates.slugPrefix) {
+                const existingSuffix = current?.slug ? (current.slug.match(SLUG_SUFFIX_RE)?.[1] || null) : null;
+                updates.slug = buildSlug(updates.slugPrefix, existingSuffix);
+            }
         }
 
         let page = await BookingPage.findOneAndUpdate(
@@ -514,7 +538,7 @@ const updateMyBookingPage = async (req, res) => {
         );
 
         if (!page) {
-            const slug = buildSlug(userId);
+            const slug = buildSlug();
             page = new BookingPage({ userId, slug, ...updates });
             await page.save();
         }

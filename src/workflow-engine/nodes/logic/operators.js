@@ -134,8 +134,14 @@ const OPERATORS = {
 // engine and nodes actually write.
 const VARIABLE_NAMESPACES = [
     'lead.', 'tenant.', 'webhook.', 'signal.', 'payload.',
+    // WF-H1: the trigger's own payload — the inbound WhatsApp message, the booked
+    // appointment, the voice call log, the changed stage, the tags that were added.
+    // Without this namespace publish-time validation rejected every reference to it.
+    'trigger.',
     'http.', 'ai.', 'whatsapp.', 'email.', 'voice.', 'wait.',
-    'switch.', 'condition.', 'field.', 'notification.', 'assign.', 'test.'
+    'switch.', 'condition.', 'field.', 'notification.', 'assign.', 'test.',
+    // Row 27: iteration-local values, readable via context.get()/{{loop.item}}.
+    'loop.', 'merge.'
 ];
 
 const resolveCompareValue = (compareValue, context) => {

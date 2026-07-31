@@ -8,7 +8,7 @@ const axios = require('axios');
 const Papa = require('papaparse');
 const { sendAutomatedEmailOnLeadCreate, sendAutomatedEmailOnStageChange } = require('../services/emailAutomationService');
 const { sendAutomatedWhatsAppOnLeadCreate, sendAutomatedWhatsAppOnStageChange } = require('../services/whatsappAutomationService');
-const { sendMetaEvent } = require('../services/metaConversionService');
+const { sendMetaEventForLead } = require('../services/metaConversionService');
 const { sendEmail } = require('../services/emailService');
 const { logActivity } = require('../services/auditService');
 const { findDuplicates, findAllDuplicateGroups, normalizePhone } = require('../services/duplicateService');
@@ -40,7 +40,10 @@ const ALLOWED_LEAD_UPDATE_FIELDS = new Set([
 
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
-const isValidLeadId = (value) => mongoose.Types.ObjectId.isValid(value);
+// Strict 24-char hex, NOT mongoose.Types.ObjectId.isValid(): that helper accepts
+// any 12-character string (12 bytes is a valid raw ObjectId) and then casts it to
+// a DIFFERENT id than the caller supplied.
+const isValidLeadId = (value) => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
 
 const appendLeadHistory = (leadId, historyEntry) =>
     Lead.findByIdAndUpdate(leadId, {
@@ -133,7 +136,11 @@ const queueLeadCreatedEffects = (lead, ownerId, options = {}) => {
     // New Workflow Engine — runs in parallel, non-blocking
     runInBackground('Workflow Engine Error (LEAD_CREATED/STAGE_CHANGED):', () => {
         WorkflowEngine.fireTrigger('LEAD_CREATED', { lead });
-        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead });
+        // isInitialStage: creating a lead fires BOTH triggers, but the lead has not
+        // CHANGED stage — it was placed in one. The engine uses this to stop an
+        // initial placement satisfying a `fromStage` filter on a STAGE_CHANGED
+        // workflow, which would otherwise double-fire on every new lead.
+        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, isInitialStage: true });
     });
 
     runInBackground('Sequence enrollment error (LEAD_CREATED):', () => {
@@ -142,8 +149,9 @@ const queueLeadCreatedEffects = (lead, ownerId, options = {}) => {
     });
 
     // CAPI Lead event for manually created leads.
-    // skipCapi: bulk import sends CAPI itself with a single shared config fetch —
-    // without this flag every imported lead fired TWICE (here + the batch block).
+    // skipCapi: CSV bulk import sets this — imported rows are historical data,
+    // not fresh conversions, and reporting them to Meta with event_time = now
+    // would poison campaign attribution and value optimization (audit H1).
     if (!options.skipCapi) {
         sendMetaEventIfEnabled(lead, lead.status, null)
             .catch(err => console.error('Meta CAPI error (Lead Created):', err));
@@ -172,18 +180,12 @@ const queueLeadStageChangeEffects = (lead, fromStage = undefined) => {
 };
 
 const sendMetaEventIfEnabled = async (lead, newStatus, oldStatus) => {
-    try {
-        const config = await IntegrationConfig.findOne({ userId: lead.userId })
-            .select('+meta.metaCapiAccessToken +meta.metaCapiEnabled +meta.metaPixelId +meta.metaStageMapping +meta.metaTestEventCode');
-
-        if (config && config.meta?.metaCapiEnabled) {
-            runInBackground('Meta CAPI error (non-blocking):', () =>
-                sendMetaEvent(config, lead, newStatus, oldStatus)
-            );
-        }
-    } catch (err) {
-        console.error('Error fetching config for Meta CAPI (non-blocking):', err);
-    }
+    // Outbox-backed single entry point: resolves config (incl. agent → parent
+    // fallback), dedupes, and guarantees delivery-or-visible-failure via the
+    // CapiEventOutbox drain cron.
+    runInBackground('Meta CAPI error (non-blocking):', () =>
+        sendMetaEventForLead(lead, newStatus, oldStatus)
+    );
 };
 
 // ==========================================
@@ -945,23 +947,13 @@ const syncLeads = async (req, res) => {
             const insertedLeads = await Lead.insertMany(leadsToInsert);
             count = insertedLeads.length;
 
-            // Trigger automations safely without blocking main thread
-            setTimeout(async () => {
+            // Trigger automations safely without blocking main thread.
+            // AUDIT H1: no CAPI here — CSV rows are historical records, not fresh
+            // conversions. The old batch block fired one unbounded parallel "Lead"
+            // event per row with event_time = now, flooding Meta with stale,
+            // wrongly-timestamped conversions on every import.
+            setTimeout(() => {
                 insertedLeads.forEach(newLead => queueLeadCreatedEffects(newLead, userId, { skipCapi: true }));
-
-                // Fetch CAPI config once for the whole batch — avoids N×1 DB queries
-                try {
-                    const capiConfig = await IntegrationConfig.findOne({ userId })
-                        .select('+meta.metaCapiAccessToken +meta.metaCapiEnabled +meta.metaPixelId +meta.metaStageMapping +meta.metaTestEventCode');
-                    if (capiConfig?.meta?.metaCapiEnabled) {
-                        insertedLeads.forEach(newLead => {
-                            sendMetaEvent(capiConfig, newLead, newLead.status, null)
-                                .catch(err => console.error('Meta CAPI error (Sheet Sync):', err));
-                        });
-                    }
-                } catch (err) {
-                    console.error('Meta CAPI config fetch error (Sheet Sync):', err);
-                }
             }, 0);
         }
 
@@ -1686,6 +1678,22 @@ const bulkDeleteLeads = async (req, res) => {
             return res.status(400).json({ message: "No leads selected for deletion" });
         }
 
+        // Validate every id before it reaches $in. One malformed entry made Mongoose
+        // throw a CastError for the WHOLE batch, so a single bad id turned a bulk
+        // delete into a 500 with nothing deleted and no indication of which id.
+        const invalid = ids.filter(id => !isValidLeadId(id));
+        if (invalid.length > 0) {
+            return res.status(400).json({
+                message: `Invalid lead ID format (${invalid.length} of ${ids.length})`,
+                invalidIds: invalid.slice(0, 10)
+            });
+        }
+
+        // Cap the batch so one request cannot delete an unbounded slice of the tenant.
+        if (ids.length > 500) {
+            return res.status(400).json({ message: 'Too many leads in one request. Delete at most 500 at a time.' });
+        }
+
         // Tenant-scoped delete — can only delete leads you own
         const result = await Lead.deleteMany({
             _id: { $in: ids },
@@ -1725,6 +1733,18 @@ const bulkUpdateStatus = async (req, res) => {
         }
         if (!status) {
             return res.status(400).json({ message: "Status is required" });
+        }
+
+        // Same reasoning as bulkDeleteLeads: one bad id must not 500 the batch.
+        const invalid = ids.filter(id => !isValidLeadId(id));
+        if (invalid.length > 0) {
+            return res.status(400).json({
+                message: `Invalid lead ID format (${invalid.length} of ${ids.length})`,
+                invalidIds: invalid.slice(0, 10)
+            });
+        }
+        if (ids.length > 500) {
+            return res.status(400).json({ message: 'Too many leads in one request. Update at most 500 at a time.' });
         }
 
         const result = await Lead.updateMany(

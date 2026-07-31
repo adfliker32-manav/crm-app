@@ -208,8 +208,13 @@ test('C7: every settleBranches call that routes onward checks the terminal signa
     // continueOnError error-route. They enqueue nothing that depends on the result —
     // a terminal execution simply has nothing left to settle — so they are
     // deliberately unchecked. Pin the count so a new unchecked routing site is caught.
+    //
+    // WF-C2 dropped this from 3 to 2: the join-absorb path no longer goes through
+    // settleBranches at all, because settleBranches COMPLETES an execution when the
+    // counter reaches zero — and a barrier absorbing the last token means deadlock,
+    // not success. It settles the token inline and diagnoses instead.
     const unchecked = (e.match(/(?<!const settled = )await settleBranches\(/g) || []).length;
-    assert.strictEqual(unchecked, 3, 'unexpected unchecked settleBranches call — is it routing onward?');
+    assert.strictEqual(unchecked, 2, 'unexpected unchecked settleBranches call — is it routing onward?');
 });
 
 // ─── C8: cross-workflow loop guard ───────────────────────────────────────────

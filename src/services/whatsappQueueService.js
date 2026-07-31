@@ -119,7 +119,7 @@ const defineWhatsAppJobs = (agenda) => {
             const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
             const Lead = require('../models/Lead');
             const AutomationLock = require('../models/AutomationLock');
-            const { sendWhatsAppMessage } = require('./whatsappService');
+            const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
 
             const watcher = await LeadAutomationWatcher.findById(watcherId);
 
@@ -152,8 +152,22 @@ const defineWhatsAppJobs = (agenda) => {
                 await Lead.findByIdAndUpdate(watcher.leadId, updates);
             }
 
-            if (watcher.ifNoReplyAction?.sendTemplateId && lead.phone) {
-                const result = await sendWhatsAppMessage(lead.phone, watcher.ifNoReplyAction.sendTemplateId, watcher.tenantId.toString());
+            // Meta rejects anything not APPROVED. Without this pre-check a rejected
+            // or quality-paused template was fired at the API once per timed-out
+            // watcher, producing a stream of failures and no follow-up.
+            const noReplyGate = watcher.ifNoReplyAction?.sendTemplateId && lead.phone
+                ? await checkTemplateSendable(watcher.tenantId.toString(), watcher.ifNoReplyAction.sendTemplateId)
+                : null;
+            if (noReplyGate && !noReplyGate.ok) {
+                console.warn(
+                    `[Timeout] No-reply follow-up skipped — template ` +
+                    `"${watcher.ifNoReplyAction.sendTemplateId}" is ${noReplyGate.reason}.`
+                );
+            } else if (watcher.ifNoReplyAction?.sendTemplateId && lead.phone) {
+                const result = await sendWhatsAppMessage(
+                    lead.phone, watcher.ifNoReplyAction.sendTemplateId, watcher.tenantId.toString(),
+                    null, noReplyGate?.template?.language
+                );
                 console.log(`📤 [Timeout] No-reply follow-up template sent to ${lead.phone}`);
 
                 // FIX: Sync the no-reply template to conversation DB (was a ghost message)

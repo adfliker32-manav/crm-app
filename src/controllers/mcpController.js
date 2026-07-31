@@ -27,6 +27,44 @@ const periodStart = (period) => {
     return null; // 'all'
 };
 
+/**
+ * Every side effect a pipeline stage change must produce.
+ *
+ * The MCP tools used to write `status` with a bare `$set`, so moving a lead
+ * through the pipeline from Claude fired NO automation, NO workflow trigger and
+ * NO Meta CAPI conversion event, and left `stageEnteredAt` pointing at the
+ * previous stage's entry time (silently corrupting stage-age reporting). Every
+ * other write path — leadController, extApiController, the webhooks — does all
+ * four. This is the shared implementation so the MCP path cannot drift again.
+ *
+ * Detached on purpose: an automation failure must not fail the tool call, but it
+ * must still be logged rather than becoming an unhandled rejection.
+ */
+const fireStageChange = (lead, prevStatus, newStatus) => {
+    const label = `[MCP] stage-change side effect (${prevStatus} → ${newStatus})`;
+
+    Promise.resolve()
+        .then(async () => {
+            const { evaluateLead } = require('../services/AutomationService');
+            await evaluateLead(lead, 'STAGE_CHANGED');
+        })
+        .catch(err => console.error(`${label} — automation:`, err.message));
+
+    Promise.resolve()
+        .then(async () => {
+            const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+            await WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, startedBy: 'mcp' });
+        })
+        .catch(err => console.error(`${label} — workflow:`, err.message));
+
+    Promise.resolve()
+        .then(async () => {
+            const { sendMetaEventForLead } = require('../services/metaConversionService');
+            await sendMetaEventForLead(lead, newStatus, prevStatus);
+        })
+        .catch(err => console.error(`${label} — Meta CAPI:`, err.message));
+};
+
 const periodRange = (period) => {
     const now = new Date();
     if (period === 'today') return { start: new Date(now.getFullYear(), now.getMonth(), now.getDate()), end: now };
@@ -1090,9 +1128,31 @@ const toolHandlers = {
 
         if (Object.keys(updates).length === 0) throw new Error('No fields to update. Provide at least one field to change.');
 
-        const updated = await Lead.findByIdAndUpdate(leadId, { $set: updates }, { new: true })
+        // A stage change is not a plain field write — it has to carry the same
+        // bookkeeping and downstream triggers as every other write path.
+        const prevStatus = lead.status;
+        const stageChanged = status !== undefined && status !== prevStatus;
+
+        const mutation = { $set: updates };
+        if (stageChanged) {
+            updates.stageEnteredAt = new Date();
+            mutation.$push = {
+                history: {
+                    type: 'System',
+                    subType: 'Stage Change',
+                    content: `Stage changed from "${prevStatus}" to "${status}" via AI assistant`,
+                    date: new Date()
+                }
+            };
+        }
+
+        const updated = await Lead.findByIdAndUpdate(leadId, mutation, { new: true })
             .select('name phone email status source dealValue tags qualificationLevel')
             .lean();
+
+        if (stageChanged) {
+            fireStageChange({ ...lead, ...updates, _id: lead._id }, prevStatus, status);
+        }
 
         return {
             success: true,
@@ -1189,9 +1249,20 @@ const toolHandlers = {
         };
 
         if (note) update.$push.notes = { text: note, date: now };
-        if (markedAsDeadLead) update.$set.status = 'Dead Lead';
+
+        // Marking dead IS a stage change — same bookkeeping + triggers as update_lead.
+        const prevStatus = lead.status;
+        const goesDead = markedAsDeadLead && prevStatus !== 'Dead Lead';
+        if (markedAsDeadLead) {
+            update.$set.status = 'Dead Lead';
+            if (goesDead) update.$set.stageEnteredAt = now;
+        }
 
         await Lead.findByIdAndUpdate(leadId, update);
+
+        if (goesDead) {
+            fireStageChange({ ...lead, status: 'Dead Lead' }, prevStatus, 'Dead Lead');
+        }
 
         return {
             success: true,

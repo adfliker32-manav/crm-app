@@ -8,43 +8,59 @@ const AgencySettings = require('../models/AgencySettings');
  */
 const meterUsage = (channel) => async (req, res, next) => {
     try {
-        // The tenant's agencyId is injected by authMiddleware
-        const agencyId = req.user.agencyId || req.user.userId;
+        // ⚠️ Meter the TENANT, not the caller. `req.user.agencyId` is not a JWT
+        // claim (buildAuthPayload emits userId/role/name/permissions/tenantId/tv),
+        // so this always fell through to the caller's own id — which for an agent
+        // is the agent, giving every agent their own private quota and making the
+        // tenant's monthly cap unenforceable. `req.tenantId` is the workspace owner.
+        const agencyId = req.tenantId || req.user?.agencyId || req.user?.userId || req.user?.id;
         if (!agencyId) return next(); // Skip metering for SuperAdmins
 
-        const settings = await AgencySettings.findOne({ agencyId });
+        const settings = await AgencySettings.findOne({ agencyId }).lean();
         if (!settings) return next(); // No plan set up, allow through
 
+        const field = channel === 'whatsapp' ? 'whatsappSent' : 'emailsSent';
+        const limitField = channel === 'whatsapp' ? 'whatsappMessagesPerMonth' : 'emailsPerMonth';
+        const limit = settings.planLimits?.[limitField];
+        if (typeof limit !== 'number') return next(); // No cap configured
+
         const now = new Date();
-        const periodStart = new Date(settings.usage.periodStart);
-        const diffDays = (now - periodStart) / (1000 * 60 * 60 * 24);
+        const periodStart = settings.usage?.periodStart ? new Date(settings.usage.periodStart) : now;
+        const periodExpired = (now - periodStart) / (1000 * 60 * 60 * 24) >= 30;
 
-        // Reset counters if a new billing month has started
-        if (diffDays >= 30) {
-            settings.usage.whatsappSent = 0;
-            settings.usage.emailsSent = 0;
-            settings.usage.periodStart = now;
+        if (periodExpired) {
+            // Roll the window. Conditioned on the period we just observed so two
+            // concurrent requests cannot both reset (which would zero one's count).
+            await AgencySettings.updateOne(
+                { agencyId, 'usage.periodStart': settings.usage?.periodStart },
+                { $set: { 'usage.whatsappSent': 0, 'usage.emailsSent': 0, 'usage.periodStart': now } }
+            );
         }
 
-        if (channel === 'whatsapp') {
-            const limit = settings.planLimits.whatsappMessagesPerMonth;
-            if (settings.usage.whatsappSent >= limit) {
-                return res.status(429).json({
-                    message: `WhatsApp message limit reached (${limit}/month). Please upgrade your plan.`
-                });
-            }
-            settings.usage.whatsappSent += 1;
-        } else if (channel === 'email') {
-            const limit = settings.planLimits.emailsPerMonth;
-            if (settings.usage.emailsSent >= limit) {
-                return res.status(429).json({
-                    message: `Email limit reached (${limit}/month). Please upgrade your plan.`
-                });
-            }
-            settings.usage.emailsSent += 1;
+        // Atomic check-and-increment. The previous read-modify-write via
+        // settings.save() lost increments whenever two sends overlapped, so the
+        // recorded usage drifted below reality and the cap leaked.
+        const claimed = await AgencySettings.findOneAndUpdate(
+            { agencyId, [`usage.${field}`]: { $lt: limit } },
+            { $inc: { [`usage.${field}`]: 1 } },
+            { new: true }
+        ).lean();
+
+        if (!claimed) {
+            return res.status(429).json({
+                message: channel === 'whatsapp'
+                    ? `WhatsApp message limit reached (${limit}/month). Please upgrade your plan.`
+                    : `Email limit reached (${limit}/month). Please upgrade your plan.`
+            });
         }
 
-        await settings.save();
+        // Hand the caller a way to give the unit back if the send itself fails —
+        // otherwise a provider outage silently burns the tenant's quota.
+        req.refundUsage = () => AgencySettings.updateOne(
+            { agencyId, [`usage.${field}`]: { $gt: 0 } },
+            { $inc: { [`usage.${field}`]: -1 } }
+        ).catch(err => console.error('Usage refund error:', err.message));
+
         next();
     } catch (error) {
         console.error('Usage metering error:', error);

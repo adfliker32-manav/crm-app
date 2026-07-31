@@ -105,6 +105,89 @@ const findWorkflowCycle = (nodes = [], connections = []) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// WF-C2 FIX: unreachable join detection
+// ─────────────────────────────────────────────────────────────────────────────
+// A Merge step waits for N branches. Its default N is derived from the graph, and a
+// node only ever emits ONE port per run — so wiring both the 'true' and the 'false'
+// port of an If/Else into one Merge (the obvious way to rejoin branches) creates a
+// barrier that can never be satisfied. At runtime the merge absorbed the single
+// token it got, the branch counter drained to zero, and the execution was reported
+// COMPLETED with every step after the merge silently never run.
+//
+// The engine now detects that at runtime and fails loudly, but the author should
+// never get that far. Two incoming edges are MUTUALLY EXCLUSIVE when, somewhere in
+// their ancestry, they leave a common node through different ports.
+//
+// For each incoming edge we walk BACKWARDS and record, for every ancestor, the set
+// of ports used to leave it on some path to that edge. Two edges whose port sets for
+// a shared ancestor are disjoint can never both fire.
+const findUnsatisfiableJoins = (nodes = [], connections = []) => {
+    const realIds = new Set(nodes.map(n => n.id));
+    const conns = connections.filter(c => realIds.has(c.sourceNodeId) && realIds.has(c.targetNodeId));
+
+    // targetNodeId → incoming edges
+    const incomingBy = new Map();
+    for (const c of conns) {
+        if (!incomingBy.has(c.targetNodeId)) incomingBy.set(c.targetNodeId, []);
+        incomingBy.get(c.targetNodeId).push(c);
+    }
+
+    /** Map of ancestorNodeId → Set(exit ports used on some path to this edge). */
+    const ancestorExitPorts = (edge) => {
+        const map = new Map();
+        // Visit (nodeId, port) pairs so a node reached via two different ports is
+        // explored for both. The graph is already known to be acyclic here, but the
+        // seen-set keeps this safe if that ever changes.
+        const seen = new Set();
+        const stack = [[edge.sourceNodeId, edge.sourcePort || 'output']];
+        while (stack.length) {
+            const [nodeId, port] = stack.pop();
+            const key = `${nodeId} ${port}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            if (!map.has(nodeId)) map.set(nodeId, new Set());
+            map.get(nodeId).add(port);
+
+            for (const up of (incomingBy.get(nodeId) || [])) {
+                stack.push([up.sourceNodeId, up.sourcePort || 'output']);
+            }
+        }
+        return map;
+    };
+
+    const problems = [];
+    for (const node of nodes) {
+        if (node.type !== 'merge') continue;
+        // An explicit "Wait For" is the author telling us the real arity — trust it.
+        const explicit = node.data?.expectedInputs;
+        if (explicit !== undefined && explicit !== null && explicit !== '') continue;
+
+        const incoming = incomingBy.get(node.id) || [];
+        if (incoming.length < 2) continue;
+
+        const portMaps = incoming.map(ancestorExitPorts);
+
+        for (let i = 0; i < incoming.length && problems.length < 5; i++) {
+            for (let j = i + 1; j < incoming.length; j++) {
+                let exclusiveAt = null;
+                for (const [ancestor, portsA] of portMaps[i]) {
+                    const portsB = portMaps[j].get(ancestor);
+                    if (!portsB) continue;
+                    const shares = [...portsA].some(p => portsB.has(p));
+                    if (!shares) { exclusiveAt = { ancestor, portsA: [...portsA], portsB: [...portsB] }; break; }
+                }
+                if (exclusiveAt) {
+                    problems.push({ mergeId: node.id, ...exclusiveAt });
+                    break;
+                }
+            }
+        }
+    }
+    return problems;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // STOPPING LIVE WORK (H11 FIX)
 // ─────────────────────────────────────────────────────────────────────────────
 // Deleting or disabling a workflow used to touch only the definition and the cron
@@ -250,6 +333,26 @@ const validateForPublish = (workflow) => {
             `These steps can never run because nothing connects to them: ` +
             `${orphans.map(n => n.name || n.type).join(', ')}.`
         );
+    }
+
+    // ── WF-C2 FIX: a Merge that can never be satisfied ───────────────────────
+    // Wiring both sides of an If/Else into one Merge deadlocks the run. Catch it
+    // here with the node names, rather than letting the execution fail hours later.
+    const badJoins = findUnsatisfiableJoins(workflow.nodes, workflow.connections);
+    if (badJoins.length > 0) {
+        const nameOf = (id) => {
+            const n = workflow.nodes.find(nd => nd.id === id);
+            return n ? (n.name || n.type) : id;
+        };
+        for (const p of badJoins) {
+            errors.push(
+                `The step "${nameOf(p.mergeId)}" waits for branches that can never all arrive: ` +
+                `they come from different outcomes of "${nameOf(p.ancestor)}" ` +
+                `(${p.portsA.join('/')} vs ${p.portsB.join('/')}), and only one of those runs. ` +
+                `Set "Wait For" on the merge step to the number that really arrives, or connect ` +
+                `only branches that always run together.`
+            );
+        }
     }
 
     // ── M-C4 FIX: catch variable typos at publish ────────────────────────────
@@ -1115,11 +1218,28 @@ exports.testWorkflow = async (req, res) => {
             });
         }
 
+        // ── WF-H2 FIX: test the DRAFT, not the last-published definition ────────
+        // Edits to a published workflow are stored in `workflow.draft` so the live
+        // version keeps running (M-V3). Testing the live fields meant the author
+        // validated the very version they were replacing — the change under test was
+        // never executed. Publishing promotes the same fields, so this runs exactly
+        // what going live would run.
+        const d = workflow.draft;
+        const graphOverride = d ? {
+            nodes:         d.nodes,
+            connections:   d.connections,
+            variables:     d.variables,
+            settings:      d.settings,
+            triggerConfig: d.triggerConfig
+        } : null;
+        const triggerToFire = (d && d.trigger) || workflow.trigger;
+
         // Fire the trigger with 'test' mode — executions started as test are labeled separately
-        const executionIds = await WorkflowEngine.fireTrigger(workflow.trigger, {
+        const executionIds = await WorkflowEngine.fireTrigger(triggerToFire, {
             lead:       { ...lead, userId: tenantId },
             workflowId: workflow._id,
-            startedBy:  'test'
+            startedBy:  'test',
+            graphOverride
         });
 
         // M-V7 FIX: the 6×500ms poll loop held the request open for up to 3 seconds

@@ -13,17 +13,37 @@ const IMAGE_MIMES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image
 const VIDEO_MIMES = ['video/mp4', 'video/webm', 'video/quicktime'];
 const ALLOWED_MIMES = [...IMAGE_MIMES, ...VIDEO_MIMES];
 
+// The stored extension is derived from the accepted MIME type, never from the
+// client's filename. `payload.html` uploaded as `image/png` satisfied the MIME
+// filter and used to be written as `<uuid>.html`; served back from our own origin
+// under /uploads, that executes as same-origin script.
+const EXT_FOR_MIME = {
+    'image/jpeg': '.jpg',
+    'image/jpg':  '.jpg',
+    'image/png':  '.png',
+    'image/gif':  '.gif',
+    'image/webp': '.webp',
+    'video/mp4':  '.mp4',
+    'video/webm': '.webm',
+    'video/quicktime': '.mov'
+};
+
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB — video cap; images naturally smaller
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const ticketId = req.params.id || 'inbox';
+        // The id lands in a filesystem path, so it must be a strict ObjectId and
+        // never whatever the URL happened to contain. Routes also mount
+        // authorizeTicketAccess ahead of this middleware, so by the time we run
+        // the caller is already proven to own the ticket.
+        const raw = req.params.id;
+        const ticketId = /^[a-f\d]{24}$/i.test(String(raw || '')) ? String(raw) : 'inbox';
         const dir = path.join(SUPPORT_UPLOAD_ROOT, ticketId);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         cb(null, dir);
     },
     filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname).slice(0, 8);
+        const ext = EXT_FOR_MIME[file.mimetype] || '.bin';
         cb(null, `${uuidv4()}${ext}`);
     }
 });

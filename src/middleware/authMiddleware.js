@@ -82,8 +82,10 @@ const authMiddleware = async (req, res, next) => {
         // user's current tokenVersion. A password reset / permission change /
         // deactivation bumps that counter and every older token stops working.
         if (authUserId) {
-            let currentTv = tokenVersionCache.get(`tv_${authUserId}`);
-            if (currentTv === undefined) {
+            let cachedState = tokenVersionCache.get(`tv_${authUserId}`);
+            let currentTv;
+
+            if (cachedState === undefined) {
                 const userDoc = await User.findById(authUserId).select('tokenVersion is_active').lean();
                 // A deleted user must NOT keep access. Without this branch the
                 // lookup returns null, `?.tokenVersion || 0` collapses to 0, and a
@@ -95,14 +97,22 @@ const authMiddleware = async (req, res, next) => {
                         message: 'Account no longer exists. Please log in again.'
                     });
                 }
-                if (userDoc.is_active === false) {
-                    return res.status(401).json({
-                        error: 'account_deactivated',
-                        message: 'Account has been deactivated. Please contact your administrator.'
-                    });
-                }
                 currentTv = userDoc.tokenVersion || 0;
-                tokenVersionCache.set(`tv_${authUserId}`, currentTv);
+                // Cache the ACTIVE flag alongside the version. Previously only the
+                // number was cached, so the deactivation check ran on cache MISSES
+                // only — a user deactivated just after a cache fill kept full access
+                // for the rest of the TTL unless their tokenVersion also changed.
+                cachedState = { tv: currentTv, active: userDoc.is_active !== false };
+                tokenVersionCache.set(`tv_${authUserId}`, cachedState);
+            } else {
+                currentTv = cachedState.tv;
+            }
+
+            if (!cachedState.active) {
+                return res.status(401).json({
+                    error: 'account_deactivated',
+                    message: 'Account has been deactivated. Please contact your administrator.'
+                });
             }
 
             if ((decoded.tv || 0) !== currentTv) {
@@ -296,6 +306,11 @@ const requireFeature = (featureKey) => (req, res, next) => {
 // 🛡️ STRICT ROLE-BASED ACCESS CONTROL (RBAC) WRAPPER
 const requirePermission = (permissionKey) => {
     return (req, res, next) => {
+        // Mounted without authMiddleware this would throw and surface as a 500,
+        // i.e. an unauthenticated request would look like a server fault instead
+        // of being rejected. Fail closed with the correct status.
+        if (!req.user) return res.status(401).json({ message: 'Authentication required' });
+
         // Superadmins and agency owners bypass permission checks
         if (['superadmin', 'agency'].includes(req.user.role)) return next();
 

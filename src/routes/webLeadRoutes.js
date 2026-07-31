@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const webLeadController = require('../controllers/webLeadController');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const checkPermission = require('../middleware/checkPermission');
 const rateLimit = require('express-rate-limit');
 
 // ── Public capture endpoint — accessed from any landing page ─────────────────
@@ -25,8 +26,14 @@ router.options('/capture', (req, res) => {
 router.post('/capture', captureRateLimit, webLeadController.captureLead);
 
 // ── Authenticated config routes (used by CRM settings UI) ───────────────────
-router.get('/config', authMiddleware, webLeadController.getConfig);
-router.put('/config', authMiddleware, webLeadController.updateConfig);
-router.post('/regenerate', authMiddleware, webLeadController.regenerateKey);
+// SECURITY: these previously had authMiddleware ONLY. `accessSettings` was
+// enforced in the UI (Settings.jsx hides the tab) but never on the API, so any
+// authenticated agent could read the workspace's Web-to-Lead API key, rotate it
+// (silently breaking every customer landing page), or point `defaultAgent` at
+// themselves to self-assign all inbound web leads. The permission defaults to
+// false for agents, matching tagRoutes/emailRoutes.
+router.get('/config', authMiddleware, checkPermission('accessSettings'), webLeadController.getConfig);
+router.put('/config', authMiddleware, checkPermission('accessSettings'), webLeadController.updateConfig);
+router.post('/regenerate', authMiddleware, checkPermission('accessSettings'), webLeadController.regenerateKey);
 
 module.exports = router;

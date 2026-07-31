@@ -178,6 +178,43 @@ const buildAttachments = (req) => {
     }));
 };
 
+// multer has already written every accepted file to disk by the time a handler
+// runs, so any non-2xx exit leaves orphans behind. Nothing ever collected them,
+// which made a rejected upload a free way to consume disk indefinitely.
+const discardUploads = (req) => {
+    if (!req.files || !req.files.length) return;
+    for (const f of req.files) {
+        try { fs.unlinkSync(f.path); } catch (_) { /* already gone */ }
+    }
+};
+
+/**
+ * Ownership gate for ticket-scoped routes. MUST be mounted BEFORE the multer
+ * middleware: multer writes uploads into `uploads/support/<ticketId>/` derived
+ * straight from the URL, so authorising afterwards let any authenticated user
+ * drop files into any other tenant's ticket folder (and, via the authenticated
+ * `/uploads` static mount, read them back) before the 403 was ever returned.
+ *
+ * Stashes the ticket on `req.supportTicket` so the handler does not re-query.
+ */
+const authorizeTicketAccess = async (req, res, next) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const ticket = await SupportTicket.findById(req.params.id);
+        if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
+
+        if (req.user.role !== 'superadmin' && String(ticket.createdBy) !== String(userId)) {
+            return res.status(403).json({ message: 'Forbidden' });
+        }
+
+        req.supportTicket = ticket;
+        next();
+    } catch (err) {
+        console.error('authorizeTicketAccess error:', err);
+        res.status(500).json({ message: 'Failed to load ticket' });
+    }
+};
+
 // ─────────────────────────────────────────────
 // CUSTOMER (tenant-side) — any logged-in user
 // ─────────────────────────────────────────────
@@ -187,7 +224,10 @@ const createTicket = async (req, res) => {
         const userId = req.user.userId || req.user.id;
         const subject = (req.body.subject || '').trim();
         const firstMessage = (req.body.message || '').trim();
-        if (!subject) return res.status(400).json({ message: 'Subject is required' });
+        if (!subject) {
+            discardUploads(req);
+            return res.status(400).json({ message: 'Subject is required' });
+        }
         if (!firstMessage && (!req.files || !req.files.length)) {
             return res.status(400).json({ message: 'Please describe your issue or attach a screenshot/video' });
         }
@@ -329,6 +369,7 @@ Ticket Details:
         });
     } catch (err) {
         console.error('createTicket error:', err);
+        discardUploads(req);
         res.status(500).json({ message: 'Failed to create support ticket' });
     }
 };
@@ -349,14 +390,8 @@ const listMyTickets = async (req, res) => {
 
 const getTicketMessages = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const ticket = await SupportTicket.findById(req.params.id).lean();
-        if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
-
-        // Access control: customer can only see their own ticket; super admin can see any
-        if (req.user.role !== 'superadmin' && String(ticket.createdBy) !== String(userId)) {
-            return res.status(403).json({ message: 'Forbidden' });
-        }
+        // Ownership already enforced by authorizeTicketAccess.
+        const ticket = req.supportTicket;
 
         const messages = await SupportMessage.find({ ticketId: ticket._id })
             .sort({ createdAt: 1 })
@@ -380,17 +415,14 @@ const getTicketMessages = async (req, res) => {
 const sendMessage = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const ticket = await SupportTicket.findById(req.params.id);
-        if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
-
+        // Ownership already enforced by authorizeTicketAccess, before multer ran.
+        const ticket = req.supportTicket;
         const isSuper = req.user.role === 'superadmin';
-        if (!isSuper && String(ticket.createdBy) !== String(userId)) {
-            return res.status(403).json({ message: 'Forbidden' });
-        }
 
         const text = (req.body.text || '').trim();
         const attachments = buildAttachments(req);
         if (!text && !attachments.length) {
+            discardUploads(req);
             return res.status(400).json({ message: 'Message text or attachment required' });
         }
 
@@ -425,6 +457,7 @@ const sendMessage = async (req, res) => {
         res.status(201).json({ message: msg, ticket });
     } catch (err) {
         console.error('sendMessage error:', err);
+        discardUploads(req);
         res.status(500).json({ message: 'Failed to send message' });
     }
 };
@@ -433,14 +466,9 @@ const sendMessage = async (req, res) => {
 // Either side can close their own ticket; super admin can close any.
 const closeTicket = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const ticket = await SupportTicket.findById(req.params.id);
-        if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
-
+        // Ownership already enforced by authorizeTicketAccess.
+        const ticket = req.supportTicket;
         const isSuper = req.user.role === 'superadmin';
-        if (!isSuper && String(ticket.createdBy) !== String(userId)) {
-            return res.status(403).json({ message: 'Forbidden' });
-        }
 
         const ticketId = ticket._id.toString();
         const tenantUserId = ticket.createdBy;
@@ -526,6 +554,8 @@ const adminGetCannedReply = async (req, res) => {
 };
 
 module.exports = {
+    // middleware — must be mounted BEFORE any upload middleware on ticket routes
+    authorizeTicketAccess,
     // customer
     createTicket,
     listMyTickets,

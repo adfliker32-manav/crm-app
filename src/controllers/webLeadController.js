@@ -206,16 +206,7 @@ exports.captureLead = async (req, res) => {
         return res.status(401).json({ success: false, message: 'Invalid API key' });
     }
 
-    // ── LAYER 3: Per-key rate limit (minute + daily) ─────────────────────
-    const rateLimitResult = _checkRateLimit(apiKey);
-    if (!rateLimitResult.ok) {
-        const msg = rateLimitResult.reason === 'daily'
-            ? 'Daily lead capture limit reached. Try again tomorrow.'
-            : 'Rate limit exceeded. Please slow down.';
-        return res.status(429).json({ success: false, message: msg });
-    }
-
-    // ── LAYER 4: DB lookup (cached rejection for misses) ─────────────────
+    // ── LAYER 3: DB lookup (cached rejection for misses) ─────────────────
     let workspace;
     try {
         workspace = await WorkspaceSettings.findOne({ webLeadApiKey: apiKey })
@@ -231,8 +222,23 @@ exports.captureLead = async (req, res) => {
         return res.status(401).json({ success: false, message: 'Invalid API key' });
     }
 
+    // ── LAYER 4: Per-key rate limit (minute + daily) ─────────────────────
+    // This deliberately runs AFTER the key is proven real. It used to run before,
+    // so every unique INVALID key created a _dailyCapMap entry that lived a full
+    // 24 hours — the 60s invalid-key cache does not help when each attempt uses a
+    // fresh key. A distributed attacker could grow those maps without bound until
+    // the process ran out of memory. Now the maps hold at most one entry per real
+    // workspace, which is naturally bounded by the tenant count.
+    const rateLimitResult = _checkRateLimit(apiKey);
+    if (!rateLimitResult.ok) {
+        const msg = rateLimitResult.reason === 'daily'
+            ? 'Daily lead capture limit reached. Try again tomorrow.'
+            : 'Rate limit exceeded. Please slow down.';
+        return res.status(429).json({ success: false, message: msg });
+    }
+
     // ── LAYER 5: Input validation ────────────────────────────────────────
-    const { name, phone, email, message, source, stage, tag, customData } = req.body;
+    const { name, phone, email, message, source, stage, tag, customData, fbc, fbp, fbclid } = req.body;
 
     if (!name || typeof name !== 'string' || (!phone && !email)) {
         return res.status(400).json({
@@ -276,6 +282,25 @@ exports.captureLead = async (req, res) => {
                 date: new Date()
             }]
         };
+
+        // ── Meta click/browser IDs for CAPI attribution (audit M4) ───────
+        // _fbc/_fbp cookies (or a raw fbclid URL param) sent by the form
+        // snippet dramatically improve Meta's event matching for web leads.
+        // Format-validated so arbitrary strings can't be smuggled into CAPI
+        // payloads: fbc = fb.{0|1}.{ts}.{fbclid}, fbp = fb.{0|1}.{ts}.{random}.
+        {
+            const fbcVal = (fbc && typeof fbc === 'string')
+                ? fbc.trim()
+                : (fbclid && typeof fbclid === 'string' && /^[A-Za-z0-9_\-]{1,500}$/.test(fbclid.trim())
+                    ? `fb.1.${Date.now()}.${fbclid.trim()}`
+                    : null);
+            if (fbcVal && /^fb\.[01]\.\d+\.[A-Za-z0-9_\-]+$/.test(fbcVal) && fbcVal.length <= 600) {
+                leadData.fbc = fbcVal;
+            }
+            if (fbp && typeof fbp === 'string' && /^fb\.[01]\.\d+\.\d+$/.test(fbp.trim()) && fbp.trim().length <= 100) {
+                leadData.fbp = fbp.trim();
+            }
+        }
 
         // Optional custom data fields — capped at MAX_CUSTOM_KEYS entries
         if (customData && typeof customData === 'object' && !Array.isArray(customData)) {
@@ -323,7 +348,10 @@ exports.captureLead = async (req, res) => {
             WorkflowEngine.fireTrigger('LEAD_CREATED', { lead }).catch(e =>
                 console.error('[WebLead] Workflow Engine LEAD_CREATED error:', e.message)
             );
-            WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead }).catch(e =>
+            // isInitialStage: a new lead was PLACED in a stage, it did not change
+            // stage. Without it, a STAGE_CHANGED workflow narrowed by `fromStage`
+            // still fires on every newly captured lead.
+            WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, isInitialStage: true }).catch(e =>
                 console.error('[WebLead] Workflow Engine STAGE_CHANGED error:', e.message)
             );
         } catch (wfErr) {

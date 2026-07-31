@@ -42,11 +42,16 @@ const WorkflowDropLogSchema = new mongoose.Schema({
     triggerType: { type: String, required: true },
 
     // Machine-readable cause.
-    //   burst_limit   — per-tenant execution rate limit exceeded
-    //   trigger_depth — cross-workflow loop guard tripped (see C8)
+    //   burst_limit             — per-tenant execution rate limit exceeded
+    //   trigger_depth           — cross-workflow loop guard tripped (see C8)
+    //   max_executions_per_lead — the workflow already has settings.maxExecutionsPerLead
+    //                             active run(s) for this lead (WF-H7). This is by far
+    //                             the most common drop: the setting defaults to 1, so
+    //                             any lead already inside a drip campaign silently
+    //                             ignores every further trigger.
     reason: {
         type: String,
-        enum: ['burst_limit', 'trigger_depth'],
+        enum: ['burst_limit', 'trigger_depth', 'max_executions_per_lead'],
         required: true,
         index: true
     },

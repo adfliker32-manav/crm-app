@@ -626,19 +626,16 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
                     .catch(err => console.error(`❌ [Lead:${newLead._id}] WA auto-message failed:`, err.message));
             }
 
-            (async () => {
-                try {
-                    const config = await IntegrationConfig.findOne({ userId })
-                        .select('+meta.metaCapiEnabled +meta.metaPixelId +meta.metaCapiAccessToken +meta.metaStageMapping +meta.metaTestEventCode');
-                    if (config?.meta?.metaCapiEnabled) {
-                        const { sendMetaEvent } = require('../services/metaConversionService');
-                        sendMetaEvent(config, newLead, newLead.status, null)
-                            .catch(err => console.error(`❌ [Lead:${newLead._id}] CAPI event failed:`, err.message));
-                    }
-                } catch (e) {
-                    console.error(`❌ [Lead:${newLead._id}] CAPI config fetch failed:`, e.message);
-                }
-            })();
+            // Meta CAPI event via the durable outbox. eventTime = the TRUE Meta
+            // created_time (audit H1): real-time webhook leads are seconds old,
+            // recovery-cron leads get correctly backdated (≤12h), and historical
+            // backfill leads older than 7 days are skipped instead of being sent
+            // as fake "now" conversions that would corrupt attribution.
+            {
+                const { sendMetaEventForLead } = require('../services/metaConversionService');
+                sendMetaEventForLead(newLead, newLead.status, null, { eventTime: leadDetails?.createdTime })
+                    .catch(err => console.error(`❌ [Lead:${newLead._id}] CAPI event failed:`, err.message));
+            }
 
             evaluateLead(newLead, 'LEAD_CREATED')
                 .catch(err => console.error(`❌ [Lead:${newLead._id}] AutomationService (LEAD_CREATED) failed:`, err.message));
@@ -649,7 +646,11 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
                 WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: newLead }).catch(err =>
                     console.error(`❌ [Lead:${newLead._id}] WorkflowEngine LEAD_CREATED failed:`, err.message)
                 );
-                WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: newLead }).catch(err =>
+                // isInitialStage: this lead was just created, so it was PLACED in a
+                // stage rather than moved between two. Without the flag a
+                // STAGE_CHANGED workflow filtered by `fromStage` fires on every
+                // inbound Meta lead.
+                WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: newLead, isInitialStage: true }).catch(err =>
                     console.error(`❌ [Lead:${newLead._id}] WorkflowEngine STAGE_CHANGED failed:`, err.message)
                 );
             } catch (wfErr) {

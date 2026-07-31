@@ -102,6 +102,15 @@ const MergeNode = {
         console.log(`[MergeNode] all ${expected} branches arrived at "${context.getNodeIdForJoin()}" — continuing.`);
         return {
             nextPort: 'output',
+            // ── WF-M2 FIX: leave the loop when this merge closed a loop body ─────
+            // Successors used to inherit the merge's own iteration path, so the step
+            // AFTER a For Each ran inside `loop#K` — where K was whichever iteration
+            // happened to arrive last. That made the claim key non-deterministic, kept
+            // `loop.item`/`loop.index` readable past the end of the loop (pointing at
+            // an arbitrary item), and made a further downstream merge resolve its
+            // width from the LOOP's item count instead of its own incoming edges.
+            // A loop-closing merge is precisely the point where iteration ends.
+            exitIteration: basis === 'loop',
             output: { 'merge.arrived': arrived, 'merge.expected': expected, 'merge.basis': basis }
         };
     }

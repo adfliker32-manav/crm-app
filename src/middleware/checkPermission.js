@@ -10,6 +10,13 @@
 
 const checkPermission = (permissionName) => {
     const middleware = (req, res, next) => {
+        // Fail closed if this is ever mounted without authMiddleware ahead of it —
+        // otherwise the property read throws and an unauthenticated request is
+        // reported as a 500 server fault rather than a 401.
+        if (!req.user) {
+            return res.status(401).json({ success: false, message: 'Authentication required' });
+        }
+
         // Managers and Super Admins bypass all permission checks
         if (req.user.role === 'manager' || req.user.role === 'superadmin') {
             return next();

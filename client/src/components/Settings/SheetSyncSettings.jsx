@@ -28,6 +28,8 @@ const SheetSyncSettings = () => {
     const [selectedSheet, setSelectedSheet] = useState(null);
     const [syncEnabled, setSyncEnabled] = useState(false);
     const [webhookUrl, setWebhookUrl] = useState(null);
+    // Kept out of the URL — travels to the sheet as the x-webhook-secret header.
+    const [webhookSecret, setWebhookSecret] = useState(null);
 
     // Field mapping
     const [sheetHeaders, setSheetHeaders] = useState([]);
@@ -111,6 +113,7 @@ const SheetSyncSettings = () => {
             setLastPushStatus(config.lastPushStatus || null);
             setTotalPushes(config.totalPushes || 0);
             setWebhookUrl(configRes.data.webhookUrl || null);
+            setWebhookSecret(configRes.data.webhookSecret || null);
 
             // Build selected fields from saved config or defaults
             setSelectedFields(buildAvailableFields(cfDefs, config.selectedFields || []));
@@ -250,6 +253,7 @@ const SheetSyncSettings = () => {
             });
             setSyncEnabled(true);
             setWebhookUrl(res.data.webhookUrl || null);
+            setWebhookSecret(res.data.webhookSecret || null);
             showSuccess('Google Sheet Push Sync enabled!');
         } catch (err) {
             showError(err.response?.data?.message || 'Failed to save');
@@ -282,6 +286,9 @@ const SheetSyncSettings = () => {
 // Extensions → Apps Script → Paste → Save
 
 const CRM_WEBHOOK_URL = "${webhookUrl}";
+// Sent as a header, not in the URL — a secret in a query string is recorded by
+// access logs, proxies and browser history.
+const CRM_WEBHOOK_SECRET = "${webhookSecret || ''}";
 
 function onEdit(e) {
   const sheet = e.source.getActiveSheet();
@@ -311,6 +318,7 @@ function onEdit(e) {
     UrlFetchApp.fetch(CRM_WEBHOOK_URL, {
       method: "POST",
       contentType: "application/json",
+      headers: { "x-webhook-secret": CRM_WEBHOOK_SECRET },
       payload: JSON.stringify({ rows: [row], sheetName: sheet.getName() }),
       muteHttpExceptions: true
     });
@@ -321,7 +329,7 @@ function onEdit(e) {
 
 // After pasting: Triggers (⏰) → Add Trigger → onEdit → From spreadsheet → On edit
 `;
-    }, [webhookUrl, fieldMapping]);
+    }, [webhookUrl, webhookSecret, fieldMapping]);
 
     const handleCopy = () => {
         navigator.clipboard.writeText(getAppsScript());

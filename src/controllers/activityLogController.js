@@ -120,8 +120,18 @@ exports.getRecentActivity = async (req, res) => {
 
         const companyId = req.tenantId;
 
+        // SECURITY: this endpoint applied NO user filter, so it completely bypassed
+        // the restriction getActivityLogs enforces two functions above — any agent
+        // could read the whole company's audit trail, including manager actions, via
+        // /api/activity-logs/recent?limit=100. An audit log that the audited party
+        // can read at will is not a control. Mirror the same rule here.
+        const filters = { companyId };
+        if (req.user.role === 'agent' && !req.user.permissions?.viewActivityLogs) {
+            filters.userId = req.user.userId || req.user.id;
+        }
+
         const result = await getActivityLogs(
-            { companyId },
+            filters,
             1,
             limit
         );

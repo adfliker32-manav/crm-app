@@ -83,8 +83,7 @@ const UpdateStageNode = {
 
             // Run post-stage-change effects in background, just like leadController
             const { runInBackground } = require('../../../utils/controllerHelpers');
-            const IntegrationConfig = require('../../../models/IntegrationConfig');
-            const { sendMetaEvent } = require('../../../services/metaConversionService');
+            const { sendMetaEventForLead } = require('../../../services/metaConversionService');
             const { enrollLeadInSequences } = require('../../../services/sequenceService');
             const { updateLeadScore } = require('../../../services/leadScoringService');
 
@@ -115,17 +114,11 @@ const UpdateStageNode = {
                 return updateLeadScore(leadDoc._id, isLost ? 'STAGE_LOST' : 'STAGE_FORWARD');
             });
 
-            runInBackground('Meta CAPI error (non-blocking):', async () => {
-                try {
-                    const config = await IntegrationConfig.findOne({ userId: leadDoc.userId })
-                        .select('+meta.metaCapiAccessToken +meta.metaCapiEnabled +meta.metaPixelId +meta.metaStageMapping +meta.metaTestEventCode');
-                    if (config && config.meta?.metaCapiEnabled) {
-                        await sendMetaEvent(config, leadDoc, stageName, oldStatus);
-                    }
-                } catch (err) {
-                    console.error('Error fetching config for Meta CAPI (non-blocking):', err);
-                }
-            });
+            // Outbox-backed entry point — handles config resolution (incl. the
+            // agent → parent fallback this path used to miss) and retry-on-failure.
+            runInBackground('Meta CAPI error (non-blocking):', () =>
+                sendMetaEventForLead(leadDoc, stageName, oldStatus)
+            );
         }
 
         return {

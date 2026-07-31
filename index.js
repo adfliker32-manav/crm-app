@@ -130,10 +130,65 @@ if (process.env.NODE_ENV !== 'production') {
 app.use(express.static(path.join(__dirname, 'client/dist')));
 app.use(express.static('public')); // Keep for existing public assets if any
 
-// ⚠️ SECURITY: Uploaded files are served ONLY through authenticated routes.
-// Previously exposed at /uploads with NO auth — any URL guess could access private documents.
-// Now protected: files are only accessible via the authenticated download endpoints.
-app.use('/uploads', authMiddleware, express.static('uploads'));
+// ⚠️ SECURITY: Uploaded files are served ONLY through an ownership-checked route.
+//
+// This was previously `app.use('/uploads', authMiddleware, express.static('uploads'))`.
+// authMiddleware proves that SOMEONE is logged in; it says nothing about WHOSE file
+// this is. Any authenticated user of any tenant who learned (or guessed) a path could
+// read it. That exposed three separate trees:
+//   - uploads/support/<ticketId>/...   another tenant's support attachments
+//   - uploads/whatsapp/<mediaId>.<ext> the WhatsApp media CACHE, keyed by a mediaId
+//                                      that appears in message payloads — so any
+//                                      tenant could fetch any other tenant's media
+//                                      and bypass the media proxy entirely
+//   - uploads/email-attachments/...    email attachments
+//
+// Only support attachments are ever referenced by URL (supportController builds
+// `/uploads/support/<ticketId>/<file>`). The WhatsApp cache and email attachments are
+// read server-side by path — they must NOT be reachable over HTTP at all. So the blanket
+// mount is gone and exactly one authorising route replaces it.
+app.get(
+    '/uploads/support/:ticketId/:filename',
+    authMiddleware,
+    require('./src/middleware/validateObjectId')({ params: ['ticketId'] }),
+    async (req, res) => {
+        try {
+            const { ticketId, filename } = req.params;
+
+            // The filename becomes a path segment. Allow only a flat, safe name —
+            // no separators, no traversal.
+            if (!/^[A-Za-z0-9._-]+$/.test(filename) || filename.includes('..')) {
+                return res.status(400).json({ message: 'Invalid filename' });
+            }
+
+            const SupportTicket = require('./src/models/SupportTicket');
+            const ticket = await SupportTicket.findById(ticketId).select('createdBy').lean();
+            if (!ticket) return res.status(404).json({ message: 'Not found' });
+
+            // Same rule authorizeTicketAccess applies to the ticket's messages:
+            // the creator, or a platform super admin.
+            const uid = req.user.userId || req.user.id;
+            if (req.user.role !== 'superadmin' && String(ticket.createdBy) !== String(uid)) {
+                console.warn(`🛑 [Uploads] Denied: user ${uid} -> ticket ${ticketId}/${filename}`);
+                return res.status(403).json({ message: 'Forbidden' });
+            }
+
+            const root = path.resolve(process.cwd(), 'uploads', 'support', ticketId);
+            const full = path.resolve(root, filename);
+            // Defence in depth: never serve outside the ticket's own directory.
+            if (!full.startsWith(root + path.sep)) {
+                return res.status(400).json({ message: 'Invalid path' });
+            }
+
+            return res.sendFile(full, (err) => {
+                if (err && !res.headersSent) res.status(404).json({ message: 'Not found' });
+            });
+        } catch (err) {
+            console.error('[Uploads] support attachment error:', err.message);
+            if (!res.headersSent) res.status(500).json({ message: 'Server error' });
+        }
+    }
+);
 
 // 🔥 DATABASE CONNECTION
 // SECURITY FIX: Use environment variable instead of hardcoded credentials

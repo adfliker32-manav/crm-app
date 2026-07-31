@@ -29,6 +29,7 @@ const PRESETS = {
         deleteNotes: false,
         manageFollowUps: false,
         accessSettings: false,
+        viewActivityLogs: false,
         viewBilling: false,
         manageTeam: false
     },
@@ -58,6 +59,7 @@ const PRESETS = {
         deleteNotes: false,
         manageFollowUps: true,
         accessSettings: false,
+        viewActivityLogs: false,
         viewBilling: false,
         manageTeam: false
     },
@@ -87,6 +89,7 @@ const PRESETS = {
         deleteNotes: false,
         manageFollowUps: true,
         accessSettings: false,
+        viewActivityLogs: false,
         viewBilling: false,
         manageTeam: false
     }
@@ -234,6 +237,9 @@ const EditAgentModal = ({ isOpen, onClose, onSuccess, agent }) => {
             title: '⚙️ Settings & Admin',
             permissions: [
                 { key: 'accessSettings', label: 'Access Settings' },
+                // Company-wide audit visibility. Without it an agent sees only their OWN
+                // actions in the Audit Log, which stays the safe default.
+                { key: 'viewActivityLogs', label: 'View Company Audit Log' },
                 // HIDING BILLING FOR NOW: { key: 'viewBilling', label: 'View Billing' },
                 { key: 'manageTeam', label: 'Manage Team' }
             ]

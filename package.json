@@ -7,7 +7,7 @@
     "start": "node index.js",
     "build": "npm install && cd client && npm install && npm run build",
     "dev": "concurrently \"nodemon index.js\" \"cd client && npm run dev\"",
-    "test": "node --test tests/email/*.test.js tests/security/*.test.js tests/workflow/*.test.js",
+    "test": "node --test tests/email/*.test.js tests/security/*.test.js tests/workflow/*.test.js tests/whatsapp/*.test.js",
     "test:email": "node --test tests/email/*.test.js",
     "test:security": "node --test tests/security/*.test.js",
     "test:workflow": "node --test tests/workflow/*.test.js",

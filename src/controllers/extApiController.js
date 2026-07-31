@@ -25,6 +25,7 @@
 
 const mongoose  = require('mongoose');
 const Lead      = require('../models/Lead');
+const User      = require('../models/User');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const Appointment = require('../models/Appointment');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
@@ -41,6 +42,55 @@ const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 const runInBackground = (label, fn) => {
     fn().catch(err => console.error(`[ExtAPI] ${label}:`, err.message));
+};
+
+// Statuses that still occupy a slot. Cancelled/No-Show free it up again.
+const ACTIVE_APPT_STATUSES = ['Pending', 'Confirmed'];
+
+// The tenant's booking-page timezone, so the Appointment pre-save hook derives
+// appointmentAt in local time (reminders key off it). Null when no page exists.
+const resolveTenantTzOffset = async (tenantId) => {
+    try {
+        const BookingPage = require('../models/BookingPage');
+        const page = await BookingPage.findOne({ userId: tenantId })
+            .select('timezoneOffsetMinutes').lean();
+        return Number.isFinite(page?.timezoneOffsetMinutes) ? page.timezoneOffsetMinutes : null;
+    } catch {
+        return null;
+    }
+};
+
+/**
+ * Existing active appointment overlapping this slot, honouring the booking page's
+ * buffer when one is configured. Returns the conflicting doc, or null.
+ */
+const findSlotConflict = async (tenantId, dateObj, appointmentTime, excludeApptId = null) => {
+    const { timeToMinutes, conflicts } = require('../utils/appointmentUtils');
+    const BookingPage = require('../models/BookingPage');
+
+    const dayStart = new Date(dateObj); dayStart.setHours(0, 0, 0, 0);
+    const dayEnd   = new Date(dateObj); dayEnd.setHours(23, 59, 59, 999);
+
+    const query = {
+        userId: tenantId,
+        appointmentDate: { $gte: dayStart, $lte: dayEnd },
+        status: { $in: ACTIVE_APPT_STATUSES }
+    };
+    if (excludeApptId) query._id = { $ne: excludeApptId };
+
+    const [sameDay, page] = await Promise.all([
+        Appointment.find(query).select('_id appointmentTime').lean(),
+        BookingPage.findOne({ userId: tenantId }).select('bufferMinutes').lean()
+    ]);
+
+    const buffer = Number(page?.bufferMinutes || 0);
+    const wanted = timeToMinutes(appointmentTime);
+    if (wanted < 0) return null; // unparseable time — nothing to compare against
+
+    return sameDay.find(a => {
+        const m = timeToMinutes(a.appointmentTime);
+        return m >= 0 && conflicts(wanted, m, buffer);
+    }) || null;
 };
 
 // ─── 1. PING ──────────────────────────────────────────────────────────────────
@@ -72,14 +122,33 @@ exports.createLead = async (req, res) => {
             userId:    req.tenantId,
             name:      name.trim(),
             source:    (source || 'External API').slice(0, 100),
-            status:    status || 'New',
+            // Stage names are tenant-configurable, so there is no enum to check
+            // against — but it still must be a bounded string rather than whatever
+            // JSON the caller sent (an object here reaches the query layer intact).
+            status:    status ? String(status).trim().slice(0, 50) : 'New',
             dealValue: Number(dealValue) || 0,
             tags:      Array.isArray(tags) ? tags.map(t => String(t).slice(0, 50)) : []
         };
 
         if (phone)       leadData.phone      = String(phone).slice(0, 30);
         if (email)       leadData.email      = String(email).slice(0, 200).toLowerCase();
-        if (assignedTo && isValidId(assignedTo)) leadData.assignedTo = assignedTo;
+
+        // `assignedTo` was accepted on nothing but ObjectId shape, so a caller
+        // could hand a lead to a user in a DIFFERENT workspace. Confirm the target
+        // is this tenant's owner or one of their agents before writing it.
+        if (assignedTo !== undefined && assignedTo !== null && assignedTo !== '') {
+            if (!isValidId(assignedTo)) {
+                return res.status(400).json({ success: false, message: 'Invalid `assignedTo` user ID.' });
+            }
+            const assignee = await User.findOne({
+                _id: assignedTo,
+                $or: [{ _id: req.tenantId }, { parentId: req.tenantId }]
+            }).select('_id').lean();
+            if (!assignee) {
+                return res.status(400).json({ success: false, message: '`assignedTo` is not a member of this workspace.' });
+            }
+            leadData.assignedTo = assignee._id;
+        }
         if (customData && typeof customData === 'object' && !Array.isArray(customData)) {
             const safeCustom = {};
             Object.keys(customData).slice(0, 20).forEach(k => {
@@ -244,7 +313,11 @@ exports.updateLead = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Lead not found.' });
         }
 
-        const { name, phone, email, status, dealValue, tags, customData } = req.body;
+        const { name, phone, email, dealValue, tags, customData } = req.body;
+        // Bounded for the same reason as createLead.
+        const status = req.body.status !== undefined && req.body.status !== null
+            ? String(req.body.status).trim().slice(0, 50)
+            : undefined;
         const prevStatus = lead.status;
 
         if (name !== undefined) {
@@ -566,7 +639,28 @@ exports.createAppointment = async (req, res) => {
             if (leadDoc) apptData.leadId = leadDoc._id;
         }
 
-        const appointment = await Appointment.create(apptData);
+        // Double-booking guard. The public booking form and the customer reschedule
+        // flow both validate availability server-side; this path wrote straight to
+        // the collection, so the API could silently book a slot that was already
+        // taken. Third-party CRMs are NOT bound to the booking page's slot grid, so
+        // we deliberately enforce only the conflict rule (plus the page's buffer
+        // when one is configured) rather than the full public-form ruleset.
+        const conflict = await findSlotConflict(req.tenantId, d, apptData.appointmentTime);
+        if (conflict) {
+            return res.status(409).json({
+                success: false,
+                message: 'That time slot is already booked. Choose another time.',
+                conflictingAppointmentId: conflict._id
+            });
+        }
+
+        const appointment = new Appointment(apptData);
+        // Let the model's pre-save hook derive appointmentAt in the tenant's
+        // timezone — reminders fire off appointmentAt, so an unset/UTC-defaulted
+        // value sends them at the wrong local time.
+        const tzOffset = await resolveTenantTzOffset(req.tenantId);
+        if (tzOffset !== null) appointment.$locals.tzOffsetMinutes = tzOffset;
+        await appointment.save();
 
         if (leadDoc) {
             leadDoc.history.push({
@@ -636,6 +730,27 @@ exports.updateAppointment = async (req, res) => {
         if (appointmentTime) appt.appointmentTime = String(appointmentTime).slice(0, 20);
         if (notes)           appt.notes           = String(notes).slice(0, 1000);
         if (customerName)    appt.customerName     = String(customerName).trim().slice(0, 200);
+
+        // Moving an appointment is a booking too — same conflict rule as creation,
+        // ignoring this appointment so it never conflicts with itself.
+        if (appointmentDate || appointmentTime) {
+            const conflict = await findSlotConflict(
+                req.tenantId, appt.appointmentDate, appt.appointmentTime, appt._id
+            );
+            if (conflict) {
+                return res.status(409).json({
+                    success: false,
+                    message: 'That time slot is already booked. Choose another time.',
+                    conflictingAppointmentId: conflict._id
+                });
+            }
+            // Reminders already sent for the OLD time must be allowed to fire again.
+            appt.reminder24hSent = false;
+            appt.reminder1hSent  = false;
+
+            const tzOffset = await resolveTenantTzOffset(req.tenantId);
+            if (tzOffset !== null) appt.$locals.tzOffsetMinutes = tzOffset;
+        }
 
         await appt.save();
 

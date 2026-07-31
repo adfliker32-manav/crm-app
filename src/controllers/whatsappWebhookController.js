@@ -565,9 +565,16 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                 });
 
                 // Step 1c: Fire new Workflow Engine WHATSAPP_REPLY start trigger
+                // WF-H1: pass the reply text as a first-class field. The raw Meta
+                // object nests it at message.text.body, so a workflow branching on
+                // "did they say yes" had to know Meta's wire format — and before the
+                // trigger.* namespace existed it could not read the message at all.
                 await WorkflowEngine.fireTrigger('WHATSAPP_REPLY', {
                     lead,
                     tenantId: conversation.userId,
+                    messageText: messageDoc.content?.text || '',
+                    messageType,
+                    conversationId: conversation._id,
                     message
                 });
             } catch (err) {

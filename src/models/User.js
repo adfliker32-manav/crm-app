@@ -179,6 +179,15 @@ const userSchema = new mongoose.Schema({
         accessSettings: { type: Boolean, default: false },
         viewBilling: { type: Boolean, default: false },
 
+        // Audit Log
+        // activityLogController gates company-wide log access on this, but it was
+        // never declared here — so the check `permissions?.viewActivityLogs` read
+        // undefined for every user and the escape hatch was unreachable dead code.
+        // It failed SAFE (agents stayed restricted to their own actions), but a
+        // manager had no way to grant an auditor or team lead broader visibility.
+        // Defaults false: company-wide audit access is opt-in.
+        viewActivityLogs: { type: Boolean, default: false },
+
         // Team
         manageTeam: { type: Boolean, default: false },
 

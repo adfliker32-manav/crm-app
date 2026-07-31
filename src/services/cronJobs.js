@@ -178,7 +178,7 @@ const runAppointmentReminders = async () => {
     try {
         const Appointment = require('../models/Appointment');
         const WhatsAppTemplate = require('../models/WhatsAppTemplate');
-        const { sendWhatsAppMessage } = require('./whatsappService');
+        const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
         const { isFeatureDisabled } = require('../utils/systemConfig');
 
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
@@ -282,7 +282,7 @@ const runAppointmentReminders = async () => {
 
             if (template && appt.customerPhone) {
                 try {
-                    await sendWhatsAppMessage(appt.customerPhone, template.name, appt.userId.toString());
+                    await sendWhatsAppMessage(appt.customerPhone, template.name, appt.userId.toString(), null, template.language);
                     console.log(`📅 [AppointmentReminder] ${label} WhatsApp sent to ${appt.customerPhone} (appt ${appt._id})`);
                 } catch (err) {
                     console.error(`❌ [AppointmentReminder] ${label} WhatsApp failed for ${appt._id}:`, err.message);
@@ -327,7 +327,7 @@ const runLostLeadRecovery = async () => {
     try {
         const Lead = require('../models/Lead');
         const WhatsAppTemplate = require('../models/WhatsAppTemplate');
-        const { sendWhatsAppMessage } = require('./whatsappService');
+        const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
         const { isFeatureDisabled } = require('../utils/systemConfig');
 
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
@@ -370,7 +370,7 @@ const runLostLeadRecovery = async () => {
             }
 
             try {
-                await sendWhatsAppMessage(lead.phone, template.name, lead.userId.toString());
+                await sendWhatsAppMessage(lead.phone, template.name, lead.userId.toString(), null, template.language);
                 await Lead.findByIdAndUpdate(lead._id, {
                     $set: { recoveryAttemptedAt: new Date() },
                     $push: {
@@ -696,7 +696,7 @@ const runSubscriptionReconcile = async () => {
 const runFollowUpTemplateSend = async () => {
     try {
         const Lead = require('../models/Lead');
-        const { sendWhatsAppMessage } = require('./whatsappService');
+        const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
         const { sendEmailWithRetry } = require('./emailService');
         const EmailTemplate = require('../models/EmailTemplate');
         const User = require('../models/User');
@@ -745,7 +745,21 @@ const runFollowUpTemplateSend = async () => {
                         await Lead.findByIdAndUpdate(lead._id, { $set: { followUpTemplateSent: true } });
                         continue;
                     }
-                    await sendWhatsAppMessage(lead.phone, lead.followUpTemplateName, lead.userId.toString());
+                    // Meta rejects anything not APPROVED. This cron re-runs on a
+                    // schedule, so without the pre-check a rejected or paused
+                    // template was retried indefinitely against the API.
+                    const followUpGate = await checkTemplateSendable(lead.userId.toString(), lead.followUpTemplateName);
+                    if (!followUpGate.ok) {
+                        console.warn(
+                            `[FollowUp] Skipped — template "${lead.followUpTemplateName}" is ` +
+                            `${followUpGate.reason} (lead ${lead._id}).`
+                        );
+                        continue;
+                    }
+                    await sendWhatsAppMessage(
+                        lead.phone, lead.followUpTemplateName, lead.userId.toString(),
+                        null, followUpGate.template?.language
+                    );
                     await Lead.findByIdAndUpdate(lead._id, {
                         $set: { followUpTemplateSent: true, followUpTemplateType: null, followUpTemplateName: null },
                         $push: {
@@ -910,6 +924,17 @@ const startCronJobs = () => {
     // Auto-recalculate broadcast stats — every 5 minutes
     cron.schedule('*/5 * * * *', runBroadcastStatsAutoRecalculate);
     console.log('[CronJobs] Broadcast stats auto-recalculate scheduled (every 5 min)');
+
+    // ── Meta CAPI outbox drain — every 5 minutes ───────────────────────────
+    // Retries conversion events whose inline send failed transiently and sends
+    // deferred bulk events in per-tenant batches. Mongo-backed, survives restarts.
+    try {
+        const { drainCapiOutbox } = require('./capiOutboxService');
+        cron.schedule('*/5 * * * *', drainCapiOutbox);
+        console.log('[CronJobs] Meta CAPI outbox drain scheduled (every 5 min)');
+    } catch (e) {
+        console.error('⚠️ [CronJobs] Failed to schedule Meta CAPI outbox drain:', e.message);
+    }
 };
 
 // ──────────────────────────────────────────────────────────────────────────────

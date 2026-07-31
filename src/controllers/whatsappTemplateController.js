@@ -1,36 +1,30 @@
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
-const User = require('../models/User');
-const IntegrationConfig = require('../models/IntegrationConfig');
 const { submitTemplateToMeta, syncTemplateFromMeta } = require('../services/whatsappService');
 const { escapeRegex } = require('../utils/controllerHelpers');
 const { parseMetaError } = require('../utils/metaErrorUtils');
 
-// Get all templates (shared across users with same WhatsApp phone number)
+// Get all templates for the caller's own workspace (owner + their agents).
 exports.getTemplates = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
         const { status, category, search } = req.query;
 
-        // Find current user's tenant (manager or self) and their WhatsApp phone number
-        const currentUser = await User.findById(userId).select('role parentId').lean();
-        const tenantId = (currentUser?.role === 'agent' && currentUser?.parentId) ? currentUser.parentId : userId;
-        const tenantConfig = await IntegrationConfig.findOne({ userId: tenantId })
-            .select('whatsapp.waPhoneNumberId').lean();
+        // ⚠️ TENANT ISOLATION: this previously widened the scope to EVERY workspace
+        // on the platform sharing the same `whatsapp.waPhoneNumberId`, with no
+        // tenant filter — so two unrelated tenants on one WABA number (a reseller
+        // provisioning one number for two clients, or one business running two
+        // workspaces) each read the other's entire template inventory, including
+        // full body copy.
+        //
+        // That exact pattern was already removed from getCompanyUserIds for this
+        // reason (see utils/whatsappUtils.js); this call site was missed and kept
+        // building the union inline. Every sibling method in this file
+        // (getTemplate, updateTemplate, deleteTemplate) already scopes correctly —
+        // only the list endpoint was wrong. It now uses the same helper they do.
+        const { getCompanyUserIds } = require('../utils/whatsappUtils');
+        const companyUserIds = await getCompanyUserIds(userId);
 
-        // Build userId filter: include ALL users sharing the same WhatsApp phone number
-        let userFilter;
-        if (tenantConfig?.whatsapp?.waPhoneNumberId) {
-            const sharedConfigs = await IntegrationConfig.find(
-                { 'whatsapp.waPhoneNumberId': tenantConfig.whatsapp.waPhoneNumberId },
-                { userId: 1 }
-            ).lean();
-            const sharedIds = sharedConfigs.map(c => c.userId);
-            userFilter = { userId: { $in: sharedIds } };
-        } else {
-            userFilter = { userId };
-        }
-
-        const query = { ...userFilter };
+        const query = { userId: { $in: companyUserIds } };
         if (status) query.status = status;
         if (category) query.category = category;
         if (search) {

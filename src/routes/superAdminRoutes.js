@@ -102,7 +102,12 @@ router.put('/companies/:id/agent-limit', validateObjectId({ params: ['id'] }), a
 // Phase 2: Core Platform Features
 router.get('/settings', authMiddleware, requireSuperAdmin, getSettings);
 router.put('/settings', authMiddleware, requireSuperAdmin, updateSettings);
-router.post('/impersonate', authMiddleware, requireSuperAdmin, impersonateUser);
+// `userId` comes from the BODY here, so it needs the same ObjectId validation the
+// param-based routes get. Without it a request that omits userId reaches
+// User.findById(undefined) — and because BSON drops an undefined value rather than
+// sending null, that resolves to findOne({}) and returns an ARBITRARY user, whom
+// the caller is then handed an impersonation token for.
+router.post('/impersonate', validateObjectId({ body: ['userId'] }), authMiddleware, requireSuperAdmin, impersonateUser);
 
 // Emergency System Controls (Kill Switches)
 router.get('/system-settings', authMiddleware, requireSuperAdmin, getSystemSettings);

@@ -47,7 +47,7 @@ const mcpAuthMiddleware = async (req, res, next) => {
     try {
         const workspace = await WorkspaceSettings
             .findOne({ mcpApiKey: key })
-            .select('userId accountStatus planFeatures activeModules')
+            .select('userId accountStatus planFeatures activeModules planExpiryDate')
             .lean();
 
         if (!workspace) {
@@ -62,6 +62,21 @@ const mcpAuthMiddleware = async (req, res, next) => {
             return res.status(403).json({
                 jsonrpc: '2.0',
                 error: { code: -32003, message: `Account is ${workspace.accountStatus.toLowerCase()}. Contact your administrator.` },
+                id: null
+            });
+        }
+
+        // A lapsed plan puts the tenant in read-only mode everywhere else
+        // (authMiddleware blocks writes with `subscription_required`). This route
+        // authenticates by API key and so never passed through that check, leaving
+        // the MCP tools as a fully-writable way around an expired subscription.
+        if (workspace.planExpiryDate && Date.now() > new Date(workspace.planExpiryDate).getTime()) {
+            return res.status(403).json({
+                jsonrpc: '2.0',
+                error: {
+                    code: -32003,
+                    message: 'Your plan has ended. Subscribe from the Billing page to reactivate MCP access.'
+                },
                 id: null
             });
         }

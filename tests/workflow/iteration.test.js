@@ -15,6 +15,13 @@ process.env.WORKFLOW_SECRET_KEY = process.env.WORKFLOW_SECRET_KEY || 'b'.repeat(
 const SRC = path.join(__dirname, '..', '..', 'src');
 const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8');
 
+// Strip comments before asserting a pattern is ABSENT — a fix that documents the
+// anti-pattern it removed would otherwise trip its own doesNotMatch.
+const stripComments = (s) => s
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '')
+    .replace(/([^:])\/\/.*$/gm, '$1');
+
 require(path.join(SRC, 'workflow-engine', 'registerAllNodes.js'));
 const NodeRegistry = require(path.join(SRC, 'workflow-engine', 'NodeRegistry.js'));
 
@@ -187,7 +194,42 @@ test('27: the engine retires an absorbed token', () => {
     const e = read('workflow-engine/WorkflowEngine.js');
     assert.match(e, /if \(result\?\.absorbToken\)/);
     // Absorbing must decrement by exactly one, or the execution never completes.
-    assert.match(e, /if \(usesBranchCounting\) await settleBranches\(executionId, -1\);/);
+    // WF-C2: it must NOT go through settleBranches. That helper completes the
+    // execution when the counter hits zero, and a barrier absorbing the LAST token
+    // is a deadlock — the merge is still waiting for arrivals that can never come.
+    // Routing it through settleBranches is what reported those runs as 'completed'
+    // with every step after the merge silently skipped.
+    const absorb = stripComments(
+        e.slice(e.indexOf('if (result?.absorbToken)'), e.indexOf('H6 FIX: backpressure defers'))
+    );
+    assert.match(absorb, /\$inc:\s*\{\s*activeBranches:\s*-1\s*\}/,
+        'the absorb path must retire exactly one token');
+    assert.doesNotMatch(absorb, /settleBranches/,
+        'absorbing must not use settleBranches — it would complete a deadlocked execution');
+});
+
+// ─── WF-C2: a barrier that drains the last token is a deadlock ───────────────
+test('WF-C2: an absorb that empties the branch counter fails the execution', () => {
+    const e = read('workflow-engine/WorkflowEngine.js');
+    const absorb = stripComments(
+        e.slice(e.indexOf('if (result?.absorbToken)'), e.indexOf('H6 FIX: backpressure defers'))
+    );
+    // It must notice the drain and mark the run failed with an actionable message,
+    // rather than leaving it to be reported as a success.
+    assert.match(absorb, /activeBranches\s*<=\s*0/);
+    assert.match(absorb, /status:\s*'failed'/);
+    assert.match(absorb, /waitingBranches/, 'a parked sibling branch is not a deadlock');
+});
+
+// ─── WF-C2: the default join width counts CONCURRENT branches, not edges ─────
+test('WF-C2: countIncomingConnections bounds by source port, not edge count', () => {
+    const e = read('workflow-engine/WorkflowEngine.js');
+    const fn = e.slice(e.indexOf('countIncomingConnections()'), e.indexOf('recordJoinArrival'));
+    // Two edges leaving DIFFERENT ports of one node are alternatives: only one can
+    // ever fire, so a Merge fed by an If/Else must expect 1, not 2.
+    assert.match(fn, /Math\.max/, 'must take the max per source node, not the total');
+    assert.doesNotMatch(fn, /\.filter\(c => c\.targetNodeId === this\._nodeId\)\.length/,
+        'the raw incoming-edge count is the bug this replaced');
 });
 
 // ─── Row 27: loop.* is iteration-local ───────────────────────────────────────

@@ -128,7 +128,14 @@ const SendEmailNode = {
         // interpolated into a customer-facing email. Pass an explicit allow-list plus
         // the lead/webhook namespaces authors actually reference.
         const allVars = context.getAll();
-        const SAFE_VAR_PREFIXES = ['lead.', 'webhook.', 'signal.', 'switch.', 'condition.', 'ai.classification'];
+        // WF-H1: 'trigger.' carries the event's own data (the booked appointment, the
+        // reply text, the stage it moved to) — exactly the things an author wants to
+        // put in the email. It is caller-supplied like 'webhook.', so it belongs in
+        // the same allow-list rather than in the everything-spread this replaced.
+        const SAFE_VAR_PREFIXES = [
+            'lead.', 'webhook.', 'trigger.', 'signal.', 'loop.',
+            'switch.', 'condition.', 'ai.classification'
+        ];
         const safeVars = {};
         for (const [k, v] of Object.entries(allVars)) {
             if (SAFE_VAR_PREFIXES.some(p => k === p || k.startsWith(p))) safeVars[k] = v;

@@ -346,39 +346,13 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
 
         const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language || 'en_US');
 
-        // ── Error code branching ───────────────────────────────────────────────
-        // Meta returns structured errors. Different codes need different responses:
-        //   131056 → Rate limit → back off, don't count as failed
-        //   131031 → Template paused by Meta → abort entire broadcast
-        //   130472 → User not on WhatsApp → permanent fail
-        if (!result || result.success === false) {
-            const errorCode = String(
-                result?.error?.code || result?.data?.error?.code || ''
-            );
-            const errorMsg = result?.error?.message || result?.data?.error?.message || 'Unknown error';
-
-            // Rate limit: throw special error so batch processor can cool down
-            if (META_RATE_LIMIT_CODES.includes(errorCode)) {
-                const rateLimitErr = new Error(`META_RATE_LIMIT: ${errorMsg}`);
-                rateLimitErr.isRateLimit = true;
-                throw rateLimitErr;
-            }
-
-            // Template blocked: throw special error to abort the entire broadcast
-            if (META_TEMPLATE_BLOCKED.includes(errorCode)) {
-                const templateErr = new Error(`META_TEMPLATE_BLOCKED: ${errorMsg}`);
-                templateErr.isTemplateFatal = true;
-                templateErr.errorCode = errorCode;
-                throw templateErr;
-            }
-
-            // Permanent fail (not on WA, re-engagement needed, invalid params)
-            if (META_PERMANENT_FAIL.includes(errorCode)) {
-                console.warn(`[Lead:${lead._id}] Permanent fail (${errorCode}): ${errorMsg}`);
-            }
-
-            return false; // Count as failed
-        }
+        // A successful send returns Meta's raw body ({ messages: [...] }). There is
+        // no success flag, and a FAILURE never reaches this line at all —
+        // sendWhatsAppMessage throws. The error classification that used to live
+        // here, guarded by `result.success === false`, was therefore unreachable in
+        // every case; it now runs in the catch below, where the error actually
+        // arrives. Guard only against an empty body.
+        if (!result) return false;
 
         // ── Mark as sent BEFORE DB sync (atomic pipeline) ─────────────────────
         await redis.pipeline()
@@ -395,7 +369,39 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
     } catch (err) {
         // Re-throw rate limit and template errors so _processBatch can handle them
         if (err.isRateLimit || err.isTemplateFatal) throw err;
-        console.error(`[Lead:${lead._id}] Broadcast send failed:`, err.message);
+
+        // ── Meta error classification ──────────────────────────────────────────
+        // This is the ONLY place a Meta failure surfaces: sendWhatsAppMessage throws
+        // rather than returning a failure shape, so classifying on the return value
+        // (as this function used to) could never fire. The consequence was not
+        // cosmetic — a template PAUSED by Meta mid-broadcast (131031) never aborted
+        // the run, so the worker kept pushing the blocked template to every
+        // remaining contact. That is precisely what drives a WABA's quality rating
+        // down and gets numbers restricted or banned.
+        //   131056/131045/131057 → throttled → cool down, do not count as failed
+        //   131031/131026        → template paused/blocked → abort the whole broadcast
+        //   130472/131047/131021 → permanent (not on WA / re-engagement / bad params)
+        const errorCode = String(err.response?.data?.error?.code ?? '');
+        const errorMsg  = err.response?.data?.error?.message || err.message || 'Unknown error';
+
+        if (META_RATE_LIMIT_CODES.includes(errorCode)) {
+            const rateLimitErr = new Error(`META_RATE_LIMIT: ${errorMsg}`);
+            rateLimitErr.isRateLimit = true;
+            throw rateLimitErr;
+        }
+
+        if (META_TEMPLATE_BLOCKED.includes(errorCode)) {
+            const templateErr = new Error(`META_TEMPLATE_BLOCKED: ${errorMsg}`);
+            templateErr.isTemplateFatal = true;
+            templateErr.errorCode = errorCode;
+            throw templateErr;
+        }
+
+        if (META_PERMANENT_FAIL.includes(errorCode)) {
+            console.warn(`[Lead:${lead._id}] Permanent fail (${errorCode}): ${errorMsg}`);
+        }
+
+        console.error(`[Lead:${lead._id}] Broadcast send failed${errorCode ? ` (${errorCode})` : ''}:`, errorMsg);
         return false;
     }
 }
