@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 
 const MediaAsset = require('../models/MediaAsset');
@@ -50,6 +51,26 @@ const TYPE_RULES = [
 
 function classify(mimeType) {
     return TYPE_RULES.find(r => r.mimes.includes(mimeType)) || null;
+}
+
+// ⚠️ aggregate() does NOT cast $match values the way find() does. req.tenantId
+// arrives from a JWT claim, so it is a STRING — matching it against an ObjectId
+// field silently returns zero rows, which made the storage quota unenforceable
+// and pinned the usage bar at "0 B". Always cast before aggregating.
+function tenantObjectId(tenantId) {
+    const raw = String(tenantId || '');
+    return /^[a-f\d]{24}$/i.test(raw) ? new mongoose.Types.ObjectId(raw) : null;
+}
+
+/** Total bytes stored by a tenant in the Media Library. */
+async function usedBytesFor(tenantId) {
+    const oid = tenantObjectId(tenantId);
+    if (!oid) return { bytes: 0, count: 0 };
+    const rows = await MediaAsset.aggregate([
+        { $match: { userId: oid, deletedAt: null } },
+        { $group: { _id: null, bytes: { $sum: '$size' }, count: { $sum: 1 } } }
+    ]);
+    return { bytes: rows[0]?.bytes || 0, count: rows[0]?.count || 0 };
 }
 
 function sha256File(filePath) {
