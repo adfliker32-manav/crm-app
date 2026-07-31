@@ -40,7 +40,12 @@ const emailTemplateSchema = new mongoose.Schema({
     },
     attachments: [{
         filename: String,
-        path: String, // File path on server
+        // Legacy on-disk path. Only set on rows created before attachments
+        // moved to object storage; new rows use storageKey.
+        path: String,
+        // Object-storage key: email-attachments/<tenantId>/<file>. Tenant-scoped
+        // by construction, which is what the send path validates against.
+        storageKey: String,
         originalName: String,
         mimetype: String,
         size: Number

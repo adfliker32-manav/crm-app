@@ -4,29 +4,35 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Configure multer for file uploads
+// SECURITY FIX: Define allowed file types for email attachments.
+// The map is also the single source of the stored extension — see below.
+const EXT_FOR_MIME = {
+    'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+    'application/pdf': '.pdf',
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.ms-excel': '.xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'text/plain': '.txt', 'text/csv': '.csv'
+};
+const allowedMimeTypes = Object.keys(EXT_FOR_MIME);
+
+// Uploads stage in uploads/temp/ only long enough to stream into object storage.
+const TEMP_DIR = path.join('uploads', 'temp');
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        const uploadDir = 'uploads/email-attachments';
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
-        }
-        cb(null, uploadDir);
+        cb(null, TEMP_DIR);
     },
     filename: function (req, file, cb) {
+        // The extension comes from the ACCEPTED MIME type, never from the
+        // client's filename. `payload.html` sent as image/png used to be stored
+        // as .html here — the sibling upload middlewares already fixed this.
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + path.extname(file.originalname));
+        cb(null, uniqueSuffix + (EXT_FOR_MIME[file.mimetype] || '.bin'));
     }
 });
-
-// SECURITY FIX: Define allowed file types for email attachments
-const allowedMimeTypes = [
-    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-    'application/pdf',
-    'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'text/plain', 'text/csv'
-];
 
 const upload = multer({
     storage: storage,
@@ -140,13 +146,12 @@ exports.deleteTemplate = async (req, res) => {
             return res.status(404).json({ message: 'Template not found' });
         }
 
-        // Delete attachment files — ignore errors (file may already be gone)
+        // Delete attachment bytes from wherever they live — ignore errors
         if (template.attachments && template.attachments.length > 0) {
-            template.attachments.forEach(att => {
-                try {
-                    fs.unlinkSync(att.path);
-                } catch (_) {}
-            });
+            const { deleteAttachmentFile } = require('../utils/emailAttachments');
+            await Promise.all(template.attachments.map(att =>
+                deleteAttachmentFile(att).catch(() => {})
+            ));
         }
 
         await EmailTemplate.findByIdAndDelete(req.params.id);
@@ -179,16 +184,29 @@ exports.uploadAttachment = [
             return res.status(400).json({ message: 'No files uploaded' });
         }
 
-        // Add attachments to template
-        req.files.forEach(file => {
-            template.attachments.push({
-                filename: file.filename,
-                path: file.path,
-                originalName: file.originalname,
-                mimetype: file.mimetype,
-                size: file.size
-            });
-        });
+        // Stream each staged file into object storage, then drop the temp copy.
+        const objectStore = require('../services/storageService');
+        for (const file of req.files) {
+            // Keyed by the template's OWNER (the same id the lookup above used),
+            // because that is the id the send path validates the prefix against.
+            const storageKey = `email-attachments/${userId}/${file.filename}`;
+            try {
+                const stream = fs.createReadStream(file.path);
+                await objectStore.putObject(storageKey, stream, file.mimetype, { contentLength: file.size });
+                template.attachments.push({
+                    filename: file.filename,
+                    storageKey,
+                    originalName: file.originalname,
+                    mimetype: file.mimetype,
+                    size: file.size
+                });
+            } catch (err) {
+                console.error(`[EmailTemplate] Attachment upload failed (${file.filename}):`, err.message);
+            } finally {
+                try { fs.unlinkSync(file.path); } catch (_) { /* already gone */ }
+            }
+        }
+
 
         await template.save();
         res.json(template);
@@ -224,10 +242,9 @@ exports.removeAttachment = async (req, res) => {
             return res.status(404).json({ message: 'Attachment not found' });
         }
 
-        // Delete file from filesystem
-        if (fs.existsSync(attachment.path)) {
-            fs.unlinkSync(attachment.path);
-        }
+        // Delete the bytes (object storage, or legacy disk path)
+        const { deleteAttachmentFile } = require('../utils/emailAttachments');
+        await deleteAttachmentFile(attachment).catch(() => {});
 
         template.attachments.pull(attachmentId);
         await template.save();
@@ -296,15 +313,11 @@ exports.sendTemplateEmail = async (req, res) => {
         const subject = replaceVariables(template.subject, finalData);
         const body = replaceVariables(template.body, finalData);
 
-        // Prepare attachments
-        // FIX A5: Validate attachment paths to prevent path traversal
-        const ALLOWED_ATTACHMENT_PREFIX = 'uploads/email-attachments/';
-        const attachments = template.attachments
-            .filter(att => att.path && att.path.startsWith(ALLOWED_ATTACHMENT_PREFIX))
-            .map(att => ({
-                filename: att.originalName || att.filename,
-                path: att.path
-            }));
+        // Prepare attachments — resolved from object storage, with the key
+        // constrained to this tenant's namespace (replaces the old path-prefix
+        // check, which proved containment but not ownership).
+        const { resolveAttachments } = require('../utils/emailAttachments');
+        const attachments = await resolveAttachments(template.attachments, userId);
 
         const recipient = to || leadData.leadEmail;
         if (!recipient) {

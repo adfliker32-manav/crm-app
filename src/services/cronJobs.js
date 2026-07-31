@@ -85,44 +85,56 @@ const runTimeInStageTrigger = async () => {
 };
 
 /**
- * FIX #88: Media cache eviction — cleans up WhatsApp media files
- * older than 7 days from uploads/whatsapp/ to prevent disk exhaustion.
+ * Disk hygiene. Media now lives in object storage, so this no longer evicts a
+ * cache — it drains what is left behind on local disk:
+ *
+ *   uploads/temp/     staging for in-flight uploads. Controllers unlink in a
+ *                     finally block, but an aborted request or a crash mid-upload
+ *                     leaves a file; anything older than a few hours is an orphan.
+ *   uploads/whatsapp/ legacy inbound-media cache. Nothing writes here any more
+ *                     (inboundMediaService mirrors to object storage instead).
+ *                     Draining it is safe: reads fall back to object storage or
+ *                     Meta, and the durable copy is no longer on this disk.
+ *
  * Runs once daily.
  */
-const cleanupWhatsAppMediaCache = async () => {
-    const cacheDir = path.join(process.cwd(), 'uploads', 'whatsapp');
-    const MAX_AGE_DAYS = 7;
-    const MAX_AGE_MS = MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+const cleanupLocalMediaDirs = async () => {
+    const targets = [
+        { dir: path.join(process.cwd(), 'uploads', 'temp'),     maxAgeMs: 6 * 60 * 60 * 1000,      label: 'temp upload' },
+        { dir: path.join(process.cwd(), 'uploads', 'whatsapp'), maxAgeMs: 7 * 24 * 60 * 60 * 1000, label: 'legacy WhatsApp cache' }
+    ];
 
-    try {
-        await fs.promises.access(cacheDir);
-    } catch {
-        return; // Directory doesn't exist yet — nothing to clean
-    }
+    for (const { dir, maxAgeMs, label } of targets) {
+        try {
+            await fs.promises.access(dir);
+        } catch {
+            continue; // Directory doesn't exist — nothing to clean
+        }
 
-    try {
-        const files = await fs.promises.readdir(cacheDir);
-        const now = Date.now();
-        let deleted = 0;
+        try {
+            const files = await fs.promises.readdir(dir);
+            const now = Date.now();
+            let deleted = 0;
 
-        for (const file of files) {
-            try {
-                const filePath = path.join(cacheDir, file);
-                const stat = await fs.promises.stat(filePath);
-                if (stat.isFile() && (now - stat.mtimeMs) > MAX_AGE_MS) {
-                    await fs.promises.unlink(filePath);
-                    deleted++;
+            for (const file of files) {
+                try {
+                    const filePath = path.join(dir, file);
+                    const stat = await fs.promises.stat(filePath);
+                    if (stat.isFile() && (now - stat.mtimeMs) > maxAgeMs) {
+                        await fs.promises.unlink(filePath);
+                        deleted++;
+                    }
+                } catch (err) {
+                    // Skip files that can't be accessed
                 }
-            } catch (err) {
-                // Skip files that can't be accessed
             }
-        }
 
-        if (deleted > 0) {
-            console.log(`🧹 [CacheCleanup] Removed ${deleted} WhatsApp media files older than ${MAX_AGE_DAYS} days`);
+            if (deleted > 0) {
+                console.log(`🧹 [DiskCleanup] Removed ${deleted} stale ${label} file(s)`);
+            }
+        } catch (err) {
+            console.error(`❌ [DiskCleanup] Error cleaning ${dir}:`, err.message);
         }
-    } catch (err) {
-        console.error('❌ [CacheCleanup] Error cleaning WhatsApp media cache:', err.message);
     }
 };
 
@@ -876,8 +888,8 @@ const startCronJobs = () => {
     console.log('[CronJobs] Monthly AI token reset scheduled (1st of every month at 00:00)');
 
     // Media cache cleanup — 3:00 AM daily (wall-clock, survives restarts)
-    cron.schedule('0 3 * * *', cleanupWhatsAppMediaCache);
-    console.log('[CronJobs] WhatsApp media cache cleanup scheduled (daily 03:00, 7-day retention)');
+    cron.schedule('0 3 * * *', cleanupLocalMediaDirs);
+    console.log('[CronJobs] Local disk cleanup scheduled (daily 03:00 — temp orphans + legacy media cache)');
 
     // Token auto-refresh — 2:00 AM daily (wall-clock, survives restarts)
     // Also runs once 30 s after startup to catch any tokens missed while server was down.
@@ -1187,7 +1199,7 @@ const runBroadcastStatsAutoRecalculate = async () => {
 
 module.exports = {
     startCronJobs,
-    cleanupWhatsAppMediaCache,
+    cleanupLocalMediaDirs,
     refreshExpiringTokens,
     resetMonthlyAiTokens,
     runTimeInStageTrigger,

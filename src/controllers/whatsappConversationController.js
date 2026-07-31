@@ -753,17 +753,45 @@ exports.downloadMediaProxy = async (req, res) => {
 
         const { getCompanyUserIds } = require('../utils/whatsappUtils');
         const companyUserIds = await getCompanyUserIds(userId);
-        const owns = await WhatsAppMessage.exists({
-            'content.mediaId': String(mediaId),
-            userId: { $in: companyUserIds }
-        });
-        if (!owns) {
+        // One query proves ownership AND yields the storage key — the ownership
+        // gate stays exactly where it was, before any bytes are fetched.
+        const owningMsg = await WhatsAppMessage.findOne(
+            { 'content.mediaId': String(mediaId), userId: { $in: companyUserIds } },
+            { 'content.storageKey': 1, 'content.mimeType': 1 }
+        ).lean();
+        if (!owningMsg) {
             console.warn(`🛑 [Media] Denied: user ${userId} -> mediaId ${mediaId}`);
             return res.status(404).json({ message: 'Media not found' });
         }
 
-        const { downloadMedia } = require('../services/whatsappService');
-        const result = await downloadMedia(mediaId, userId);
+        // Prefer the durable mirror in object storage. Meta purges media after
+        // ~30 days, so for anything older this is the ONLY surviving copy.
+        // Messages that predate the mirror fall through to the Meta fetch.
+        let result = null;
+        const storageKey = owningMsg.content?.storageKey;
+        if (storageKey) {
+            try {
+                const storage = require('../services/storageService');
+                const data = await storage.getBuffer(storageKey);
+                result = { data, mimeType: owningMsg.content?.mimeType || 'application/octet-stream' };
+            } catch (storageErr) {
+                console.warn(`[Media] Storage read failed for ${storageKey}, falling back to Meta:`, storageErr.message);
+            }
+        }
+
+        if (!result) {
+            const { downloadMedia } = require('../services/whatsappService');
+            result = await downloadMedia(mediaId, userId);
+
+            // Backfill on demand: an un-mirrored media that is still fetchable
+            // gets persisted now, so it survives Meta's retention window.
+            if (!storageKey) {
+                const { mirrorInboundMedia } = require('../services/inboundMediaService');
+                mirrorInboundMedia({ mediaId, userId, mimeType: result.mimeType })
+                    .catch(err => console.error('[Media] Lazy mirror failed:', err.message));
+            }
+        }
+
         const buffer = Buffer.from(result.data);
         const total = buffer.length;
 

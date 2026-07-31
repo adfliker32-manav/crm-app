@@ -5,8 +5,10 @@ const { sendEmailWithRetry } = require('./emailService');
 const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 
-// Attachment paths are confined to the upload directory (see FIX S4 below).
-const ALLOWED_ATTACHMENT_PREFIX = 'uploads/email-attachments/';
+// Attachment bytes live in object storage; resolveAttachments enforces that a
+// template's attachment keys stay inside its own tenant namespace, and keeps the
+// legacy path-containment guard for rows created before that move.
+const { resolveAttachments } = require('../utils/emailAttachments');
 
 // Inbox threading and analytics logging are handled centrally by
 // emailService.sendEmail() → emailSyncService. The local syncToInbox() copy
@@ -62,16 +64,11 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
                 const subject = replaceVariables(template.subject, templateData);
                 const body = replaceVariables(template.body, templateData);
 
-                // Prepare attachments — skip any whose file has been deleted.
-                // FIX S4: also confine paths to the upload directory, matching
-                // the guard emailTemplateController already applies. Without it
-                // a tampered attachment row could exfiltrate an arbitrary file.
-                const attachments = (template.attachments || [])
-                    .filter(att => att.path
-                        && att.path.startsWith(ALLOWED_ATTACHMENT_PREFIX)
-                        && !att.path.includes('..')
-                        && fs.existsSync(att.path))
-                    .map(att => ({ filename: att.originalName || att.filename, path: att.path }));
+                // Attachments resolve from object storage, with the key confined
+                // to this tenant's namespace so a tampered row cannot reach
+                // another tenant's file. Legacy on-disk rows keep the original
+                // path containment guard (see utils/emailAttachments).
+                const attachments = await resolveAttachments(template.attachments, userId);
 
                 // Send email — logging + inbox threading happen inside sendEmail
                 const emailOptions = {
@@ -154,16 +151,11 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
                 const subject = replaceVariables(template.subject, templateData);
                 const body = replaceVariables(template.body, templateData);
 
-                // Prepare attachments — skip any whose file has been deleted.
-                // FIX S4: also confine paths to the upload directory, matching
-                // the guard emailTemplateController already applies. Without it
-                // a tampered attachment row could exfiltrate an arbitrary file.
-                const attachments = (template.attachments || [])
-                    .filter(att => att.path
-                        && att.path.startsWith(ALLOWED_ATTACHMENT_PREFIX)
-                        && !att.path.includes('..')
-                        && fs.existsSync(att.path))
-                    .map(att => ({ filename: att.originalName || att.filename, path: att.path }));
+                // Attachments resolve from object storage, with the key confined
+                // to this tenant's namespace so a tampered row cannot reach
+                // another tenant's file. Legacy on-disk rows keep the original
+                // path containment guard (see utils/emailAttachments).
+                const attachments = await resolveAttachments(template.attachments, userId);
 
                 // Send email — logging + inbox threading happen inside sendEmail
                 const emailOptions = {

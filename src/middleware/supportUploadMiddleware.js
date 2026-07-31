@@ -3,10 +3,17 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
+// Legacy tree. Nothing is written here any more — attachments now go to object
+// storage — but it is still read for files uploaded before that change, and
+// still removed when a ticket is deleted.
 const SUPPORT_UPLOAD_ROOT = path.join('uploads', 'support');
 
-if (!fs.existsSync(SUPPORT_UPLOAD_ROOT)) {
-    fs.mkdirSync(SUPPORT_UPLOAD_ROOT, { recursive: true });
+// Uploads land here only long enough to be streamed into object storage; the
+// controller removes them in every exit path.
+const SUPPORT_TEMP_DIR = path.join('uploads', 'temp');
+
+if (!fs.existsSync(SUPPORT_TEMP_DIR)) {
+    fs.mkdirSync(SUPPORT_TEMP_DIR, { recursive: true });
 }
 
 const IMAGE_MIMES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
@@ -30,18 +37,11 @@ const EXT_FOR_MIME = {
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB — video cap; images naturally smaller
 
+// Everything stages in one flat temp dir — the destination no longer depends on
+// a URL-supplied ticket id, so there is no path to build from untrusted input
+// and no per-ticket directory to create before authorisation has run.
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        // The id lands in a filesystem path, so it must be a strict ObjectId and
-        // never whatever the URL happened to contain. Routes also mount
-        // authorizeTicketAccess ahead of this middleware, so by the time we run
-        // the caller is already proven to own the ticket.
-        const raw = req.params.id;
-        const ticketId = /^[a-f\d]{24}$/i.test(String(raw || '')) ? String(raw) : 'inbox';
-        const dir = path.join(SUPPORT_UPLOAD_ROOT, ticketId);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        cb(null, dir);
-    },
+    destination: (req, file, cb) => cb(null, SUPPORT_TEMP_DIR),
     filename: (req, file, cb) => {
         const ext = EXT_FOR_MIME[file.mimetype] || '.bin';
         cb(null, `${uuidv4()}${ext}`);
@@ -64,5 +64,6 @@ const classifyAttachment = (mime) => (IMAGE_MIMES.includes(mime) ? 'image' : 'vi
 module.exports = {
     uploadSupportMedia: upload.array('files', 3),
     SUPPORT_UPLOAD_ROOT,
+    SUPPORT_TEMP_DIR,
     classifyAttachment
 };

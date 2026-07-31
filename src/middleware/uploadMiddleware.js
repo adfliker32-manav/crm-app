@@ -1,3 +1,11 @@
+// ⚠️ DEPRECATED — NOT WIRED TO ANY ROUTE.
+// Attachments no longer touch the application server's disk:
+//   • ad-hoc email attachments  → emailRoutes.js uses multer.memoryStorage()
+//   • email template attachments → emailTemplateController streams to object
+//     storage (email-attachments/<ownerId>/…) via storageService
+// Do NOT mount this middleware. Reintroducing it would put tenant files back on
+// local disk, where they survive no redeploy and are never cleaned up.
+// Retained only because the security test suite asserts on its source.
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');

@@ -445,10 +445,9 @@ const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en'
 const downloadMedia = async (mediaId, userId = null) => {
     try {
         console.log(`🔍 Media Request: ${mediaId} (User: ${userId})`);
+        // Legacy read-only cache. Nothing writes here any more (see below); this
+        // only serves files left over from before media moved to object storage.
         const uploadsDir = path.join(process.cwd(), 'uploads', 'whatsapp');
-        
-        // Ensure directory exists (async)
-        await fs.promises.mkdir(uploadsDir, { recursive: true });
 
         // ⚠️ PRODUCTION NOTE:
         // Avoid directory scans (fs.readdir) — performance degrades as files grow.
@@ -496,7 +495,6 @@ const downloadMedia = async (mediaId, userId = null) => {
 
         const mediaUrl = mediaInfoResponse.data.url;
         const mimeType = mediaInfoResponse.data.mime_type;
-        const extension = mimeType.split('/')[1]?.split(';')[0] || 'bin';
 
         console.log(`⬇️  Downloading Binary: ${mediaUrl.substring(0, 50)}...`);
         const mediaResponse = await axios.get(mediaUrl, {
@@ -504,12 +502,11 @@ const downloadMedia = async (mediaId, userId = null) => {
             responseType: 'arraybuffer'
         });
 
-        const fileName = `${mediaId}.${extension}`;
-        const filePath = path.join(uploadsDir, fileName);
-        await fs.promises.writeFile(filePath, Buffer.from(mediaResponse.data));
-        
-        console.log(`💾 WhatsApp media cached: ${fileName}`);
-
+        // NOTE: deliberately does NOT write to disk any more. Inbound media is
+        // mirrored to object storage by inboundMediaService the moment the
+        // webhook arrives (and lazily on read for older messages), so the local
+        // cache is redundant — and it was actively harmful: the 7-day cleanup
+        // cron deleted the only surviving copy of media Meta had already purged.
         return {
             data: mediaResponse.data,
             mimeType: mimeType,

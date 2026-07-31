@@ -173,6 +173,36 @@ app.get(
                 return res.status(403).json({ message: 'Forbidden' });
             }
 
+            // Attachments live in object storage. Resolve the key from the
+            // message row rather than trusting the URL, so the served object is
+            // always one this ticket actually references.
+            const SupportMessage = require('./src/models/SupportMessage');
+            const attachmentUrl = `/uploads/support/${ticketId}/${filename}`;
+            const msg = await SupportMessage.findOne(
+                { ticketId, 'attachments.url': attachmentUrl },
+                { 'attachments.$': 1 }
+            ).lean();
+            const attachment = msg?.attachments?.[0];
+
+            if (attachment?.storageKey) {
+                const storage = require('./src/services/storageService');
+                try {
+                    const stream = await storage.getStream(attachment.storageKey);
+                    res.set('X-Content-Type-Options', 'nosniff');
+                    res.set('Cache-Control', 'private, max-age=86400');
+                    stream.on('error', (e) => {
+                        console.error('[Uploads] support stream error:', e.message);
+                        if (!res.headersSent) res.status(404).json({ message: 'Not found' });
+                        else res.destroy();
+                    });
+                    return stream.pipe(res);
+                } catch (e) {
+                    console.error('[Uploads] support storage read failed:', e.message);
+                    return res.status(404).json({ message: 'Not found' });
+                }
+            }
+
+            // Legacy fallback: attachments uploaded before object storage.
             const root = path.resolve(process.cwd(), 'uploads', 'support', ticketId);
             const full = path.resolve(root, filename);
             // Defence in depth: never serve outside the ticket's own directory.

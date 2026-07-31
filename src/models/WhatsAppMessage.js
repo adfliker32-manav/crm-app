@@ -37,6 +37,12 @@ const whatsAppMessageSchema = new mongoose.Schema({
         mimeType: String,
         fileName: String,
         fileSize: Number,
+        // Object-storage key for media mirrored to R2 (wa-inbound/<tenantId>/…).
+        // Meta deletes media after ~30 days, so mediaId alone is not durable —
+        // this is the authoritative copy once set. Absent on messages that
+        // predate the mirror, which fall back to the Meta fetch.
+        storageKey: String,
+        storedAt: Date,
         // For templates
         templateName: String,
         templateLanguage: String,

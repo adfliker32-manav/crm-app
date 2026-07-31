@@ -511,6 +511,20 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         await messageDoc.save();
         debug(`✅ WhatsAppMessage saved to DB: ${messageDoc._id}`);
 
+        // ── Mirror inbound media to object storage ────────────────────────────
+        // Meta deletes media after ~30 days, so the mediaId alone is not durable.
+        // Fire-and-forget: the webhook must return 200 to Meta promptly or Meta
+        // retries the delivery, and a storage hiccup must never lose the message.
+        if (messageContent?.mediaId) {
+            const { mirrorInboundMedia } = require('../services/inboundMediaService');
+            mirrorInboundMedia({
+                mediaId: messageContent.mediaId,
+                userId: targetUserId,
+                mimeType: messageContent.mimeType,
+                waMessageId
+            }).catch(err => console.error('[Webhook] Inbound media mirror error:', err.message));
+        }
+
         // 🔌 Push to frontend via Socket.IO (real-time)
         const savedMsg = messageDoc.toObject();
         const conversationIdStr = conversation._id.toString();

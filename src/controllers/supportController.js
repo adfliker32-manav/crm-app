@@ -168,14 +168,41 @@ async function recordAiSupportUsage(credits) {
     }
 }
 
-const buildAttachments = (req) => {
+/**
+ * Stream each staged upload into object storage and describe it for the message
+ * document. The bytes never stay on the application server — multer's temp file
+ * is removed here, and again by discardUploads on any error path.
+ *
+ * The public `url` shape is unchanged, so existing clients keep working; the
+ * serving route resolves it through `storageKey` when present.
+ */
+const persistAttachments = async (req, ticketId) => {
     if (!req.files || !req.files.length) return [];
-    return req.files.map(f => ({
-        kind: classifyAttachment(f.mimetype),
-        url: `/uploads/support/${path.basename(path.dirname(f.path))}/${f.filename}`,
-        filename: f.originalname,
-        size: f.size
-    }));
+
+    const storage = require('../services/storageService');
+    const out = [];
+
+    for (const f of req.files) {
+        const storageKey = `support/${ticketId}/${f.filename}`;
+        try {
+            const stream = fs.createReadStream(f.path);
+            await storage.putObject(storageKey, stream, f.mimetype, { contentLength: f.size });
+            out.push({
+                kind: classifyAttachment(f.mimetype),
+                url: `/uploads/support/${ticketId}/${f.filename}`,
+                filename: f.originalname,
+                size: f.size,
+                storageKey
+            });
+        } catch (err) {
+            // One bad upload must not sink the whole message — drop the
+            // attachment and keep the text the user actually wrote.
+            console.error(`[Support] Attachment upload failed (${f.filename}):`, err.message);
+        } finally {
+            try { fs.unlinkSync(f.path); } catch (_) { /* already gone */ }
+        }
+    }
+    return out;
 };
 
 // multer has already written every accepted file to disk by the time a handler
@@ -250,22 +277,8 @@ const createTicket = async (req, res) => {
             lastMessageAt: new Date()
         });
 
-        // Move uploaded files (if any) from /inbox folder to ticket folder
-        const attachments = [];
-        if (req.files && req.files.length) {
-            const targetDir = path.join(SUPPORT_UPLOAD_ROOT, ticket._id.toString());
-            if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-            for (const f of req.files) {
-                const newPath = path.join(targetDir, f.filename);
-                try { fs.renameSync(f.path, newPath); } catch (_) {}
-                attachments.push({
-                    kind: classifyAttachment(f.mimetype),
-                    url: `/uploads/support/${ticket._id}/${f.filename}`,
-                    filename: f.originalname,
-                    size: f.size
-                });
-            }
-        }
+        // Upload staged files to object storage now that the ticket id exists.
+        const attachments = await persistAttachments(req, ticket._id.toString());
 
         await SupportMessage.create({
             ticketId: ticket._id,
@@ -420,11 +433,11 @@ const sendMessage = async (req, res) => {
         const isSuper = req.user.role === 'superadmin';
 
         const text = (req.body.text || '').trim();
-        const attachments = buildAttachments(req);
-        if (!text && !attachments.length) {
+        if (!text && (!req.files || !req.files.length)) {
             discardUploads(req);
             return res.status(400).json({ message: 'Message text or attachment required' });
         }
+        const attachments = await persistAttachments(req, String(ticket._id));
 
         const msg = await SupportMessage.create({
             ticketId: ticket._id,
@@ -473,10 +486,31 @@ const closeTicket = async (req, res) => {
         const ticketId = ticket._id.toString();
         const tenantUserId = ticket.createdBy;
 
+        // Collect storage keys BEFORE deleting the messages that reference them,
+        // otherwise the objects are orphaned in the bucket forever.
+        const storageKeys = [];
+        try {
+            const msgs = await SupportMessage.find({ ticketId: ticket._id })
+                .select('attachments.storageKey').lean();
+            for (const m of msgs) {
+                for (const a of (m.attachments || [])) {
+                    if (a.storageKey) storageKeys.push(a.storageKey);
+                }
+            }
+        } catch (e) {
+            console.warn('Support attachment key collection warning:', e.message);
+        }
+
         await SupportMessage.deleteMany({ ticketId: ticket._id });
         await SupportTicket.deleteOne({ _id: ticket._id });
 
-        // Remove upload folder (best-effort, non-fatal)
+        // Purge the objects (best-effort, non-fatal — deleteObject never throws)
+        if (storageKeys.length) {
+            const storage = require('../services/storageService');
+            await Promise.all(storageKeys.map(k => storage.deleteObject(k)));
+        }
+
+        // Remove the legacy on-disk folder for pre-migration attachments
         try {
             const dir = path.join(SUPPORT_UPLOAD_ROOT, ticketId);
             if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });

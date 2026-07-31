@@ -81,9 +81,17 @@ test('H-2: the WhatsApp media cache is no longer reachable over HTTP', () => {
 // ─── M-1: media proxy must verify ownership locally ─────────────────────────
 test('M-1: downloadMediaProxy proves the media belongs to the caller before fetching', () => {
     const c = read('controllers', 'whatsappConversationController.js');
+    // exists() or findOne() — the lookup now also returns the object-storage key,
+    // but the scoping predicate (mediaId AND the caller's company) is the point.
     assert.match(
-        c, /WhatsAppMessage\.exists\(\{[\s\S]*?['"]content\.mediaId['"][\s\S]*?userId:\s*\{\s*\$in:\s*companyUserIds/,
+        c, /WhatsAppMessage\.(exists|findOne)\(\s*\{[\s\S]*?['"]content\.mediaId['"][\s\S]*?userId:\s*\{\s*\$in:\s*companyUserIds/,
         'ownership must be checked locally, not delegated entirely to Meta token scoping'
+    );
+    // …and it must gate the fetch, not merely exist somewhere in the file.
+    const fn = c.slice(c.indexOf('exports.downloadMediaProxy'));
+    assert.ok(
+        fn.indexOf('companyUserIds') < fn.indexOf('getBuffer'),
+        'the ownership check must run before any media bytes are read'
     );
 });
 
