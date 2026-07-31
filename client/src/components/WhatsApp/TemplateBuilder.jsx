@@ -4,6 +4,12 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import TemplatePhonePreview from './TemplatePhonePreview';
 import TemplateAutomationCard from './TemplateAutomationCard';
+import MediaLibrary, { formatBytes, iconForType } from './MediaLibrary';
+
+// <img> cannot send an Authorization header — the preview route also accepts
+// the JWT as a query param (same pattern as the WhatsApp media proxy).
+const mediaRawUrl = (id) =>
+    `${api.defaults.baseURL}/media-library/${id}/raw?token=${encodeURIComponent(localStorage.getItem('token') || '')}`;
 
 const TemplateBuilder = ({ templateId, onBack }) => {
     const { showSuccess, showError } = useNotification();
@@ -24,6 +30,10 @@ const TemplateBuilder = ({ templateId, onBack }) => {
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
     const [mediaPreview, setMediaPreview] = useState(null); // local preview URL
+    const [showMediaPicker, setShowMediaPicker] = useState(false);
+    // The library asset backing the header, for display. Rehydrated on load from
+    // the header's mediaAssetId so an existing template shows what it points at.
+    const [selectedMedia, setSelectedMedia] = useState(null);
     const [stages, setStages] = useState([]);
     const bodyRef = useRef(null);
     const fileInputRef = useRef(null);
@@ -44,7 +54,23 @@ const TemplateBuilder = ({ templateId, onBack }) => {
         try {
             setLoading(true);
             const res = await api.get(`/whatsapp/templates/${templateId}`);
-            setTemplate(res.data.template || res.data);
+            const loaded = res.data.template || res.data;
+            setTemplate(loaded);
+
+            // Rehydrate the header's library asset so the builder shows what the
+            // template points at (the template itself stores only the reference).
+            const header = (loaded.components || []).find(c => c.type === 'HEADER');
+            if (header?.mediaAssetId) {
+                try {
+                    const lib = await api.get('/media-library');
+                    const match = (lib.data.assets || []).find(a => String(a.id) === String(header.mediaAssetId));
+                    setSelectedMedia(match || { id: header.mediaAssetId, label: 'Selected media', mediaType: header.format });
+                } catch {
+                    setSelectedMedia({ id: header.mediaAssetId, label: 'Selected media', mediaType: header.format });
+                }
+            } else {
+                setSelectedMedia(null);
+            }
         } catch { showError('Failed to load template'); }
         finally { setLoading(false); }
     };
@@ -57,11 +83,12 @@ const TemplateBuilder = ({ templateId, onBack }) => {
         const bodyComp = template.components.find(c => c.type === 'BODY');
         if (!bodyComp?.text) { showError('Body text is required'); return false; }
 
-        // Validate media header has been uploaded
+        // A media header needs either a Media Library reference (current flow) or
+        // a legacy handle from a template created before the library existed.
         const headerComp = template.components.find(c => c.type === 'HEADER');
         if (headerComp && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerComp.format)) {
-            if (!headerComp.example?.header_handle?.length) {
-                showError('Please upload a media file for the header');
+            if (!headerComp.mediaAssetId && !headerComp.example?.header_handle?.length) {
+                showError('Please choose a file from the Media Library for the header');
                 return false;
             }
         }
@@ -183,6 +210,9 @@ const TemplateBuilder = ({ templateId, onBack }) => {
     // ────────── Header Format Handling ──────────
     const handleHeaderFormatChange = (format) => {
         setMediaPreview(null);
+        // Switching format invalidates any chosen media (a PDF cannot back an
+        // IMAGE header), so drop the reference rather than silently keeping it.
+        setSelectedMedia(null);
         setTemplate(prev => {
             const components = prev.components.filter(c => c.type !== 'HEADER');
             if (format === 'NONE') return { ...prev, components };
@@ -197,83 +227,44 @@ const TemplateBuilder = ({ templateId, onBack }) => {
         });
     };
 
-    const handleMediaUpload = async (file) => {
-        if (!file) return;
-
-        const MB = 1024 * 1024;
-        const headerComp = template.components.find(c => c.type === 'HEADER');
-        if (!headerComp) return;
-
-        // Client-side validation
-        if (headerComp.format === 'IMAGE') {
-            if (file.size > 5 * MB) { showError('Image must be under 5 MB'); return; }
-            if (!['image/jpeg', 'image/png'].includes(file.type)) { showError('Only JPG and PNG allowed'); return; }
-        } else if (headerComp.format === 'VIDEO') {
-            if (file.size > 16 * MB) { showError('Video must be under 16 MB'); return; }
-            if (!['video/mp4', 'video/3gpp'].includes(file.type)) { showError('Only MP4 and 3GPP allowed'); return; }
-        } else if (headerComp.format === 'DOCUMENT') {
-            if (file.size > 10 * MB) { showError('Document must be under 10 MB'); return; }
-        }
-
-        // Show local preview
-        if (headerComp.format === 'IMAGE') {
-            setMediaPreview(URL.createObjectURL(file));
-        } else if (headerComp.format === 'VIDEO') {
-            setMediaPreview(URL.createObjectURL(file));
-        } else {
-            setMediaPreview(file.name);
-        }
-
-        // Upload to Meta via backend
-        setUploading(true);
-        setUploadProgress(0);
-        try {
-            const formData = new FormData();
-            formData.append('file', file);
-
-            const res = await api.post('/whatsapp/upload-media', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
-                onUploadProgress: (e) => {
-                    setUploadProgress(Math.round((e.loaded / e.total) * 100));
+    // ────────── Media Library selection ──────────
+    // The template stores only a reference (mediaAssetId); the file itself lives
+    // in object storage and is shared with every other template, broadcast and
+    // automation that points at the same asset.
+    const handleSelectMedia = (asset) => {
+        setSelectedMedia(asset);
+        setShowMediaPicker(false);
+        setTemplate(prev => ({
+            ...prev,
+            components: prev.components.map(c =>
+                c.type !== 'HEADER' ? c : {
+                    ...c,
+                    mediaAssetId: asset.id,
+                    // A fresh Meta upload handle is derived from the asset at submit
+                    // time, so any stale handle from the old flow must not linger.
+                    example: { ...(c.example || {}), header_handle: [] },
+                    _mediaLabel: asset.label,
+                    _mediaSize: asset.size
                 }
-            });
-
-            if (res.data.success && res.data.handle) {
-                // Store the handle in the header component
-                setTemplate(prev => {
-                    const components = prev.components.map(c => {
-                        if (c.type !== 'HEADER') return c;
-                        return {
-                            ...c,
-                            example: { ...(c.example || {}), header_handle: [res.data.handle] },
-                            _uploadedFileName: res.data.fileName,
-                            _uploadedFileSize: res.data.fileSize
-                        };
-                    });
-                    return { ...prev, components };
-                });
-                showSuccess('Media uploaded to Meta successfully!');
-            } else {
-                showError(res.data.message || 'Upload failed');
-                setMediaPreview(null);
-            }
-        } catch (err) {
-            showError(err.response?.data?.message || 'Failed to upload media');
-            setMediaPreview(null);
-        } finally {
-            setUploading(false);
-            setUploadProgress(0);
-        }
+            )
+        }));
     };
 
-    const handleDrop = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const file = e.dataTransfer?.files?.[0];
-        if (file) handleMediaUpload(file);
+    const clearHeaderMedia = () => {
+        setSelectedMedia(null);
+        setTemplate(prev => ({
+            ...prev,
+            components: prev.components.map(c =>
+                c.type !== 'HEADER' ? c : {
+                    ...c,
+                    mediaAssetId: null,
+                    example: { ...(c.example || {}), header_handle: [] },
+                    _mediaLabel: undefined,
+                    _mediaSize: undefined
+                }
+            )
+        }));
     };
-
-    const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); };
 
     const formatFileSize = (bytes) => {
         if (bytes < 1024) return bytes + ' B';
@@ -574,65 +565,56 @@ const TemplateBuilder = ({ templateId, onBack }) => {
                                             <p className="text-[10px] font-bold text-slate-300">{(headerComp?.text || '').length}/60</p>
                                         </div>
                                     </div>
-                                ) : (
-                                    <div
-                                        className="border-2 border-dashed border-slate-200 rounded-[2rem] p-10 bg-slate-50/50 hover:bg-blue-50/30 hover:border-blue-200 transition-all cursor-pointer group/upload text-center relative overflow-hidden"
-                                        onClick={() => isDraft && fileInputRef.current?.click()}
-                                    >
-                                        <input
-                                            ref={fileInputRef}
-                                            type="file"
-                                            className="hidden"
-                                            accept={currentHeaderFormat === 'IMAGE' ? 'image/jpeg,image/png' : currentHeaderFormat === 'VIDEO' ? 'video/mp4' : '.pdf'}
-                                            onChange={(e) => {
-                                                const file = e.target.files?.[0];
-                                                if (file) handleMediaUpload(file);
-                                                e.target.value = '';
-                                            }}
-                                        />
-                                        <div className="relative z-10">
-                                            <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center mx-auto mb-4 group-hover/upload:scale-110 transition-transform text-blue-500 border border-slate-100">
-                                                <i className={`fa-solid ${currentHeaderFormat === 'IMAGE' ? 'fa-image' : currentHeaderFormat === 'VIDEO' ? 'fa-film' : 'fa-file-lines'} text-2xl`}></i>
-                                            </div>
-                                            <p className="text-sm font-black text-slate-700">{uploading ? 'Uploading...' : `Click to upload ${currentHeaderFormat.toLowerCase()}`}</p>
-                                            <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-wider">Max size 5MB • {currentHeaderFormat === 'IMAGE' ? 'JPG/PNG' : currentHeaderFormat === 'VIDEO' ? 'MP4' : 'PDF'}</p>
+                                ) : selectedMedia ? (
+                                    /* ── Media selected from the library ─────────────────── */
+                                    <div className="border border-slate-200 rounded-[2rem] p-5 bg-slate-50/50 flex items-center gap-4">
+                                        <div className="w-16 h-16 rounded-2xl overflow-hidden bg-white border border-slate-100 flex items-center justify-center shrink-0 shadow-sm">
+                                            {selectedMedia.mediaType === 'IMAGE' && selectedMedia.id ? (
+                                                <img src={mediaRawUrl(selectedMedia.id)} className="w-full h-full object-cover" alt={selectedMedia.label} />
+                                            ) : (
+                                                <i className={`fa-solid ${iconForType(selectedMedia.mediaType)} text-2xl text-slate-300`}></i>
+                                            )}
                                         </div>
-
-                                        {(mediaPreview || headerComp?.example?.header_handle?.length > 0) && !uploading && (
-                                            <div className="absolute inset-0 bg-white z-20 flex items-center justify-center p-2">
-                                                {currentHeaderFormat === 'IMAGE' && mediaPreview ? (
-                                                    <img src={mediaPreview} className="h-full w-full object-cover rounded-2xl shadow-md" alt="Preview" />
-                                                ) : currentHeaderFormat === 'VIDEO' && mediaPreview ? (
-                                                    <video src={mediaPreview} className="h-full w-full object-cover rounded-2xl shadow-md" />
-                                                ) : currentHeaderFormat === 'DOCUMENT' ? (
-                                                    <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100 w-full shadow-sm">
-                                                        <div className="w-12 h-12 bg-rose-500 rounded-xl flex items-center justify-center text-white shadow-lg"><i className="fa-solid fa-file-pdf text-xl"></i></div>
-                                                        <div className="text-left flex-1 min-w-0">
-                                                            <div className="text-sm font-black text-slate-800 truncate">{headerComp?._uploadedFileName || 'Document'}</div>
-                                                            <div className="text-[10px] font-bold text-slate-400">{headerComp?._uploadedFileSize ? formatFileSize(headerComp._uploadedFileSize) : 'Uploaded'}</div>
-                                                        </div>
-                                                    </div>
-                                                ) : (
-                                                    /* Saved media handle from a previously-uploaded template — Meta handles
-                                                       aren't viewable URLs, so show a confirmation instead of a broken preview. */
-                                                    <div className="flex flex-col items-center justify-center gap-2 text-center">
-                                                        <div className="w-12 h-12 bg-emerald-500 rounded-xl flex items-center justify-center text-white shadow-lg"><i className="fa-solid fa-circle-check text-xl"></i></div>
-                                                        <div className="text-sm font-black text-slate-700 capitalize">{currentHeaderFormat.toLowerCase()} uploaded</div>
-                                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Click trash to remove</div>
-                                                    </div>
-                                                )}
-                                                <div className="absolute top-4 right-4 z-30 opacity-0 group-hover/upload:opacity-100 transition-opacity">
-                                                    <button onClick={(e) => { e.stopPropagation(); setMediaPreview(null); handleHeaderFormatChange('NONE'); }} className="w-8 h-8 bg-black/50 backdrop-blur-md rounded-full text-white flex items-center justify-center hover:bg-rose-500 transition-colors shadow-lg"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
-                                                </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-sm font-black text-slate-800 truncate">{selectedMedia.label}</div>
+                                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">
+                                                {selectedMedia.size ? formatBytes(selectedMedia.size) : 'From Media Library'}
+                                            </div>
+                                        </div>
+                                        {isDraft && (
+                                            <div className="flex items-center gap-2 shrink-0">
+                                                <button
+                                                    onClick={() => setShowMediaPicker(true)}
+                                                    className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[11px] font-black text-slate-600 hover:border-blue-300 hover:text-blue-600 transition-colors"
+                                                >
+                                                    Change
+                                                </button>
+                                                <button
+                                                    onClick={clearHeaderMedia}
+                                                    className="w-9 h-9 bg-white border border-slate-200 rounded-xl text-slate-400 hover:bg-rose-50 hover:text-rose-500 hover:border-rose-200 transition-colors"
+                                                    title="Remove"
+                                                >
+                                                    <i className="fa-solid fa-trash-can text-[11px]"></i>
+                                                </button>
                                             </div>
                                         )}
-
-                                        {uploading && (
-                                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center">
-                                                <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-                                                <p className="text-xs font-black text-blue-600 uppercase tracking-widest">{uploadProgress}% Uploading</p>
-                                            </div>
-                                        )}
+                                    </div>
+                                ) : (
+                                    /* ── Nothing chosen yet ──────────────────────────────── */
+                                    <div
+                                        className="border-2 border-dashed border-slate-200 rounded-[2rem] p-10 bg-slate-50/50 hover:bg-blue-50/30 hover:border-blue-200 transition-all cursor-pointer group/upload text-center"
+                                        onClick={() => isDraft && setShowMediaPicker(true)}
+                                    >
+                                        <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center mx-auto mb-4 group-hover/upload:scale-110 transition-transform text-blue-500 border border-slate-100">
+                                            <i className={`fa-solid ${iconForType(currentHeaderFormat)} text-2xl`}></i>
+                                        </div>
+                                        <p className="text-sm font-black text-slate-700">Choose {currentHeaderFormat.toLowerCase()} from Media Library</p>
+                                        <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-wider">
+                                            {currentHeaderFormat === 'IMAGE' ? 'JPG/PNG · up to 5 MB'
+                                                : currentHeaderFormat === 'VIDEO' ? 'MP4 · up to 16 MB'
+                                                : 'PDF & docs · up to 100 MB'}
+                                        </p>
+                                        <p className="text-[10px] font-bold text-blue-400 mt-2">Upload once — reuse in any template or broadcast</p>
                                     </div>
                                 )}
                             </div>
@@ -849,6 +831,39 @@ const TemplateBuilder = ({ templateId, onBack }) => {
                     analytics={template.analytics}
                 />
             </div>
+
+            {/* ════════ MEDIA LIBRARY PICKER ════════ */}
+            {showMediaPicker && (
+                <div
+                    className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+                    onClick={() => setShowMediaPicker(false)}
+                >
+                    <div
+                        className="bg-white rounded-3xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+                            <div>
+                                <h3 className="text-sm font-black text-slate-800">Choose {currentHeaderFormat?.toLowerCase()} from Media Library</h3>
+                                <p className="text-[11px] text-slate-400 font-bold mt-0.5">Upload a new file or reuse one you already have</p>
+                            </div>
+                            <button
+                                onClick={() => setShowMediaPicker(false)}
+                                className="w-9 h-9 rounded-xl bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
+                            >
+                                <i className="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                        <div className="overflow-y-auto p-6 flex-1">
+                            <MediaLibrary
+                                pickerMode
+                                allowedType={['IMAGE', 'VIDEO', 'DOCUMENT'].includes(currentHeaderFormat) ? currentHeaderFormat : null}
+                                onSelect={handleSelectMedia}
+                            />
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

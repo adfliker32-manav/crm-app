@@ -631,6 +631,21 @@ app.use('/api/whatsapp/quick-replies', authMiddleware, quickReplyRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/whatsapp-logs', whatsAppLogRoutes);
 
+// Media Library — tenant-owned files in object storage (R2), reusable across
+// templates, broadcasts, chatbot flows and workflow sends.
+// <img>/<video> tags cannot set an Authorization header, so the preview stream
+// also accepts the JWT via ?token= — copied into the header so the normal auth
+// pipeline (and its tenant scoping) still applies. Same pattern as the existing
+// WhatsApp media proxy.
+const mediaLibraryRoutes = require('./src/routes/mediaLibraryRoutes');
+const mediaLibraryAuth = (req, res, next) => {
+    if (!req.header('Authorization') && req.query.token) {
+        req.headers.authorization = `Bearer ${req.query.token}`;
+    }
+    return authMiddleware(req, res, next);
+};
+app.use('/api/media-library', mediaLibraryAuth, requireModule('whatsapp'), mediaLibraryRoutes);
+
 // Chatbot flows
 const chatbotRoutes = require('./src/routes/chatbotRoutes');
 app.use('/api/chatbot/flows', chatbotRoutes);

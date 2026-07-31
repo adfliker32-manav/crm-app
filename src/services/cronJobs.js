@@ -179,6 +179,7 @@ const runAppointmentReminders = async () => {
         const Appointment = require('../models/Appointment');
         const WhatsAppTemplate = require('../models/WhatsAppTemplate');
         const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
+        const { buildMetaComponents } = require('../utils/templateVariableResolver');
         const { isFeatureDisabled } = require('../utils/systemConfig');
 
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
@@ -282,7 +283,15 @@ const runAppointmentReminders = async () => {
 
             if (template && appt.customerPhone) {
                 try {
-                    await sendWhatsAppMessage(appt.customerPhone, template.name, appt.userId.toString(), null, template.language);
+                    // Media-header templates need their media on every send; this
+                    // used to pass null components, so any reminder template with
+                    // an image/PDF header was rejected by Meta.
+                    const { resolveTemplateMedia } = require('./mediaLibraryService');
+                    const media = await resolveTemplateMedia(template, appt.userId.toString());
+                    const components = media
+                        ? buildMetaComponents(template.components || [], template.variableMapping, { media })
+                        : null;
+                    await sendWhatsAppMessage(appt.customerPhone, template.name, appt.userId.toString(), components, template.language);
                     console.log(`📅 [AppointmentReminder] ${label} WhatsApp sent to ${appt.customerPhone} (appt ${appt._id})`);
                 } catch (err) {
                     console.error(`❌ [AppointmentReminder] ${label} WhatsApp failed for ${appt._id}:`, err.message);
@@ -328,6 +337,7 @@ const runLostLeadRecovery = async () => {
         const Lead = require('../models/Lead');
         const WhatsAppTemplate = require('../models/WhatsAppTemplate');
         const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
+        const { buildMetaComponents } = require('../utils/templateVariableResolver');
         const { isFeatureDisabled } = require('../utils/systemConfig');
 
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
@@ -370,7 +380,13 @@ const runLostLeadRecovery = async () => {
             }
 
             try {
-                await sendWhatsAppMessage(lead.phone, template.name, lead.userId.toString(), null, template.language);
+                // Resolve a Media Library header if the recovery template has one.
+                const { resolveTemplateMedia } = require('./mediaLibraryService');
+                const media = await resolveTemplateMedia(template, lead.userId.toString());
+                const components = media
+                    ? buildMetaComponents(template.components || [], template.variableMapping, { media })
+                    : null;
+                await sendWhatsAppMessage(lead.phone, template.name, lead.userId.toString(), components, template.language);
                 await Lead.findByIdAndUpdate(lead._id, {
                     $set: { recoveryAttemptedAt: new Date() },
                     $push: {

@@ -8,6 +8,7 @@ import WhatsAppSettings from '../components/WhatsApp/WhatsAppSettings';
 import WhatsAppAnalytics from '../components/WhatsApp/WhatsAppAnalytics';
 import ChatbotFlows from '../components/WhatsApp/ChatbotFlows';
 import ChatbotFlowBuilder from '../components/WhatsApp/ChatbotFlowBuilder';
+import MediaLibrary from '../components/WhatsApp/MediaLibrary';
 import AISettings from '../components/Settings/AISettings';
 import FeatureGate from '../components/FeatureGate';
 import { hasEntitlement } from '../utils/entitlements';
@@ -44,6 +45,7 @@ const WhatsAppManagement = () => {
         { id: 'inbox', label: 'Inbox', icon: 'fa-solid fa-inbox' },
         hasModule('chatbot') && { id: 'chatbot', label: 'Chatbot', icon: 'fa-solid fa-robot' },
         { id: 'templates', label: 'Templates', icon: 'fa-solid fa-file-lines' },
+        { id: 'media', label: 'Media', icon: 'fa-solid fa-photo-film' },
         { id: 'broadcasts', label: 'Broadcasts', icon: 'fa-solid fa-tower-broadcast' },
         { id: 'analytics', label: 'Analytics', icon: 'fa-solid fa-chart-line' },
         { id: 'settings', label: 'Settings', icon: 'fa-solid fa-cog' }
@@ -54,6 +56,7 @@ const WhatsAppManagement = () => {
     const renderContent = () => {
         switch (activeTab) {
             case 'inbox': return <WhatsAppInbox />;
+            case 'media': return <div className="h-full overflow-y-auto"><MediaLibrary /></div>;
             case 'chatbot': {
                 // Fullscreen flow builder takes over the whole area (no sub-tabs).
                 if (editingFlowId) {

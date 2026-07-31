@@ -131,7 +131,11 @@ const workspaceSettingsSchema = new mongoose.Schema({
         webhooks:            { type: Boolean, default: true },
         leadLimit:           { type: Number, default: 100 },
         agentLimit:          { type: Number, default: 5 },
-        aiMessageLimit:      { type: Number, default: 1000 }
+        aiMessageLimit:      { type: Number, default: 1000 },
+        // Media Library storage cap in MB (0 or negative = unlimited).
+        // Enforced on upload in mediaLibraryController against the sum of
+        // MediaAsset.size for the tenant.
+        storageLimitMb:      { type: Number, default: 1024 }
     },
 
     activeModules: {

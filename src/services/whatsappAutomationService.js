@@ -4,6 +4,7 @@ const WhatsAppMessage = require('../models/WhatsAppMessage');
 const User = require('../models/User');
 const { sendWhatsAppMessage } = require('./whatsappService');
 const { buildMetaComponents } = require('../utils/templateVariableResolver');
+const { resolveTemplateMedia } = require('./mediaLibraryService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 
 /**
@@ -141,7 +142,14 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
 
         for (const template of templates) {
             try {
-                const metaComponents = buildMetaComponents(template.components || [], template.variableMapping, templateData);
+                // FIX: templates with an IMAGE/VIDEO/DOCUMENT header need the media
+                // supplied on every send — the handle stored at creation is only the
+                // reviewer's sample. Without this, Meta rejected every automated send
+                // of a media template for a parameter mismatch.
+                const media = await resolveTemplateMedia(template, userId);
+                const metaComponents = buildMetaComponents(
+                    template.components || [], template.variableMapping, { ...templateData, media }
+                );
                 console.log(`📤 [WA-Auto] Sending template "${template.name}" to ${lead.phone}...`);
                 const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language);
                 const messageId = result?.messages?.[0]?.id;
@@ -209,7 +217,12 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
 
         for (const template of templates) {
             try {
-                const metaComponents = buildMetaComponents(template.components || [], template.variableMapping, templateData);
+                // Media headers must be re-supplied on every send — see the note
+                // in sendAutomatedWhatsAppOnLeadCreate.
+                const media = await resolveTemplateMedia(template, userId);
+                const metaComponents = buildMetaComponents(
+                    template.components || [], template.variableMapping, { ...templateData, media }
+                );
                 const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language);
                 console.log(`✅ Automated WhatsApp sent to ${lead.phone} for stage change to ${newStage} using template ${template.name}`);
 

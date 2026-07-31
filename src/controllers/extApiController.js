@@ -495,7 +495,26 @@ exports.sendWhatsAppTemplate = async (req, res) => {
             });
         }
 
-        const components = lead ? buildMetaComponents(template, lead) : undefined;
+        // FIX: this called buildMetaComponents(template, lead) — the wrong
+        // signature. It expects (components, variableMapping, data), so the loop
+        // received a non-iterable document and every /whatsapp/template call made
+        // with a leadId threw instead of sending.
+        const { resolveTemplateMedia } = require('../services/mediaLibraryService');
+        const media = await resolveTemplateMedia(template, req.tenantId);
+
+        let components;
+        if (lead || media) {
+            const owner = await User.findById(req.tenantId).select('name companyName').lean();
+            components = buildMetaComponents(template.components || [], template.variableMapping, {
+                leadName:    lead?.name   || '',
+                leadEmail:   lead?.email  || '',
+                leadPhone:   lead?.phone  || toPhone || '',
+                stageName:   lead?.status || 'New',
+                companyName: owner?.companyName || '',
+                userName:    owner?.name || '',
+                media
+            });
+        }
         const result = await sendWhatsAppMessage(
             toPhone,
             templateName,

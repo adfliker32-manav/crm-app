@@ -214,6 +214,19 @@ const schemas = {
     restoreWorkflowVersion: Joi.object({}),
 
     // Rows 23 + 55: the plaintext credential arrives here once and is never returned.
+    // Media Library — the file itself is validated in the controller against a
+    // MIME allowlist and per-type size caps; these cover the text fields only.
+    // multipart/form-data delivers them as strings, hence no coercion here.
+    uploadMediaAsset: Joi.object({
+        label:  Joi.string().trim().max(120).allow('', null),
+        folder: Joi.string().trim().max(60).allow('', null)
+    }),
+
+    updateMediaAsset: Joi.object({
+        label:  Joi.string().trim().max(120).allow('', null),
+        folder: Joi.string().trim().max(60).allow('', null)
+    }).min(1),
+
     upsertWorkflowSecret: Joi.object({
         name:        Joi.string().trim().uppercase().pattern(/^[A-Z0-9_]{2,64}$/).required()
             .messages({ 'string.pattern.base': 'name must be 2-64 characters of A-Z, 0-9 or underscore' }),

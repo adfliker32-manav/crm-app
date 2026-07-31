@@ -70,6 +70,17 @@ const whatsappTemplateSchema = new mongoose.Schema({
             body_text: [[String]], // Array of arrays for body variables
             header_handle: [String]
         },
+        // Media Library reference for IMAGE/VIDEO/DOCUMENT headers.
+        // The template stores only a pointer — the bytes live in object storage
+        // and one asset can back many templates, flows and broadcasts.
+        // A fresh Meta upload handle is derived from this at submit time
+        // (handles are consumed per submission and cannot be cached), and the
+        // actual media is resolved from it on every send.
+        mediaAssetId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'MediaAsset',
+            default: null
+        },
         // Buttons array
         buttons: [{
             type: {

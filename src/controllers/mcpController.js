@@ -934,6 +934,11 @@ const toolHandlers = {
         let sent = 0, failed = 0;
         const errors = [];
 
+        // Resolved once for the whole run — the Meta media id is cached on the
+        // asset, so every lead in this loop reuses the same upload.
+        const { resolveTemplateMedia } = require('../services/mediaLibraryService');
+        const templateMedia = await resolveTemplateMedia(template, tenantId);
+
         for (const lead of leads) {
             try {
                 const varData = {
@@ -942,7 +947,8 @@ const toolHandlers = {
                     leadEmail: lead.email || '',
                     stageName: lead.status || stage,
                     companyName,
-                    userName
+                    userName,
+                    media: templateMedia
                 };
                 const components = buildMetaComponents(template.components, template.variableMapping, varData);
                 await sendWhatsAppMessage(lead.phone, template.name, tenantId, components, template.language);

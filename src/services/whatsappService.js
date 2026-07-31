@@ -535,6 +535,22 @@ const submitTemplateToMeta = async (userId, template) => {
 
         const url = `https://graph.facebook.com/v25.0/${wabaId}/message_templates`;
 
+        // Media Library headers: Meta requires a resumable-upload handle as the
+        // reviewer's sample, and a handle is consumed by the submission that uses
+        // it — so derive a FRESH one from the stored asset on every submit rather
+        // than caching it on the template.
+        let libraryHandle = null;
+        const mediaHeader = template.components.find(
+            c => c.type === 'HEADER' && c.mediaAssetId && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(c.format)
+        );
+        if (mediaHeader) {
+            const { createTemplateHandle } = require('./mediaLibraryService');
+            libraryHandle = await createTemplateHandle(mediaHeader.mediaAssetId, userId);
+            if (!libraryHandle) {
+                return { success: false, error: 'Could not upload the selected media to Meta. Please re-select the file in the Media Library and try again.' };
+            }
+        }
+
         const metaComponents = template.components.map(comp => {
             const metaComp = { type: comp.type };
             if (comp.type === 'HEADER') {
@@ -549,7 +565,11 @@ const submitTemplateToMeta = async (userId, template) => {
                             : headerVars.map((_, i) => `sample_value_${i + 1}`);
                         metaComp.example = { header_text: headerExamples };
                     }
+                } else if (libraryHandle && comp === mediaHeader) {
+                    metaComp.example = { header_handle: [libraryHandle] };
                 } else if (comp.example?.header_handle) {
+                    // Legacy templates that uploaded their own file before the
+                    // Media Library existed keep working unchanged.
                     metaComp.example = { header_handle: comp.example.header_handle };
                 }
             } else if (comp.type === 'BODY') {
@@ -706,6 +726,36 @@ const uploadMediaForSending = async (userId, filePath, mimeType, fileName) => {
     }
 };
 
+/**
+ * Same as uploadMediaForSending but from an in-memory buffer instead of a disk
+ * path — used by the Media Library, whose bytes come from object storage (R2)
+ * and are never written to the application server's filesystem.
+ */
+const uploadMediaBufferForSending = async (userId, buffer, mimeType, fileName) => {
+    try {
+        const { phoneNumberId, accessToken } = await getCredentials(userId);
+        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/media`;
+
+        const formData = new FormData();
+        formData.append('messaging_product', 'whatsapp');
+        formData.append('file', buffer, { filename: fileName, contentType: mimeType });
+
+        const response = await axios.post(url, formData, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                ...formData.getHeaders()
+            },
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity
+        });
+
+        return { success: true, media_id: response.data.id };
+    } catch (error) {
+        console.error('❌ Failed to upload media buffer for sending:', error.response?.data || error.message);
+        return { success: false, error: error.response?.data?.error?.message || error.message };
+    }
+};
+
 module.exports = {
     sendWhatsAppMessage,
     checkTemplateSendable,
@@ -720,5 +770,6 @@ module.exports = {
     deleteTemplateFromMeta,
     uploadMediaForTemplate,
     uploadMediaForSending,
+    uploadMediaBufferForSending,
     sendWhatsAppTemplateMessage
 };

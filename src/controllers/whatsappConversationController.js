@@ -472,7 +472,12 @@ exports.startConversation = async (req, res) => {
                     stageName: leadObj?.status || 'New'
                 };
                 
-                metaComponents = buildMetaComponents(templateObj.components || [], templateObj.variableMapping, templateData);
+                // Media-header templates must carry their media on every send.
+                const { resolveTemplateMedia } = require('../services/mediaLibraryService');
+                const media = await resolveTemplateMedia(templateObj, userId);
+                metaComponents = buildMetaComponents(
+                    templateObj.components || [], templateObj.variableMapping, { ...templateData, media }
+                );
             }
 
             const { sendWhatsAppMessage } = require('../services/whatsappService');
