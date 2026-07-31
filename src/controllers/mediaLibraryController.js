@@ -116,10 +116,7 @@ exports.listAssets = async (req, res) => {
         const [assets, total, usage] = await Promise.all([
             MediaAsset.find(query).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
             MediaAsset.countDocuments(query),
-            MediaAsset.aggregate([
-                { $match: { userId: req.tenantId, deletedAt: null } },
-                { $group: { _id: null, bytes: { $sum: '$size' }, count: { $sum: 1 } } }
-            ])
+            usedBytesFor(req.tenantId)
         ]);
 
         const workspace = await WorkspaceSettings.findOne({ userId: req.tenantId }).select('planFeatures.storageLimitMb').lean();
@@ -130,8 +127,8 @@ exports.listAssets = async (req, res) => {
             assets: assets.map(toDto),
             pagination: { page, limit, total, pages: Math.ceil(total / limit) },
             storage: {
-                usedBytes: usage[0]?.bytes || 0,
-                fileCount: usage[0]?.count || 0,
+                usedBytes: usage.bytes,
+                fileCount: usage.count,
                 limitMb,
                 unlimited: !(limitMb > 0)
             }
@@ -171,11 +168,7 @@ exports.uploadAsset = async (req, res) => {
             .select('planFeatures.storageLimitMb').lean();
         const limitMb = workspace?.planFeatures?.storageLimitMb ?? 1024;
         if (limitMb > 0) {
-            const usage = await MediaAsset.aggregate([
-                { $match: { userId: req.tenantId, deletedAt: null } },
-                { $group: { _id: null, bytes: { $sum: '$size' } } }
-            ]);
-            const used = usage[0]?.bytes || 0;
+            const { bytes: used } = await usedBytesFor(req.tenantId);
             if (used + size > limitMb * MB) {
                 return res.status(413).json({
                     success: false,
