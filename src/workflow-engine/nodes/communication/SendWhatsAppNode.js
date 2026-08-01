@@ -1,6 +1,9 @@
 const NodeRegistry      = require('../../NodeRegistry');
 const WhatsAppTemplate  = require('../../../models/WhatsAppTemplate');
+const User              = require('../../../models/User');
 const { sendWhatsAppMessage } = require('../../../services/whatsappService');
+const { buildMetaComponents } = require('../../../utils/templateVariableResolver');
+const { resolveTemplateMedia } = require('../../../services/mediaLibraryService');
 // RATE #1 FIX: Per-tenant WhatsApp send rate limiting
 const { checkWhatsAppRate } = require('../../../utils/workflowRateLimiter');
 
@@ -100,6 +103,36 @@ const SendWhatsAppNode = {
             return { nextPort: 'error', output: { 'whatsapp.error': reason, 'whatsapp.skipped': true } };
         }
 
+        // FIX: Build Meta API components from template variables + lead data.
+        // Previously passed `null` for components, so templates with variables
+        // (e.g. {{1}}) always failed with Meta error 132000:
+        // "number of localizable_params (0) does not match the expected number of params (1)".
+        // Now resolves variables from lead/user data exactly like automation/broadcast callers.
+        let metaComponents = null;
+        try {
+            const user = await User.findById(tenantId).select('name companyName').lean();
+            const templateData = {
+                leadName:    lead.name || '',
+                leadEmail:   lead.email || '',
+                leadPhone:   lead.phone || '',
+                companyName: user?.companyName || '',
+                userName:    user?.name || '',
+                stageName:   lead.status || 'New'
+            };
+
+            // Resolve media for IMAGE/VIDEO/DOCUMENT header templates
+            const media = await resolveTemplateMedia(template, tenantId);
+            metaComponents = buildMetaComponents(
+                template.components || [], template.variableMapping, { ...templateData, media }
+            );
+
+            // Only pass components if there are actual parameters to send
+            if (metaComponents.length === 0) metaComponents = null;
+        } catch (err) {
+            console.warn(`[SendWhatsAppNode] Failed to build template components: ${err.message}. Sending without variables.`);
+            metaComponents = null;
+        }
+
         // BUG #1 FIX: Wrap Meta API call in try/catch.
         // sendWhatsAppMessage() throws on ANY failure (expired token, wrong number, etc.).
         // Without this, BullMQ catches the throw, retries 3x, then marks the execution 'failed'.
@@ -109,7 +142,7 @@ const SendWhatsAppNode = {
             // so this costs nothing — and omitting it meant Meta was asked for
             // 'en_US' while the template is created as 'en', which fails with 132001
             // and routed every workflow WhatsApp send to the error port.
-            await sendWhatsAppMessage(lead.phone, templateName, tenantId, null, template.language);
+            await sendWhatsAppMessage(lead.phone, templateName, tenantId, metaComponents, template.language);
         } catch (err) {
             console.error(`[SendWhatsAppNode] Meta API send failed:`, err.message);
             return {
