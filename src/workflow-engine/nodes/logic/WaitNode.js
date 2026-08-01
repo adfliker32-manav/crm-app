@@ -162,11 +162,23 @@ const WaitNode = {
             // or, worse, parked against a conversation that was later archived while a
             // reply on it resolved nothing. Prefer the active one, fall back to the
             // most recent, and bind to whichever the reply will actually arrive on.
-            const conversation =
+            let conversation =
                 await WhatsAppConversation.findOne({ leadId: lead._id, status: 'active' })
                     .sort({ lastMessageAt: -1, updatedAt: -1 }).lean()
                 || await WhatsAppConversation.findOne({ leadId: lead._id })
                     .sort({ lastMessageAt: -1, updatedAt: -1 }).lean();
+
+            // Fallback: search by phone number if leadId wasn't properly linked
+            if (!conversation && lead.phone) {
+                const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
+                if (normalizedPhone.length >= 10) {
+                    const phoneLastTen = normalizedPhone.slice(-10);
+                    conversation = await WhatsAppConversation.findOne({
+                        userId: lead.userId,
+                        waContactId: { $regex: phoneLastTen + '$' }
+                    }).sort({ lastMessageAt: -1, updatedAt: -1 }).lean();
+                }
+            }
 
             if (!conversation) {
                 // WEAK #5 FIX: Route to dedicated 'no_conversation' port instead of 'timeout'.

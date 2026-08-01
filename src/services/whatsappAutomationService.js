@@ -67,7 +67,7 @@ const syncAutomatedSendToConversation = async (lead, userId, templateName, waMes
         await messageRecord.save();
 
         // Atomic update to prevent race conditions
-        await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
+        const updatePayload = {
             $set: {
                 lastMessage: `[Auto] ${templateName}`,
                 lastMessageAt: new Date(),
@@ -77,7 +77,13 @@ const syncAutomatedSendToConversation = async (lead, userId, templateName, waMes
                 'metadata.totalMessages': 1,
                 'metadata.totalOutbound': 1
             }
-        });
+        };
+
+        if (!conversation.leadId) {
+            updatePayload.$set.leadId = lead._id;
+        }
+
+        await WhatsAppConversation.findByIdAndUpdate(conversation._id, updatePayload);
 
         // 🔌 Push to the whole team via Socket.IO (shared inbox — all company users)
         try {
