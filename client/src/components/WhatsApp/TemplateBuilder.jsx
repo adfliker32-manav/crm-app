@@ -670,24 +670,74 @@ const TemplateBuilder = ({ templateId, onBack }) => {
                         {/* Variable Mapping Section */}
                         {bodyComp?.text?.includes('{{') && (
                             <div className="mt-8 pt-8 border-t border-slate-100 animate-in fade-in zoom-in-95 duration-500">
-                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Sample Data for Variables</p>
-                                <div className="grid grid-cols-2 gap-4">
-                                    {extractVariables(bodyComp.text).map((num) => (
-                                        <div key={num} className="relative group/var">
-                                            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                                                <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-[10px] font-black flex items-center justify-center">
-                                                    {num}
-                                                </span>
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Variable Mapping</p>
+                                <p className="text-[11px] text-slate-400 mb-5">Choose which CRM field each variable resolves to when sending messages automatically (workflows, broadcasts, automation).</p>
+                                <div className="space-y-4">
+                                    {extractVariables(bodyComp.text).map((num) => {
+                                        const mappingValue = template.variableMapping?.[num.toString()] || '';
+                                        const customValue = template.variableMapping?.[`${num}_custom`] || '';
+                                        return (
+                                            <div key={num} className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                                                <div className="flex items-center gap-3 mb-3">
+                                                    <span className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-600 text-[11px] font-black flex items-center justify-center shrink-0">
+                                                        {`{{${num}}}`}
+                                                    </span>
+                                                    <select
+                                                        value={mappingValue}
+                                                        onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            setTemplate(prev => ({
+                                                                ...prev,
+                                                                variableMapping: {
+                                                                    ...(prev.variableMapping || {}),
+                                                                    [num.toString()]: val,
+                                                                    ...(val !== 'custom' ? { [`${num}_custom`]: '' } : {})
+                                                                }
+                                                            }));
+                                                        }}
+                                                        className="flex-1 px-4 py-2.5 bg-white border-2 border-slate-200 focus:border-emerald-400 rounded-xl text-xs font-bold text-slate-700 outline-none cursor-pointer transition-colors"
+                                                    >
+                                                        <option value="">Auto (default by position)</option>
+                                                        <option value="lead.name">👤 Lead Name</option>
+                                                        <option value="lead.phone">📱 Lead Phone</option>
+                                                        <option value="lead.email">📧 Lead Email</option>
+                                                        <option value="lead.status">📋 Lead Stage</option>
+                                                        <option value="company.name">🏢 Company Name</option>
+                                                        <option value="user.name">🙋 User / Agent Name</option>
+                                                        <option value="custom">✏️ Custom Static Text</option>
+                                                    </select>
+                                                </div>
+                                                {mappingValue === 'custom' && (
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Enter custom text value..."
+                                                        value={customValue}
+                                                        onChange={(e) => {
+                                                            setTemplate(prev => ({
+                                                                ...prev,
+                                                                variableMapping: {
+                                                                    ...(prev.variableMapping || {}),
+                                                                    [`${num}_custom`]: e.target.value
+                                                                }
+                                                            }));
+                                                        }}
+                                                        className="w-full px-4 py-2.5 bg-white border-2 border-slate-200 focus:border-emerald-400 rounded-xl text-xs font-bold outline-none transition-colors ml-10"
+                                                    />
+                                                )}
+                                                {/* Sample value for Meta review */}
+                                                <div className="mt-3 ml-10">
+                                                    <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Sample value (for Meta review)</label>
+                                                    <input
+                                                        type="text"
+                                                        placeholder={`e.g. ${mappingValue === 'lead.name' ? 'John Doe' : mappingValue === 'lead.phone' ? '+919876543210' : mappingValue === 'lead.email' ? 'john@example.com' : mappingValue === 'company.name' ? 'Acme Corp' : 'Sample value'}`}
+                                                        value={bodyComp.example?.body_text?.[0]?.[num - 1] || ''}
+                                                        onChange={(e) => updateVariableExample('BODY', num, e.target.value)}
+                                                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-[11px] font-medium outline-none focus:border-slate-300 transition-colors mt-1"
+                                                    />
+                                                </div>
                                             </div>
-                                            <input
-                                                type="text"
-                                                placeholder={`Value for {{${num}}}`}
-                                                value={bodyComp.example?.body_text?.[0]?.[num - 1] || ''}
-                                                onChange={(e) => updateVariableExample('BODY', num, e.target.value)}
-                                                className="w-full pl-12 pr-4 py-3 bg-slate-50 border-2 border-transparent focus:border-emerald-500/20 focus:bg-white rounded-xl focus:ring-4 focus:ring-emerald-500/5 outline-none text-xs font-bold transition-all shadow-inner"
-                                            />
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             </div>
                         )}
