@@ -155,28 +155,12 @@ const blockUnapprovedLogin = (user, res) => {
         return false;
     }
 
-    // Agents are created directly by their manager — that act IS the approval.
-    // Skip the admin-approval gate entirely for agents.
-    if (user.role !== 'agent' && !user.approved_by_admin) {
-        res.status(403).json({
-            message: 'Account not approved yet. Please wait for admin approval.',
-            status: 'pending_approval'
-        });
-        return true;
-    }
-
+    // Note: Accounts are active by default. We only block login if a superadmin
+    // has explicitly manually deactivated the account (is_active = false).
     if (!user.is_active) {
         res.status(403).json({
             message: 'Account has been deactivated. Please contact your administrator.',
             status: 'deactivated'
-        });
-        return true;
-    }
-
-    if (user.status === 'rejected') {
-        res.status(403).json({
-            message: 'Account application was rejected. Please contact support.',
-            status: 'rejected'
         });
         return true;
     }

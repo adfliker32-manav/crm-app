@@ -41,10 +41,24 @@ const createSuperAdmin = async () => {
 
         let user = await User.findOne({ email: email.toLowerCase() });
 
+        // ⚠️ The account lifecycle fields MUST be set explicitly. They default to
+        // false/false/'pending' in the schema, and authMiddleware rejects any
+        // request whose user has is_active === false with a 401 `account_deactivated`
+        // — with no superadmin exemption. Leaving them at their defaults produces a
+        // Super Admin who can log in (authController exempts superadmin from the
+        // approval gate) but is then 401'd on every subsequent request, i.e. bounced
+        // straight back to the login page.
+        const LIFECYCLE = {
+            is_active: true,
+            approved_by_admin: true,
+            status: 'approved'
+        };
+
         if (user) {
             console.log('👤 Super Admin found. Updating credentials...');
             user.role = 'superadmin';
             user.name = name;
+            Object.assign(user, LIFECYCLE);
 
             // Update password
             user.password = password;
@@ -59,7 +73,8 @@ const createSuperAdmin = async () => {
                 email,
                 password: password,
                 role: 'superadmin',
-                companyName: 'Headquarters'
+                companyName: 'Headquarters',
+                ...LIFECYCLE
             });
 
             console.log('✅ New Super Admin created successfully!');
@@ -69,6 +84,7 @@ const createSuperAdmin = async () => {
         console.log('🎉 Super Admin Ready:');
         console.log(`📧 Email: ${email}`);
         console.log(`👤 Name:  ${name}`);
+        console.log(`🔓 State: is_active=${user.is_active} approved=${user.approved_by_admin} status=${user.status}`);
         console.log('-----------------------------------\n');
 
     } catch (error) {

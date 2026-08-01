@@ -109,16 +109,16 @@ const userSchema = new mongoose.Schema({
     // ✅ APPROVAL-BASED ACCESS CONTROL (Replaces all billing/trial logic)
     is_active: {
         type: Boolean,
-        default: false
+        default: true
     },
     approved_by_admin: {
         type: Boolean,
-        default: false
+        default: true
     },
     status: {
         type: String,
         enum: ['pending', 'approved', 'rejected'],
-        default: 'pending'
+        default: 'approved'
     },
 
     // 🔒 TRI-STATE ACCOUNT LIFECYCLE (For individual agents/users)
