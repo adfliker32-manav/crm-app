@@ -6,6 +6,7 @@ const { buildMetaComponents } = require('../../../utils/templateVariableResolver
 const { resolveTemplateMedia } = require('../../../services/mediaLibraryService');
 // RATE #1 FIX: Per-tenant WhatsApp send rate limiting
 const { checkWhatsAppRate } = require('../../../utils/workflowRateLimiter');
+const { syncAutomatedSendToConversation } = require('../../../services/whatsappAutomationService');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SendWhatsAppNode
@@ -142,7 +143,13 @@ const SendWhatsAppNode = {
             // so this costs nothing — and omitting it meant Meta was asked for
             // 'en_US' while the template is created as 'en', which fails with 132001
             // and routed every workflow WhatsApp send to the error port.
-            await sendWhatsAppMessage(lead.phone, templateName, tenantId, metaComponents, template.language);
+            const result = await sendWhatsAppMessage(lead.phone, templateName, tenantId, metaComponents, template.language);
+            
+            // Sync to conversation DB so downstream Wait nodes can find this conversation
+            const messageId = result?.messages?.[0]?.id;
+            if (messageId) {
+                await syncAutomatedSendToConversation(lead, tenantId, templateName, messageId, 'template');
+            }
         } catch (err) {
             console.error(`[SendWhatsAppNode] Meta API send failed:`, err.message);
             return {

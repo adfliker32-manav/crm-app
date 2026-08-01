@@ -6,6 +6,8 @@ const { sendWhatsAppMessage } = require('./whatsappService');
 const { buildMetaComponents } = require('../utils/templateVariableResolver');
 const { resolveTemplateMedia } = require('./mediaLibraryService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { emitToUsers, emitToConversation } = require('./socketService');
+const { getCompanyUserIds } = require('../utils/whatsappUtils');
 
 /**
  * FIX #79: Helper to sync automated send to conversation DB.
@@ -76,6 +78,31 @@ const syncAutomatedSendToConversation = async (lead, userId, templateName, waMes
                 'metadata.totalOutbound': 1
             }
         });
+
+        // 🔌 Push to the whole team via Socket.IO (shared inbox — all company users)
+        try {
+            const companyUserIds = await getCompanyUserIds(userId);
+            const savedMsg = messageRecord.toObject();
+            
+            emitToUsers(companyUserIds, 'whatsapp:newMessage', {
+                conversationId: conversation._id,
+                message: savedMsg
+            });
+            emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
+                conversationId: conversation._id,
+                message: savedMsg
+            });
+            emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
+                conversationId: conversation._id.toString(),
+                updates: {
+                    lastMessage: `[Auto] ${templateName}`,
+                    lastMessageAt: messageRecord.timestamp,
+                    lastMessageDirection: 'outbound'
+                }
+            });
+        } catch (socketErr) {
+            console.error(`❌ [Automation] Socket emit failed for ${lead.phone}:`, socketErr.message);
+        }
     } catch (syncErr) {
         console.error(`❌ [Automation] DB sync failed for ${lead.phone}:`, syncErr.message);
     }
@@ -247,6 +274,7 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
 
 module.exports = {
     sendAutomatedWhatsAppOnLeadCreate,
-    sendAutomatedWhatsAppOnStageChange
+    sendAutomatedWhatsAppOnStageChange,
+    syncAutomatedSendToConversation
 };
 
