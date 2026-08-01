@@ -1152,7 +1152,7 @@ const toolHandlers = {
             };
         }
 
-        const updated = await Lead.findByIdAndUpdate(leadId, mutation, { new: true })
+        const updated = await Lead.findByIdAndUpdate(leadId, mutation, { returnDocument: 'after' })
             .select('name phone email status source dealValue tags qualificationLevel')
             .lean();
 
@@ -1511,7 +1511,7 @@ const toolHandlers = {
 
         if (Object.keys(updates).length === 0) throw new Error('No fields to update.');
 
-        const updated = await Task.findByIdAndUpdate(taskId, { $set: updates }, { new: true }).lean();
+        const updated = await Task.findByIdAndUpdate(taskId, { $set: updates }, { returnDocument: 'after' }).lean();
 
         return {
             success: true,
@@ -1638,7 +1638,7 @@ const toolHandlers = {
 
         if (Object.keys(updates).length === 0) throw new Error('No fields to update.');
 
-        const updated = await Appointment.findByIdAndUpdate(appointmentId, { $set: updates }, { new: true }).lean();
+        const updated = await Appointment.findByIdAndUpdate(appointmentId, { $set: updates }, { returnDocument: 'after' }).lean();
 
         return {
             success: true,

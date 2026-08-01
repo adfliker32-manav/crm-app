@@ -325,7 +325,7 @@ const saveDraft = async (req, res) => {
             const updated = await EmailDraft.findOneAndUpdate(
                 { _id: draftId, userId },
                 { $set: fields },
-                { new: true }
+                { returnDocument: 'after' }
             ).lean();
             if (!updated) return res.status(404).json({ success: false, message: 'Draft not found' });
             return res.json({ success: true, draft: updated });

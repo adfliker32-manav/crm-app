@@ -81,7 +81,7 @@ const generateExtApiKey = async (req, res) => {
         await WorkspaceSettings.findOneAndUpdate(
             { userId: req.tenantId },
             { $set: { extApiKey: newKey, extApiEnabled: true } },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
 
         // Return the full key exactly once — they must copy it now

@@ -73,7 +73,7 @@ exports.saveVoiceConfig = async (req, res) => {
         await IntegrationConfig.findOneAndUpdate(
             { userId: req.tenantId },
             { $set: updateFields },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
 
         res.json({ success: true, message: 'Voice integration settings saved successfully.' });

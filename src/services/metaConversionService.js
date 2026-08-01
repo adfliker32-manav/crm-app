@@ -328,7 +328,7 @@ async function sendMetaEventForLead(lead, newStatus, oldStatus = null, opts = {}
                     nextRetryAt: new Date()
                 }
             },
-            { upsert: true, new: false }
+            { upsert: true, returnDocument: 'before' }
         ).lean();
 
         // Already delivered → suppress the duplicate (extends dedup beyond

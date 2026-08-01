@@ -92,7 +92,7 @@ exports.updateClient = async (req, res) => {
         const client = await AgencyClient.findByIdAndUpdate(
             req.params.id,
             { $set: updateData },
-            { new: true, runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         );
         if (!client) return res.status(404).json({ success: false, message: 'Client not found.' });
 
@@ -386,7 +386,7 @@ exports.updatePayment = async (req, res) => {
         const payment = await AgencyPayment.findByIdAndUpdate(
             req.params.id,
             { $set: update },
-            { new: true, runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         );
         if (!payment) return res.status(404).json({ success: false, message: 'Payment not found.' });
 

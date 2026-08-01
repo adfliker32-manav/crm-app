@@ -85,7 +85,7 @@ exports.handleUnsubscribe = async (req, res) => {
                 },
                 suppressedAt: new Date()
             },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
 
         console.log(`📧 Email unsubscribed: ${email}`);

@@ -306,7 +306,7 @@ exports.updateWhatsAppSettings = async (req, res) => {
         const config = await IntegrationConfig.findOneAndUpdate(
             { userId: ownerId },
             { $set: updateData },
-            { new: true, upsert: true, select: 'whatsapp' }
+            { returnDocument: 'after', upsert: true, select: 'whatsapp' }
         );
 
         res.json({

@@ -673,7 +673,7 @@ const addNote = async (req, res) => {
                     }
                 }
             },
-            { new: true }
+            { returnDocument: 'after' }
         );
 
         if (!updatedLead) return res.status(404).json({ message: "Lead not found or access denied" });

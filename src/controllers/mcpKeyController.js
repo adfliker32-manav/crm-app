@@ -43,7 +43,7 @@ const generateMcpKey = async (req, res) => {
         await WorkspaceSettings.findOneAndUpdate(
             { userId: req.tenantId },
             { $set: { mcpApiKey: newKey } },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
 
         // Return the full key exactly once — the client must copy it now.

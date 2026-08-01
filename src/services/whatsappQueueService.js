@@ -48,7 +48,7 @@ const defineWhatsAppJobs = (agenda) => {
                 const advanced = await ChatbotSession.findOneAndUpdate(
                     { _id: sessionId, currentNodeId: questionNodeId, status: 'active' },
                     { $set: { currentNodeId: nextNodeId } },
-                    { new: true }
+                    { returnDocument: 'after' }
                 );
                 if (!advanced) {
                     console.log(`⏱️ [Queue] No-reply timeout for node ${questionNodeId} skipped — customer already replied or session inactive`);

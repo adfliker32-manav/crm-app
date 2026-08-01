@@ -80,7 +80,7 @@ exports.cancelExecution = async (req, res) => {
         const execution = await WorkflowExecution.findOneAndUpdate(
             { _id: execId, tenantId, status: { $in: ['running', 'waiting'] } },
             { $set: { status: 'cancelled', completedAt: new Date() } },
-            { new: false }   // pre-image: tells us what it was before we cancelled
+            { returnDocument: 'before' }   // pre-image: tells us what it was before we cancelled
         );
 
         if (!execution) {

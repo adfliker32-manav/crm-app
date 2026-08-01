@@ -61,7 +61,7 @@ const applyPlanToWorkspace = async (clientId, plan) => {
     return WorkspaceSettings.findOneAndUpdate(
         { userId: clientId },
         { $set: update },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 };
 
@@ -176,7 +176,7 @@ const initiateSubscription = async (clientId, planCode, cycle = 'monthly', amoun
     sub = await Subscription.findOneAndUpdate(
         { clientId },
         { $set: upsert },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
     // Pre-mark workspace so the UI shows "Awaiting mandate authorization".

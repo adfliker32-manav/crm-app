@@ -478,7 +478,7 @@ const updateClient = async (req, res) => {
         }
         if (phone !== undefined) updateData.phone = phone;
 
-        const updatedUser = await User.findByIdAndUpdate(clientId, { $set: updateData }, { new: true }).select('-password').lean();
+        const updatedUser = await User.findByIdAndUpdate(clientId, { $set: updateData }, { returnDocument: 'after' }).select('-password').lean();
 
         // 4. Update WorkspaceSettings (Modules only - limits are SuperAdmin-controlled)
         const workspaceUpdate = {};

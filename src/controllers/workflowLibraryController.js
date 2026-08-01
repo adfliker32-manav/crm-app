@@ -152,7 +152,7 @@ exports.withdrawFromLibrary = async (req, res) => {
         const item = await WorkflowLibraryItem.findOneAndUpdate(
             { _id: id, authorTenantId: tenantId, deletedAt: null },
             { $set: { deletedAt: new Date() } },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!item) return res.status(404).json({ message: 'Shared template not found' });
 

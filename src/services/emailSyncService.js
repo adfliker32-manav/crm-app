@@ -156,7 +156,7 @@ const recordOutboundEmail = async (opts = {}) => {
                 },
                 $inc: { 'metadata.totalMessages': 1, 'metadata.totalOutbound': 1 }
             },
-            { new: true, upsert: true, setDefaultsOnInsert: true }
+            { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
         );
 
         const messageRecord = await EmailMessage.create({

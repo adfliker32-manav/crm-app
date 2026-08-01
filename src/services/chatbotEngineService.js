@@ -1487,7 +1487,7 @@ const evaluateSmartLead = async (session, flow, conversation) => {
             updateOp.$addToSet = { tags: { $each: bestRule.assignTags } };
         }
 
-        const updatedLead = await Lead.findByIdAndUpdate(leadIdToUpdate, updateOp, { new: true });
+        const updatedLead = await Lead.findByIdAndUpdate(leadIdToUpdate, updateOp, { returnDocument: 'after' });
 
         if (didLevelUp && bestRule?.assignTags?.length > 0) {
             await WhatsAppConversation.findByIdAndUpdate(conversation._id, {

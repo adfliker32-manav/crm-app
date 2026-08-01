@@ -43,7 +43,7 @@ const meterUsage = (channel) => async (req, res, next) => {
         const claimed = await AgencySettings.findOneAndUpdate(
             { agencyId, [`usage.${field}`]: { $lt: limit } },
             { $inc: { [`usage.${field}`]: 1 } },
-            { new: true }
+            { returnDocument: 'after' }
         ).lean();
 
         if (!claimed) {

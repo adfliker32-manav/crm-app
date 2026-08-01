@@ -130,7 +130,7 @@ const updateTaskStatus = async (req, res) => {
         const task = await Task.findOneAndUpdate(
             { _id: id, userId: ownerId },
             { status },
-            { new: true }
+            { returnDocument: 'after' }
         ).populate('leadId', 'name');
 
         if (!task) return res.status(404).json({ message: "Task not found" });

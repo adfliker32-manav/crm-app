@@ -73,7 +73,7 @@ exports.saveCustomFields = async (req, res) => {
         const settings = await WorkspaceSettings.findOneAndUpdate(
             { userId: ownerId },
             { customFieldDefinitions: processedFields },
-            { new: true, upsert: true }
+            { returnDocument: 'after', upsert: true }
         ).select('customFieldDefinitions');
 
         res.json({
@@ -127,7 +127,7 @@ exports.addCustomField = async (req, res) => {
         const updated = await WorkspaceSettings.findOneAndUpdate(
             { userId: ownerId },
             { $push: { customFieldDefinitions: newField } },
-            { new: true }
+            { returnDocument: 'after' }
         ).select('customFieldDefinitions');
 
         res.json({
@@ -157,7 +157,7 @@ exports.deleteCustomField = async (req, res) => {
         const updated = await WorkspaceSettings.findOneAndUpdate(
             { userId: ownerId },
             { $pull: { customFieldDefinitions: { key: key } } },
-            { new: true }
+            { returnDocument: 'after' }
         ).select('customFieldDefinitions');
 
         res.json({

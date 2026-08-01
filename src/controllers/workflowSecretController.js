@@ -69,7 +69,7 @@ exports.upsertSecret = async (req, res) => {
                     createdBy:   userId
                 }
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         ).select('name description hint createdAt updatedAt');
 
         auditLogger.log({

@@ -272,7 +272,7 @@ const saveLeadAlertConfig = async (req, res) => {
                     leadAlertWhatsappTemplateName: leadAlertWhatsappTemplateName?.trim() || null
                 }
             },
-            { new: true }
+            { returnDocument: 'after' }
         );
 
         res.json({ success: true, message: 'Lead alert settings saved.' });

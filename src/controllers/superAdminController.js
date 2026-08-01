@@ -400,7 +400,7 @@ const updateCompany = async (req, res) => {
                 ...(contactPerson !== undefined && { contactPerson }),
                 ...(phone !== undefined && { phone })
             },
-            { new: true, runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         ).select('-password').lean();
 
         // Update settings in WorkspaceSettings — use $set with dotted paths so
@@ -926,7 +926,7 @@ const updateCompanyAgent = async (req, res) => {
             updateData.$inc = { tokenVersion: 1 };
         }
 
-        const updatedAgent = await User.findByIdAndUpdate(agentId, updateData, { new: true })
+        const updatedAgent = await User.findByIdAndUpdate(agentId, updateData, { returnDocument: 'after' })
             .select('-password');
 
         // Evict agent caches so the change takes effect immediately.
@@ -991,7 +991,7 @@ const updateAgentLimit = async (req, res) => {
         const updatedWorkspace = await WorkspaceSettings.findOneAndUpdate(
             { userId: id },
             { $set: { agentLimit: Number.parseInt(agentLimit, 10) } },
-            { new: true, upsert: true }
+            { returnDocument: 'after', upsert: true }
         ).lean();
 
         const user = await User.findById(id).select('-password').lean();
@@ -1651,7 +1651,7 @@ const updateAgencyLimits = async (req, res) => {
                     'allowNewSignups': allowNewSignups !== undefined ? allowNewSignups : true
                 }
             },
-            { new: true, upsert: true, setDefaultsOnInsert: true }
+            { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
         );
 
         auditLogger.log({
@@ -1917,7 +1917,7 @@ const approveAccount = async (req, res) => {
                     accountStatus: 'Active'
                 }
             },
-            { new: true }
+            { returnDocument: 'after' }
         ).select('-password');
 
         if (!user) return res.status(404).json({ message: 'Account not found' });
@@ -2048,7 +2048,7 @@ const rejectAccount = async (req, res) => {
                     status: 'rejected'
                 }
             },
-            { new: true }
+            { returnDocument: 'after' }
         ).select('-password');
 
         if (!user) return res.status(404).json({ message: 'Account not found' });
@@ -2084,7 +2084,7 @@ const deactivateAccount = async (req, res) => {
         const user = await User.findOneAndUpdate(
             { _id: id, role: { $in: ['manager', 'agency'] } },
             { $set: { is_active: false } },
-            { new: true }
+            { returnDocument: 'after' }
         ).select('-password');
 
         if (!user) return res.status(404).json({ message: 'Account not found' });

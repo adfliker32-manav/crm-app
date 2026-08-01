@@ -38,7 +38,7 @@ const updateSheetSyncConfig = async (req, res) => {
         const config = await IntegrationConfig.findOneAndUpdate(
             { userId: ownerId },
             { $set: update },
-            { new: true, upsert: true }
+            { returnDocument: 'after', upsert: true }
         ).select('googleSheet');
 
         // Build the webhook URL for the user.
@@ -147,7 +147,7 @@ const regenerateWebhookSecret = async (req, res) => {
         const config = await IntegrationConfig.findOneAndUpdate(
             { userId: ownerId },
             { $set: { 'googleSheet.webhookSecret': newSecret } },
-            { new: true }
+            { returnDocument: 'after' }
         ).select('googleSheet');
 
         const backendUrl = process.env.BACKEND_URL || process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`;

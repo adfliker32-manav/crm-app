@@ -306,7 +306,7 @@ class ExecutionContext {
         const doc = await WorkflowExecution.findOneAndUpdate(
             { _id: this.executionId },
             { $addToSet: { [`joinTokens.${safeKey}`]: token } },
-            { new: true, projection: { joinTokens: 1, joinArrivals: 1 } }
+            { returnDocument: 'after', projection: { joinTokens: 1, joinArrivals: 1 } }
         );
 
         const tokens = doc?.joinTokens?.[safeKey];
@@ -828,7 +828,7 @@ const settleBranches = async (executionId, delta) => {
     const updated = await WorkflowExecution.findOneAndUpdate(
         { _id: executionId, status: { $nin: ['failed', 'cancelled', 'completed'] } },
         { $inc: { activeBranches: delta } },
-        { new: true }
+        { returnDocument: 'after' }
     );
     if (!updated) return null; // execution already terminal — nothing to settle
 
@@ -1306,7 +1306,7 @@ const executeNode = async (executionId, nodeId, opts = {}) => {
                 // '/' and '#', so it is stored under a sanitised key.
                 ...(tokenId ? { $set: { [`nodeTokens.${tokenKeyFor(nodeKey)}`]: tokenId } } : {})
             },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!claimed) {
             // ── C3 FIX: distinguish a join arrival from a stalled re-delivery ──
@@ -1547,7 +1547,7 @@ const executeNode = async (executionId, nodeId, opts = {}) => {
                 const updated = await WorkflowExecution.findOneAndUpdate(
                     { _id: executionId, status: { $nin: ['failed', 'cancelled', 'completed'] } },
                     { $inc: { activeBranches: -1 } },
-                    { new: true }
+                    { returnDocument: 'after' }
                 );
                 if (updated && updated.activeBranches <= 0 && !(updated.waitingBranches > 0)) {
                     const arrived  = result.output?.['merge.arrived'] ?? '?';
@@ -1582,7 +1582,7 @@ const executeNode = async (executionId, nodeId, opts = {}) => {
             const deferDoc = await WorkflowExecution.findOneAndUpdate(
                 { _id: executionId },
                 { $inc: { [deferField]: 1 } },
-                { new: true, projection: { deferCounts: 1 } }
+                { returnDocument: 'after', projection: { deferCounts: 1 } }
             );
             const deferCount = deferDoc?.deferCounts?.[tokenKeyFor(nodeKey)] ?? 1;
             if (deferCount > MAX_NODE_DEFERRALS) {
@@ -2018,7 +2018,7 @@ const resolveWaitSignal = async ({ signalType, channelId, payload, resolvedPort,
             const signal = await WorkflowWaitSignal.findOneAndUpdate(
                 signalQuery,
                 { $set: { status: 'received', receivedAt: new Date(), payload, resolvedPort: resolvedPort || 'output' } },
-                { new: false, sort: { createdAt: 1 } } // Oldest pending signal first
+                { returnDocument: 'before', sort: { createdAt: 1 } } // Oldest pending signal first
             );
             if (!signal) break; // No (more) waiting signals — normal traffic.
 
@@ -2105,7 +2105,7 @@ const resumeFromSignal = async (signal, { payload, resolvedPort }) => {
                     $set: { status: 'running', waitingUntil: null, waitSignalType: null },
                     $inc: { waitingBranches: -1 }
                 },
-                { new: true }
+                { returnDocument: 'after' }
             );
             if (execution) break;
 
@@ -2202,7 +2202,7 @@ const resolveTimeoutSignal = async (executionId, nodeId, signalId) => {
         const signal = await WorkflowWaitSignal.findOneAndUpdate(
             { _id: signalId, status: 'pending' },
             { $set: { status: 'timeout', receivedAt: new Date() } },
-            { new: false }
+            { returnDocument: 'before' }
         );
 
         if (!signal) {

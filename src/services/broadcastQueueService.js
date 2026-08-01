@@ -438,7 +438,7 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
                     'metadata.totalOutbound': 1
                 }
             },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
 
         // Use upsert so if another code path already saved this waMessageId (without broadcastId),
@@ -465,7 +465,7 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
                     automationSource: 'broadcast'
                 }
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
 
     } catch (syncErr) {

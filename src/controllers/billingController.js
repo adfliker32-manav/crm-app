@@ -144,7 +144,7 @@ const resolveSubscriptionPricing = async (planCode, cycle, couponCode) => {
                 $or: [{ maxUses: 0 }, { $expr: { $lt: ['$usedCount', '$maxUses'] } }]
             },
             { $inc: { usedCount: 1 } },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!claimed) {
             const e = new Error('This coupon has reached its usage limit'); e.status = 400; throw e;
@@ -317,7 +317,7 @@ const fulfilAiCreditTopup = async ({ orderId, paymentId, tenantId = null }) => {
         throw new Error('Invalid top-up order data');
     }
 
-    // Atomic claim on the unique razorpayPaymentId. findOneAndUpdate with new:false
+    // Atomic claim on the unique razorpayPaymentId. findOneAndUpdate with returnDocument: 'before'
     // returns the PRE-image: null means we just inserted the row (we own the grant);
     // a non-null doc means someone already claimed this payment. A dead-heat between
     // the client-verify and webhook paths can surface a duplicate-key (E11000) — the
@@ -331,7 +331,7 @@ const fulfilAiCreditTopup = async ({ orderId, paymentId, tenantId = null }) => {
                 userId: grantTenant, razorpayOrderId: orderId, razorpayPaymentId: paymentId,
                 amountInr, credits, status: 'pending', source: 'razorpay'
             } },
-            { upsert: true, new: false, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'before', setDefaultsOnInsert: true }
         );
         if (!prior) owned = true; // fresh insert → we own the grant
     } catch (e) {
@@ -349,7 +349,7 @@ const fulfilAiCreditTopup = async ({ orderId, paymentId, tenantId = null }) => {
             const reclaimed = await AiCreditTopup.findOneAndUpdate(
                 { razorpayPaymentId: paymentId, status: 'grant_failed' },
                 { $set: { status: 'pending' } },
-                { new: false }
+                { returnDocument: 'before' }
             );
             if (!reclaimed) {
                 // Another caller grabbed the retry (or it just succeeded).
@@ -696,7 +696,7 @@ const upsertPlan = async (req, res) => {
                     sortOrder: Number(sortOrder || 0)
                 }
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
 
         // Propagate to existing subscribers so catalog edits take effect immediately.
@@ -804,7 +804,7 @@ const updateBillingDetails = async (req, res) => {
         const ws = await WorkspaceSettings.findOneAndUpdate(
             { userId: clientId },
             { $set: { billingAddress: billingAddress || '', gstNumber: gstNumber || '' } },
-            { new: true, upsert: true }
+            { returnDocument: 'after', upsert: true }
         );
 
         res.json({

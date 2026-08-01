@@ -534,7 +534,7 @@ const updateMyBookingPage = async (req, res) => {
         let page = await BookingPage.findOneAndUpdate(
             { userId },
             { $set: updates },
-            { new: true, upsert: false }
+            { returnDocument: 'after', upsert: false }
         );
 
         if (!page) {

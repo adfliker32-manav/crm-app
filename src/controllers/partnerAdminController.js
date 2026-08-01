@@ -68,7 +68,7 @@ const processWithdrawal = async (req, res) => {
                     ...(adminNotes      && { adminNotes })
                 }
             },
-            { new: true }
+            { returnDocument: 'after' }
         );
 
         if (!withdrawal) {

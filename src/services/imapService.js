@@ -96,7 +96,7 @@ async function processIncomingEmail(user, messageData, parsedMail) {
                 'metadata.totalInbound': 1
             }
         },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
+        { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
     );
 
     // Now safe to reference conversation._id

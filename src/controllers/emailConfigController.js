@@ -108,7 +108,7 @@ exports.updateEmailConfig = async (req, res) => {
         const config = await IntegrationConfig.findOneAndUpdate(
             { userId: ownerId },
             { $set: updateData },
-            { new: true, upsert: true, select: 'email' }
+            { returnDocument: 'after', upsert: true, select: 'email' }
         );
 
         // Invalidate cached transporter so next send uses new credentials

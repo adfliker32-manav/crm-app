@@ -810,7 +810,7 @@ exports.updateStatus = async (req, res) => {
         const workflow = await Workflow.findOneAndUpdate(
             { _id: id, tenantId },
             { $set: { status } },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!workflow) return res.status(404).json({ message: 'Workflow not found' });
 
@@ -950,7 +950,7 @@ exports.saveLayout = async (req, res) => {
         await WorkflowLayout.findOneAndUpdate(
             { workflowId: id, tenantId },
             { $set: { nodePositions: nodePositions || {}, viewport: viewport || {} } },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
 
         res.json({ message: 'Layout saved' });

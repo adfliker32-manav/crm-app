@@ -198,7 +198,7 @@ async function _commitMovement(tenantId, incFields, buildRow) {
         try {
             await session.withTransaction(async () => {
                 const updated = await User.findByIdAndUpdate(
-                    tenantId, { $inc: incFields }, { new: true, session }
+                    tenantId, { $inc: incFields }, { returnDocument: 'after', session }
                 );
                 if (!updated) { userMissing = true; throw new Error('__USER_MISSING__'); }
                 balanceAfter = updated.aiCreditsBalance;
@@ -227,7 +227,7 @@ async function _commitMovement(tenantId, incFields, buildRow) {
     // Two separate writes: balance first, then a best-effort ledger row. A crash
     // between them can still diverge — hence the loud reporting in _writeLedger —
     // but this only runs where transactions are unavailable (dev standalone).
-    const updated = await User.findByIdAndUpdate(tenantId, { $inc: incFields }, { new: true });
+    const updated = await User.findByIdAndUpdate(tenantId, { $inc: incFields }, { returnDocument: 'after' });
     if (!updated) return { applied: false, ledgerLogged: false, balanceAfter: null };
     const ledgerLogged = await _writeLedger(buildRow(updated.aiCreditsBalance));
     return { applied: true, ledgerLogged, balanceAfter: updated.aiCreditsBalance };
@@ -407,7 +407,7 @@ async function upsertRate({ model, provider, label, creditsPer1kTokens, active, 
     const row = await AiModelRate.findOneAndUpdate(
         { model },
         { $set: update, $setOnInsert: { model } },
-        { new: true, upsert: true }
+        { returnDocument: 'after', upsert: true }
     );
     bustRateCache();
     return row;

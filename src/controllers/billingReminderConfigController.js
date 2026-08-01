@@ -63,7 +63,7 @@ const saveConfig = async (req, res) => {
                     sendEmail:         sendEmail !== undefined ? sendEmail : true
                 }
             },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
 
         res.json({ success: true, config });

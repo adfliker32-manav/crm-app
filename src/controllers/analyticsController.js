@@ -114,7 +114,7 @@ const setGoal = async (req, res) => {
         const goal = await Goal.findOneAndUpdate(
             { userId: ownerId, agentId, month },
             { targetLeads: targetLeads || 0, targetWon: targetWon || 0, targetRevenue: targetRevenue || 0, targetTasks: targetTasks || 0, updatedAt: new Date() },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
 
         res.json({ success: true, goal });

@@ -111,7 +111,7 @@ paymentSchema.pre('save', async function () {
         const counter = await InvoiceCounter.findOneAndUpdate(
             { _id: counterKey },
             { $inc: { seq: 1 } },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
         const seq = String(counter.seq).padStart(4, '0');
         this.invoiceNumber = `INV-${counterKey}-${seq}`;

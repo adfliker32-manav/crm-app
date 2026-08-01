@@ -61,7 +61,7 @@ const updateRule = async (req, res) => {
         const rule = await AutomationRule.findOneAndUpdate(
             { _id: id, tenantId: req.tenantId },
             { $set: safeUpdates },
-            { new: true }
+            { returnDocument: 'after' }
         );
 
         if (!rule) return res.status(404).json({ message: 'Automation rule not found' });
@@ -117,7 +117,7 @@ const toggleRule = async (req, res) => {
         const rule = await AutomationRule.findOneAndUpdate(
             { _id: id, tenantId: req.tenantId },
             { $set: { isActive } },
-            { new: true }
+            { returnDocument: 'after' }
         );
 
         if (!rule) return res.status(404).json({ message: 'Automation rule not found' });

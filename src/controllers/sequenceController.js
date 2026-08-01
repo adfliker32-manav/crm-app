@@ -51,7 +51,7 @@ const updateSequence = async (req, res) => {
         const seq = await Sequence.findOneAndUpdate(
             { _id: id, tenantId: req.tenantId },
             { $set: update },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!seq) return res.status(404).json({ message: 'Sequence not found' });
         res.json(seq);

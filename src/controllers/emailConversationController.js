@@ -186,7 +186,7 @@ exports.updateStatus = async (req, res) => {
         const conversation = await EmailConversation.findOneAndUpdate(
             { _id: conversationId, userId },
             { $set: { status } },
-            { new: true }
+            { returnDocument: 'after' }
         ).lean();
 
         if (!conversation) {

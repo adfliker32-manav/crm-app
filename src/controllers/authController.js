@@ -946,7 +946,7 @@ exports.updateAgent = async (req, res) => {
             updateData.$inc = { tokenVersion: 1 };
         }
 
-        const updatedAgent = await User.findByIdAndUpdate(id, updateData, { new: true }).select('-password');
+        const updatedAgent = await User.findByIdAndUpdate(id, updateData, { returnDocument: 'after' }).select('-password');
 
         // Evict the agent's caches immediately so the next request reflects the
         // change instead of serving stale values for the rest of the TTL.

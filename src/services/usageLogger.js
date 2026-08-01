@@ -15,7 +15,7 @@ const logUsage = async (workspaceId, field, amount = 1) => {
         await UsageLog.findOneAndUpdate(
             { workspaceId, date: today },
             { $inc: { [field]: amount } },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
     } catch (err) {
         // Non-blocking — never crash main flow for usage logging

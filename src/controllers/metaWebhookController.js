@@ -432,7 +432,7 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             IntegrationConfig.findOneAndUpdate(
                 { userId },
                 { $set: { 'meta.metaLastRawFields': rawKeys } },
-                { new: false }
+                { returnDocument: 'before' }
             ).exec().catch(() => {});
 
             // Apply custom mapping overrides if configured
@@ -885,7 +885,7 @@ async function persistDropLog({ userId, leadgenId, pageId, formId, reason, messa
                     emailAlertSent: false
                 }
             },
-            { new: false }
+            { returnDocument: 'before' }
         );
 
         // If no existing failed/recovered record was found, try to insert a new one
@@ -893,7 +893,7 @@ async function persistDropLog({ userId, leadgenId, pageId, formId, reason, messa
             await MetaLeadDropLog.findOneAndUpdate(
                 { userId, leadgenId },
                 { $setOnInsert: { userId, leadgenId, pageId, formId, reason, message, status: 'pending' } },
-                { upsert: true, new: false }
+                { upsert: true, returnDocument: 'before' }
             );
         }
 

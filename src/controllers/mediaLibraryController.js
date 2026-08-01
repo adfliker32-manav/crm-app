@@ -259,7 +259,7 @@ exports.updateAsset = async (req, res) => {
         const asset = await MediaAsset.findOneAndUpdate(
             { _id: req.params.id, userId: req.tenantId },
             { $set: updates },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!asset) return res.status(404).json({ success: false, message: 'Media not found' });
 

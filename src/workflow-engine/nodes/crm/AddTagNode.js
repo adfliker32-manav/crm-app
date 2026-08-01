@@ -32,7 +32,7 @@ const AddTagNode = {
             // addition was missing from `tags`, so a TAG_ADDED workflow filtering on
             // that other tag would not match.
             const updated = await Lead.findByIdAndUpdate(
-                lead._id, { $addToSet: { tags: tag } }, { new: true }
+                lead._id, { $addToSet: { tags: tag } }, { returnDocument: 'after' }
             );
             // L3 FIX: fire TAG_ADDED so tag-triggered workflows run for tags added
             // by automations too. Lazy require avoids the engine↔node circular dep.

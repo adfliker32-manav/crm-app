@@ -440,7 +440,7 @@ const handleWatcherReply = async (conversationId) => {
         const watcher = await LeadAutomationWatcher.findOneAndUpdate(
             { conversationId, status: 'pending' },
             { $set: { status: 'replied' } },
-            { new: false } // Return the ORIGINAL document (before update) so we get the old status
+            { returnDocument: 'before' } // Return the ORIGINAL document (before update) so we get the old status
         );
 
         if (!watcher) return; // No active watcher — normal traffic

@@ -70,7 +70,7 @@ const UpdateStageNode = {
                     }
                 }
             },
-            { new: false }   // pre-image gives us the old status for the trigger payload
+            { returnDocument: 'before' }   // pre-image gives us the old status for the trigger payload
         );
 
         const leadDoc = prev ? await Lead.findById(lead._id) : null;   // post-image for downstream consumers

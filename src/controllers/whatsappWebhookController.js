@@ -470,7 +470,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
             conversation = await WhatsAppConversation.findOneAndUpdate(
                 { userId: targetUserId, waContactId: upsertContactId },
                 updatePayload,
-                { upsert: true, new: true, setDefaultsOnInsert: true }
+                { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
             );
         } catch (upsertErr) {
             // E11000: two concurrent webhooks for the same new contact raced on insert.
@@ -480,7 +480,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                 conversation = await WhatsAppConversation.findOneAndUpdate(
                     { userId: targetUserId, waContactId: upsertContactId },
                     { $set: updatePayload.$set, $inc: updatePayload.$inc },
-                    { new: true }
+                    { returnDocument: 'after' }
                 );
                 if (!conversation) throw new Error(`Conversation not found after E11000 retry for contact ${upsertContactId}`);
             } else {
@@ -532,7 +532,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
             conversationId: conversationIdStr,
             message: savedMsg
         };
-        // NOTE: conversation.unreadCount is POST-increment (findOneAndUpdate with new:true)
+        // NOTE: conversation.unreadCount is POST-increment (findOneAndUpdate with returnDocument: 'after')
         const updatePayloadSocket = {
             conversationId: conversationIdStr,
             updates: {

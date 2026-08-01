@@ -242,7 +242,7 @@ exports.markAsRead = async (req, res) => {
         const conversation = await WhatsAppConversation.findOneAndUpdate(
             { _id: id, userId: { $in: companyUserIds } },
             { $set: { unreadCount: 0 } },
-            { new: true }
+            { returnDocument: 'after' }
         );
 
         if (!conversation) {
@@ -276,7 +276,7 @@ exports.linkToLead = async (req, res) => {
         const conversation = await WhatsAppConversation.findOneAndUpdate(
             { _id: id, userId: { $in: companyUserIds } },
             { $set: { leadId: leadId || null } },
-            { new: true }
+            { returnDocument: 'after' }
         ).populate('leadId', 'name email phone status source dealValue');
 
         if (!conversation) {
@@ -306,7 +306,7 @@ exports.updateStatus = async (req, res) => {
         const conversation = await WhatsAppConversation.findOneAndUpdate(
             { _id: id, userId: { $in: companyUserIds } },
             { $set: { status } },
-            { new: true }
+            { returnDocument: 'after' }
         );
 
         if (!conversation) {
@@ -849,7 +849,7 @@ exports.resumeChatbot = async (req, res) => {
         const conversation = await WhatsAppConversation.findOneAndUpdate(
             { _id: id, userId: { $in: companyUserIds } },
             { $set: { chatbotPausedUntil: new Date(0) } },
-            { new: true }
+            { returnDocument: 'after' }
         );
 
         if (!conversation) {
