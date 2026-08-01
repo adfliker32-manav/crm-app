@@ -1083,20 +1083,6 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
             } else {
                 console.log(`🤖 [Chatbot] No sessions at all for conversation ${conversationId}. User has not yet triggered any flow.`);
             }
-
-            // If the user tapped an interactive button but there is no active session,
-            // those buttons came from an old (now-ended) flow. Reply with a hint instead
-            // of silently dropping the tap so the user knows they need to restart.
-            if (mediaType === 'interactive') {
-                const replyText = 'This conversation has ended. Please send a new message to start again.';
-                try {
-                    const result = await sendWhatsAppTextMessage(conversation.phone, replyText, tenantId);
-                    await saveBotMessage(conversationId, tenantId, replyText, 'text', result);
-                } catch (sendErr) {
-                    console.error('Failed to send stale-button hint:', sendErr.message);
-                }
-                return null;
-            }
         }
 
         // ─── KEYWORD + FLOW MATCHING ───────────────────────────────
