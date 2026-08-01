@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
 import api from '../services/api';
 
 const AuthContext = createContext(null);
@@ -22,12 +22,21 @@ export const AuthProvider = ({ children }) => {
     });
     const [loading, _setLoading] = useState(false);
 
+    // AbortController ref for the /auth/me refresh call. The login function
+    // aborts any in-flight /auth/me request to prevent a stale 401 response
+    // from an expired token wiping the freshly-stored new session.
+    const meAbortRef = useRef(null);
+
     // Refresh user permissions from server on mount so that changes made by
     // superadmin (e.g. enabling aiChatbot) are picked up without requiring re-login.
     useEffect(() => {
         const token = localStorage.getItem('token');
         if (!token) return;
-        api.get('/auth/me')
+
+        const controller = new AbortController();
+        meAbortRef.current = controller;
+
+        api.get('/auth/me', { signal: controller.signal })
             .then(res => {
                 const fresh = res.data?.user;
                 const refreshedToken = res.data?.token;
@@ -40,11 +49,22 @@ export const AuthProvider = ({ children }) => {
                     setUser(merged);
                 }
             })
-            .catch(() => { /* silent — stale cache is better than broken UI */ });
+            .catch(() => { /* silent — stale cache is better than broken UI */ })
+            .finally(() => { meAbortRef.current = null; });
+
+        return () => controller.abort();
     }, []);
 
     const login = async (email, password, rememberMe = false) => {
         try {
+            // Abort any in-flight /auth/me request that may still be carrying an
+            // old expired token. Without this, its 401 response can race with the
+            // new session and wipe it via the response interceptor.
+            if (meAbortRef.current) {
+                meAbortRef.current.abort();
+                meAbortRef.current = null;
+            }
+
             // Adjust endpoint if needed (current: /api/auth/login)
             const res = await api.post('/auth/login', { email, password, rememberMe });
             const { token, role, user } = res.data;
@@ -109,6 +129,12 @@ export const AuthProvider = ({ children }) => {
     const googleLogin = async (credential, allowNewUser = true, rememberMe = false) => {
 
         try {
+            // Abort any in-flight /auth/me request (same race-condition guard as login)
+            if (meAbortRef.current) {
+                meAbortRef.current.abort();
+                meAbortRef.current = null;
+            }
+
             const res = await api.post('/auth/google', { credential, allowNewUser, rememberMe });
             const { token, role, user } = res.data;
 

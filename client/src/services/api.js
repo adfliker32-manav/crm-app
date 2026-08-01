@@ -53,6 +53,19 @@ api.interceptors.response.use(
 
             // Only logout if we have a token but server says it's invalid
             if (token && !isAuthEndpoint) {
+                // ── RACE-CONDITION GUARD ──
+                // A stale /auth/me request (fired on mount with an old expired token)
+                // can return 401 AFTER a fresh login has already stored a new valid
+                // token. Without this check the interceptor wipes the new session
+                // and the user is kicked back to /login immediately after logging in.
+                // Fix: compare the token that was used for THIS request against the
+                // token currently in localStorage. If they differ, a new login
+                // occurred while this request was in flight — do NOT logout.
+                const requestToken = error.config?.headers?.Authorization?.replace(/^Bearer\s+/i, '').trim();
+                if (requestToken && requestToken !== token) {
+                    return Promise.reject(error);
+                }
+
                 const errorCode = error.response?.data?.error || '';
                 const errorMessage = error.response?.data?.message || '';
 
