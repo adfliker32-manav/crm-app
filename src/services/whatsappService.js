@@ -673,9 +673,9 @@ const uploadMediaForTemplate = async (userId, fileBuffer, mimeType, fileName) =>
         const { accessToken } = await getCredentials(userId);
         const IntegrationConfig = require('../models/IntegrationConfig');
         const config = await IntegrationConfig.findOne({ userId });
-        const appId = config?.whatsapp?.waAppId;
+        const appId = config?.whatsapp?.waAppId || process.env.META_APP_ID;
 
-        if (!appId) throw new Error('Meta App ID not configured. Go to Settings → WhatsApp Config and set your App ID.');
+        if (!appId) throw new Error('Meta App ID not configured. Please add META_APP_ID to your .env file or contact your administrator.');
 
         const sessionUrl = `https://graph.facebook.com/v25.0/${appId}/uploads`;
         const sessionRes = await axios.post(sessionUrl, null, {
