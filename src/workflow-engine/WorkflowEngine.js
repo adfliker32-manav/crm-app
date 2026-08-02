@@ -1646,12 +1646,15 @@ const executeNode = async (executionId, nodeId, opts = {}) => {
 
         // Mark this node's history entry completed with a positional $set — targets
         // exactly this entry by _id, so it can't clobber sibling entries either.
+        const isFailure = ['error', 'timeout', 'rate_limit'].includes(outputPort);
         await WorkflowExecution.updateOne(
             { _id: executionId, 'history._id': histEntryId },
             { $set: {
                 // M-E10 FIX: a ledger replay did no work — record it as 'skipped' so the
                 // timeline distinguishes it from a genuine execution of the node.
-                'history.$.status':     replayedFromLedger ? 'skipped' : 'completed',
+                // If the node routed to an error/timeout port, mark it failed so analytics
+                // and the timeline reflect the failure (it previously marked all as 'completed').
+                'history.$.status':     replayedFromLedger ? 'skipped' : (isFailure ? 'failed' : 'completed'),
                 'history.$.finishedAt': new Date(),
                 'history.$.durationMs': Date.now() - startedAt.getTime(),
                 // H15 FIX: node output can carry an API response body / credentials.
