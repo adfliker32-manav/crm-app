@@ -6,6 +6,7 @@ const { classifyText } = require('../../../services/aiService');
 const { getGlobalAIKey } = require('../../../utils/aiKeyResolver');
 const aiCreditService = require('../../../services/aiCreditService');
 const IntegrationConfig = require('../../../models/IntegrationConfig');
+const AiModelRate = require('../../../models/AiModelRate');
 
 // ── H13 FIX: prompt-injection hardening ──────────────────────────────────────
 // Caps also bound cost: `data.prompt` had no length limit and the interpolated
@@ -190,7 +191,8 @@ const AiClassifierNode = {
             // Resolve the tenant's provider, then the platform key for it.
             // If the configured provider has no key but the other one does, use that —
             // so the node works on both OpenAI-only and Gemini-only deployments.
-            let provider = (data.model && data.model.startsWith('gemini')) ? 'gemini' : 'openai';
+            const rateDoc = await AiModelRate.findOne({ model: data.model }).lean();
+            let provider = rateDoc?.provider || (data.model && data.model.startsWith('gemini') ? 'gemini' : 'openai');
             let apiKey   = await getGlobalAIKey(provider);
             if (!apiKey) {
                 const alt = provider === 'openai' ? 'gemini' : 'openai';
