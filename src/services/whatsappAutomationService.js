@@ -3,7 +3,7 @@ const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const User = require('../models/User');
 const { sendWhatsAppMessage } = require('./whatsappService');
-const { buildMetaComponents } = require('../utils/templateVariableResolver');
+const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
 const { resolveTemplateMedia } = require('./mediaLibraryService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 const { emitToUsers, emitToConversation } = require('./socketService');
@@ -164,14 +164,10 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
             return false;
         }
 
-        const templateData = {
-            leadName: lead.name || '',
-            leadEmail: lead.email || '',
-            leadPhone: lead.phone || '',
-            companyName: user.companyName || '',
-            userName: user.name || '',
-            stageName: lead.status || 'New'
-        };
+        const tplContext = buildTemplateContext({
+            lead,
+            user
+        });
 
         for (const template of templates) {
             try {
@@ -180,8 +176,10 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
                 // reviewer's sample. Without this, Meta rejected every automated send
                 // of a media template for a parameter mismatch.
                 const media = await resolveTemplateMedia(template, userId);
+                tplContext.system.customData = { media };
+
                 const metaComponents = buildMetaComponents(
-                    template.components || [], template.variableMapping, { ...templateData, media }
+                    template.components || [], template.variableMapping, tplContext
                 );
                 console.log(`📤 [WA-Auto] Sending template "${template.name}" to ${lead.phone}...`);
                 const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language);
@@ -238,23 +236,21 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
             return;
         }
 
-        // Prepare data for template replacement
-        const templateData = {
-            leadName: lead.name || '',
-            leadEmail: lead.email || '',
-            leadPhone: lead.phone || '',
-            companyName: user.companyName || '',
-            userName: user.name || '',
-            stageName: newStage || ''
-        };
+        const tplContext = buildTemplateContext({
+            lead,
+            user,
+            system: { customData: { stageName: newStage } }
+        });
 
         for (const template of templates) {
             try {
                 // Media headers must be re-supplied on every send — see the note
                 // in sendAutomatedWhatsAppOnLeadCreate.
                 const media = await resolveTemplateMedia(template, userId);
+                tplContext.system.customData.media = media;
+
                 const metaComponents = buildMetaComponents(
-                    template.components || [], template.variableMapping, { ...templateData, media }
+                    template.components || [], template.variableMapping, tplContext
                 );
                 const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language);
                 console.log(`✅ Automated WhatsApp sent to ${lead.phone} for stage change to ${newStage} using template ${template.name}`);

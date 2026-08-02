@@ -5,7 +5,7 @@ const WhatsAppConversation = require('../models/WhatsAppConversation');
 const User                 = require('../models/User');
 const { getBroadcastQueue } = require('../services/broadcastQueueService');
 const { sendWhatsAppMessage }  = require('../services/whatsappService');
-const { buildMetaComponents }  = require('../utils/templateVariableResolver');
+const { buildMetaComponents, buildTemplateContext }  = require('../utils/templateResolver');
 
 // --- API Methods ---
 
@@ -445,20 +445,16 @@ exports.testBroadcast = async (req, res) => {
         }
 
         const user = await User.findById(userId).lean();
-        const templateData = {
-            leadName:    'Test User',
-            leadEmail:   'test@example.com',
-            leadPhone:   phone,
-            companyName: user?.companyName || '',
-            userName:    user?.name || '',
-            stageName:   'New',
-            media:       media || null
-        };
+        const tplContext = buildTemplateContext({
+            lead: { name: 'Test User', email: 'test@example.com', phone: phone, stage: 'New' },
+            user,
+            system: { customData: { media: media || null } }
+        });
 
         const metaComponents = buildMetaComponents(
             template.components || [],
             template.variableMapping,
-            templateData
+            tplContext
         );
 
         const result = await sendWhatsAppMessage(

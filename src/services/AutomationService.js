@@ -11,7 +11,8 @@ const { sendEmail } = require('./emailService');
 const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
 const { logActivity } = require('./auditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
-const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 const { emitToUser } = require('./socketService');
 
 // Prototype-safe property resolver (handles 'customData.Property' etc)
@@ -93,16 +94,12 @@ const executeRuleActions = async (rule, lead) => {
             } else if (action.type === 'SEND_EMAIL') {
                 if (lead.email) {
                     const user = await User.findById(lead.userId).select('name companyName').lean();
-                    const templateData = {
-                        leadName: lead.name || '',
-                        leadEmail: lead.email || '',
-                        leadPhone: lead.phone || '',
-                        companyName: user?.companyName || '',
-                        userName: user?.name || '',
-                        stageName: lead.status || ''
-                    };
-                    const subject = replaceVariables(action.subject || '', templateData);
-                    const body = replaceVariables(action.body || '', templateData);
+                    const tplContext = buildTemplateContext({
+                        lead,
+                        user
+                    });
+                    const subject = resolveTemplate(action.subject || '', tplContext);
+                    const body = resolveTemplate(action.body || '', tplContext);
                     await sendEmail({
                         to: lead.email,
                         subject,

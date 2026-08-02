@@ -35,7 +35,7 @@ const { evaluateLead } = require('../services/AutomationService');
 const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationService');
 const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
 const { normalizePhone } = require('../services/duplicateService');
-const { buildMetaComponents } = require('../utils/templateVariableResolver');
+const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -505,15 +505,12 @@ exports.sendWhatsAppTemplate = async (req, res) => {
         let components;
         if (lead || media) {
             const owner = await User.findById(req.tenantId).select('name companyName').lean();
-            components = buildMetaComponents(template.components || [], template.variableMapping, {
-                leadName:    lead?.name   || '',
-                leadEmail:   lead?.email  || '',
-                leadPhone:   lead?.phone  || toPhone || '',
-                stageName:   lead?.status || 'New',
-                companyName: owner?.companyName || '',
-                userName:    owner?.name || '',
-                media
+            const tplContext = buildTemplateContext({
+                lead: { ...lead, phone: lead?.phone || toPhone },
+                user: owner,
+                system: { customData: { media } }
             });
+            components = buildMetaComponents(template.components || [], template.variableMapping, tplContext);
         }
         const result = await sendWhatsAppMessage(
             toPhone,

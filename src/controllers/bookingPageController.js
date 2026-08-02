@@ -11,7 +11,7 @@ const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } = require('../ser
 const { sendEmail } = require('../services/emailService');
 const { emitToUser } = require('../services/socketService');
 const { normalizePhoneForWhatsApp, getWorkspaceCountryCode } = require('../utils/phoneUtils');
-const { replaceVariables } = require('../utils/emailTemplateUtils');
+const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 
 const slugify    = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 // The suffix exists only to make the slug unique — it is NOT an identifier.
@@ -406,12 +406,17 @@ const submitBooking = async (req, res) => {
 
             // Backward-compatible fallback (older configs) — use plain text only if no template selected.
             if (sends.length === 0) {
-                const waMsg = replaceVariables(page.confirmationMessage, {
-                    name:    bookingData.name,
-                    date:    bookingData.date,
-                    time:    bookingData.time,
-                    service: bookingData.service
-                }) + `\n\nReschedule or cancel: ${manageUrl}`;
+                const tplContext = buildTemplateContext({
+                    lead: {
+                        name: bookingData.name,
+                        customData: {
+                            date: bookingData.date,
+                            time: bookingData.time,
+                            service: bookingData.service
+                        }
+                    }
+                });
+                const waMsg = resolveTemplate(page.confirmationMessage, tplContext) + `\n\nReschedule or cancel: ${manageUrl}`;
 
                 sends.push(
                     sendWhatsAppTextMessage(normalizedPhone, waMsg, page.userId)

@@ -225,7 +225,7 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                                     className="w-full px-4 py-2.5 bg-white border border-blue-200 rounded-lg text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                                 />
                                 <p className="text-xs text-blue-700">
-                                    Variables like <code className="bg-white px-1 rounded">{'{{name}}'}</code> resolve from the matching lead if one exists.
+                                    Variables like <code className="bg-white px-1 rounded">{'{{lead.name}}'}</code> resolve from the matching lead if one exists.
                                     {template.attachments?.length > 0 && ` ${template.attachments.length} attachment(s) will be included.`}
                                 </p>
                                 <button

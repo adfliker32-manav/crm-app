@@ -462,7 +462,7 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
                                                     </div>
                                                     <div>
                                                         <label className="block text-xs text-slate-500 mb-1">Body Text</label>
-                                                        <textarea className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm" rows="3" value={action.body || ''} onChange={(e) => updateAction(idx, 'body', e.target.value)} placeholder="Hi {{name}}, just checking in..." />
+                                                        <textarea className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm" rows="3" value={action.body || ''} onChange={(e) => updateAction(idx, 'body', e.target.value)} placeholder="Hi {{lead.name}}, just checking in..." />
                                                     </div>
                                                 </div>
                                             )}

@@ -247,7 +247,7 @@ export default function BookingPage() {
                         <h2 className="text-xl font-bold text-slate-900">Booking confirmed</h2>
                         <p className="text-slate-500 text-sm mt-2 max-w-xs mx-auto leading-relaxed">
                             {page.thankYouMessage
-                                ? page.thankYouMessage.replace('{{name}}', name)
+                                ? page.thankYouMessage.replace('{{lead.name}}', name).replace('{{name}}', name)
                                 : `Hi ${name}, your appointment is confirmed.`}
                         </p>
 

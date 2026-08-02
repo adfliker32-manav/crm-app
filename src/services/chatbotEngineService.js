@@ -17,6 +17,7 @@ const bookingPageCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const { generateReply, mapReplyToOption } = require('./aiService');
 const aiCreditService = require('./aiCreditService');
 const { decryptToken } = require('../utils/encryptionUtils');
+const { resolveTemplate } = require('../utils/templateResolver');
 
 const normalizeBaseUrl = (value) => {
     const v = String(value || '').trim();
@@ -2556,21 +2557,16 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
 // Replace variables in text. Both the variable key (used in regex source) and the
 // value (used as replacement string) need escaping — `$` has special meaning in
 // String.replace replacement strings and would corrupt user input like "$100".
+// Replaced with centralized templateResolver
 const replaceVariables = (text, variables) => {
     if (!text) return '';
-    if (!variables || typeof variables.forEach !== 'function') return text;
-
-    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const escapeReplacement = (s) => String(s ?? '').replace(/\$/g, '$$$$');
-
-    let result = text;
-    variables.forEach((value, key) => {
-        if (!key) return;
-        const regex = new RegExp(`{{${escapeRegex(key)}}}`, 'g');
-        result = result.replace(regex, escapeReplacement(value));
-    });
-
-    return result;
+    const flatVars = {};
+    if (variables && typeof variables.forEach === 'function') {
+        variables.forEach((value, key) => {
+            if (key) flatVars[key] = value;
+        });
+    }
+    return resolveTemplate(text, flatVars);
 };
 
 // NOTE: evaluateCondition() is defined near the top of this file (after RESERVED_LEAD_VARIABLES).
@@ -2779,15 +2775,12 @@ const executeAction = async (actionData, session, conversation) => {
                             let confMsg = `✅ Your appointment for *${serviceType}* on *${appointmentDate}* at *${appointmentTime}* has been successfully booked. We look forward to seeing you!`;
                             
                             if (page && page.confirmationMessage) {
-                                const { replaceVariables } = require('../utils/emailTemplateUtils');
                                 const formattedDate = new Date(appointmentDate).toLocaleDateString('en-IN', {
                                     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
                                 });
-                                confMsg = replaceVariables(page.confirmationMessage, {
-                                    name:    customerName,
-                                    date:    formattedDate,
-                                    time:    appointmentTime,
-                                    service: serviceType
+                                confMsg = resolveTemplate(page.confirmationMessage, {
+                                    lead: { name: customerName },
+                                    system: { customData: { date: formattedDate, time: appointmentTime, service: serviceType } }
                                 });
                             }
                             

@@ -2,7 +2,7 @@ const NodeRegistry      = require('../../NodeRegistry');
 const WhatsAppTemplate  = require('../../../models/WhatsAppTemplate');
 const User              = require('../../../models/User');
 const { sendWhatsAppMessage } = require('../../../services/whatsappService');
-const { buildMetaComponents } = require('../../../utils/templateVariableResolver');
+const { buildMetaComponents, buildTemplateContext } = require('../../../utils/templateResolver');
 const { resolveTemplateMedia } = require('../../../services/mediaLibraryService');
 // RATE #1 FIX: Per-tenant WhatsApp send rate limiting
 const { checkWhatsAppRate } = require('../../../utils/workflowRateLimiter');
@@ -112,19 +112,17 @@ const SendWhatsAppNode = {
         let metaComponents = null;
         try {
             const user = await User.findById(tenantId).select('name companyName').lean();
-            const templateData = {
-                leadName:    lead.name || '',
-                leadEmail:   lead.email || '',
-                leadPhone:   lead.phone || '',
-                companyName: user?.companyName || '',
-                userName:    user?.name || '',
-                stageName:   lead.status || 'New'
-            };
-
-            // Resolve media for IMAGE/VIDEO/DOCUMENT header templates
+            
             const media = await resolveTemplateMedia(template, tenantId);
+            
+            const tplContext = buildTemplateContext({
+                lead,
+                user,
+                system: { customData: { media } }
+            });
+
             metaComponents = buildMetaComponents(
-                template.components || [], template.variableMapping, { ...templateData, media }
+                template.components || [], template.variableMapping, tplContext
             );
 
             // Only pass components if there are actual parameters to send

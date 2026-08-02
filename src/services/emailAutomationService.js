@@ -2,7 +2,8 @@ const fs = require('fs');
 const EmailTemplate = require('../models/EmailTemplate');
 const User = require('../models/User');
 const { sendEmailWithRetry } = require('./emailService');
-const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 
 // Attachment bytes live in object storage; resolveAttachments enforces that a
@@ -46,14 +47,10 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
         }
 
         // Prepare data for template replacement
-        const templateData = {
-            leadName: lead.name || '',
-            leadEmail: lead.email || '',
-            leadPhone: lead.phone || '',
-            companyName: user.companyName || '',
-            userName: user.name || '',
-            stageName: lead.status || 'New'
-        };
+        const tplContext = buildTemplateContext({
+            lead,
+            user
+        });
 
 
 
@@ -61,8 +58,8 @@ const sendAutomatedEmailOnLeadCreate = async (lead, userId) => {
         for (const template of templates) {
             try {
                 // Replace variables in subject and body
-                const subject = replaceVariables(template.subject, templateData);
-                const body = replaceVariables(template.body, templateData);
+                const subject = resolveTemplate(template.subject, tplContext);
+                const body = resolveTemplate(template.body, tplContext);
 
                 // Attachments resolve from object storage, with the key confined
                 // to this tenant's namespace so a tampered row cannot reach
@@ -133,14 +130,10 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
         }
 
         // Prepare data for template replacement
-        const templateData = {
-            leadName: lead.name || '',
-            leadEmail: lead.email || '',
-            leadPhone: lead.phone || '',
-            companyName: user.companyName || '',
-            userName: user.name || '',
-            stageName: newStage || ''
-        };
+        const tplContext = buildTemplateContext({
+            lead,
+            user
+        });
 
 
 
@@ -148,8 +141,8 @@ const sendAutomatedEmailOnStageChange = async (lead, oldStage, newStage, userId)
         for (const template of templates) {
             try {
                 // Replace variables in subject and body
-                const subject = replaceVariables(template.subject, templateData);
-                const body = replaceVariables(template.body, templateData);
+                const subject = resolveTemplate(template.subject, tplContext);
+                const body = resolveTemplate(template.body, tplContext);
 
                 // Attachments resolve from object storage, with the key confined
                 // to this tenant's namespace so a tampered row cannot reach

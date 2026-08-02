@@ -2,7 +2,8 @@ const Sequence = require('../models/Sequence');
 const SequenceEnrollment = require('../models/SequenceEnrollment');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
-const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 
 let globalAgendaInstance = null;
@@ -70,14 +71,10 @@ const enrollLeadInSequences = async (lead, triggerType, triggerStage = null) => 
 // ── Execute the action for a single step ─────────────────────────────────────
 const executeStepAction = async (step, lead, sequenceName) => {
     const user = await User.findById(lead.userId).select('name companyName').lean();
-    const templateData = {
-        leadName: lead.name || '',
-        leadEmail: lead.email || '',
-        leadPhone: lead.phone || '',
-        companyName: user?.companyName || '',
-        userName: user?.name || '',
-        stageName: lead.status || ''
-    };
+    const tplContext = buildTemplateContext({
+        lead,
+        user
+    });
 
     if (step.action.type === 'SEND_WHATSAPP' && lead.phone && step.action.templateId) {
         const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
@@ -161,8 +158,8 @@ const executeStepAction = async (step, lead, sequenceName) => {
         });
     } else if (step.action.type === 'SEND_EMAIL' && lead.email) {
         const { sendEmail } = require('./emailService');
-        const subject = replaceVariables(step.action.subject || '', templateData);
-        const body = replaceVariables(step.action.body || '', templateData);
+        const subject = resolveTemplate(step.action.subject || '', tplContext);
+        const body = resolveTemplate(step.action.body || '', tplContext);
         await sendEmail({
             to: lead.email,
             subject,

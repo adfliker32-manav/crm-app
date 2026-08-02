@@ -191,7 +191,7 @@ const runAppointmentReminders = async () => {
         const Appointment = require('../models/Appointment');
         const WhatsAppTemplate = require('../models/WhatsAppTemplate');
         const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
-        const { buildMetaComponents } = require('../utils/templateVariableResolver');
+        const { buildMetaComponents } = require('../utils/templateResolver');
         const { isFeatureDisabled } = require('../utils/systemConfig');
 
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
@@ -299,9 +299,16 @@ const runAppointmentReminders = async () => {
                     // used to pass null components, so any reminder template with
                     // an image/PDF header was rejected by Meta.
                     const { resolveTemplateMedia } = require('./mediaLibraryService');
+                    const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
                     const media = await resolveTemplateMedia(template, appt.userId.toString());
+                    
+                    const tplContext = buildTemplateContext({
+                        lead: { name: appt.customerName || '', phone: appt.customerPhone || '', email: appt.customerEmail || '' },
+                        system: { customData: { media } }
+                    });
+
                     const components = media
-                        ? buildMetaComponents(template.components || [], template.variableMapping, { media })
+                        ? buildMetaComponents(template.components || [], template.variableMapping, tplContext)
                         : null;
                     await sendWhatsAppMessage(appt.customerPhone, template.name, appt.userId.toString(), components, template.language);
                     console.log(`📅 [AppointmentReminder] ${label} WhatsApp sent to ${appt.customerPhone} (appt ${appt._id})`);
@@ -349,7 +356,7 @@ const runLostLeadRecovery = async () => {
         const Lead = require('../models/Lead');
         const WhatsAppTemplate = require('../models/WhatsAppTemplate');
         const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
-        const { buildMetaComponents } = require('../utils/templateVariableResolver');
+        const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
         const { isFeatureDisabled } = require('../utils/systemConfig');
 
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
@@ -395,8 +402,12 @@ const runLostLeadRecovery = async () => {
                 // Resolve a Media Library header if the recovery template has one.
                 const { resolveTemplateMedia } = require('./mediaLibraryService');
                 const media = await resolveTemplateMedia(template, lead.userId.toString());
+                const tplContext = buildTemplateContext({
+                    lead,
+                    system: { customData: { media } }
+                });
                 const components = media
-                    ? buildMetaComponents(template.components || [], template.variableMapping, { media })
+                    ? buildMetaComponents(template.components || [], template.variableMapping, tplContext)
                     : null;
                 await sendWhatsAppMessage(lead.phone, template.name, lead.userId.toString(), components, template.language);
                 await Lead.findByIdAndUpdate(lead._id, {
@@ -728,7 +739,8 @@ const runFollowUpTemplateSend = async () => {
         const { sendEmailWithRetry } = require('./emailService');
         const EmailTemplate = require('../models/EmailTemplate');
         const User = require('../models/User');
-        const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
+        const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
+        const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
         const { isFeatureDisabled } = require('../utils/systemConfig');
 
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
@@ -811,16 +823,12 @@ const runFollowUpTemplateSend = async () => {
                         continue;
                     }
                     const user = userMap.get(lead.userId.toString());
-                    const templateData = {
-                        leadName: lead.name || '',
-                        leadEmail: lead.email || '',
-                        leadPhone: lead.phone || '',
-                        companyName: user?.companyName || '',
-                        userName: user?.name || '',
-                        stageName: lead.status || ''
-                    };
-                    const subject = replaceVariables(template.subject, templateData);
-                    const body = replaceVariables(template.body, templateData);
+                    const tplContext = buildTemplateContext({
+                        lead,
+                        user
+                    });
+                    const subject = resolveTemplate(template.subject, tplContext);
+                    const body = resolveTemplate(template.body, tplContext);
                     await sendEmailWithRetry({
                         to: lead.email,
                         subject,

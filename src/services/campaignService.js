@@ -16,7 +16,8 @@
 const EmailCampaign = require('../models/EmailCampaign');
 const Lead = require('../models/Lead');
 const { sendEmail } = require('./emailService');
-const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 const { peekEmailDailyLimit } = require('../utils/workflowRateLimiter');
 const { isFeatureDisabled } = require('../utils/systemConfig');
 
@@ -128,17 +129,13 @@ const processBatch = async (campaignId) => {
 
         if (!lead.email) { skipped++; continue; }
 
-        const templateData = {
-            leadName: lead.name || '',
-            leadEmail: lead.email || '',
-            leadPhone: lead.phone || '',
-            companyName: owner?.companyName || '',
-            userName: owner?.name || '',
-            stageName: lead.status || ''
-        };
+        const tplContext = buildTemplateContext({
+            lead,
+            user: owner
+        });
 
-        const subject = replaceVariables(campaign.subject, templateData);
-        const body = replaceVariables(campaign.body, templateData);
+        const subject = resolveTemplate(campaign.subject, tplContext);
+        const body = resolveTemplate(campaign.body, tplContext);
 
         try {
             await sendEmail({

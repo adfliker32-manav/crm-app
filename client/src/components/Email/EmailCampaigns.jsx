@@ -4,6 +4,7 @@ import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import { useAuth } from '../../context/AuthContext';
 import { hasEmailPermission } from './emailPermissions';
+import VariableSelector from '../VariableSelector';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Bulk campaigns.
@@ -301,25 +302,28 @@ const EmailCampaigns = () => {
                                 </select>
                             </div>
 
-                            <div>
+                            <div className="relative">
                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Subject <span className="text-red-500">*</span></label>
-                                <input
-                                    type="text" required value={subject} onChange={e => setSubject(e.target.value)}
-                                    placeholder="Hi {{name}}, news from us"
-                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl outline-none text-xs font-bold text-slate-700 transition"
-                                />
+                                <div className="flex items-center space-x-2">
+                                    <input
+                                        type="text" required value={subject} onChange={e => setSubject(e.target.value)}
+                                        placeholder="Hi {{lead.name}}, news from us"
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl outline-none text-xs font-bold text-slate-700 transition"
+                                    />
+                                    <VariableSelector onInsert={(v) => setSubject(prev => prev + v)} />
+                                </div>
                             </div>
 
-                            <div>
-                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Message <span className="text-red-500">*</span></label>
+                            <div className="relative">
+                                <div className="flex justify-between items-center mb-1.5">
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Message <span className="text-red-500">*</span></label>
+                                    <VariableSelector onInsert={(v) => setBody(prev => prev + v)} />
+                                </div>
                                 <textarea
                                     required value={body} onChange={e => setBody(e.target.value)}
-                                    placeholder="Hi {{name}}, ..."
+                                    placeholder="Hi {{lead.name}}, ..."
                                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl outline-none min-h-[140px] resize-y text-xs font-medium text-slate-700 leading-relaxed transition"
                                 />
-                                <p className="text-[11px] text-slate-400 mt-1">
-                                    Variables: <code className="bg-slate-100 px-1 rounded">{'{{name}}'}</code> <code className="bg-slate-100 px-1 rounded">{'{{email}}'}</code> <code className="bg-slate-100 px-1 rounded">{'{{company}}'}</code>
-                                </p>
                             </div>
 
                             <div>

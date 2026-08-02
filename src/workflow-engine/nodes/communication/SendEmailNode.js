@@ -1,7 +1,8 @@
 const NodeRegistry  = require('../../NodeRegistry');
 const User          = require('../../../models/User');
 const { sendEmail } = require('../../../services/emailService');
-const { replaceVariables, wrapEmailHtml } = require('../../../utils/emailTemplateUtils');
+const { wrapEmailHtml } = require('../../../utils/emailTemplateUtils');
+const { resolveTemplate, buildTemplateContext } = require('../../../utils/templateResolver');
 // RATE #3 FIX: Per-tenant daily email limit tracking
 // Read-only peek: the counter is actually consumed inside sendEmail() so that
 // every automated sender shares one per-tenant daily budget. Incrementing here
@@ -141,18 +142,14 @@ const SendEmailNode = {
             if (SAFE_VAR_PREFIXES.some(p => k === p || k.startsWith(p))) safeVars[k] = v;
         }
 
-        const templateData = {
-            leadName:    context.get('lead.name') || lead.name || '',
-            leadEmail:   lead.email,
-            leadPhone:   context.get('lead.phone') || lead.phone || '',
-            companyName: user?.companyName || '',
-            userName:    user?.name || '',
-            stageName:   context.get('lead.status') || lead.status || '',
-            ...safeVars
-        };
+        const tplContext = buildTemplateContext({
+            lead,
+            user,
+            system: { customData: safeVars }
+        });
 
-        const subject = replaceVariables(data.subject || '', templateData);
-        const body    = replaceVariables(data.body || '', templateData);
+        const subject = resolveTemplate(data.subject || '', tplContext);
+        const body    = resolveTemplate(data.body || '', tplContext);
 
         try {
             await sendEmail({

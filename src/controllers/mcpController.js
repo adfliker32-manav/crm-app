@@ -5,9 +5,8 @@ const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const EmailMessage = require('../models/EmailMessage');
 const EmailTemplate = require('../models/EmailTemplate');
 const { sendWhatsAppMessage } = require('../services/whatsappService');
-const { buildMetaComponents } = require('../utils/templateVariableResolver');
 const { sendEmail } = require('../services/emailService');
-const { replaceVariables } = require('../utils/emailTemplateUtils');
+const { resolveTemplate, buildTemplateContext, buildMetaComponents } = require('../utils/templateResolver');
 const Task = require('../models/Task');
 const Appointment = require('../models/Appointment');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
@@ -941,16 +940,12 @@ const toolHandlers = {
 
         for (const lead of leads) {
             try {
-                const varData = {
-                    leadName: lead.name || '',
-                    leadPhone: lead.phone || '',
-                    leadEmail: lead.email || '',
-                    stageName: lead.status || stage,
-                    companyName,
-                    userName,
-                    media: templateMedia
-                };
-                const components = buildMetaComponents(template.components, template.variableMapping, varData);
+                const tplContext = buildTemplateContext({
+                    lead,
+                    user: owner,
+                    system: { customData: { media: templateMedia, stageName: stage } }
+                });
+                const components = buildMetaComponents(template.components, template.variableMapping, tplContext);
                 await sendWhatsAppMessage(lead.phone, template.name, tenantId, components, template.language);
                 sent++;
             } catch (err) {
@@ -1033,17 +1028,14 @@ const toolHandlers = {
 
         for (const lead of leads) {
             try {
-                const varData = {
-                    leadName: lead.name || '',
-                    leadPhone: lead.phone || '',
-                    leadEmail: lead.email || '',
-                    stageName: lead.status || stage,
-                    companyName,
-                    userName
-                };
+                const tplContext = buildTemplateContext({
+                    lead,
+                    user: owner,
+                    system: { customData: { stageName: stage } }
+                });
 
-                const subject = replaceVariables(template.subject, varData);
-                const html    = replaceVariables(template.body, varData);
+                const subject = resolveTemplate(template.subject, tplContext);
+                const html    = resolveTemplate(template.body, tplContext);
 
                 await sendEmail({
                     to: lead.email,

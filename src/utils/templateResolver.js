@@ -35,6 +35,18 @@ const validateTemplate = (template) => {
     return { valid: errors.length === 0, errors };
 };
 
+const LEGACY_MAP = {
+    'name': 'lead.name',
+    'leadname': 'lead.name',
+    'email': 'lead.email',
+    'leademail': 'lead.email',
+    'phone': 'lead.phone',
+    'leadphone': 'lead.phone',
+    'company': 'lead.company',
+    'companyname': 'lead.company',
+    'username': 'user.name'
+};
+
 /**
  * Resolves template variables safely from a nested context object.
  * 
@@ -48,13 +60,19 @@ const resolveTemplate = (template, context, options = {}) => {
     if (!context) return template;
 
     return template.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
+        let trimmedKey = key.trim();
+        // Fallback backward compatibility map
+        if (LEGACY_MAP[trimmedKey.toLowerCase()]) {
+            trimmedKey = LEGACY_MAP[trimmedKey.toLowerCase()];
+        }
+
         // If the context contains the exact flat key, use it immediately
-        if (context[key.trim()] !== undefined) {
-            const val = context[key.trim()];
+        if (context[trimmedKey] !== undefined) {
+            const val = context[trimmedKey];
             return options.sanitize ? options.sanitize(val) : val;
         }
 
-        const path = key.trim().split('.');
+        const path = trimmedKey.split('.');
         let current = context;
         
         // Traverse the context object based on the dot path
@@ -105,8 +123,108 @@ const buildTemplateContext = ({ lead, user, company }) => {
     };
 };
 
+/**
+ * Sanitize a resolved value into a Meta-safe template parameter.
+ */
+const sanitizeParam = (value) => {
+    const text = (value == null ? '' : String(value)).replace(/\s+/g, ' ').trim();
+    return text.length ? text : '-';
+};
+
+/**
+ * Build the Meta API `components` array from the DB template components.
+ * @param {Array} dbComponents - The template's components array from MongoDB
+ * @param {Map|Object} variableMapping - The template's variableMapping
+ * @param {Object} context - Standardized context { lead, user, company, system }
+ * @returns {Array} Meta-formatted components array for the API payload
+ */
+const buildMetaComponents = (dbComponents, variableMapping, context) => {
+    const metaComponents = [];
+
+    const resolveMappedVariable = (varNum) => {
+        const mapType = (variableMapping && typeof variableMapping.get === 'function')
+            ? variableMapping.get(varNum.toString())
+            : (variableMapping?.[varNum.toString()] || '');
+
+        if (mapType === 'custom') {
+            const customVal = (variableMapping && typeof variableMapping.get === 'function')
+                ? variableMapping.get(`${varNum}_custom`)
+                : (variableMapping?.[`${varNum}_custom`] || '');
+            return customVal || '';
+        }
+
+        if (mapType) {
+            const resolved = resolveTemplate(`{{${mapType}}}`, context);
+            return resolved !== `{{${mapType}}}` ? resolved : '';
+        }
+
+        // Fallbacks for unmapped variables using the standardized context
+        if (varNum === 1) return context.lead?.name || 'Customer';
+        if (varNum === 2) return context.lead?.stage || 'New';
+        if (varNum === 3) return context.company?.name || 'Our Company';
+        if (varNum === 4) return context.user?.name || 'Representative';
+        return '';
+    };
+
+    for (const comp of dbComponents || []) {
+        if (comp.type === 'BODY' && comp.text) {
+            const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+            if (matches && matches.length > 0) {
+                const parameters = [];
+                const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
+                for (const n of nums) {
+                    parameters.push({ type: 'text', text: sanitizeParam(resolveMappedVariable(n)) });
+                }
+                metaComponents.push({ type: 'body', parameters });
+            }
+        }
+        
+        if (comp.type === 'HEADER') {
+            if (comp.format === 'TEXT' && comp.text) {
+                const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+                if (matches && matches.length > 0) {
+                    const parameters = [];
+                    const nums = [...new Set(matches.map(m => parseInt(m.match(/\d+/)[0])))].sort((a, b) => a - b);
+                    for (const n of nums) {
+                        parameters.push({ type: 'text', text: sanitizeParam(resolveMappedVariable(n)) });
+                    }
+                    metaComponents.push({ type: 'header', parameters });
+                }
+            } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(comp.format)) {
+                if (context.system?.customData?.media && context.system.customData.media.type === comp.format) {
+                    const mediaObj = {};
+                    const mediaData = context.system.customData.media;
+                    if (mediaData.media_id) {
+                        mediaObj.id = mediaData.media_id;
+                    } else if (mediaData.link) {
+                        mediaObj.link = mediaData.link;
+                    }
+
+                    if (comp.format === 'DOCUMENT' && mediaData.filename) {
+                        mediaObj.filename = mediaData.filename;
+                    }
+
+                    if (mediaObj.id || mediaObj.link) {
+                        metaComponents.push({
+                            type: 'header',
+                            parameters: [
+                                {
+                                    type: comp.format.toLowerCase(),
+                                    [comp.format.toLowerCase()]: mediaObj
+                                }
+                            ]
+                        });
+                    }
+                }
+            }
+        }
+    }
+    return metaComponents;
+};
+
 module.exports = {
     validateTemplate,
     resolveTemplate,
-    buildTemplateContext
+    buildTemplateContext,
+    buildMetaComponents
 };

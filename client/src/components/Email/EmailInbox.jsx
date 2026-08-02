@@ -6,6 +6,7 @@ import { useConfirm } from '../../context/ConfirmContext';
 import useSocket from '../../hooks/useSocket';
 import { useAuth } from '../../context/AuthContext';
 import { hasEmailPermission } from './emailPermissions';
+import VariableSelector from '../VariableSelector';
 import DOMPurify from 'dompurify';
 
 const PAGE_SIZE = 30;
@@ -830,17 +831,22 @@ const EmailInbox = () => {
                                     )}
 
                                     <div className="flex items-end gap-3 bg-slate-50 border border-slate-200/60 rounded-2xl px-4 py-3 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:bg-white transition-all duration-200">
-                                        <textarea
-                                            value={newMessage}
-                                            onChange={(e) => setNewMessage(e.target.value)}
-                                            placeholder="Write your reply..."
-                                            rows={2}
-                                            className="flex-1 bg-transparent border-none focus:outline-none text-[13px] text-slate-800 font-medium resize-none min-h-[44px] max-h-[180px] custom-scrollbar"
-                                            disabled={sending}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); }
-                                            }}
-                                        />
+                                        <div className="flex flex-col flex-1">
+                                            <div className="flex justify-end mb-1">
+                                                <VariableSelector onInsert={(v) => setNewMessage(prev => prev + v)} />
+                                            </div>
+                                            <textarea
+                                                value={newMessage}
+                                                onChange={(e) => setNewMessage(e.target.value)}
+                                                placeholder="Write your reply..."
+                                                rows={2}
+                                                className="w-full bg-transparent border-none focus:outline-none text-[13px] text-slate-800 font-medium resize-none min-h-[44px] max-h-[180px] custom-scrollbar"
+                                                disabled={sending}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); }
+                                                }}
+                                            />
+                                        </div>
                                         <input
                                             ref={replyFileInput}
                                             type="file"
@@ -1114,17 +1120,23 @@ const EmailInbox = () => {
                             </div>
                             <div>
                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Subject</label>
-                                <input
-                                    type="text"
-                                    required
-                                    value={composeSubject}
-                                    onChange={(e) => setComposeSubject(e.target.value)}
-                                    placeholder="Enter subject..."
-                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-bold text-slate-700"
-                                />
+                                <div className="flex items-center space-x-2">
+                                    <input
+                                        type="text"
+                                        required
+                                        value={composeSubject}
+                                        onChange={(e) => setComposeSubject(e.target.value)}
+                                        placeholder="Enter subject..."
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-bold text-slate-700"
+                                    />
+                                    <VariableSelector onInsert={(v) => setComposeSubject(prev => prev + v)} />
+                                </div>
                             </div>
                             <div>
-                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Message</label>
+                                <div className="flex justify-between items-center mb-1.5">
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Message</label>
+                                    <VariableSelector onInsert={(v) => setComposeMessage(prev => prev + v)} />
+                                </div>
                                 <textarea
                                     required
                                     value={composeMessage}

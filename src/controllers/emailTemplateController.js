@@ -47,7 +47,8 @@ const upload = multer({
     }
 });
 
-const { replaceVariables, wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
+const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 
 // Get all email templates
 exports.getTemplates = async (req, res) => {
@@ -277,8 +278,9 @@ exports.sendTemplateEmail = async (req, res) => {
             return res.status(400).json({ message: 'Template is not active' });
         }
 
-        // Get lead data if leadId provided
-        let leadData = {};
+        let leadObj = null;
+        let userObj = null;
+
         if (leadId) {
             const Lead = require('../models/Lead');
             const User = require('../models/User');
@@ -292,26 +294,21 @@ exports.sendTemplateEmail = async (req, res) => {
                 }
             }
             
-            const lead = await Lead.findOne({ _id: leadId, userId: ownerId });
-            if (lead) {
-                const user = await User.findById(lead.userId);
-                leadData = {
-                    leadName: lead.name,
-                    leadEmail: lead.email,
-                    leadPhone: lead.phone,
-                    companyName: user?.companyName || '',
-                    userName: user?.name || '',
-                    stageName: lead.status
-                };
+            leadObj = await Lead.findOne({ _id: leadId, userId: ownerId });
+            if (leadObj) {
+                userObj = await User.findById(leadObj.userId);
             }
         }
 
-        // Merge custom data
-        const finalData = { ...leadData, ...(customData || {}) };
+        const tplContext = buildTemplateContext({
+            lead: leadObj,
+            user: userObj,
+            system: { customData }
+        });
 
         // Replace variables in subject and body
-        const subject = replaceVariables(template.subject, finalData);
-        const body = replaceVariables(template.body, finalData);
+        const subject = resolveTemplate(template.subject, tplContext);
+        const body = resolveTemplate(template.body, tplContext);
 
         // Prepare attachments — resolved from object storage, with the key
         // constrained to this tenant's namespace (replaces the old path-prefix
@@ -319,7 +316,7 @@ exports.sendTemplateEmail = async (req, res) => {
         const { resolveAttachments } = require('../utils/emailAttachments');
         const attachments = await resolveAttachments(template.attachments, userId);
 
-        const recipient = to || leadData.leadEmail;
+        const recipient = to || (leadObj ? leadObj.email : null);
         if (!recipient) {
             return res.status(400).json({ message: 'No recipient — provide `to` or a lead with an email address.' });
         }

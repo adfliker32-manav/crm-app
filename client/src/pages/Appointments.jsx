@@ -824,10 +824,10 @@ function BookingPageCustomizer() {
                                 </CField>
                                 <CField label="Thank You Message" icon="fa-heart" className="sm:col-span-2">
                                     <textarea value={thankYouMessage} onChange={e => setThankYouMessage(e.target.value)}
-                                        placeholder="Hi {{name}}, your appointment is confirmed. We look forward to seeing you!"
+                                        placeholder="Hi {{lead.name}}, your appointment is confirmed. We look forward to seeing you!"
                                         rows={2} className={`${iCls} resize-none`} />
                                     <p className="text-xs text-slate-400 mt-1">
-                                        Shown on success screen. Use <code className="bg-slate-100 px-1 rounded text-[11px]">{'{{name}}'}</code> for customer name.
+                                        Shown on success screen. Use <code className="bg-slate-100 px-1 rounded text-[11px]">{'{{lead.name}}'}</code> for customer name.
                                     </p>
                                 </CField>
                                 <CField label="Logo URL" icon="fa-image" className="sm:col-span-2">

@@ -2,58 +2,6 @@
 // Shared utility for template variable replacement — single source of truth.
 // Used by: emailTemplateController.js, emailAutomationService.js
 
-/**
- * Replaces template variables like {{leadName}}, {{LeadName}}, {{LEADNAME}} etc.
- * Matching is case-insensitive so any capitalisation the user types works.
- */
-const { resolveTemplate, buildTemplateContext } = require('./templateResolver');
-
-const replaceVariables = (template, data) => {
-    if (!template) return '';
-
-    // Standardize context from legacy flat data structure
-    const context = buildTemplateContext({
-        lead: {
-            name: data.leadName || data.name || '',
-            email: data.leadEmail || data.email || '',
-            phone: data.leadPhone || data.phone || '',
-            company: data.companyName || data.company || '',
-            stage: data.stageName || data.stage || '',
-            customData: data.customData || {}
-        },
-        user: {
-            name: data.userName || data.user || ''
-        },
-        company: {
-            name: data.companyName || data.company || ''
-        }
-    });
-
-    // Optional legacy fallback - merge custom data so {{AnyCase}} can still resolve if not matched
-    Object.keys(data).forEach(k => {
-        if (!context.lead.customData) context.lead.customData = {};
-        if (context.lead.customData[k] === undefined) {
-            context.lead.customData[k] = data[k];
-        }
-    });
-
-    // Map legacy placeholders to new standard placeholders for backward compatibility
-    let standardizedTemplate = template
-        .replace(/\{\{name\}\}/gi, '{{lead.name}}')
-        .replace(/\{\{leadname\}\}/gi, '{{lead.name}}')
-        .replace(/\{\{email\}\}/gi, '{{lead.email}}')
-        .replace(/\{\{leademail\}\}/gi, '{{lead.email}}')
-        .replace(/\{\{phone\}\}/gi, '{{lead.phone}}')
-        .replace(/\{\{leadphone\}\}/gi, '{{lead.phone}}')
-        .replace(/\{\{company\}\}/gi, '{{lead.company}}')
-        .replace(/\{\{companyname\}\}/gi, '{{lead.company}}')
-        .replace(/\{\{username\}\}/gi, '{{user.name}}')
-        .replace(/\{\{stagename\}\}/gi, '{{lead.stage}}')
-        .replace(/\{\{date\}\}/gi, '{{system.date}}')
-        .replace(/\{\{time\}\}/gi, '{{system.time}}');
-
-    return resolveTemplate(standardizedTemplate, context);
-};
 
 /**
  * Wraps an email body in a clean, industry-standard HTML email shell.
@@ -217,7 +165,6 @@ const injectTracking = (html, logId, backendUrl) => {
 };
 
 module.exports = {
-    replaceVariables,
     wrapEmailHtml,
     unwrapEmailHtml,
     injectBeforeBodyEnd,

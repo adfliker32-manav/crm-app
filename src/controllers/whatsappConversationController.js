@@ -9,7 +9,7 @@ const { cancelActiveChatbots } = require('../services/chatbotEngineService');
 const { emitToUser, emitToUsers, emitToConversation } = require('../services/socketService');
 const mongoose = require('mongoose');
 
-const { buildMetaComponents } = require('../utils/templateVariableResolver');
+const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
 const { escapeRegex } = require('../utils/controllerHelpers');
 
 const { getUserWhatsAppCredentials, getCompanyUserIds } = require('../utils/whatsappUtils');
@@ -463,20 +463,17 @@ exports.startConversation = async (req, res) => {
                 const userObj = await User.findById(userId);
                 const leadObj = leadId ? await Lead.findById(leadId) : await Lead.findOne({ userId: userId, phone: normalizedPhone });
                 
-                const templateData = {
-                    leadName: leadObj?.name || '',
-                    leadEmail: leadObj?.email || '',
-                    leadPhone: normalizedPhone || '',
-                    companyName: userObj?.companyName || '',
-                    userName: userObj?.name || '',
-                    stageName: leadObj?.status || 'New'
-                };
-                
-                // Media-header templates must carry their media on every send.
                 const { resolveTemplateMedia } = require('../services/mediaLibraryService');
                 const media = await resolveTemplateMedia(templateObj, userId);
+
+                const tplContext = buildTemplateContext({
+                    lead: leadObj,
+                    user: userObj,
+                    system: { customData: { media } }
+                });
+
                 metaComponents = buildMetaComponents(
-                    templateObj.components || [], templateObj.variableMapping, { ...templateData, media }
+                    templateObj.components || [], templateObj.variableMapping, tplContext
                 );
             }
 

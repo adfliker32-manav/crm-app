@@ -6,7 +6,7 @@ const User                 = require('../models/User');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage      = require('../models/WhatsAppMessage');
 const { sendWhatsAppMessage }  = require('./whatsappService');
-const { buildMetaComponents }  = require('../utils/templateVariableResolver');
+const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
 
 // ─── Rate-limit config ────────────────────────────────────────────────────────
 // 5 leads in parallel, one batch every 5 s = 60 msgs/min (Meta-safe).
@@ -328,20 +328,16 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
         const alreadySent = await redis.sismember(sentKey, lead._id.toString());
         if (alreadySent) return null;
 
-        const templateData = {
-            leadName:    lead.name    || '',
-            leadEmail:   lead.email   || '',
-            leadPhone:   lead.phone   || '',
-            companyName: user?.companyName || '',
-            userName:    user?.name   || '',
-            stageName:   lead.status  || 'New',
-            media:       media || null
-        };
+        const tplContext = buildTemplateContext({
+            lead,
+            user,
+            system: { customData: { media } }
+        });
 
         const metaComponents = buildMetaComponents(
             template.components || [],
             template.variableMapping,
-            templateData
+            tplContext
         );
 
         const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language || 'en_US');

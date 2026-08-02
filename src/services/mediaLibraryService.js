@@ -6,7 +6,7 @@
 // Two consumers:
 //   resolveForSend()      — every message send (template header, broadcast,
 //                           chatbot, workflow, manual). Returns the `media`
-//                           object that templateVariableResolver expects.
+//                           object that templateResolver expects.
 //   createTemplateHandle() — template SUBMISSION only. Meta requires a
 //                           resumable-upload handle as the reviewer's sample;
 //                           handles are consumed per submission and cannot be

@@ -1150,7 +1150,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                         onChange={(e) => updateSelectedActionData({ body: e.target.value })}
                                                         className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm"
                                                         rows="4"
-                                                        placeholder="Use variables like {{name}} or {{email}}"
+                                                        placeholder="Use variables like {{lead.name}} or {{lead.email}}"
                                                     />
                                                 </div>
                                             </div>
