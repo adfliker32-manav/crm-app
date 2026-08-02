@@ -6,6 +6,14 @@ export const NotificationProvider = ({ children }) => {
     const [notifications, setNotifications] = useState([]);
 
     const showNotification = useCallback((message, type = 'info', duration = 4000) => {
+        // Fix for backward arguments across the app (where developers mistakenly passed the type as the first argument)
+        if (['success', 'error', 'warning', 'info'].includes(message) && 
+            !['success', 'error', 'warning', 'info'].includes(type)) {
+            const temp = message;
+            message = type;
+            type = temp;
+        }
+
         const id = Date.now() + Math.random();
         const notification = { id, message, type, duration };
 
