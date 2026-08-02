@@ -190,8 +190,7 @@ const AiClassifierNode = {
             // Resolve the tenant's provider, then the platform key for it.
             // If the configured provider has no key but the other one does, use that —
             // so the node works on both OpenAI-only and Gemini-only deployments.
-            const cfg = await IntegrationConfig.findOne({ userId: tenantId }).select('ai.provider ai.model').lean();
-            let provider = cfg?.ai?.provider || 'openai';
+            let provider = (data.model && data.model.startsWith('gemini')) ? 'gemini' : 'openai';
             let apiKey   = await getGlobalAIKey(provider);
             if (!apiKey) {
                 const alt = provider === 'openai' ? 'gemini' : 'openai';
