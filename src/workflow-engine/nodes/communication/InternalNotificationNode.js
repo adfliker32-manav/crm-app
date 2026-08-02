@@ -64,7 +64,8 @@ const InternalNotificationNode = {
         const lead    = context.getLead();
         const tenantId = context.tenantId.toString();
         const vars = context.getAll();
-        const message = (data.message || '').replace(/\{\{([^}]+)\}\}/g, (_, key) => vars[key.trim()] ?? '');
+        const { resolveTemplate } = require('../../../utils/templateResolver');
+        const message = resolveTemplate(data.message || '', vars);
 
         const payload = {
             leadId:    lead?._id,

@@ -6,40 +6,53 @@
  * Replaces template variables like {{leadName}}, {{LeadName}}, {{LEADNAME}} etc.
  * Matching is case-insensitive so any capitalisation the user types works.
  */
+const { resolveTemplate, buildTemplateContext } = require('./templateResolver');
+
 const replaceVariables = (template, data) => {
     if (!template) return '';
 
-    // Build a lowercase-keyed lookup that merges built-ins with caller-supplied data.
-    // Friendly aliases ({{name}}, {{email}}, {{phone}}, {{company}}) are included so the
-    // editor's example placeholder ("Hello {{name}}") resolves in both manual and
-    // automated sends — otherwise those tokens were left literal in the email.
-    const lookup = {
-        leadname:    data.leadName    || '',
-        leademail:   data.leadEmail   || '',
-        leadphone:   data.leadPhone   || '',
-        companyname: data.companyName || '',
-        username:    data.userName    || '',
-        stagename:   data.stageName   || '',
-        name:        data.leadName    || '',
-        email:       data.leadEmail   || '',
-        phone:       data.leadPhone   || '',
-        company:     data.companyName || '',
-        date:        new Date().toLocaleDateString(),
-        time:        new Date().toLocaleTimeString(),
-    };
-
-    // Also add any extra keys from data (custom CRM fields) in lowercase
-    Object.keys(data).forEach(k => {
-        if (lookup[k.toLowerCase()] === undefined) {
-            lookup[k.toLowerCase()] = data[k] != null ? String(data[k]) : '';
+    // Standardize context from legacy flat data structure
+    const context = buildTemplateContext({
+        lead: {
+            name: data.leadName || data.name || '',
+            email: data.leadEmail || data.email || '',
+            phone: data.leadPhone || data.phone || '',
+            company: data.companyName || data.company || '',
+            stage: data.stageName || data.stage || '',
+            customData: data.customData || {}
+        },
+        user: {
+            name: data.userName || data.user || ''
+        },
+        company: {
+            name: data.companyName || data.company || ''
         }
     });
 
-    // Single case-insensitive pass — replaces every {{AnyCase}} token
-    return template.replace(/\{\{(\w+)\}\}/gi, (match, key) => {
-        const val = lookup[key.toLowerCase()];
-        return val !== undefined ? val : match;
+    // Optional legacy fallback - merge custom data so {{AnyCase}} can still resolve if not matched
+    Object.keys(data).forEach(k => {
+        if (!context.lead.customData) context.lead.customData = {};
+        if (context.lead.customData[k] === undefined) {
+            context.lead.customData[k] = data[k];
+        }
     });
+
+    // Map legacy placeholders to new standard placeholders for backward compatibility
+    let standardizedTemplate = template
+        .replace(/\{\{name\}\}/gi, '{{lead.name}}')
+        .replace(/\{\{leadname\}\}/gi, '{{lead.name}}')
+        .replace(/\{\{email\}\}/gi, '{{lead.email}}')
+        .replace(/\{\{leademail\}\}/gi, '{{lead.email}}')
+        .replace(/\{\{phone\}\}/gi, '{{lead.phone}}')
+        .replace(/\{\{leadphone\}\}/gi, '{{lead.phone}}')
+        .replace(/\{\{company\}\}/gi, '{{lead.company}}')
+        .replace(/\{\{companyname\}\}/gi, '{{lead.company}}')
+        .replace(/\{\{username\}\}/gi, '{{user.name}}')
+        .replace(/\{\{stagename\}\}/gi, '{{lead.stage}}')
+        .replace(/\{\{date\}\}/gi, '{{system.date}}')
+        .replace(/\{\{time\}\}/gi, '{{system.time}}');
+
+    return resolveTemplate(standardizedTemplate, context);
 };
 
 /**

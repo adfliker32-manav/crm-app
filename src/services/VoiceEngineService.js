@@ -201,23 +201,15 @@ class VoiceEngineService {
      */
     _injectVariables(prompt, lead) {
         if (!prompt) return '';
-        const s = (v, len) => this._sanitizeVar(v, len);
-        let result = prompt;
-
-        // Core lead fields
-        result = result.replace(/{{lead\.name}}/g,  s(lead.name, 80) || 'Customer');
-        result = result.replace(/{{lead\.phone}}/g, s(lead.phone, 25));
-        result = result.replace(/{{lead\.email}}/g, s(lead.email, 120));
-        result = result.replace(/{{lead\.stage}}/g, s(lead.status || lead.stage, 60));
-        result = result.replace(/{{lead\.source}}/g, s(lead.source, 60));
-
-        // Custom data fields
-        result = result.replace(/{{lead\.company}}/g, s(lead.customData?.company || lead.customData?.Company, 120));
-        result = result.replace(/{{lead\.assignedManager}}/g, s(lead.customData?.assignedManager, 80));
-        result = result.replace(/{{lead\.appointmentDate}}/g, s(lead.customData?.appointmentDate || lead.appointmentDate, 60));
-        result = result.replace(/{{lead\.productName}}/g, s(lead.customData?.productName || lead.customData?.ProductName, 120));
-
-        return result;
+        const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
+        
+        // Pass the lead to the standard builder
+        const context = buildTemplateContext({ lead });
+        
+        // Pass a generic sanitizer. Most max lengths were around 120.
+        return resolveTemplate(prompt, context, {
+            sanitize: (val) => this._sanitizeVar(val, 120)
+        });
     }
 
     /**

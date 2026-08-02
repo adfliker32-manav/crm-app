@@ -22,26 +22,38 @@ const resolveVariable = (mappingObj, varNum, data) => {
         ? mappingObj.get(varNum.toString())
         : (mappingObj?.[varNum.toString()] || '');
 
-    switch (mapType) {
-        case 'lead.name': return data.leadName || 'Customer';
-        case 'lead.phone': return data.leadPhone || '';
-        case 'lead.email': return data.leadEmail || '';
-        case 'lead.status': return data.stageName || 'New';
-        case 'company.name': return data.companyName || '';
-        case 'user.name': return data.userName || '';
-        case 'custom':
-            const customVal = (mappingObj && typeof mappingObj.get === 'function')
-                ? mappingObj.get(`${varNum}_custom`)
-                : (mappingObj?.[`${varNum}_custom`] || '');
-            return customVal || '';
-        default:
-            // Fallback to older static convention if unmapped
-            if (varNum === 1) return data.leadName || 'Customer';
-            if (varNum === 2) return data.stageName || 'New';
-            if (varNum === 3) return data.companyName || 'Our Company';
-            if (varNum === 4) return data.userName || 'Representative';
-            return '';
+    if (mapType === 'custom') {
+        const customVal = (mappingObj && typeof mappingObj.get === 'function')
+            ? mappingObj.get(`${varNum}_custom`)
+            : (mappingObj?.[`${varNum}_custom`] || '');
+        return customVal || '';
     }
+
+    const { resolveTemplate, buildTemplateContext } = require('./templateResolver');
+    const context = buildTemplateContext({
+        lead: {
+            name: data.leadName,
+            phone: data.leadPhone,
+            email: data.leadEmail,
+            stage: data.stageName
+        },
+        company: { name: data.companyName },
+        user: { name: data.userName }
+    });
+
+    if (mapType) {
+        // We evaluate it via the central resolver by wrapping it in {{ }}
+        const resolved = resolveTemplate(`{{${mapType}}}`, context);
+        // If it returns the same placeholder, it means it didn't resolve. Fallback to empty string.
+        return resolved !== `{{${mapType}}}` ? resolved : '';
+    }
+
+    // Fallback to older static convention if unmapped
+    if (varNum === 1) return data.leadName || 'Customer';
+    if (varNum === 2) return data.stageName || 'New';
+    if (varNum === 3) return data.companyName || 'Our Company';
+    if (varNum === 4) return data.userName || 'Representative';
+    return '';
 };
 
 /**

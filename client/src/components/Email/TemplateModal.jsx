@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
+import VariableSelector from '../VariableSelector';
 
 const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
     const [formData, setFormData] = useState({
@@ -119,7 +120,10 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Email Subject</label>
+                            <div className="flex items-center justify-between">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+                                <VariableSelector onInsert={(v) => setFormData({ ...formData, subject: formData.subject + v })} />
+                            </div>
                             <input
                                 type="text"
                                 name="subject"
@@ -133,7 +137,10 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Email Body</label>
+                        <div className="flex items-center justify-between">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Email Body</label>
+                            <VariableSelector onInsert={(v) => setFormData({ ...formData, body: formData.body + v })} />
+                        </div>
                         <textarea
                             name="body"
                             value={formData.body}
@@ -141,9 +148,9 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                             required
                             rows="8"
                             className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm"
-                            placeholder="Hello {{name}}, ..."
+                            placeholder="Hello {{lead.name}}, ..."
                         ></textarea>
-                        <p className="text-xs text-gray-500 mt-1">Available variables: {'{{name}}'}, {'{{email}}'}, {'{{phone}}'}, {'{{companyName}}'}, {'{{userName}}'}, {'{{stageName}}'}, {'{{date}}'}, {'{{time}}'}</p>
+                        <p className="text-xs text-gray-500 mt-1">Select variables using the dropdown above to insert them into your template.</p>
                     </div>
 
                     <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-3">
