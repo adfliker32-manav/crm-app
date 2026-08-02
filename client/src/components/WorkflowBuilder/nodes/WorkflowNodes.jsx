@@ -124,6 +124,18 @@ export const ActionNode = ({ data, selected }) => {
                 </div>
             )}
 
+            <div style={{ display: 'flex', justifyContent: 'space-evenly', marginTop: 8, textAlign: 'center', flexWrap: 'wrap' }}>
+                {!multipleOutputs ? (
+                    <span style={{ fontSize: 9, color: color.border, fontWeight: 700 }}>Next</span>
+                ) : (
+                    dynamicOutputs.map((port) => (
+                        <span key={port.id} style={{ fontSize: 9, color: color.border, fontWeight: 700, flex: 1 }}>
+                            {port.label}
+                        </span>
+                    ))
+                )}
+            </div>
+
             {!multipleOutputs ? (
                 <Handle type="source" position={Position.Bottom} id="output"
                     style={{ background: color.border, width: 10, height: 10, border: '2px solid #fff' }} />
