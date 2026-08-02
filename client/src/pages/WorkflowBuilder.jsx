@@ -178,7 +178,7 @@ function WorkflowBuilderInner() {
                     }]);
                 }
             } catch (err) {
-                showNotification('error', 'Failed to load workflow');
+                showNotification('Failed to load workflow', 'error');
             }
         };
         loadData();
@@ -330,10 +330,10 @@ function WorkflowBuilderInner() {
                 savedWorkflow = res.data.workflow || { ...workflow, ...payload };
             }
             setWorkflow(w => ({ ...w, ...savedWorkflow }));
-            showNotification('success', 'Workflow saved');
+            showNotification('Workflow saved', 'success');
             return savedWorkflow;
         } catch (err) {
-            showNotification('error', err.response?.data?.message || 'Failed to save workflow');
+            showNotification(err.response?.data?.message || 'Failed to save workflow', 'error');
             throw err;
         } finally {
             setSaving(false);
@@ -350,13 +350,13 @@ function WorkflowBuilderInner() {
             const res = await api.post(`/workflows/${workflowId}/publish`);
             // M-V3: publish promotes the draft into the live definition and clears it.
             setWorkflow(w => ({ ...w, ...(res.data.workflow || savedWorkflow), status: 'published', draft: null }));
-            showNotification('success', 'Workflow published! It will now execute automatically.');
+            showNotification('Workflow published! It will now execute automatically.', 'success');
         } catch (err) {
             // Publish validation returns a list of specific problems — showing only the
             // generic message would hide which step is actually wrong.
             const data = err.response?.data;
             const detail = data?.errors?.length ? data.errors.join(' ') : (data?.message || err.message);
-            showNotification('error', detail || 'Publish failed');
+            showNotification(detail || 'Publish failed', 'error');
         } finally {
             setPublishing(false);
         }
@@ -364,7 +364,7 @@ function WorkflowBuilderInner() {
 
     // ── Test Run ────────────────────────────────────────────────────────────
     const handleTestRun = async () => {
-        if (!testLeadId.trim()) return showNotification('error', 'Enter a Lead ID to test with');
+        if (!testLeadId.trim()) return showNotification('Enter a Lead ID to test with', 'error');
         try {
             const savedWorkflow = workflow?.status === 'published' ? workflow : await handleSave();
             const workflowId = savedWorkflow?._id || workflow?._id;
@@ -373,9 +373,9 @@ function WorkflowBuilderInner() {
             setTestExecutionId(res.data.executionId);
             setTestMode(true);
             setShowTestModal(false);
-            showNotification('success', 'Test run started — watch the debugger below');
+            showNotification('Test run started — watch the debugger below', 'success');
         } catch (err) {
-            showNotification('error', err.response?.data?.message || err.message || 'Test run failed');
+            showNotification(err.response?.data?.message || err.message || 'Test run failed', 'error');
         }
     };
 
