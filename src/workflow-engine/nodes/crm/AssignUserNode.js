@@ -91,7 +91,7 @@ const AssignUserNode = {
             });
 
             setImmediate(() => {
-                emitToUser(data.userId.toString(), 'lead:assigned', {
+                emitToUser(data.userId.toString(), 'notification:agent', {
                     leadId: lead._id, leadName: lead.name,
                     message: `You have been assigned lead: ${lead.name}`, timestamp: new Date()
                 });

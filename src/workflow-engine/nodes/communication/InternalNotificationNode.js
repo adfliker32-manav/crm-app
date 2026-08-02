@@ -95,7 +95,7 @@ const InternalNotificationNode = {
                     }
                 };
             }
-            emitToUser(lead.assignedTo.toString(), 'workflow:notification', payload);
+            emitToUser(lead.assignedTo.toString(), 'notification:agent', payload);
             notified = 1;
         } else if (data.targetRole === 'manager' || data.targetRole === 'all') {
             const query = data.targetRole === 'manager'
@@ -113,10 +113,10 @@ const InternalNotificationNode = {
                 );
             }
             for (const u of users) {
-                emitToUser(u._id.toString(), 'workflow:notification', payload);
+                emitToUser(u._id.toString(), 'notification:agent', payload);
             }
             // Also notify the owner
-            emitToUser(tenantId, 'workflow:notification', payload);
+            emitToUser(tenantId, 'notification:agent', payload);
             notified = users.length + 1;
         }
 
