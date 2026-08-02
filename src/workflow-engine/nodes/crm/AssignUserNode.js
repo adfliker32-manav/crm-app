@@ -84,7 +84,7 @@ const AssignUserNode = {
                 $set:  { assignedTo: data.userId },
                 $push: {
                     history: {
-                        $each:  [{ type: 'System', subType: 'WorkflowEngine', content: `Lead assigned by Workflow`, date: new Date() }],
+                        $each:  [{ type: 'System', subType: 'Auto', content: `Lead assigned by Workflow`, date: new Date() }],
                         $slice: -100
                     }
                 }
