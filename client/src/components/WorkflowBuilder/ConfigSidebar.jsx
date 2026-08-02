@@ -1,6 +1,6 @@
-/* eslint-disable react/prop-types */
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
+import VariableSelector from '../VariableSelector';
 
 const TRIGGER_OPTIONS = [
     { value: 'LEAD_CREATED',       label: '🔆 Lead Created',         desc: 'Fires when a new lead is added to the CRM' },
@@ -34,7 +34,10 @@ const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates }) =
 
     if (field.type === 'text') return (
         <div>
-            <label style={labelStyle}>{field.label}{field.required && <span style={{ color: '#EF4444' }}> *</span>}</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <label style={{ ...labelStyle, marginBottom: 0 }}>{field.label}{field.required && <span style={{ color: '#EF4444' }}> *</span>}</label>
+                <VariableSelector onInsert={val => onChange(field.key, v + val)} />
+            </div>
             <input style={inputStyle} type="text" value={v} placeholder={field.placeholder || ''} onChange={e => onChange(field.key, e.target.value)} />
             {field.description && <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>{field.description}</p>}
         </div>
@@ -50,7 +53,10 @@ const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates }) =
 
     if (field.type === 'textarea') return (
         <div>
-            <label style={labelStyle}>{field.label}{field.required && <span style={{ color: '#EF4444' }}> *</span>}</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <label style={{ ...labelStyle, marginBottom: 0 }}>{field.label}{field.required && <span style={{ color: '#EF4444' }}> *</span>}</label>
+                <VariableSelector onInsert={val => onChange(field.key, v + val)} />
+            </div>
             <textarea style={{ ...inputStyle, resize: 'vertical' }} rows={field.rows || 4} value={v} placeholder={field.placeholder || ''} onChange={e => onChange(field.key, e.target.value)} />
             {field.description && <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>{field.description}</p>}
         </div>

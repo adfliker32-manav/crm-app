@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import VariableSelector from '../VariableSelector';
 
 const WhatsAppTemplateModal = ({ isOpen, onClose, template, onSuccess }) => {
     const { showSuccess, showError } = useNotification();
@@ -257,12 +258,15 @@ const WhatsAppTemplateModal = ({ isOpen, onClose, template, onSuccess }) => {
                             <label className="block text-sm font-medium text-gray-700">
                                 Message <span className="text-red-500">*</span>
                             </label>
-                            <span className={`text-xs font-medium ${charCount > (formData.isMarketing ? marketingCharLimit : charLimit)
-                                ? 'text-red-600'
-                                : 'text-gray-500'
-                                }`}>
-                                {charCount} / {formData.isMarketing ? marketingCharLimit : charLimit}
-                            </span>
+                            <div className="flex items-center gap-4">
+                                <VariableSelector onInsert={(v) => setFormData(prev => ({ ...prev, message: prev.message + v }))} />
+                                <span className={`text-xs font-medium ${charCount > (formData.isMarketing ? marketingCharLimit : charLimit)
+                                    ? 'text-red-600'
+                                    : 'text-gray-500'
+                                    }`}>
+                                    {charCount} / {formData.isMarketing ? marketingCharLimit : charLimit}
+                                </span>
+                            </div>
                         </div>
                         <textarea
                             name="message"
@@ -273,7 +277,7 @@ const WhatsAppTemplateModal = ({ isOpen, onClose, template, onSuccess }) => {
                             required
                         ></textarea>
                         <p className="text-xs text-gray-500 mt-1">
-                            Use variables: {`{{name}}, {{phone}}, {{email}}`}
+                            Select variables using the dropdown above to insert them into your template.
                         </p>
                     </div>
 
