@@ -109,12 +109,8 @@ const AiClassifierNode = {
             {
                 key:         'model',
                 label:       'AI Model',
-                type:        'select',
-                defaultValue: 'gpt-4o-mini',
-                options: [
-                    { value: 'gpt-4o-mini',   label: 'Adfliker Advance (Better, Fast, Low Cost)' },
-                    { value: 'gpt-3.5-turbo', label: 'Adfliker Ultra (Legacy)' }
-                ]
+                type:        'ai_model_selector',
+                defaultValue: 'gpt-4o-mini'
             }
         ]
     }),

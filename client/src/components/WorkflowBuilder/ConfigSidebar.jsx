@@ -19,6 +19,13 @@ const TRIGGER_OPTIONS = [
 // ─────────────────────────────────────────────────────────────────────────────
 // Field renderers for each schema field type
 // ─────────────────────────────────────────────────────────────────────────────
+const ADFLIKER_MODELS = [
+    { id: 'gemini-2.5-flash-lite-preview-06-17', provider: 'gemini', name: 'Adfliker Light', desc: 'Fast & cost-effective' },
+    { id: 'gemini-2.5-flash', provider: 'gemini', name: 'Adfliker Smart', desc: 'Best balance — Recommended', recommended: true },
+    { id: 'gpt-4o-mini', provider: 'openai', name: 'Adfliker Advance', desc: 'Powerful reasoning, affordable' },
+    { id: 'gpt-4o', provider: 'openai', name: 'Adfliker Ultra', desc: 'Maximum capability, premium' },
+];
+
 const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates }) => {
     const v = value ?? field.defaultValue ?? '';
 
@@ -240,6 +247,43 @@ const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates }) =
                 <button onClick={addCase} style={{ marginTop: 8, width: '100%', padding: '6px 0', background: '#F1F5F9', border: '1px dashed #CBD5E1', borderRadius: 6, color: '#475569', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                     + Add Routing Case
                 </button>
+            </div>
+        );
+    }
+
+    if (field.type === 'ai_model_selector') {
+        return (
+            <div>
+                <label style={labelStyle}>{field.label}{field.required && <span style={{ color: '#EF4444' }}> *</span>}</label>
+                {field.description && <p style={{ fontSize: 11, color: '#94A3B8', marginBottom: 8 }}>{field.description}</p>}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '12px' }}>
+                    {ADFLIKER_MODELS.map(m => (
+                        <label
+                            key={m.id}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '12px', padding: '14px', borderRadius: '12px', border: '1px solid',
+                                cursor: 'pointer', transition: 'all 0.2s',
+                                borderColor: v === m.id ? '#3B82F6' : '#E2E8F0',
+                                backgroundColor: v === m.id ? 'rgba(59, 130, 246, 0.05)' : '#fff',
+                                boxShadow: v === m.id ? '0 0 0 1px rgba(59, 130, 246, 0.5)' : 'none'
+                            }}
+                        >
+                            <input
+                                type="radio"
+                                name={field.key}
+                                checked={v === m.id}
+                                onChange={() => onChange(field.key, m.id)}
+                                style={{ width: '16px', height: '16px', accentColor: '#2563EB' }}
+                            />
+                            <div>
+                                <p style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#1E293B' }}>
+                                    {m.name}{m.recommended ? ' ✅' : ''}
+                                </p>
+                                <p style={{ margin: 0, marginTop: '2px', fontSize: '11px', color: '#64748B', fontWeight: 600 }}>{m.desc}</p>
+                            </div>
+                        </label>
+                    ))}
+                </div>
             </div>
         );
     }
