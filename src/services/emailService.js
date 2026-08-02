@@ -270,9 +270,9 @@ const sendEmail = async (options) => {
     // so its _id is generated up-front and reused when the row is written —
     // that's what lets the pixel URL exist before the log does.
     //
-    // Only bulk/automated/template mail is tracked: transactional notices and
-    // human-typed 1:1 replies are deliberately left untracked.
-    const trackingEnabled = !!userId && !transactional && !conversational;
+    // All non-transactional mail is tracked for opens, including human-typed 
+    // 1:1 replies, so that the EMAIL_OPENED trigger functions universally.
+    const trackingEnabled = !!userId && !transactional;
     const trackingLogId = trackingEnabled ? new mongoose.Types.ObjectId() : null;
     const trackedHtml = trackingEnabled
         ? injectTracking(baseHtml, trackingLogId.toString(), process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`)
