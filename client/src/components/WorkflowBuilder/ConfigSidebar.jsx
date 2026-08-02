@@ -165,7 +165,10 @@ const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates }) =
                     {conditions.map((cond, i) => (
                         <div key={i} style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: 10, position: 'relative' }}>
                             <button onClick={() => removeCondition(i)} style={{ position: 'absolute', top: 6, right: 6, background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}>×</button>
-                            <input style={{...inputStyle, marginBottom: 6}} type="text" placeholder="Variable (e.g. lead.source)" value={cond.variable} onChange={e => updateCondition(i, 'variable', e.target.value)} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: 6 }}>
+                                <input style={{...inputStyle, flex: 1, marginBottom: 0}} type="text" placeholder="Variable (e.g. lead.source)" value={cond.variable} onChange={e => updateCondition(i, 'variable', e.target.value)} />
+                                <VariableSelector onInsert={v => updateCondition(i, 'variable', (cond.variable || '') + v)} />
+                            </div>
                             <select style={{...inputStyle, marginBottom: 6}} value={cond.operator} onChange={e => updateCondition(i, 'operator', e.target.value)}>
                                 <option value="equals">Equals</option>
                                 <option value="not_equals">Does Not Equal</option>
@@ -213,7 +216,10 @@ const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates }) =
                             <input style={{...inputStyle, marginBottom: 8}} type="text" placeholder="Port Name (e.g. VIP)" value={c.portName} onChange={e => updateCase(i, 'portName', e.target.value)} />
                             
                             <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', marginBottom: 4 }}>Rule</div>
-                            <input style={{...inputStyle, marginBottom: 6}} type="text" placeholder="Variable (e.g. lead.score)" value={c.variable} onChange={e => updateCase(i, 'variable', e.target.value)} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: 6 }}>
+                                <input style={{...inputStyle, flex: 1, marginBottom: 0}} type="text" placeholder="Variable (e.g. lead.score)" value={c.variable} onChange={e => updateCase(i, 'variable', e.target.value)} />
+                                <VariableSelector onInsert={v => updateCase(i, 'variable', (c.variable || '') + v)} />
+                            </div>
                             <select style={{...inputStyle, marginBottom: 6}} value={c.operator} onChange={e => updateCase(i, 'operator', e.target.value)}>
                                 <option value="equals">Equals</option>
                                 <option value="not_equals">Does Not Equal</option>

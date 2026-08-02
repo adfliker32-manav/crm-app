@@ -112,8 +112,8 @@ const AiClassifierNode = {
                 type:        'select',
                 defaultValue: 'gpt-4o-mini',
                 options: [
-                    { value: 'gpt-4o-mini',   label: 'GPT-4o Mini (Better, Fast, Low Cost)' },
-                    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo (Legacy)' }
+                    { value: 'gpt-4o-mini',   label: 'Adfliker Advance (Better, Fast, Low Cost)' },
+                    { value: 'gpt-3.5-turbo', label: 'Adfliker Ultra (Legacy)' }
                 ]
             }
         ]
