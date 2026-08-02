@@ -128,6 +128,9 @@ function WorkflowBuilderInner() {
                     const { workflow: wf, layout } = wfRes.data;
                     setWorkflow(wf);
 
+                    // M-V3: if a published workflow has a draft, we should load the draft into the canvas!
+                    const activeWf = wf.draft ? { ...wf, ...wf.draft } : wf;
+                    
                     // Build React Flow nodes from workflow.nodes + layout.nodePositions
                     const positions = layout?.nodePositions || {};
                     const rfNodes = [
@@ -136,10 +139,10 @@ function WorkflowBuilderInner() {
                             id: 'trigger',
                             type: 'trigger',
                             position: positions['trigger'] || { x: 350, y: 80 },
-                            data: { trigger: wf.trigger, label: getTriggerLabel(wf.trigger) }
+                            data: { trigger: activeWf.trigger, label: getTriggerLabel(activeWf.trigger) }
                         },
                         // Action/Logic nodes
-                        ...(wf.nodes || []).map(n => ({
+                        ...(activeWf.nodes || []).map(n => ({
                             id: n.id,
                             type: getReactFlowType(n.type),
                             position: positions[n.id] || { x: 350, y: 250 },
@@ -155,7 +158,7 @@ function WorkflowBuilderInner() {
                     setNodes(rfNodes);
 
                     // Build React Flow edges from workflow.connections
-                    const rfEdges = (wf.connections || []).map(c => ({
+                    const rfEdges = (activeWf.connections || []).map(c => ({
                         id: c.id,
                         source: c.sourceNodeId,
                         sourceHandle: c.sourcePort || 'output',
