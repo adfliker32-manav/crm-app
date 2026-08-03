@@ -1555,6 +1555,18 @@ const toolHandlers = {
             source:          'manual'
         });
 
+        try {
+            const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+            const Lead = require('../models/Lead');
+            let leadForWf = null;
+            if (leadId) leadForWf = await Lead.findById(leadId).lean();
+            WorkflowEngine.fireTrigger('APPOINTMENT_BOOKED', { lead: leadForWf, appointment }).catch(err => 
+                console.error('[MCP] WorkflowEngine APPOINTMENT_BOOKED error:', err.message)
+            );
+        } catch (wfErr) {
+            console.error('[MCP] Failed to fire WorkflowEngine trigger:', wfErr.message);
+        }
+
         return {
             success: true,
             appointmentId: appointment._id,

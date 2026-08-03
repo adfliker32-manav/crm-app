@@ -2768,6 +2768,22 @@ const executeAction = async (actionData, session, conversation) => {
                         });
                         await appt.save();
                         console.log(`🤖 [Chatbot] book_appointment: created appointment ${appt._id} for ${customerName}`);
+                        
+                        try {
+                            const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                            const Lead = require('../models/Lead');
+                            let leadForWf = null;
+                            if (conversation.leadId) {
+                                leadForWf = await Lead.findById(conversation.leadId).lean();
+                            }
+                            // Fire the workflow trigger so automations can run
+                            WorkflowEngine.fireTrigger('APPOINTMENT_BOOKED', { 
+                                lead: leadForWf, 
+                                appointment: appt 
+                            }).catch(err => console.error('[Chatbot] WorkflowEngine APPOINTMENT_BOOKED error:', err.message));
+                        } catch (wfErr) {
+                            console.error('[Chatbot] Failed to fire WorkflowEngine trigger:', wfErr.message);
+                        }
                     } catch (saveErr) {
                         console.error('❌ Failed to save appointment in database:', saveErr.message);
                         try {
