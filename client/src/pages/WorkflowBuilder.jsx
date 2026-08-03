@@ -330,7 +330,10 @@ function WorkflowBuilderInner() {
             } else {
                 const res = await api.put(`/workflows/${workflow._id}`, payload);
                 await api.put(`/workflows/${workflow._id}/layout`, { nodePositions: positions, viewport });
-                savedWorkflow = res.data.workflow || { ...workflow, ...payload };
+                const returnedWf = res.data.workflow;
+                savedWorkflow = returnedWf 
+                    ? (returnedWf.draft ? { ...returnedWf, ...returnedWf.draft } : returnedWf)
+                    : { ...workflow, ...payload };
             }
             setWorkflow(w => ({ ...w, ...savedWorkflow }));
             showNotification('Workflow saved', 'success');
