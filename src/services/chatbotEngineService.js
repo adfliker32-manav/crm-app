@@ -2754,14 +2754,25 @@ const executeAction = async (actionData, session, conversation) => {
                         'name', 'full_name', 'customer_name', 'firstName'
                     ]) || conversation.displayName || conversation.phone;
                     
+                    
                     try {
+                        // Validate the date before creating the document
+                        const parsedDate = new Date(appointmentDate);
+                        if (isNaN(parsedDate.getTime())) {
+                            console.error(`❌ [Chatbot] book_appointment: Invalid date value from AI: "${appointmentDate}"`);
+                            const retryMsg = "I had trouble understanding the date. Could you please confirm the date again? (e.g., August 5th)";
+                            const retryResult = await sendWhatsAppTextMessage(conversation.phone, retryMsg, session.userId);
+                            await saveBotMessage(session.conversationId, session.userId, retryMsg, 'text', retryResult);
+                            break;
+                        }
+
                         const appt = new Appointment({
                             userId: session.userId,
                             leadId: conversation.leadId || null,
                             customerName: customerName,
                             customerPhone: conversation.phone,
                             serviceType: serviceType,
-                            appointmentDate: new Date(appointmentDate),
+                            appointmentDate: parsedDate,
                             appointmentTime: appointmentTime,
                             source: 'chatbot',
                             status: 'Pending',
@@ -2785,8 +2796,33 @@ const executeAction = async (actionData, session, conversation) => {
                         } catch (wfErr) {
                             console.error('[Chatbot] Failed to fire WorkflowEngine trigger:', wfErr.message);
                         }
+                        // Send a confirmation message directly so the customer
+                        // always gets feedback, even when no Workflow automation
+                        // is set up for APPOINTMENT_BOOKED.
+                        try {
+                            const dateObj = new Date(appointmentDate);
+                            const formattedDate = dateObj.toLocaleDateString('en-US', {
+                                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+                                timeZone: 'UTC'
+                            });
+                            const confirmMsg = `✅ Your appointment has been booked!\n\n` +
+                                `📋 *Service:* ${serviceType}\n` +
+                                `📅 *Date:* ${formattedDate}\n` +
+                                `🕐 *Time:* ${appointmentTime}\n\n` +
+                                `We look forward to seeing you!`;
+                            const confirmResult = await sendWhatsAppTextMessage(conversation.phone, confirmMsg, session.userId);
+                            await saveBotMessage(session.conversationId, session.userId, confirmMsg, 'text', confirmResult);
+                        } catch (confirmErr) {
+                            console.error('[Chatbot] Failed to send booking confirmation message:', confirmErr.message);
+                        }
                     } catch (saveErr) {
-                        console.error('❌ Failed to save appointment in database:', saveErr.message);
+                        console.error('❌ Failed to save appointment in database:', saveErr.message, saveErr.stack);
+                        console.error('❌ Appointment data was:', JSON.stringify({
+                            userId: session.userId,
+                            customerName: customerName,
+                            customerPhone: conversation.phone,
+                            serviceType, appointmentDate, appointmentTime
+                        }));
                         try {
                             const errMsg = "I'm sorry, I couldn't save your appointment due to an internal error. Please try again or contact support.";
                             const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
@@ -2797,7 +2833,7 @@ const executeAction = async (actionData, session, conversation) => {
                         break;
                     }
                     
-                    // Confirmation messages should now be sent via Workflow Engine.
+                    // Additional confirmation can also be sent via Workflow Engine.
                 } else {
                     try {
                         const errMsg = "Oops, I missed some details! Could you please confirm the exact date, time, and service you'd like to book?";
