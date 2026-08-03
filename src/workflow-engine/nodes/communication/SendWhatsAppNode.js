@@ -118,7 +118,8 @@ const SendWhatsAppNode = {
             const tplContext = buildTemplateContext({
                 lead,
                 user,
-                system: { customData: { media } }
+                system: { customData: { media } },
+                appointment: context.env?.trigger?.appointment || context.env?.trigger?.payload?.appointment
             });
 
             metaComponents = buildMetaComponents(

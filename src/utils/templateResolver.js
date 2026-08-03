@@ -97,7 +97,7 @@ const resolveTemplate = (template, context, options = {}) => {
  * @param {object} args - { lead, user, company }
  * @returns {object} - Standardized context { lead, user, company, system }
  */
-const buildTemplateContext = ({ lead, user, company, system }) => {
+const buildTemplateContext = ({ lead, user, company, system, appointment }) => {
     return {
         lead: lead ? {
             name: lead.name || '',
@@ -120,7 +120,12 @@ const buildTemplateContext = ({ lead, user, company, system }) => {
             ...system,
             date: new Date().toLocaleDateString(),
             time: new Date().toLocaleTimeString()
-        }
+        },
+        appointment: appointment ? {
+            date: appointment.appointmentDate ? new Date(appointment.appointmentDate).toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '',
+            time: appointment.appointmentTime || '',
+            service: appointment.serviceType || ''
+        } : {}
     };
 };
 

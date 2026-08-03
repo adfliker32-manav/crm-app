@@ -145,7 +145,8 @@ const SendEmailNode = {
         const tplContext = buildTemplateContext({
             lead,
             user,
-            system: { customData: safeVars }
+            system: { customData: safeVars },
+            appointment: context.env.trigger?.appointment || context.env.trigger?.payload?.appointment
         });
 
         const subject = resolveTemplate(data.subject || '', tplContext);

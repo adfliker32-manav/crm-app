@@ -18,6 +18,11 @@ const TEMPLATE_VARIABLES = {
   system: {
     date: "Current Date",
     time: "Current Time"
+  },
+  appointment: {
+    date: "Appointment Date",
+    time: "Appointment Time",
+    service: "Appointment Service"
   }
 };
 
