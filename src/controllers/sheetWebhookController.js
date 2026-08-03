@@ -8,10 +8,7 @@ const Lead = require('../models/Lead');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const { normalizePhone } = require('../services/duplicateService');
-const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationService');
-const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
-const { evaluateLead } = require('../services/AutomationService');
-const { sendMetaEventForLead } = require('../services/metaConversionService');
+const { queueLeadCreatedEffects } = require('../utils/leadEffects');
 const { safeTokenEqual } = require('../utils/safeCompare');
 
 // One push must not be able to ask the server to do unbounded work. Apps Script
@@ -238,89 +235,7 @@ const receiveSheetPush = async (req, res) => {
             insertedCount = insertedLeads.length;
             // Fire automations (non-blocking)
             for (const newLead of insertedLeads) {
-                // Trigger lead arrival alerts (socket and WhatsApp alerts)
-                try {
-                    const { sendLeadArrivalAlert } = require('../services/leadAlertService');
-                    sendLeadArrivalAlert(newLead).catch(err => console.error('❌ Error sending sheet lead arrival alerts:', err.message));
-                } catch (alertErr) {
-                    console.error('❌ Failed to trigger sheet lead arrival alerts:', alertErr.message);
-                }
-
-                // 1. Email Automation
-                if (newLead.email) {
-                    sendAutomatedEmailOnLeadCreate(newLead, userId)
-                        .then(sent => {
-                            if (sent) {
-                                Lead.findByIdAndUpdate(newLead._id, {
-                                    $push: { 
-                                        history: { 
-                                            $each: [{ type: 'Email', subType: 'Auto', content: 'Automated Welcome Email Sent (Sheet Sync)', date: new Date() }],
-                                            $slice: -100 
-                                        } 
-                                    }
-                                }).exec();
-                            }
-                        })
-                        .catch(err => console.error('[Sheet Push] Email automation error:', err.message));
-                }
-                
-                // 2. WhatsApp Automation
-                if (newLead.phone) {
-                    const phoneToSend = normalizePhone(newLead.phone) || newLead.phone;
-                    const leadForWhatsApp = typeof newLead.toObject === 'function' 
-                        ? { ...newLead.toObject(), phone: phoneToSend } 
-                        : { ...newLead, phone: phoneToSend };
-
-                    sendAutomatedWhatsAppOnLeadCreate(leadForWhatsApp, userId)
-                        .then(sent => {
-                            if (sent) {
-                                Lead.findByIdAndUpdate(newLead._id, {
-                                    $push: { 
-                                        history: { 
-                                            $each: [{ type: 'WhatsApp', subType: 'Auto', content: 'Automated Welcome WhatsApp Sent (Sheet Sync)', date: new Date() }],
-                                            $slice: -100 
-                                        } 
-                                    }
-                                }).exec();
-                            }
-                        })
-                        .catch(err => console.error('[Sheet Push] WhatsApp automation error:', err.message));
-                }
-
-                // 3. Meta CAPI event — pass the lead's ACTUAL status (audit M1: this
-                // hardcoded 'New', so a row mapped straight into the qualified stage
-                // fired 'Lead' instead of 'Purchase'). deferSend: a push can carry up
-                // to 500 rows — the outbox drain cron delivers them in one batched
-                // request instead of 500 parallel POSTs (audit H2).
-                sendMetaEventForLead(newLead, newLead.status, null, { deferSend: true })
-                    .catch(err => console.error('[Sheet Push] Meta CAPI error:', err));
-
-                // 4. Automation Builder Rules
-                evaluateLead(newLead, 'LEAD_CREATED').catch(err => console.error('[Sheet Push] AutomationService error (LEAD_CREATED):', err));
-
-                // Fire new Workflow Engine trigger
-                try {
-                    const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-                    WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: newLead }).catch(err =>
-                        console.error('[Sheet Push] WorkflowEngine LEAD_CREATED error:', err.message)
-                    );
-                    // isInitialStage: a brand-new lead has not CHANGED stage, it
-                    // was placed in one. Without this flag a STAGE_CHANGED
-                    // workflow narrowed by `fromStage` still fires on creation.
-                    WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: newLead, isInitialStage: true }).catch(err =>
-                        console.error('[Sheet Push] WorkflowEngine STAGE_CHANGED error:', err.message)
-                    );
-                } catch (wfErr) {
-                    console.error('[Sheet Push] WorkflowEngine import error:', wfErr.message);
-                }
-
-                // 5. FIX: Enroll Sheet leads in drip sequences (was missing — only manual leads were enrolled)
-                try {
-                    const { enrollLeadInSequences } = require('../services/sequenceService');
-                    enrollLeadInSequences(newLead, 'LEAD_CREATED').catch(err => console.error('[Sheet Push] Sequence enrollment error (LEAD_CREATED):', err));
-                } catch (seqErr) {
-                    console.error('[Sheet Push] Sequence import error:', seqErr.message);
-                }
+                queueLeadCreatedEffects(newLead, userId, { source: 'Sheet Sync', deferSend: true });
             }
         }
 

@@ -12,6 +12,7 @@ const { sendEmail } = require('../services/emailService');
 const { emitToUser } = require('../services/socketService');
 const { normalizePhoneForWhatsApp, getWorkspaceCountryCode } = require('../utils/phoneUtils');
 const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
+const { queueLeadCreatedEffects, queueLeadStageChangeEffects } = require('../utils/leadEffects');
 
 const slugify    = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 // The suffix exists only to make the slug unique — it is NOT an identifier.
@@ -241,13 +242,7 @@ const submitBooking = async (req, res) => {
                 lead = newLead.toObject();
                 leadWasCreated = true;
 
-                // Trigger lead arrival alerts (socket and WhatsApp alerts)
-                try {
-                    const { sendLeadArrivalAlert } = require('../services/leadAlertService');
-                    sendLeadArrivalAlert(newLead).catch(err => console.error('❌ Error sending booking lead arrival alerts:', err.message));
-                } catch (alertErr) {
-                    console.error('❌ Failed to trigger booking lead arrival alerts:', alertErr.message);
-                }
+                queueLeadCreatedEffects(newLead, page.userId.toString(), { source: 'Booking Page' });
             }
 
             const leadId = lead?._id || null;
@@ -303,22 +298,10 @@ const submitBooking = async (req, res) => {
                 if (leadDoc) {
                     const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
 
-                    // 1. If lead was created, fire LEAD_CREATED & STAGE_CHANGED
-                    if (leadWasCreated) {
-                        WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: leadDoc }).catch(err =>
-                            console.error('[Booking Page] WorkflowEngine LEAD_CREATED error:', err.message)
-                        );
-                        // isInitialStage: placed in a stage on creation, not moved
-                        // between two — stops it satisfying a `fromStage` filter.
-                        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc, isInitialStage: true }).catch(err =>
-                            console.error('[Booking Page] WorkflowEngine STAGE_CHANGED error:', err.message)
-                        );
-                    } else if (stageNameToSet && lead.status !== stageNameToSet) {
-                        // 2. A real transition — no isInitialStage, and the previous
-                        // stage is known here, so pass it for `fromStage` filters.
-                        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: leadDoc, fromStage: lead.status, toStage: stageNameToSet }).catch(err =>
-                            console.error('[Booking Page] WorkflowEngine STAGE_CHANGED error:', err.message)
-                        );
+                    // 1. LEAD_CREATED & STAGE_CHANGED (initial) were already handled by queueLeadCreatedEffects earlier.
+                    // 2. If stage changed on an EXISTING lead, fire stage change effects
+                    if (!leadWasCreated && stageNameToSet && lead.status !== stageNameToSet) {
+                        queueLeadStageChangeEffects(leadDoc, lead.status);
                     }
 
                     // 3. Fire APPOINTMENT_BOOKED

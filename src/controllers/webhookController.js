@@ -4,6 +4,7 @@ const Lead = require('../models/Lead');
 const User = require('../models/User');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
+const { queueLeadCreatedEffects } = require('../utils/leadEffects');
 
 // 1. Verification
 // src/controllers/webhookController.js
@@ -163,13 +164,7 @@ async function processIncomingMessage(messageObj, value) {
             await lead.save();
             console.log(`✅ Created new lead: ${name} (${normalizedPhone})`);
 
-            // Trigger lead arrival alerts (socket and WhatsApp alerts)
-            try {
-                const { sendLeadArrivalAlert } = require('../services/leadAlertService');
-                sendLeadArrivalAlert(lead).catch(err => console.error('❌ Error sending WhatsApp lead arrival alerts:', err.message));
-            } catch (alertErr) {
-                console.error('❌ Failed to trigger WhatsApp lead arrival alerts:', alertErr.message);
-            }
+            queueLeadCreatedEffects(lead, ownerUser._id.toString(), { source: 'WhatsApp Inbound' });
         }
 
         // ============================================

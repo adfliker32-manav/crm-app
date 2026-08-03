@@ -45,10 +45,11 @@ const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key
 // a DIFFERENT id than the caller supplied.
 const isValidLeadId = (value) => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
 
-const appendLeadHistory = (leadId, historyEntry) =>
-    Lead.findByIdAndUpdate(leadId, {
-        $push: { history: { $each: [historyEntry], $slice: -100 } }
-    }).exec();
+const {
+    appendLeadHistory,
+    queueLeadCreatedEffects,
+    queueLeadStageChangeEffects
+} = require('../utils/leadEffects');
 
 const resolveActorName = async (user) => {
     if (user?.name) {
@@ -93,91 +94,6 @@ const applyLeadUpdates = (lead, updates) => {
     });
 };
 
-const queueLeadCreatedEffects = (lead, ownerId, options = {}) => {
-    if (lead.email) {
-        runInBackground('Email automation error (non-blocking):', async () => {
-            const sent = await sendAutomatedEmailOnLeadCreate(lead, ownerId);
-
-            if (sent) {
-                await appendLeadHistory(lead._id, {
-                    type: 'Email',
-                    subType: 'Auto',
-                    content: 'Automated Welcome Email Sent',
-                    date: new Date()
-                });
-            }
-        });
-    }
-
-    if (lead.phone) {
-        runInBackground('WhatsApp automation error (non-blocking):', async () => {
-            const phoneToSend = normalizePhone(lead.phone) || lead.phone;
-            const leadForWhatsApp =
-                typeof lead.toObject === 'function'
-                    ? { ...lead.toObject(), phone: phoneToSend }
-                    : { ...lead, phone: phoneToSend };
-
-            const sent = await sendAutomatedWhatsAppOnLeadCreate(leadForWhatsApp, ownerId);
-
-            if (sent) {
-                await appendLeadHistory(lead._id, {
-                    type: 'WhatsApp',
-                    subType: 'Auto',
-                    content: 'Automated Welcome WhatsApp Sent',
-                    date: new Date()
-                });
-            }
-        });
-    }
-
-    runInBackground('Automation Service Error (LEAD_CREATED):', () =>
-        evaluateLead(lead, 'LEAD_CREATED')
-    );
-    // New Workflow Engine — runs in parallel, non-blocking
-    runInBackground('Workflow Engine Error (LEAD_CREATED/STAGE_CHANGED):', () => {
-        WorkflowEngine.fireTrigger('LEAD_CREATED', { lead });
-        // isInitialStage: creating a lead fires BOTH triggers, but the lead has not
-        // CHANGED stage — it was placed in one. The engine uses this to stop an
-        // initial placement satisfying a `fromStage` filter on a STAGE_CHANGED
-        // workflow, which would otherwise double-fire on every new lead.
-        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, isInitialStage: true });
-    });
-
-    runInBackground('Sequence enrollment error (LEAD_CREATED):', () => {
-        const { enrollLeadInSequences } = require('../services/sequenceService');
-        return enrollLeadInSequences(lead, 'LEAD_CREATED');
-    });
-
-    // CAPI Lead event for manually created leads.
-    // skipCapi: CSV bulk import sets this — imported rows are historical data,
-    // not fresh conversions, and reporting them to Meta with event_time = now
-    // would poison campaign attribution and value optimization (audit H1).
-    if (!options.skipCapi) {
-        sendMetaEventIfEnabled(lead, lead.status, null)
-            .catch(err => console.error('Meta CAPI error (Lead Created):', err));
-    }
-};
-
-const queueLeadStageChangeEffects = (lead, fromStage = undefined) => {
-    runInBackground('Auto Error (STAGE_CHANGED):', () => evaluateLead(lead, 'STAGE_CHANGED'));
-    // New Workflow Engine — runs in parallel, non-blocking.
-    // L1 FIX: pass fromStage/toStage so triggerConfig stage filters can match.
-    runInBackground('Workflow Engine Error (STAGE_CHANGED):', () =>
-        WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, fromStage, toStage: lead.status })
-    );
-    // NOTE: TIME_IN_STAGE removed - it is time-based, not event-based. Needs a cron/Agenda job.
-
-    runInBackground('Sequence enrollment error (STAGE_CHANGED):', () => {
-        const { enrollLeadInSequences } = require('../services/sequenceService');
-        return enrollLeadInSequences(lead, 'STAGE_CHANGED', lead.status);
-    });
-
-    runInBackground('Score update error (STAGE_CHANGED):', () => {
-        const { updateLeadScore } = require('../services/leadScoringService');
-        const isLost = /lost|dead/i.test(lead.status || '');
-        return updateLeadScore(lead._id, isLost ? 'STAGE_LOST' : 'STAGE_FORWARD');
-    });
-};
 
 const sendMetaEventIfEnabled = async (lead, newStatus, oldStatus) => {
     // Outbox-backed single entry point: resolves config (incl. agent → parent
@@ -358,14 +274,6 @@ const createLead = async (req, res) => {
         }).catch(err => console.error('Audit log error:', err));
 
         queueLeadCreatedEffects(newLead, ownerId);
-
-        // Trigger lead arrival alerts (socket and WhatsApp alerts)
-        try {
-            const { sendLeadArrivalAlert } = require('../services/leadAlertService');
-            sendLeadArrivalAlert(newLead).catch(err => console.error('❌ Error sending lead arrival alerts:', err.message));
-        } catch (alertErr) {
-            console.error('❌ Failed to trigger lead arrival alerts:', alertErr.message);
-        }
 
         res.json(newLead);
     } catch (err) {

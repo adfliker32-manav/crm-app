@@ -25,9 +25,7 @@
 const crypto = require('crypto');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const Lead = require('../models/Lead');
-const { evaluateLead } = require('../services/AutomationService');
-const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationService');
-const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
+const { queueLeadCreatedEffects } = require('../utils/leadEffects');
 const { clearTenantCache } = require('../middleware/authMiddleware');
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -319,54 +317,8 @@ exports.captureLead = async (req, res) => {
         const lead = new Lead(leadData);
         await lead.save();
 
-        // Meta CAPI 'Lead' event (was missing — web-form leads never reached Meta)
-        {
-            const { sendMetaEventForLead } = require('../services/metaConversionService');
-            sendMetaEventForLead(lead, lead.status, null)
-                .catch(e => console.error('[WebLead] Meta CAPI error:', e.message));
-        }
-
-        // Trigger lead arrival alerts (socket and WhatsApp alerts)
-        try {
-            const { sendLeadArrivalAlert } = require('../services/leadAlertService');
-            sendLeadArrivalAlert(lead).catch(e => console.error('[WebLead] alert error:', e.message));
-        } catch (alertErr) {
-            console.error('[WebLead] Failed to trigger lead arrival alerts:', alertErr.message);
-        }
-
-        // Fire automations in background (non-blocking)
         const ownerId = lead.userId.toString();
-        if (lead.email) sendAutomatedEmailOnLeadCreate(lead, ownerId).catch(e => console.error('[WebLead] email automation error:', e.message));
-        if (lead.phone) sendAutomatedWhatsAppOnLeadCreate(lead, ownerId).catch(e => console.error('[WebLead] whatsapp automation error:', e.message));
-        evaluateLead(lead, 'LEAD_CREATED').catch(e =>
-            console.error('[WebLead] automation trigger error:', e.message)
-        );
-
-        // Fire new Workflow Engine trigger
-        try {
-            const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-            WorkflowEngine.fireTrigger('LEAD_CREATED', { lead }).catch(e =>
-                console.error('[WebLead] Workflow Engine LEAD_CREATED error:', e.message)
-            );
-            // isInitialStage: a new lead was PLACED in a stage, it did not change
-            // stage. Without it, a STAGE_CHANGED workflow narrowed by `fromStage`
-            // still fires on every newly captured lead.
-            WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, isInitialStage: true }).catch(e =>
-                console.error('[WebLead] Workflow Engine STAGE_CHANGED error:', e.message)
-            );
-        } catch (wfErr) {
-            console.error('[WebLead] Workflow Engine import error:', wfErr.message);
-        }
-
-        // FIX: Enroll Web leads in drip sequences (was missing — only manual leads were enrolled)
-        try {
-            const { enrollLeadInSequences } = require('../services/sequenceService');
-            enrollLeadInSequences(lead, 'LEAD_CREATED').catch(e =>
-                console.error('[WebLead] sequence enrollment error:', e.message)
-            );
-        } catch (seqErr) {
-            console.error('[WebLead] sequence import error:', seqErr.message);
-        }
+        queueLeadCreatedEffects(lead, ownerId, { source: 'Web Form' });
 
         // ✅ Don't expose MongoDB ObjectID to public callers
         res.status(201).json({ success: true });

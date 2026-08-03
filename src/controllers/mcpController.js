@@ -14,6 +14,7 @@ const WhatsAppMessage = require('../models/WhatsAppMessage');
 const EmailConversation = require('../models/EmailConversation');
 const Goal = require('../models/Goal');
 const { sendWhatsAppTextMessage } = require('../services/whatsappService');
+const { queueLeadCreatedEffects, queueLeadStageChangeEffects } = require('../utils/leadEffects');
 
 const MCP_VERSION = '2024-11-05';
 
@@ -24,44 +25,6 @@ const periodStart = (period) => {
     if (period === 'week')  return new Date(now - 7  * 86400000);
     if (period === 'month') return new Date(now - 30 * 86400000);
     return null; // 'all'
-};
-
-/**
- * Every side effect a pipeline stage change must produce.
- *
- * The MCP tools used to write `status` with a bare `$set`, so moving a lead
- * through the pipeline from Claude fired NO automation, NO workflow trigger and
- * NO Meta CAPI conversion event, and left `stageEnteredAt` pointing at the
- * previous stage's entry time (silently corrupting stage-age reporting). Every
- * other write path — leadController, extApiController, the webhooks — does all
- * four. This is the shared implementation so the MCP path cannot drift again.
- *
- * Detached on purpose: an automation failure must not fail the tool call, but it
- * must still be logged rather than becoming an unhandled rejection.
- */
-const fireStageChange = (lead, prevStatus, newStatus) => {
-    const label = `[MCP] stage-change side effect (${prevStatus} → ${newStatus})`;
-
-    Promise.resolve()
-        .then(async () => {
-            const { evaluateLead } = require('../services/AutomationService');
-            await evaluateLead(lead, 'STAGE_CHANGED');
-        })
-        .catch(err => console.error(`${label} — automation:`, err.message));
-
-    Promise.resolve()
-        .then(async () => {
-            const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-            await WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, startedBy: 'mcp' });
-        })
-        .catch(err => console.error(`${label} — workflow:`, err.message));
-
-    Promise.resolve()
-        .then(async () => {
-            const { sendMetaEventForLead } = require('../services/metaConversionService');
-            await sendMetaEventForLead(lead, newStatus, prevStatus);
-        })
-        .catch(err => console.error(`${label} — Meta CAPI:`, err.message));
 };
 
 const periodRange = (period) => {
@@ -1092,13 +1055,7 @@ const toolHandlers = {
             qualificationLevel: qualificationLevel || 'Cold'
         });
 
-        // Trigger lead arrival alerts (socket and WhatsApp alerts)
-        try {
-            const { sendLeadArrivalAlert } = require('../services/leadAlertService');
-            sendLeadArrivalAlert(lead).catch(err => console.error('❌ Error sending MCP lead arrival alerts:', err.message));
-        } catch (alertErr) {
-            console.error('❌ Failed to trigger MCP lead arrival alerts:', alertErr.message);
-        }
+        queueLeadCreatedEffects(lead, tenantId.toString(), { source: 'MCP API' });
 
         return {
             success: true,
@@ -1149,7 +1106,7 @@ const toolHandlers = {
             .lean();
 
         if (stageChanged) {
-            fireStageChange({ ...lead, ...updates, _id: lead._id }, prevStatus, status);
+            queueLeadStageChangeEffects({ ...lead, ...updates, _id: lead._id }, prevStatus);
         }
 
         return {

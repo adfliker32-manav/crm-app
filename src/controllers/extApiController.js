@@ -36,6 +36,7 @@ const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationS
 const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
 const { normalizePhone } = require('../services/duplicateService');
 const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
+const { queueLeadCreatedEffects, queueLeadStageChangeEffects } = require('../utils/leadEffects');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -172,39 +173,7 @@ exports.createLead = async (req, res) => {
 
         await lead.save();
 
-        // Meta CAPI 'Lead' event (was missing — external-API leads never reached Meta)
-        runInBackground('Meta CAPI (LEAD_CREATED)', () => {
-            const { sendMetaEventForLead } = require('../services/metaConversionService');
-            return sendMetaEventForLead(lead, lead.status, null);
-        });
-
-        // ✅ Fire automations (same as Meta webhook + webLead)
-        runInBackground('Automation (LEAD_CREATED)', () => evaluateLead(lead, 'LEAD_CREATED'));
-
-        // Fire new Workflow Engine trigger
-        runInBackground('Workflow Engine (LEAD_CREATED)', async () => {
-            const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-            // L-16: mark these as API-driven so they are attributable.
-            // L-18: await, so a failure surfaces through runInBackground's handler
-            // instead of becoming a detached promise.
-            await WorkflowEngine.fireTrigger('LEAD_CREATED', { lead, startedBy: 'api' });
-            // L-17: a brand-new lead has not changed stage. STAGE_CHANGED is fired
-            // here only for backwards compatibility with workflows built against the
-            // old behaviour, and is explicitly marked so filters can tell them apart.
-            await WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, startedBy: 'api', isInitialStage: true });
-        });
-
-        if (lead.email) {
-            runInBackground('Email automation (LEAD_CREATED)', async () => {
-                await sendAutomatedEmailOnLeadCreate(lead, req.tenantId);
-            });
-        }
-        if (lead.phone) {
-            runInBackground('WA automation (LEAD_CREATED)', async () => {
-                const phoneNorm = normalizePhone(lead.phone) || lead.phone;
-                await sendAutomatedWhatsAppOnLeadCreate({ ...lead.toObject(), phone: phoneNorm }, req.tenantId);
-            });
-        }
+        queueLeadCreatedEffects(lead, req.tenantId.toString(), { source: 'External API' });
 
         res.status(201).json({
             success: true,
@@ -350,16 +319,7 @@ exports.updateLead = async (req, res) => {
 
         // Fire stage-change automations if stage changed
         if (status && status !== prevStatus) {
-            runInBackground('Automation (STAGE_CHANGED)', () => evaluateLead(lead, 'STAGE_CHANGED'));
-            runInBackground('Workflow Engine (STAGE_CHANGED)', () => {
-                const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-                return WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead, startedBy: 'api' });
-            });
-            // Meta CAPI stage-change event (was missing on the External API path)
-            runInBackground('Meta CAPI (STAGE_CHANGED)', () => {
-                const { sendMetaEventForLead } = require('../services/metaConversionService');
-                return sendMetaEventForLead(lead, status, prevStatus);
-            });
+            queueLeadStageChangeEffects(lead, prevStatus);
         }
 
         res.json({

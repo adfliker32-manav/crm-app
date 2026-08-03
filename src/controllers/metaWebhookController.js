@@ -6,9 +6,7 @@ const MetaLeadDropLog = require('../models/MetaLeadDropLog');
 const axios = require('axios');
 const { emitToUser } = require('../services/socketService');
 const { normalizePhoneForWhatsApp } = require('../utils/phoneUtils');
-const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
-const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationService');
-const { evaluateLead } = require('../services/AutomationService');
+const { queueLeadCreatedEffects } = require('../utils/leadEffects');
 const { checkAndRefreshToken } = require('./metaController');
 const telemetryService = require('../services/telemetryService');
 
@@ -601,70 +599,11 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
         console.log(`✅ Created Meta lead: ${newLead.name} (${newLead.phone || newLead.email})`);
 
         setImmediate(() => {
-            // ── Trigger lead arrival alerts (socket and WhatsApp alerts) ───────────
-            try {
-                const { sendLeadArrivalAlert } = require('../services/leadAlertService');
-                sendLeadArrivalAlert(newLead).catch(err => console.error('❌ Error sending lead arrival alerts:', err.message));
-            } catch (alertErr) {
-                console.error('❌ Failed to trigger lead arrival alerts:', alertErr.message);
-            }
-
-            if (newLead.email) {
-                sendAutomatedEmailOnLeadCreate(newLead, userId)
-                    .catch(err => console.error(`❌ [Lead:${newLead._id}] Email auto-message failed:`, err.message));
-            }
-
-            if (newLead.phone) {
-                sendAutomatedWhatsAppOnLeadCreate(newLead, userId)
-                    .then(sent => {
-                        if (sent) {
-                            Lead.findByIdAndUpdate(newLead._id, {
-                                $push: { history: { $each: [{ type: 'WhatsApp', subType: 'Auto', content: 'Automated Welcome WhatsApp Sent (Meta Sync)', date: new Date() }], $slice: -100 } }
-                            }).exec();
-                        }
-                    })
-                    .catch(err => console.error(`❌ [Lead:${newLead._id}] WA auto-message failed:`, err.message));
-            }
-
-            // Meta CAPI event via the durable outbox. eventTime = the TRUE Meta
-            // created_time (audit H1): real-time webhook leads are seconds old,
-            // recovery-cron leads get correctly backdated (≤12h), and historical
-            // backfill leads older than 7 days are skipped instead of being sent
-            // as fake "now" conversions that would corrupt attribution.
-            {
-                const { sendMetaEventForLead } = require('../services/metaConversionService');
-                sendMetaEventForLead(newLead, newLead.status, null, { eventTime: leadDetails?.createdTime })
-                    .catch(err => console.error(`❌ [Lead:${newLead._id}] CAPI event failed:`, err.message));
-            }
-
-            evaluateLead(newLead, 'LEAD_CREATED')
-                .catch(err => console.error(`❌ [Lead:${newLead._id}] AutomationService (LEAD_CREATED) failed:`, err.message));
-
-            // Fire new Workflow Engine trigger
-            try {
-                const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-                WorkflowEngine.fireTrigger('LEAD_CREATED', { lead: newLead }).catch(err =>
-                    console.error(`❌ [Lead:${newLead._id}] WorkflowEngine LEAD_CREATED failed:`, err.message)
-                );
-                // isInitialStage: this lead was just created, so it was PLACED in a
-                // stage rather than moved between two. Without the flag a
-                // STAGE_CHANGED workflow filtered by `fromStage` fires on every
-                // inbound Meta lead.
-                WorkflowEngine.fireTrigger('STAGE_CHANGED', { lead: newLead, isInitialStage: true }).catch(err =>
-                    console.error(`❌ [Lead:${newLead._id}] WorkflowEngine STAGE_CHANGED failed:`, err.message)
-                );
-            } catch (wfErr) {
-                console.error(`❌ [Lead:${newLead._id}] WorkflowEngine import error:`, wfErr.message);
-            }
-
-            // FIX: Enroll Meta leads in drip sequences (was missing — only manual leads were enrolled)
-            try {
-                const { enrollLeadInSequences } = require('../services/sequenceService');
-                enrollLeadInSequences(newLead, 'LEAD_CREATED')
-                    .catch(err => console.error(`❌ [Lead:${newLead._id}] Sequence enrollment (LEAD_CREATED) failed:`, err.message));
-            } catch (seqErr) {
-                console.error(`❌ [Lead:${newLead._id}] Sequence enrollment import error:`, seqErr.message);
-            }
+            queueLeadCreatedEffects(newLead, userId.toString(), {
+                source: 'Meta Sync',
+                eventTime: leadDetails?.createdTime,
+                deferSend: false // Realtime webhooks can send instantly
+            });
         });
 
         return newLead;
