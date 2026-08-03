@@ -2805,11 +2805,16 @@ const executeAction = async (actionData, session, conversation) => {
                                 weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
                                 timeZone: 'UTC'
                             });
-                            const confirmMsg = `✅ Your appointment has been booked!\n\n` +
-                                `📋 *Service:* ${serviceType}\n` +
+                            const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+                            const manageUrl = (appt.manageToken && frontendUrl)
+                                ? `${frontendUrl}/book/manage/${appt.manageToken}`
+                                : '';
+                            const confirmMsg = `Hi ${customerName}! ✅ Your appointment has been confirmed.\n\n` +
                                 `📅 *Date:* ${formattedDate}\n` +
-                                `🕐 *Time:* ${appointmentTime}\n\n` +
-                                `We look forward to seeing you!`;
+                                `⏰ *Time:* ${appointmentTime}\n` +
+                                `🏷️ *Service:* ${serviceType}\n\n` +
+                                `We look forward to seeing you!` +
+                                (manageUrl ? `\n\nReschedule or cancel: ${manageUrl}` : '');
                             const confirmResult = await sendWhatsAppTextMessage(conversation.phone, confirmMsg, session.userId);
                             await saveBotMessage(session.conversationId, session.userId, confirmMsg, 'text', confirmResult);
                         } catch (confirmErr) {
