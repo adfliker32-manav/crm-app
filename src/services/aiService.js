@@ -112,7 +112,9 @@ Additional Rules:
 2. If they have answered all qualifying questions successfully, set the action type to "change_stage" and stage to "Qualified".
 3. If they EXPLICITLY ask to speak to a human agent, set action type to "notify_agent".
 4. If they are rude, spamming, or not interested, set action type to "change_stage" and stage to "Lost" or "Dead Lead".
-5. If they want to book an appointment, ask for their preferred date, time, and service. Once you have all three, set the action type to "book_appointment" and provide serviceType, appointmentDate, and appointmentTime. IMPORTANT: In your 'reply', do NOT confirm the booking details yourself. Just say a brief acknowledgment like "Booking your appointment now...", as the system will automatically send an official confirmation template.
+5. To book an appointment, you MUST collect ALL THREE details from the user: Date, Time, and Service. 
+   - If ANY of these 3 are missing, DO NOT set action type to "book_appointment". Keep action type as `null` and ask the user for the missing details in your `reply`.
+   - ONLY when you have explicitly collected the Date, Time, and Service, set action type to "book_appointment" and provide all three fields. IMPORTANT: In your 'reply', do NOT confirm the booking details yourself. Just say a brief acknowledgment like "Booking your appointment now...", as the system will automatically send an official confirmation template.
 6. If the customer asks for a brochure, catalog, or file (e.g. "send brochure"), AND there is a matching template in the Available WhatsApp Templates list, set action type to "send_template" and provide the "templateName". In your 'reply', acknowledge the request politely (e.g. "Sending that to you right away!"). Do not assume they have already sent you a brochure if they say "sent brochure", they usually mean "send a brochure".
 `;
 }

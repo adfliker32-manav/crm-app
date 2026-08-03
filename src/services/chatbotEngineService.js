@@ -2856,6 +2856,14 @@ const executeAction = async (actionData, session, conversation) => {
                     } catch (err) {
                         console.error('Failed to send appointment confirmation message:', err.message);
                     }
+                } else {
+                    try {
+                        const errMsg = "Oops, I missed some details! Could you please confirm the exact date, time, and service you'd like to book?";
+                        const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
+                        await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);
+                    } catch (err) {
+                        console.error('Failed to send fallback message for missing appointment details:', err.message);
+                    }
                 }
                 break;
             }
