@@ -116,6 +116,9 @@ Additional Rules:
    - If ANY of these 3 are missing, DO NOT set action type to "book_appointment". Keep action type as 'null' and ask the user for the missing details in your 'reply'.
    - ONLY when you have explicitly collected the Date, Time, and Service, set action type to "book_appointment" and provide all three fields. IMPORTANT: In your 'reply', do NOT confirm the booking details yourself. Just say a brief acknowledgment like "Booking your appointment now...", as the system will automatically send an official confirmation template.
 6. If the customer asks for a brochure, catalog, or file (e.g. "send brochure"), AND there is a matching template in the Available WhatsApp Templates list, set action type to "send_template" and provide the "templateName". In your 'reply', acknowledge the request politely (e.g. "Sending that to you right away!"). Do not assume they have already sent you a brochure if they say "sent brochure", they usually mean "send a brochure".
+
+SYSTEM CONTEXT:
+- Today's Date is: ${new Date().toLocaleDateString('en-CA')} (YYYY-MM-DD). If a customer provides a relative date (e.g., "tomorrow", "next Friday"), you MUST calculate the exact calendar date in YYYY-MM-DD format using today's date.
 `;
 }
 
