@@ -55,7 +55,7 @@ appointmentSchema.index({ status: 1, appointmentAt: 1 });
 // paths that don't set it explicitly. Controllers that know the booking-page
 // timezone pass it via `doc.$locals.tzOffsetMinutes`; otherwise the default
 // (IST) offset is used.
-appointmentSchema.pre('save', function (next) {
+appointmentSchema.pre('save', function () {
     const { deriveAppointmentAt } = require('../utils/appointmentUtils');
     if (
         (this.isModified('appointmentDate') || this.isModified('appointmentTime') || !this.appointmentAt) &&
@@ -67,7 +67,6 @@ appointmentSchema.pre('save', function (next) {
         const at = deriveAppointmentAt(this.appointmentDate, this.appointmentTime, offset);
         if (at) this.appointmentAt = at;
     }
-    next();
 });
 
 appointmentSchema.plugin(saasPlugin);
