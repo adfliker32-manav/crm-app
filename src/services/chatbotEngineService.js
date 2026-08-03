@@ -2747,24 +2747,38 @@ const executeAction = async (actionData, session, conversation) => {
                 const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } = require('./whatsappService');
                 const { serviceType, appointmentDate, appointmentTime } = actionData.actionData || {};
                 
+                console.log(`🤖 [Chatbot] executeAction(book_appointment) Data:`, JSON.stringify(actionData.actionData));
+
                 if (appointmentDate && appointmentTime && serviceType) {
                     const customerName = getFirstPopulatedVariable(session.variables, [
                         'name', 'full_name', 'customer_name', 'firstName'
                     ]) || conversation.displayName || conversation.phone;
                     
-                    const appt = new Appointment({
-                        userId: session.userId,
-                        leadId: conversation.leadId || null,
-                        customerName: customerName,
-                        customerPhone: conversation.phone,
-                        serviceType: serviceType,
-                        appointmentDate: new Date(appointmentDate),
-                        appointmentTime: appointmentTime,
-                        source: 'chatbot',
-                        status: 'Pending'
-                    });
-                    await appt.save();
-                    console.log(`🤖 [Chatbot] book_appointment: created appointment ${appt._id} for ${customerName}`);
+                    try {
+                        const appt = new Appointment({
+                            userId: session.userId,
+                            leadId: conversation.leadId || null,
+                            customerName: customerName,
+                            customerPhone: conversation.phone,
+                            serviceType: serviceType,
+                            appointmentDate: new Date(appointmentDate),
+                            appointmentTime: appointmentTime,
+                            source: 'chatbot',
+                            status: 'Pending'
+                        });
+                        await appt.save();
+                        console.log(`🤖 [Chatbot] book_appointment: created appointment ${appt._id} for ${customerName}`);
+                    } catch (saveErr) {
+                        console.error('❌ Failed to save appointment in database:', saveErr.message);
+                        try {
+                            const errMsg = "I'm sorry, I couldn't save your appointment due to an internal error. Please try again or contact support.";
+                            const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
+                            await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);
+                        } catch (msgErr) {
+                            console.error('Failed to send save-error message:', msgErr.message);
+                        }
+                        break;
+                    }
                     
                     // Send system confirmation message using BookingPage template
                     try {
