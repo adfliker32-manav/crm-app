@@ -784,6 +784,9 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
         ? `${aiConfig.ai.systemPrompt}\n${buildRescueContext(session, currentNode)}`
         : aiConfig.ai.systemPrompt;
 
+    const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+    const availableTemplates = await WhatsAppTemplate.find({ userId: tenantId, status: 'APPROVED' }).select('name category').lean();
+
     try {
         const { reply, action, usage } = await generateReply({
             provider: aiConfig.ai.provider,
@@ -791,7 +794,8 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
             modelName: aiConfig.ai.model,
             systemPrompt,
             conversationHistory: history,
-            leadContext: leadDetails
+            leadContext: leadDetails,
+            availableTemplates
         });
 
         // Tag the reply with its mode so the turn guards above can count it
@@ -867,6 +871,12 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
                 await executeAction({
                     actionType: 'book_appointment',
                     actionData: action
+                }, actionSession, conversation);
+            } else if (action.type === 'send_template' && action.templateName) {
+                console.log(`🤖 [${logTag}] Executing send_template → "${action.templateName}" for conversation ${conversationId}`);
+                await executeAction({
+                    actionType: 'send_template',
+                    actionData: { templateName: action.templateName }
                 }, actionSession, conversation);
             }
         }
@@ -2469,6 +2479,9 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     }
                 }
 
+                const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+                const availableTemplates = await WhatsAppTemplate.find({ userId: session.userId, status: 'APPROVED' }).select('name category').lean();
+
                 // 3. Make HTTP request to AI Service
                 try {
                     const { reply, action, usage } = await generateReply({
@@ -2477,7 +2490,8 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                         modelName: aiConfig.ai.model,
                         systemPrompt,
                         conversationHistory: history,
-                        leadContext: leadDetails
+                        leadContext: leadDetails,
+                        availableTemplates
                     });
 
                     // 4. Send WhatsApp reply
@@ -2523,6 +2537,11 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                             await executeAction({
                                 actionType: 'book_appointment',
                                 actionData: action
+                            }, session, conversation);
+                        } else if (action.type === 'send_template' && action.templateName) {
+                            await executeAction({
+                                actionType: 'send_template',
+                                actionData: { templateName: action.templateName }
                             }, session, conversation);
                         }
                     }
@@ -2590,6 +2609,53 @@ const executeAction = async (actionData, session, conversation) => {
                     }
                 }
                 break;
+
+            case 'send_template': {
+                const tplName = actionData.actionData?.templateName;
+                if (tplName) {
+                    const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+                    const template = await WhatsAppTemplate.findOne({ userId: session.userId, name: tplName, status: 'APPROVED' }).lean();
+                    if (template) {
+                        const { sendWhatsAppTemplateMessage } = require('./whatsappService');
+                        const { resolveTemplateMedia } = require('./mediaLibraryService');
+                        const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
+                        
+                        const templateMedia = await resolveTemplateMedia(template, session.userId);
+                        
+                        let leadObj = null;
+                        if (conversation.leadId) {
+                            leadObj = await Lead.findById(conversation.leadId).lean();
+                        }
+                        
+                        const tplContext = buildTemplateContext({
+                            lead: leadObj || { phone: conversation.phone },
+                            system: { customData: { media: templateMedia } }
+                        });
+                        
+                        const components = buildMetaComponents(template.components, template.variableMapping, tplContext);
+                        
+                        const templateResult = await sendWhatsAppTemplateMessage(
+                            conversation.phone,
+                            template.name,
+                            template.language || 'en',
+                            components,
+                            session.userId,
+                            { isAutomated: true, triggerType: 'chatbot_ai' }
+                        );
+                        
+                        // Using local saveBotMessage function
+                        await saveBotMessage(
+                            session.conversationId,
+                            session.userId,
+                            `📄 AI Sent Template: ${template.name}`,
+                            'template',
+                            templateResult
+                        );
+                    }
+                }
+                break;
+            }
+
 
             case 'change_stage': {
                 const newStage = actionData.actionData?.stage;

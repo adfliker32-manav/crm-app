@@ -97,7 +97,7 @@ const resolveTemplate = (template, context, options = {}) => {
  * @param {object} args - { lead, user, company }
  * @returns {object} - Standardized context { lead, user, company, system }
  */
-const buildTemplateContext = ({ lead, user, company }) => {
+const buildTemplateContext = ({ lead, user, company, system }) => {
     return {
         lead: lead ? {
             name: lead.name || '',
@@ -117,6 +117,7 @@ const buildTemplateContext = ({ lead, user, company }) => {
             address: company.address || ''
         } : {},
         system: {
+            ...system,
             date: new Date().toLocaleDateString(),
             time: new Date().toLocaleTimeString()
         }

@@ -71,11 +71,23 @@ function formatLeadContext(leadContext = {}) {
 /**
  * Appends JSON schema enforcement rules to the system prompt.
  */
-function buildEnforcedSystemPrompt(basePrompt, leadContext) {
+/**
+ * Appends JSON schema enforcement rules to the system prompt.
+ */
+function buildEnforcedSystemPrompt(basePrompt, leadContext, availableTemplates = []) {
     const contextText = formatLeadContext(leadContext);
+    
+    let templatesText = '';
+    if (availableTemplates && availableTemplates.length > 0) {
+        templatesText = '\n=== AVAILABLE WHATSAPP TEMPLATES ===\n' +
+            'You have permission to send the following WhatsApp templates to the user if they request information like a brochure, catalog, or file:\n' +
+            availableTemplates.map(t => `- Template Name: "${t.name}" (Category: ${t.category})`).join('\n') +
+            '\n=== END AVAILABLE WHATSAPP TEMPLATES ===\n';
+    }
     
     return `${basePrompt}
 ${contextText}
+${templatesText}
 CRITICAL OUTPUT INSTRUCTIONS:
 You are a lead qualification assistant. You must respond ONLY in a valid JSON object matching the schema below. 
 Do not wrap your response in markdown formatting (like \`\`\`json ... \`\`\`), just output raw JSON.
@@ -84,12 +96,13 @@ Output JSON Schema:
 {
   "reply": "Your WhatsApp response message here. Keep it to 1-3 sentences maximum. Be polite and ask qualifying questions one by one.",
   "action": {
-    "type": "change_stage" | "assign_tag" | "notify_agent" | "book_appointment" | null,
+    "type": "change_stage" | "assign_tag" | "notify_agent" | "book_appointment" | "send_template" | null,
     "stage": "The stage name to change the lead to (e.g. 'Qualified', 'Interested', 'Lost') if qualification conditions are met, otherwise null",
     "tag": "A tag to assign to the lead (e.g. 'hot-lead', 'invalid-number') if applicable, otherwise null",
     "serviceType": "If type is book_appointment, the service requested (e.g. 'Consultation'). Otherwise null",
     "appointmentDate": "If type is book_appointment, the date in YYYY-MM-DD format. Otherwise null",
     "appointmentTime": "If type is book_appointment, the time (e.g. '10:00 AM' or '14:30'). Otherwise null",
+    "templateName": "If type is send_template, the exact template name to send from the available templates list. Otherwise null",
     "reason": "Brief justification of why this action was chosen"
   }
 }
@@ -97,9 +110,10 @@ Output JSON Schema:
 Additional Rules:
 1. If the customer answers a qualifying question, save the info and ask the next question.
 2. If they have answered all qualifying questions successfully, set the action type to "change_stage" and stage to "Qualified".
-3. If they specifically ask for a human agent or present a query you cannot resolve, set action type to "notify_agent".
+3. If they EXPLICITLY ask to speak to a human agent, set action type to "notify_agent".
 4. If they are rude, spamming, or not interested, set action type to "change_stage" and stage to "Lost" or "Dead Lead".
 5. If they want to book an appointment, ask for their preferred date, time, and service. Once you have all three, set the action type to "book_appointment" and provide serviceType, appointmentDate, and appointmentTime. IMPORTANT: In your 'reply', do NOT confirm the booking details yourself. Just say a brief acknowledgment like "Booking your appointment now...", as the system will automatically send an official confirmation template.
+6. If the customer asks for a brochure, catalog, or file (e.g. "send brochure"), AND there is a matching template in the Available WhatsApp Templates list, set action type to "send_template" and provide the "templateName". In your 'reply', acknowledge the request politely (e.g. "Sending that to you right away!"). Do not assume they have already sent you a brochure if they say "sent brochure", they usually mean "send a brochure".
 `;
 }
 
@@ -242,7 +256,7 @@ async function callOpenAI(apiKey, modelName, systemPrompt, history, lastUserMess
 /**
  * Main service function to generate replies and qualification actions.
  */
-exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conversationHistory = [], leadContext = {} }) => {
+exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conversationHistory = [], leadContext = {}, availableTemplates = [] }) => {
     console.log(`[AI_SERVICE DEBUG] Received key: length=${apiKey?.length}, prefix=${apiKey?.substring(0, 5)}`);
     if (!apiKey) {
         throw new Error('API key is required.');
@@ -259,7 +273,7 @@ exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conv
         historySubset = normalized.slice(0, normalized.length - 1);
     }
     
-    const finalSystemPrompt = buildEnforcedSystemPrompt(systemPrompt, leadContext);
+    const finalSystemPrompt = buildEnforcedSystemPrompt(systemPrompt, leadContext, availableTemplates);
     
     console.log(`🤖 Sending request to ${provider} (${modelName || 'default'}). History length: ${historySubset.length}. Msg: "${lastUserMessage}"`);
     
