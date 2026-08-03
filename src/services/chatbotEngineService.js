@@ -2764,7 +2764,8 @@ const executeAction = async (actionData, session, conversation) => {
                             appointmentDate: new Date(appointmentDate),
                             appointmentTime: appointmentTime,
                             source: 'chatbot',
-                            status: 'Pending'
+                            status: 'Pending',
+                            manageToken: require('../utils/appointmentUtils').generateManageToken()
                         });
                         await appt.save();
                         console.log(`🤖 [Chatbot] book_appointment: created appointment ${appt._id} for ${customerName}`);

@@ -1552,7 +1552,8 @@ const toolHandlers = {
             appointmentTime,
             notes:           notes  || null,
             status:          apptStatus,
-            source:          'manual'
+            source:          'manual',
+            manageToken:     require('../utils/appointmentUtils').generateManageToken()
         });
 
         try {
