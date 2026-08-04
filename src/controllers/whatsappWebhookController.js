@@ -139,7 +139,23 @@ const resolveAppSecret = async (wabaId) => {
             return { secret, verifiable: true };
         }
         if (config?.whatsapp?.embeddedSignupConnected) {
-            return { secret: process.env.META_APP_SECRET || null, verifiable: true };
+            const envSecret = process.env.META_APP_SECRET?.trim() || null;
+            if (envSecret) {
+                return { secret: envSecret, verifiable: true };
+            }
+            // ROOT CAUSE FIX: META_APP_SECRET is empty/missing in .env.
+            // Previously this returned { secret: null, verifiable: true },
+            // which made line 181 fail → !null === true → EVERY inbound
+            // message from Embedded Signup WABAs was silently dropped.
+            // Fall back to unverifiable so messages still flow through.
+            // The user MUST set META_APP_SECRET for production security.
+            console.error(
+                '🚨 [Webhook] META_APP_SECRET is NOT set in .env! ' +
+                'Embedded Signup WABA webhooks CANNOT be signature-verified. ' +
+                'Proceeding WITHOUT verification — set META_APP_SECRET from ' +
+                'Meta App Dashboard → Settings → Basic → App Secret.'
+            );
+            return { secret: null, verifiable: false };
         }
         return { secret: null, verifiable: false };
     } catch (e) {
