@@ -44,7 +44,11 @@ const LEGACY_MAP = {
     'leadphone': 'lead.phone',
     'company': 'lead.company',
     'companyname': 'lead.company',
-    'username': 'user.name'
+    'username': 'user.name',
+    'date': 'appointment.date',
+    'time': 'appointment.time',
+    'service': 'appointment.service',
+    'manage_link': 'appointment.manageLink'
 };
 
 /**
@@ -124,7 +128,8 @@ const buildTemplateContext = ({ lead, user, company, system, appointment }) => {
         appointment: appointment ? {
             date: appointment.appointmentDate ? new Date(appointment.appointmentDate).toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '',
             time: appointment.appointmentTime || '',
-            service: appointment.serviceType || ''
+            service: appointment.serviceType || '',
+            manageLink: appointment.manageLink || ''
         } : {}
     };
 };

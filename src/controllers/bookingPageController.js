@@ -392,14 +392,23 @@ const submitBooking = async (req, res) => {
                 const tplContext = buildTemplateContext({
                     lead: {
                         name: bookingData.name,
+                        email: customerEmail,
+                        phone: normalizedPhone,
                         customData: {
                             date: bookingData.date,
                             time: bookingData.time,
                             service: bookingData.service
                         }
+                    },
+                    appointment: {
+                        ...appt.toObject(),
+                        manageLink: manageUrl
                     }
                 });
-                const waMsg = resolveTemplate(page.confirmationMessage, tplContext) + `\n\nReschedule or cancel: ${manageUrl}`;
+                let waMsg = resolveTemplate(page.confirmationMessage, tplContext);
+                if (manageUrl && !waMsg.includes(manageUrl)) {
+                    waMsg += `\n\nReschedule or cancel: ${manageUrl}`;
+                }
 
                 sends.push(
                     sendWhatsAppTextMessage(normalizedPhone, waMsg, page.userId)
