@@ -126,19 +126,26 @@ exports.disconnectWhatsApp = async (req, res) => {
         if (!canAccessSettings) return res.status(403).json({ message: 'Unauthorized' });
 
         const ownerId = req.tenantId;
+        // F1 FIX: Use $unset instead of $set: null for credential and identity fields.
+        // $set: null leaves a document key with value null — this pollutes the
+        // waPhoneNumberId index (sparse:true only skips undefined, not null) and
+        // causes E11000 duplicate key errors when a second tenant disconnects.
+        // $unset removes the key entirely so the sparse index ignores it.
         await IntegrationConfig.findOneAndUpdate(
             { userId: ownerId },
             {
                 $set: {
-                    'whatsapp.wabaId':                null,
-                    'whatsapp.waPhoneNumberId':       null,
-                    'whatsapp.waAccessToken':         null,
-                    'whatsapp.waAppId':               null,
-                    'whatsapp.waAppSecret':           null,
-                    'whatsapp.waBusinessId':          null,
-                    'whatsapp.displayPhone':          null,
-                    'whatsapp.verifiedName':          null,
                     'whatsapp.embeddedSignupConnected': false
+                },
+                $unset: {
+                    'whatsapp.wabaId':           '',
+                    'whatsapp.waPhoneNumberId':  '',
+                    'whatsapp.waAccessToken':    '',
+                    'whatsapp.waAppId':          '',
+                    'whatsapp.waAppSecret':      '',
+                    'whatsapp.waBusinessId':     '',
+                    'whatsapp.displayPhone':     '',
+                    'whatsapp.verifiedName':     ''
                 }
             }
         );

@@ -385,6 +385,8 @@ const WhatsAppInbox = () => {
                           : message.type === 'sticker'  ? '🎨 Sticker'
                           : message.type === 'location' ? '📍 Location'
                           : message.type === 'contacts' ? '👤 Contact'
+                          : message.type === 'system'   ? '🔔 System notification'
+                          : message.type === 'reaction' ? `${message.content?.reactionEmoji || '👍'} Reaction`
                           : '💬 Message');
                     const updated = prev.map(c => {
                         if (c._id !== convId) return c;

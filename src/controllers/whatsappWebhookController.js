@@ -143,8 +143,14 @@ const resolveAppSecret = async (wabaId) => {
         }
         return { secret: null, verifiable: false };
     } catch (e) {
-        console.warn('⚠️ [Webhook] Failed to look up per-tenant app secret:', e.message);
-        return { secret: null, verifiable: false };
+        // F5 FIX: Fail CLOSED on DB errors. The previous code returned
+        // { verifiable: false } which told the caller "skip signature checks" —
+        // meaning a DB timeout would silently disable ALL webhook security.
+        // Returning verifiable: true with no secret makes the caller reject the
+        // request. Meta retries on 5xx, so a transient DB outage causes a brief
+        // delay rather than accepting potentially spoofed payloads.
+        console.error('❌ [Webhook] DB error resolving app secret — failing closed. Webhooks will be rejected until DB recovers:', e.message);
+        return { secret: null, verifiable: true };
     }
 };
 
@@ -181,7 +187,9 @@ exports.handleWebhook = async (req, res) => {
                 // Manual-credentials connection (or unknown WABA) — no secret exists
                 // anywhere for us to check against; this is an accepted trade-off of
                 // that connect flow, not a misconfiguration. Do not fail closed here.
-                debug(`⚠️ [Webhook] WABA ${wabaIdFromPayload} has no verifiable app secret (manual-credentials connection) — processing without signature check.`);
+                // BUG #2 FIX: Always log this at warn (not debug) so it is visible in
+                // production when troubleshooting missing inbound messages.
+                console.warn(`⚠️ [Webhook] WABA ${wabaIdFromPayload} — no app secret found (manual-credentials connection). Proceeding without signature verification.`);
             }
 
             const body = req.body;
@@ -189,7 +197,9 @@ exports.handleWebhook = async (req, res) => {
             // Check if this is a WhatsApp webhook
             debug(`🔍 body.object = "${body.object}"`);
             if (body.object !== 'whatsapp_business_account') {
-                debug(`❌ Not a whatsapp_business_account event. Got: "${body.object}". Ignoring.`);
+                // BUG #5 FIX: Use console.log (always visible) not debug() for non-WA events
+                // so dropped webhooks from other Meta products are traceable in production.
+                console.log(`[Webhook] Non-WhatsApp event dropped: object="${body.object}" — ignoring.`);
                 telemetryService.recordWebhook(false, false, 0);
                 return;
             }
@@ -314,6 +324,16 @@ const processEntry = async (entry) => {
             debug(`📱 Display Phone Number:          ${displayPhoneNumber}`);
             debugJSON('📋 Change value', value);
 
+            // W13 FIX: Guard against a missing/undefined phone_number_id BEFORE the DB lookup.
+            // Without this guard, `undefined` is silently stripped by Mongoose so the query
+            // degenerates to findOne({}) → first IntegrationConfig in the collection → wrong tenant.
+            // A disconnected WABA sets this field to null ($unset needed on disconnect — see W34),
+            // so we must also guard the null case.
+            if (!phoneNumberId) {
+                console.warn(`[Webhook] W13: Missing phone_number_id in metadata — dropping change to prevent mis-routing. metadata=${JSON.stringify(value.metadata)}`);
+                continue;
+            }
+
             // Find the user who owns this phone number via IntegrationConfig and populate user directly
             debug(`🔎 Looking for tenant with waPhoneNumberId = "${phoneNumberId}" via IntegrationConfig...`);
             const config = await IntegrationConfig.findOne({ "whatsapp.waPhoneNumberId": phoneNumberId })
@@ -323,15 +343,16 @@ const processEntry = async (entry) => {
             let user = null;
             if (config && config.userId) {
                 user = config.userId;
-                debug(`✅ Found user by waPhoneNumberId: ${user.email} (${user._id})`);
+                // BUG #5 FIX: Always log successful tenant resolution (not just in debug mode)
+                console.log(`[Webhook] Tenant resolved: phoneNumberId=${phoneNumberId} → userId=${user._id}`);
             } else {
-                debug(`⚠️  No IntegrationConfig found for waPhoneNumberId "${phoneNumberId}". Message will be dropped.`);
-                console.log(`⚠️  Incoming message for unconfigured phone number ID: ${phoneNumberId}. No tenant claims this number.`);
+                // BUG #5 FIX: This is the most common reason messages silently vanish.
+                // Always log at warn (not debug) so it is visible without WA_WEBHOOK_DEBUG=true.
+                console.warn(`[Webhook] ⚠️  No IntegrationConfig found for waPhoneNumberId="${phoneNumberId}". Message dropped. Check that this Phone Number ID is saved in Settings → WhatsApp Config.`);
             }
 
             if (!user) {
-                console.log(`⚠️ No user found for phone number ID: ${phoneNumberId}`);
-                debug('   Skipping this change — no user to assign it to');
+                // Already warned above — just skip cleanly.
                 continue;
             }
 
@@ -558,6 +579,15 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // ─── AUTOMATION + CHATBOT (Sequential, non-blocking) ────────────
         // CRITICAL: Run watcher FIRST (it may set chatbotPausedUntil), then chatbot.
         // Previously these ran in separate setImmediate blocks causing a race condition.
+        //
+        // BUG #6 FIX: Skip the entire automation + chatbot pipeline for 'system' messages.
+        // System messages are Meta-generated events (number changes, business notifications)
+        // from the WhatsApp Business app — they are NOT real customer replies. Running them
+        // through the pipeline would: trigger unwanted bot responses, falsely mark leads as
+        // "replied", pause drip sequences, and inflate lead scores.
+        if (messageType === 'system') {
+            console.log(`[Webhook] System message stored (id=${waMessageId}) — automation/chatbot pipeline skipped.`);
+        } else {
         setImmediate(async () => {
             try {
                 // Step 1: Check if this inbound message resolves a pending WAIT_FOR_REPLY watcher (legacy engine)
@@ -619,6 +649,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                 console.error('❌ Background chatbot error:', err);
             }
         });
+        } // end if (messageType !== 'system')
 
     } catch (error) {
         console.error('❌ Error processing incoming message:', error);
@@ -759,7 +790,14 @@ const processStatusUpdate = async (status, userId) => {
 };
 
 // Helper: Get message type
+// BUG #6 FIX: Added 'system' type for messages originating from the WhatsApp Business
+// app itself (e.g. number-change notifications, ephemeral messages, business-initiated
+// conversation starters sent from the app). Without this, Meta's 'system' message
+// objects fall through to 'unknown', which the WhatsAppMessage model accepts but the
+// DB save still succeeds — however the chatbot/automation pipeline should NOT react
+// to these system events as if they were customer replies.
 const getMessageType = (message) => {
+    if (message.system) return 'system';    // Business-app system notification (number change etc.)
     if (message.text) return 'text';
     if (message.image) return 'image';
     if (message.document) return 'document';
@@ -771,6 +809,9 @@ const getMessageType = (message) => {
     if (message.interactive) return 'interactive';
     if (message.button) return 'interactive';
     if (message.reaction) return 'reaction';
+    // BUG #6 FIX: Log unknown types in production so we learn about new Meta message types
+    // before they silently cause ValidationErrors on the WhatsAppMessage model.
+    console.warn(`[Webhook] Unrecognised message type — keys: ${Object.keys(message).join(', ')}. Saving as 'unknown'. Please report to dev team.`);
     return 'unknown';
 };
 
@@ -831,6 +872,11 @@ const extractMessageContent = (message) => {
     } else if (message.reaction) {
         content.reactionEmoji = message.reaction.emoji;
         content.reactedMessageId = message.reaction.message_id;
+    } else if (message.system) {
+        // BUG #6 FIX: Capture system message body so it is human-readable in the inbox
+        // instead of appearing as an empty message. Common bodies: "Phone number changed",
+        // "Customer changed phone number", etc.
+        content.text = message.system.body || '🔔 System notification';
     }
 
     if (message.referral) {
@@ -850,6 +896,7 @@ const extractMessageContent = (message) => {
 
 // Helper: Extract message preview for conversation list
 const extractMessagePreview = (message) => {
+    if (message.system) return `🔔 ${message.system.body || 'System notification'}`;
     if (message.text) return message.text.body;
     if (message.image) return message.image.caption || '📷 Image';
     if (message.document) return `📄 ${message.document.filename || 'Document'}`;

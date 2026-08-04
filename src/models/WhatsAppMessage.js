@@ -26,7 +26,10 @@ const whatsAppMessageSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['text', 'image', 'document', 'audio', 'video', 'sticker', 'location', 'contacts', 'template', 'interactive', 'reaction', 'unknown'],
+        // BUG #6 FIX: 'system' added — Meta sends system events (e.g. number-change
+        // notifications) from the WhatsApp Business app. Without this, a system message
+        // causes a ValidationError and is silently dropped from the CRM inbox.
+        enum: ['text', 'image', 'document', 'audio', 'video', 'sticker', 'location', 'contacts', 'template', 'interactive', 'reaction', 'system', 'unknown'],
         default: 'text'
     },
     content: {
