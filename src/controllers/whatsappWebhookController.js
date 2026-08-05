@@ -374,7 +374,8 @@ const processTemplateStatusUpdate = async (wabaId, value) => {
 //   • message.from = YOUR business phone number (sender)
 //   • message.to   = CUSTOMER phone number (recipient)
 //   • Direction is OUTBOUND — we save it as our own sent message
-//   • Must NOT trigger chatbot, automation, lead scoring, or unread count
+//   • DOES pause chatbot for 24h (agent took over from phone)
+//   • Must NOT trigger bot replies, automation, lead scoring, or unread count
 //   • Must deduplicate against messages already sent via CRM API
 // ============================================================
 const processEchoMessage = async (message, userId, phoneNumberId) => {
