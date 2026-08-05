@@ -788,7 +788,7 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
     const availableTemplates = await WhatsAppTemplate.find({ userId: tenantId, status: 'APPROVED' }).select('name category').lean();
 
     try {
-        const { reply, action, usage } = await generateReply({
+        const { reply, action, extracted_variables, usage } = await generateReply({
             provider: aiConfig.ai.provider,
             apiKey: apiKey,
             modelName: aiConfig.ai.model,
@@ -838,6 +838,19 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
                 };
             }
 
+            // Save any extracted variables from the AI response
+            if (extracted_variables && typeof extracted_variables === 'object') {
+                for (const [key, value] of Object.entries(extracted_variables)) {
+                    if (value != null && String(value).trim() && String(value).toLowerCase() !== 'null') {
+                        actionSession.variables.set(key, String(value).trim());
+                    }
+                }
+                if (actionSession.markModified) actionSession.markModified('variables');
+                console.log(`🤖 [AI ${mode}] Extracted variables:`, Object.fromEntries(
+                    Object.entries(extracted_variables).filter(([, v]) => v != null && String(v).trim() && String(v).toLowerCase() !== 'null')
+                ));
+            }
+
             const logTag = mode === 'rescue' ? 'AI Rescue' : 'AI Fallback';
 
             if (action.type === 'change_stage' && action.stage) {
@@ -877,6 +890,15 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
                 await executeAction({
                     actionType: 'send_template',
                     actionData: { templateName: action.templateName }
+                }, actionSession, conversation);
+            } else if (action.type === 'create_lead') {
+                console.log(`🤖 [${logTag}] Executing create_lead for conversation ${conversationId}`);
+                await executeAction({
+                    actionType: 'create_lead',
+                    actionData: {
+                        status: action.status || 'New',
+                        source: action.source || 'WhatsApp AI Chatbot'
+                    }
                 }, actionSession, conversation);
             }
         }
@@ -1285,14 +1307,25 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
         }
 
         // 3. First Message Match (Completely new contact) — only if NOT paused
+        // BYPASS FIX: meta_ad flows MUST NOT match here — they only fire when Meta
+        // attaches referral data (Click-to-WhatsApp ad clicks). A normal customer
+        // message has no referral, so letting a meta_ad flow fall through to
+        // first_message / any_message would trigger it for every ordinary chat.
         if (!targetFlow && !isPaused && conversation.metadata.totalInbound === 1) {
-            targetFlow = allActiveFlows.find(f => f.triggerType === 'first_message' || f.triggerType === 'any_message');
+            targetFlow = allActiveFlows.find(f =>
+                (f.triggerType === 'first_message' || f.triggerType === 'any_message') &&
+                f.triggerType !== 'meta_ad'
+            );
             if (targetFlow) console.log(`🤖 [Chatbot] First-message trigger matched: "${targetFlow.name}"`);
         }
 
         // 4. Existing Contact Match (They have messaged before) — only if NOT paused
+        // BYPASS FIX: same guard — meta_ad flows must never match on a normal inbound.
         if (!targetFlow && !isPaused && conversation.metadata.totalInbound > 1) {
-            targetFlow = allActiveFlows.find(f => f.triggerType === 'existing_contact_message' || f.triggerType === 'any_message');
+            targetFlow = allActiveFlows.find(f =>
+                (f.triggerType === 'existing_contact_message' || f.triggerType === 'any_message') &&
+                f.triggerType !== 'meta_ad'
+            );
             if (targetFlow) console.log(`🤖 [Chatbot] Existing-contact trigger matched: "${targetFlow.name}"`);
         }
 
@@ -2484,7 +2517,7 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
 
                 // 3. Make HTTP request to AI Service
                 try {
-                    const { reply, action, usage } = await generateReply({
+                    const { reply, action, extracted_variables, usage } = await generateReply({
                         provider: aiConfig.ai.provider,
                         apiKey: apiKey,
                         modelName: aiConfig.ai.model,
@@ -2494,7 +2527,20 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                         availableTemplates
                     });
 
-                    // 4. Send WhatsApp reply
+                    // 4a. Save any extracted variables from the AI response
+                    if (extracted_variables && typeof extracted_variables === 'object') {
+                        for (const [key, value] of Object.entries(extracted_variables)) {
+                            if (value != null && String(value).trim() && String(value).toLowerCase() !== 'null') {
+                                session.variables.set(key, String(value).trim());
+                            }
+                        }
+                        session.markModified('variables');
+                        console.log(`🤖 [Chatbot] AI extracted variables:`, Object.fromEntries(
+                            Object.entries(extracted_variables).filter(([, v]) => v != null && String(v).trim() && String(v).toLowerCase() !== 'null')
+                        ));
+                    }
+
+                    // 4b. Send WhatsApp reply
                     const result = await sendWhatsAppTextMessage(conversation.phone, reply, session.userId);
                     await saveBotMessage(session.conversationId, session.userId, reply, 'text', result);
 
@@ -2543,6 +2589,15 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                                 actionType: 'send_template',
                                 actionData: { templateName: action.templateName }
                             }, session, conversation);
+                        } else if (action.type === 'create_lead') {
+                            await executeAction({
+                                actionType: 'create_lead',
+                                actionData: {
+                                    status: action.status || 'New',
+                                    source: action.source || 'WhatsApp AI Chatbot'
+                                }
+                            }, session, conversation);
+                            console.log(`🤖 [Chatbot] AI triggered create_lead for ${conversation.displayName || conversation.phone}`);
                         }
                     }
 

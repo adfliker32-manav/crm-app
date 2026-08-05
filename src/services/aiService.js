@@ -95,10 +95,19 @@ Do not wrap your response in markdown formatting (like \`\`\`json ... \`\`\`), j
 Output JSON Schema:
 {
   "reply": "Your WhatsApp response message here. Keep it to 1-3 sentences maximum. Be polite and ask qualifying questions one by one.",
+  "extracted_variables": {
+    "name": "The customer's name if shared in this message, otherwise null",
+    "phone": "The customer's phone/mobile number if shared, otherwise null",
+    "email": "The customer's email if shared, otherwise null",
+    "business_name": "The customer's business/company name if shared, otherwise null",
+    "industry": "The customer's industry/sector if shared, otherwise null"
+  },
   "action": {
-    "type": "change_stage" | "assign_tag" | "notify_agent" | "book_appointment" | "send_template" | null,
+    "type": "change_stage" | "assign_tag" | "notify_agent" | "book_appointment" | "send_template" | "create_lead" | null,
     "stage": "If type is change_stage, the name of the pipeline stage. Otherwise null",
     "tag": "If type is assign_tag, the tag to apply. Otherwise null",
+    "status": "If type is create_lead, the lead stage (e.g. 'New', 'Qualified'). Default 'New'. Otherwise null",
+    "source": "If type is create_lead, the lead source label. Default 'WhatsApp AI Chatbot'. Otherwise null",
     "serviceType": "The service requested (e.g. 'Consultation'), or null if unknown",
     "appointmentDate": "The requested date in YYYY-MM-DD format, or null if unknown",
     "appointmentTime": "The requested time (e.g. '10:00 AM'), or null if unknown",
@@ -106,6 +115,17 @@ Output JSON Schema:
     "reason": "Internal reasoning for your action (never shown to user)"
   }
 }
+
+VARIABLE EXTRACTION RULES:
+- On EVERY turn, if the customer shares any personal or business information (name, phone, email, business name, industry, or any other detail), include it in "extracted_variables".
+- Only include fields that the customer explicitly mentioned in THIS message. Set other fields to null.
+- The system will automatically save these variables for lead creation.
+- If the customer provides multiple details in one message (e.g. "I'm Rahul from ABC Hospital"), extract ALL of them.
+
+LEAD CREATION RULES:
+- When you have collected enough qualifying information (at minimum: the customer's name), you may set action type to "create_lead".
+- The system will automatically use the saved variables (name, phone, email, business_name, industry) to create or update the lead in the CRM.
+- You do NOT need to wait for all fields — create the lead whenever you have sufficient info, and additional variables will update the lead on subsequent turns.
 
 BEHAVIOR RULES:
 1. Keep replies conversational, helpful, and VERY brief (1-2 sentences).
@@ -310,6 +330,7 @@ exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conv
     return {
         reply,
         action: resultJson.action || null,
+        extracted_variables: resultJson.extracted_variables || null,
         usage: finalUsage
     };
 };
