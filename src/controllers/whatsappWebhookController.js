@@ -9,6 +9,44 @@ const telemetryService = require('../services/telemetryService');
 const { emitToUser, emitToConversation } = require('../services/socketService');
 
 // ============================================================
+// 🔒 PER-CONVERSATION CHATBOT SERIALIZATION LOCK
+// Prevents the race condition where a customer sends multiple
+// messages in rapid succession and the chatbot processes them
+// concurrently. With concurrent processing, Message 2 arrives
+// while Message 1 is still running the flow, causing the bot
+// to treat Message 2 as the answer to a question it just asked
+// via Message 1 — resulting in two bot questions being sent
+// without waiting for a real user reply.
+//
+// Fix: a per-conversation async queue (mutex). All chatbot calls
+// for the same conversationId are serialized — each one waits
+// for the previous to resolve before starting. The lock is held
+// in memory only, so it resets on restart (acceptable: the DB
+// unique-index guard in ChatbotSession.js is the durable layer).
+// ============================================================
+const chatbotLocks = new Map(); // conversationId (string) → Promise chain
+
+/**
+ * Acquires a sequential lock for a given conversation and runs `fn` inside it.
+ * Returns fn’s result. Any error thrown by fn propagates to the caller.
+ */
+const runWithChatbotLock = (conversationId, fn) => {
+    const key = conversationId.toString();
+    // Chain fn onto the existing promise for this conversation (or a resolved base).
+    const previous = chatbotLocks.get(key) || Promise.resolve();
+    const next = previous.then(fn, fn); // run fn regardless of previous outcome
+    chatbotLocks.set(key, next);
+    // Clean up the map entry once the entire chain settles so memory doesn’t leak
+    // for conversations that go quiet after a burst.
+    next.finally(() => {
+        if (chatbotLocks.get(key) === next) {
+            chatbotLocks.delete(key);
+        }
+    });
+    return next;
+};
+
+// ============================================================
 // 🐛 DEBUG MODE - controlled via WA_WEBHOOK_DEBUG env variable
 // Set WA_WEBHOOK_DEBUG=true in your .env to enable verbose logs
 // ============================================================
@@ -258,12 +296,21 @@ const processTemplateStatusUpdate = async (wabaId, value) => {
         }
 
         // Map Meta event names to our DB status values
+        // v26 sends additional event types beyond the original 5 — handle all of them
+        // to prevent templates from going stale in the DB when Meta changes their status.
         const statusMap = {
-            APPROVED: 'APPROVED',
-            REJECTED: 'REJECTED',
-            DISABLED: 'DISABLED',
-            PAUSED: 'PAUSED',
-            PENDING_DELETION: 'DISABLED'
+            APPROVED:         'APPROVED',
+            REJECTED:         'REJECTED',
+            DISABLED:         'DISABLED',
+            PAUSED:           'PAUSED',
+            PENDING_DELETION: 'DISABLED',
+            FLAGGED:          'FLAGGED',      // v26: at-risk, may be disabled soon
+            ARCHIVED:         'DISABLED',     // v26: archived due to inactivity → treat as disabled
+            UNARCHIVED:       'APPROVED',     // v26: restored from archive → treat as approved
+            IN_APPEAL:        'PAUSED',       // v26: under appeal review → treat as paused
+            REINSTATED:       'APPROVED',     // v26: restored after appeal → approved
+            LOCKED:           'PAUSED',       // v26: cannot be edited → treat as paused
+            DELETED:          'DISABLED'       // v26: permanently removed → treat as disabled
         };
         const newStatus = statusMap[event];
         if (!newStatus) {
@@ -315,6 +362,179 @@ const processTemplateStatusUpdate = async (wabaId, value) => {
     }
 };
 
+// ============================================================
+// 📤 SMB MESSAGE ECHO HANDLER
+// In coexistence mode (WhatsApp Business App + Cloud API on the
+// same number), messages sent from the WA Business App do NOT
+// arrive via the normal "messages" webhook field. Meta delivers
+// them under a separate field called "smb_message_echoes".
+//
+// Key differences from normal inbound messages:
+//   • change.field = "smb_message_echoes" (not "messages")
+//   • message.from = YOUR business phone number (sender)
+//   • message.to   = CUSTOMER phone number (recipient)
+//   • Direction is OUTBOUND — we save it as our own sent message
+//   • Must NOT trigger chatbot, automation, lead scoring, or unread count
+//   • Must deduplicate against messages already sent via CRM API
+// ============================================================
+const processEchoMessage = async (message, userId, phoneNumberId) => {
+    try {
+        const customerPhone = message.to; // In echoes, 'to' is the customer
+        const waMessageId = message.id;
+        const timestamp = new Date(parseInt(message.timestamp) * 1000);
+
+        if (!customerPhone) {
+            console.warn(`[Webhook] SMB Echo: Missing 'to' field in echo message ${waMessageId}. Skipping.`);
+            return;
+        }
+
+        debug(`📤 processEchoMessage: to=${customerPhone}, msgId=${waMessageId}, ts=${timestamp.toISOString()}`);
+        debugJSON('📤 Echo message object', message);
+
+        // ── IDEMPOTENCY CHECK ──────────────────────────────────────────────
+        // If the message was already sent via CRM API (sendMessage / startConversation /
+        // broadcast), its waMessageId is already in the DB. Skip to avoid duplicates.
+        const isDuplicate = await WhatsAppMessage.exists({ waMessageId });
+        if (isDuplicate) {
+            debug(`📤 SMB Echo: message ${waMessageId} already exists (sent via CRM API). Skipping echo.`);
+            return;
+        }
+
+        // ── RESOLVE CONVERSATION ───────────────────────────────────────────
+        const { getCompanyUserIds } = require('../utils/whatsappUtils');
+        const validUserIds = await getCompanyUserIds(userId);
+        const phoneLastTen = customerPhone.slice(-10);
+
+        // Try to link to existing lead by phone
+        const lead = await Lead.findOne({
+            userId: { $in: validUserIds },
+            phone: { $regex: phoneLastTen + '$' }
+        })
+            .sort({ updatedAt: -1, createdAt: -1 })
+            .lean();
+
+        // Find existing conversation — exact match first, then suffix fallback
+        let existingConversation = await WhatsAppConversation.findOne({
+            userId: { $in: validUserIds },
+            waContactId: customerPhone
+        }).sort({ lastMessageAt: -1 }).lean();
+
+        if (!existingConversation) {
+            existingConversation = await WhatsAppConversation.findOne({
+                userId: { $in: validUserIds },
+                waContactId: { $regex: phoneLastTen + '$' }
+            }).sort({ lastMessageAt: -1 }).lean();
+            if (existingConversation) {
+                debug(`📤 Echo: Found conversation via phone suffix match: ${existingConversation._id}`);
+            }
+        }
+
+        const targetUserId = existingConversation ? existingConversation.userId : userId;
+        const upsertContactId = existingConversation ? existingConversation.waContactId : customerPhone;
+
+        const messagePreview = extractMessagePreview(message);
+
+        // ── UPSERT CONVERSATION ────────────────────────────────────────────
+        // Unlike inbound messages, echo messages do NOT increment unreadCount
+        // (it's our own outbound message — no need to alert the agent).
+        const echoUpdatePayload = {
+            $setOnInsert: {
+                userId: targetUserId,
+                waContactId: upsertContactId,
+                phone: customerPhone,
+                leadId: lead?._id || null,
+                initiatedBy: 'user',
+                'metadata.firstMessageAt': timestamp
+            },
+            $set: {
+                lastMessage: messagePreview,
+                lastMessageAt: timestamp,
+                lastMessageDirection: 'outbound',
+                status: 'active'
+            },
+            $inc: {
+                'metadata.totalMessages': 1,
+                'metadata.totalOutbound': 1
+            }
+        };
+
+        let conversation;
+        try {
+            conversation = await WhatsAppConversation.findOneAndUpdate(
+                { userId: targetUserId, waContactId: upsertContactId },
+                echoUpdatePayload,
+                { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+            );
+        } catch (upsertErr) {
+            if (upsertErr.code === 11000) {
+                debug('⚠️ E11000 on echo conversation upsert — retrying as update');
+                conversation = await WhatsAppConversation.findOneAndUpdate(
+                    { userId: targetUserId, waContactId: upsertContactId },
+                    { $set: echoUpdatePayload.$set, $inc: echoUpdatePayload.$inc },
+                    { returnDocument: 'after' }
+                );
+                if (!conversation) throw new Error(`Conversation not found after E11000 retry for echo contact ${upsertContactId}`);
+            } else {
+                throw upsertErr;
+            }
+        }
+
+        debug(`📤 Echo: Conversation upserted: ${conversation._id}`);
+
+        // ── SAVE MESSAGE AS OUTBOUND ───────────────────────────────────────
+        const messageType = getMessageType(message);
+        const messageContent = extractMessageContent(message);
+
+        const messageDoc = new WhatsAppMessage({
+            conversationId: conversation._id,
+            userId: targetUserId,
+            waMessageId,
+            direction: 'outbound',
+            type: messageType,
+            content: messageContent,
+            status: 'sent',     // Already sent from the WA Business App
+            timestamp,
+            isAutomated: false   // Manually sent by agent from the app
+        });
+
+        await messageDoc.save();
+        debug(`📤 Echo: WhatsAppMessage saved to DB: ${messageDoc._id}`);
+        console.log(`📤 SMB Echo synced: "${messagePreview.substring(0, 50)}" → ${customerPhone}`);
+
+        // ── PUSH TO FRONTEND VIA SOCKET.IO ─────────────────────────────────
+        const savedMsg = messageDoc.toObject();
+        const conversationIdStr = conversation._id.toString();
+        const socketPayload = {
+            conversationId: conversationIdStr,
+            message: savedMsg
+        };
+        const echoSocketUpdate = {
+            conversationId: conversationIdStr,
+            updates: {
+                lastMessage: messagePreview.substring(0, 100),
+                lastMessageAt: timestamp,
+                lastMessageDirection: 'outbound'
+            }
+        };
+
+        for (const uid of validUserIds) {
+            emitToUser(String(uid), 'whatsapp:newMessage', socketPayload);
+            emitToUser(String(uid), 'whatsapp:conversationUpdate', echoSocketUpdate);
+        }
+        emitToConversation(conversationIdStr, 'whatsapp:newMessage', socketPayload);
+        emitToConversation(conversationIdStr, 'whatsapp:conversationUpdate', echoSocketUpdate);
+
+        // NOTE: Deliberately NO chatbot, automation, lead scoring, or drip-sequence
+        // logic here. Echo messages are outbound (sent by us) — running the inbound
+        // pipeline would trigger false bot replies, inflate lead scores, and break
+        // drip-sequence pause logic.
+
+    } catch (error) {
+        console.error('❌ Error processing SMB echo message:', error);
+        debug('❌ Full error stack:', error.stack);
+    }
+};
+
 // Process a single entry from the webhook
 const processEntry = async (entry) => {
     debug(`📂 Processing entry ID: ${entry.id}`);
@@ -324,10 +544,117 @@ const processEntry = async (entry) => {
     for (const change of changes) {
         debug(`   Change field: "${change.field}"`);
 
-        // Auto-update template status when Meta approves or rejects a submitted template.
+         // Auto-update template status when Meta approves or rejects a submitted template.
         // Without this, templates stay PENDING forever and the automated WhatsApp send never fires.
         if (change.field === 'message_template_status_update') {
             await processTemplateStatusUpdate(entry.id, change.value);
+            continue;
+        }
+
+        // ── TEMPLATE QUALITY UPDATE (v26) ─────────────────────────────────
+        // Meta sends this when a template's quality rating changes (e.g. HIGH → LOW).
+        // Templates with LOW quality risk being PAUSED or DISABLED automatically.
+        if (change.field === 'message_template_quality_update') {
+            try {
+                const value = change.value;
+                const metaTemplateId = value?.message_template_id?.toString();
+                const templateName = value?.message_template_name;
+                const metaQuality = value?.new_quality_score;  // 'GREEN', 'YELLOW', 'RED', 'UNKNOWN'
+
+                if (!metaTemplateId || !metaQuality) {
+                    console.warn('⚠️ [QualityWebhook] Missing template ID or quality in payload', value);
+                    continue;
+                }
+
+                // Map Meta's color codes to our DB enum
+                const qualityMap = {
+                    'GREEN': 'HIGH',
+                    'YELLOW': 'MEDIUM',
+                    'RED': 'LOW',
+                    'UNKNOWN': 'UNKNOWN'
+                };
+                const newQuality = qualityMap[metaQuality] || 'UNKNOWN';
+
+                const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+
+                let template = await WhatsAppTemplate.findOne({ metaTemplateId });
+                if (!template && templateName) {
+                    const ownerConfig = await IntegrationConfig.findOne({ 'whatsapp.wabaId': entry.id }).select('userId').lean();
+                    if (ownerConfig) {
+                        template = await WhatsAppTemplate.findOne({ userId: ownerConfig.userId, name: templateName });
+                    }
+                }
+
+                if (template) {
+                    const prevQuality = template.quality;
+                    template.quality = newQuality;
+                    await template.save();
+                    console.log(`📊 [QualityWebhook] Template "${templateName}" quality: ${prevQuality} → ${newQuality}`);
+
+                    // Alert user if quality dropped to LOW (template at risk of being disabled)
+                    if (newQuality === 'LOW') {
+                        emitToUser(template.userId.toString(), 'notification:agent', {
+                            type: 'template_quality_alert',
+                            templateId: template._id,
+                            templateName,
+                            quality: newQuality,
+                            message: `⚠️ WhatsApp template "${templateName}" quality dropped to LOW. It may be paused or disabled soon. Review and improve it.`,
+                            timestamp: new Date()
+                        });
+                    }
+                } else {
+                    console.warn(`⚠️ [QualityWebhook] Template not found: id=${metaTemplateId} name=${templateName}`);
+                }
+            } catch (err) {
+                console.error('❌ [QualityWebhook] Error processing quality update:', err.message);
+            }
+            continue;
+        }
+
+        // ── SMB MESSAGE ECHOES (Coexistence Mode) ─────────────────────────
+        // Messages sent from the WhatsApp Business App are echoed here.
+        // Without this handler, outbound messages from the app are invisible to the CRM.
+        if (change.field === 'smb_message_echoes') {
+            const value = change.value;
+            const phoneNumberId = value.metadata?.phone_number_id;
+
+            debug(`📤 SMB Echo: Phone Number ID = ${phoneNumberId}`);
+            debugJSON('📤 SMB Echo value', value);
+
+            if (!phoneNumberId) {
+                console.warn('[Webhook] SMB Echo: Missing phone_number_id in metadata — dropping.');
+                continue;
+            }
+
+            // Resolve the tenant who owns this phone number
+            const config = await IntegrationConfig.findOne({ 'whatsapp.waPhoneNumberId': phoneNumberId })
+                .populate('userId', 'email role parentId')
+                .lean();
+
+            if (!config?.userId) {
+                console.warn(`[Webhook] SMB Echo: No IntegrationConfig for waPhoneNumberId="${phoneNumberId}". Echo dropped.`);
+                continue;
+            }
+
+            const user = config.userId;
+            console.log(`[Webhook] SMB Echo tenant resolved: phoneNumberId=${phoneNumberId} → userId=${user._id}`);
+
+            if (value.message_echoes && value.message_echoes.length > 0) {
+                debug(`📤 SMB Echo: Processing ${value.message_echoes.length} echoed message(s)`);
+                for (const message of value.message_echoes) {
+                    debug(`   → Echo message ID: ${message.id}, type: ${message.type}, to: ${message.to}`);
+                    await processEchoMessage(message, user._id, phoneNumberId);
+                }
+            }
+
+            // Echo payloads may also carry status updates for app-sent messages
+            if (value.statuses && value.statuses.length > 0) {
+                debug(`📊 SMB Echo: Processing ${value.statuses.length} status update(s)`);
+                for (const status of value.statuses) {
+                    await processStatusUpdate(status, user._id);
+                }
+            }
+
             continue;
         }
 
@@ -657,9 +984,16 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
 
             try {
                 // Step 3: Trigger chatbot/auto-reply logic (runs AFTER watcher completes)
-                debug('🤖 Running chatbot engine in background...');
+                // W9 FIX: Serialize chatbot processing per-conversation to prevent the
+                // rapid-burst race condition. If the customer sends 3 messages in 1 second
+                // the bot was processing all 3 concurrently, making message 2 look like the
+                // answer to a question the bot just asked in message 1. The lock forces each
+                // message’s chatbot call to finish before the next one begins.
+                debug('🤖 Running chatbot engine in background (serialized by conversation lock)...');
                 const chatbotEngine = require('../services/chatbotEngineService');
-                await chatbotEngine.processIncomingMessage(messageDoc, conversation._id, targetUserId);
+                await runWithChatbotLock(conversation._id, () =>
+                    chatbotEngine.processIncomingMessage(messageDoc, conversation._id, targetUserId)
+                );
                 debug('🤖 Chatbot engine finished in background');
             } catch (err) {
                 console.error('❌ Background chatbot error:', err);

@@ -89,7 +89,7 @@ exports.connectWhatsAppManual = async (req, res) => {
             }
         } catch (e) { /* non-fatal */ }
 
-        // Subscribe the WABA to receive webhook events (incoming messages)
+        // Subscribe the WABA to receive webhook events (incoming messages + echoes)
         let webhookSubscribed = false;
         try {
             await axios.post(`${GRAPH}/${wabaId}/subscribed_apps`, null, {
@@ -474,7 +474,10 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
 
         await invalidateCompanyScope(ownerId);
 
-        // Subscribe the WABA to receive webhook events (incoming messages)
+        // Subscribe the WABA to receive webhook events (incoming messages + echoes)
+        // NOTE: smb_message_echoes must also be enabled in the Meta App Dashboard → Webhooks
+        // for the coexistence echo sync to work. The subscribed_apps call registers this WABA
+        // for all fields the App-level webhook is subscribed to.
         let webhookSubscribed = false;
         let webhookSubscriptionError = null;
         try {
@@ -483,7 +486,7 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
                 timeout: 10000
             });
             webhookSubscribed = true;
-            console.log(`✅ Webhook subscription registered for WABA ${wabaId}`);
+            console.log(`✅ Webhook subscription registered for WABA ${wabaId} (includes smb_message_echoes for coexistence sync)`);
         } catch (subErr) {
             webhookSubscriptionError = subErr.response?.data?.error?.message || subErr.message;
             console.warn(`⚠️ Webhook subscription failed for WABA ${wabaId}:`, webhookSubscriptionError);

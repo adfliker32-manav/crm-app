@@ -35,7 +35,8 @@ const whatsappTemplateSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['PENDING', 'APPROVED', 'REJECTED', 'PAUSED', 'DISABLED', 'DRAFT'],
+        // v26 adds FLAGGED: template at-risk of being disabled due to negative feedback
+        enum: ['PENDING', 'APPROVED', 'REJECTED', 'PAUSED', 'DISABLED', 'FLAGGED', 'DRAFT'],
         default: 'DRAFT'
     },
     quality: {
