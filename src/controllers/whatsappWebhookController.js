@@ -501,6 +501,15 @@ const processEchoMessage = async (message, userId, phoneNumberId) => {
         debug(`📤 Echo: WhatsAppMessage saved to DB: ${messageDoc._id}`);
         console.log(`📤 SMB Echo synced: "${messagePreview.substring(0, 50)}" → ${customerPhone}`);
 
+        // ── PAUSE CHATBOT (agent took over from WA Business App) ──────────
+        // Same behavior as CRM sendMessage — pause chatbot for 24h and
+        // cancel any active ChatbotSessions so the bot doesn't reply
+        // on top of the human agent's manual response.
+        const { cancelActiveChatbots } = require('../services/chatbotEngineService');
+        setImmediate(() => cancelActiveChatbots(conversation._id).catch(
+            e => console.error('cancelActiveChatbots (echo) error:', e)
+        ));
+
         // ── PUSH TO FRONTEND VIA SOCKET.IO ─────────────────────────────────
         const savedMsg = messageDoc.toObject();
         const conversationIdStr = conversation._id.toString();
@@ -524,10 +533,9 @@ const processEchoMessage = async (message, userId, phoneNumberId) => {
         emitToConversation(conversationIdStr, 'whatsapp:newMessage', socketPayload);
         emitToConversation(conversationIdStr, 'whatsapp:conversationUpdate', echoSocketUpdate);
 
-        // NOTE: Deliberately NO chatbot, automation, lead scoring, or drip-sequence
-        // logic here. Echo messages are outbound (sent by us) — running the inbound
-        // pipeline would trigger false bot replies, inflate lead scores, and break
-        // drip-sequence pause logic.
+        // NOTE: We DO pause the chatbot (agent took over), but we deliberately do NOT
+        // run the inbound pipeline — no bot replies, no lead scoring, no drip-sequence
+        // triggers. Echo messages are outbound (sent by us), not customer-initiated.
 
     } catch (error) {
         console.error('❌ Error processing SMB echo message:', error);
