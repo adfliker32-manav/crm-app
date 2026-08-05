@@ -1269,7 +1269,18 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
         // Fires when user clicks an ad and sends a message (referral data is attached)
         // Bypasses pause as it's an explicit intent.
         // Match priority: source_id (Ad ID) → headline → catch-all (no identifier set)
-        if (!targetFlow && message.content?.referral) {
+        //
+        // FIX: Mongoose initialises the `referral` nested subdocument as an empty
+        // object `{}` for EVERY message (because the schema defines it with no
+        // required fields). An empty object is truthy, so the old check
+        // `message.content?.referral` passed for NORMAL messages too — causing the
+        // catch-all meta_ad flow to fire on every single inbound message.
+        // The correct guard checks that Meta actually populated the referral with at
+        // least a `source_id` or `source_type`, which it always does on real CTWA
+        // ad clicks.
+        const referral = message.content?.referral;
+        const hasRealReferral = referral && (referral.source_id || referral.source_type || referral.headline);
+        if (!targetFlow && hasRealReferral) {
             const adSourceId = message.content.referral.source_id || '';
             const adHeadline = (message.content.referral.headline || '').toLowerCase().trim();
             const metaAdFlows = allActiveFlows.filter(f => f.triggerType === 'meta_ad');
