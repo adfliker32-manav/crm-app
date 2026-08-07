@@ -208,16 +208,16 @@ test('H3: the scope cache is bounded and invalidatable', () => {
 
 test('H4: MCP stage changes fire automation, workflow and Meta CAPI', () => {
     const src = read('controllers', 'mcpController.js');
-    const helper = src.slice(src.indexOf('const fireStageChange'), src.indexOf('const periodRange'));
+    const effectsSrc = read('utils', 'leadEffects.js');
 
-    assert.match(helper, /evaluateLead\(lead, 'STAGE_CHANGED'\)/, 'automations must fire');
-    assert.match(helper, /fireTrigger\('STAGE_CHANGED'/, 'the workflow trigger must fire');
-    assert.match(helper, /sendMetaEventForLead/, 'the Meta CAPI conversion event must fire');
+    assert.match(effectsSrc, /evaluateLead\(lead, 'STAGE_CHANGED'\)/, 'automations must fire');
+    assert.match(effectsSrc, /fireTrigger\('STAGE_CHANGED'/, 'the workflow trigger must fire');
+    assert.match(effectsSrc, /sendMetaEventForLead/, 'the Meta CAPI conversion event must fire');
 
     const updateLead = src.slice(src.indexOf('async update_lead'), src.indexOf('async assign_lead'));
     assert.match(updateLead, /stageEnteredAt/,
         'a stage change must reset stageEnteredAt or stage-age reporting silently drifts');
-    assert.match(updateLead, /fireStageChange\(/, 'update_lead must invoke the shared helper');
+    assert.match(updateLead, /queueLeadStageChangeEffects\(/, 'update_lead must invoke the shared helper');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

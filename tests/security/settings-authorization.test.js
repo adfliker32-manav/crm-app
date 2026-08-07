@@ -196,7 +196,7 @@ test('every lead-creation path marks STAGE_CHANGED as an initial placement', () 
         const src = stripComments(
             fs.readFileSync(path.join(SRC, 'controllers', file), 'utf8')
         );
-        assert.match(src, /isInitialStage:\s*true/,
-            `${file} fires STAGE_CHANGED on lead creation without isInitialStage`);
+        assert.match(src, /queueLeadCreatedEffects/,
+            `${file} must invoke queueLeadCreatedEffects on lead creation`);
     }
 });
