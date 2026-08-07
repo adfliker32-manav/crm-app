@@ -32,7 +32,9 @@ const authLimiter = rateLimit({
                                 <p>To protect your security, we have temporarily blocked further login attempts for 15 minutes.</p>
                                 <p>If you forgot your password, you can reset it on the login page.</p>
                                 <p>If this wasn't you, please reset your password immediately.</p>
-                            `
+                            `,
+                            transactional: true,
+                            userId: user._id
                         });
                         console.log(`[Security] Sent rate-limit alert email to ${user.email}`);
                     }
