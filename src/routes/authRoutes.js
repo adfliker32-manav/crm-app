@@ -8,10 +8,41 @@ const { validate, schemas } = require('../middleware/validateRequest');
 const rateLimit = require('express-rate-limit');
 const validateObjectId = require('../middleware/validateObjectId');
 
+const User = require('../models/User');
+const { sendEmail } = require('../services/emailService');
+
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
-    message: { message: 'Too many authentication attempts, please try again after 15 minutes' }
+    max: 5,
+    message: { message: 'Too many authentication attempts, please try again after 15 minutes' },
+    handler: async (req, res, next, options) => {
+        // Only send the email on the EXACT request that trips the limit to prevent email spam
+        if (req.rateLimit && req.rateLimit.current === options.max + 1) {
+            const email = req.body?.email;
+            if (email) {
+                try {
+                    const user = await User.findOne({ email });
+                    if (user) {
+                        await sendEmail({
+                            to: user.email,
+                            subject: 'Security Alert: Multiple Failed Login Attempts',
+                            html: `
+                                <p>Hi ${user.name},</p>
+                                <p>We detected multiple failed login attempts to your account from IP address <strong>${req.ip}</strong>.</p>
+                                <p>To protect your security, we have temporarily blocked further login attempts for 15 minutes.</p>
+                                <p>If you forgot your password, you can reset it on the login page.</p>
+                                <p>If this wasn't you, please reset your password immediately.</p>
+                            `
+                        });
+                        console.log(`[Security] Sent rate-limit alert email to ${user.email}`);
+                    }
+                } catch (error) {
+                    console.error('[Security] Failed to send rate-limit alert email:', error);
+                }
+            }
+        }
+        res.status(options.statusCode).json(options.message);
+    }
 });
 
 // 1. Login (Public)
