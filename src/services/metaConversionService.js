@@ -12,7 +12,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v26.0';
 const LEAD_EVENT_SOURCE = 'Adfliker CRM';
 const META_API_TIMEOUT = 8000;
 

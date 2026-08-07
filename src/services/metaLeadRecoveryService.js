@@ -21,7 +21,7 @@ const axios = require('axios');
 const { emitToUser } = require('./socketService');
 const { sendEmail } = require('./emailService');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v26.0';
 const META_API_TIMEOUT = 8000;
 const MAX_RETRY_COUNT = 5;
 const RECOVERY_WINDOW_HOURS = 12;

@@ -115,7 +115,7 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
         }
 
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
 
         const resolvedLanguage = await resolveTemplateLanguage(templateName, userId, languageCode);
 
@@ -171,14 +171,14 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
     }
 };
 
-const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
+const sendWhatsAppTextMessage = async (to, messageText, userId = null, options = {}) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
             throw new Error("Emergency: WhatsApp sending is temporarily disabled.");
         }
 
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -186,6 +186,12 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null) => {
             type: "text",
             text: { body: messageText }
         };
+
+        // BSUID support: when sending to a username-only contact, Meta requires
+        // recipient_type: 'user_id' instead of the default 'individual' (phone).
+        if (options.recipientType === 'user_id') {
+            data.recipient_type = 'user_id';
+        }
 
         const config = {
             headers: {
@@ -233,7 +239,7 @@ const sendMediaMessage = async (to, mediaType, mediaIdentifier, caption = null, 
         }
         
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
 
         // Determine if mediaIdentifier is an ID (numeric-ish) or a URL
         const isUrl = typeof mediaIdentifier === 'string' && (mediaIdentifier.startsWith('http://') || mediaIdentifier.startsWith('https://'));
@@ -273,7 +279,7 @@ const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
         }
 
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -317,7 +323,7 @@ const sendListMessage = async (to, bodyText, buttonText, items, userId = null) =
         }
 
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -362,7 +368,7 @@ const sendCtaUrlMessage = async (to, bodyText, buttonText, buttonUrl, userId = n
         }
 
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -401,7 +407,7 @@ const sendCtaUrlMessage = async (to, bodyText, buttonText, buttonUrl, userId = n
 const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en', componentsData = [], userId = null, options = {}) => {
     try {
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
 
         const data = {
             messaging_product: "whatsapp",
@@ -488,7 +494,7 @@ const downloadMedia = async (mediaId, userId = null) => {
         console.log(`🌐 Cache Miss. Fetching from Meta: ${mediaId}`);
         const { accessToken } = await getCredentials(userId);
 
-        const mediaInfoUrl = `https://graph.facebook.com/v25.0/${mediaId}`;
+        const mediaInfoUrl = `https://graph.facebook.com/v26.0/${mediaId}`;
         const mediaInfoResponse = await axios.get(mediaInfoUrl, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
         });
@@ -530,7 +536,7 @@ const submitTemplateToMeta = async (userId, template) => {
             return { success: false, error: 'WhatsApp Business Account ID not configured. Go to Settings → WhatsApp Config.' };
         }
 
-        const url = `https://graph.facebook.com/v25.0/${wabaId}/message_templates`;
+        const url = `https://graph.facebook.com/v26.0/${wabaId}/message_templates`;
 
         // Media Library headers: Meta requires a resumable-upload handle as the
         // reviewer's sample, and a handle is consumed by the submission that uses
@@ -623,7 +629,7 @@ const META_QUALITY_MAP = {
 const syncTemplateFromMeta = async (userId, metaTemplateId) => {
     try {
         const { accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${metaTemplateId}`;
+        const url = `https://graph.facebook.com/v26.0/${metaTemplateId}`;
 
         const response = await axios.get(url, {
             headers: { 'Authorization': `Bearer ${accessToken}` },
@@ -656,7 +662,7 @@ const deleteTemplateFromMeta = async (userId, templateName) => {
         if (!creds?.businessId) {
             return { success: false, error: 'WhatsApp Business Account not configured' };
         }
-        const url = `https://graph.facebook.com/v25.0/${creds.businessId}/message_templates`;
+        const url = `https://graph.facebook.com/v26.0/${creds.businessId}/message_templates`;
         await axios.delete(url, {
             headers: { 'Authorization': `Bearer ${creds.accessToken}` },
             params: { name: templateName }
@@ -677,13 +683,13 @@ const uploadMediaForTemplate = async (userId, fileBuffer, mimeType, fileName) =>
 
         if (!appId) throw new Error('Meta App ID not configured. Please add META_APP_ID to your .env file or contact your administrator.');
 
-        const sessionUrl = `https://graph.facebook.com/v25.0/${appId}/uploads`;
+        const sessionUrl = `https://graph.facebook.com/v26.0/${appId}/uploads`;
         const sessionRes = await axios.post(sessionUrl, null, {
             params: { file_length: fileBuffer.length, file_type: mimeType, file_name: fileName },
             headers: { 'Authorization': `Bearer ${accessToken}` }
         });
 
-        const uploadUrl = `https://graph.facebook.com/v25.0/${sessionRes.data.id}`;
+        const uploadUrl = `https://graph.facebook.com/v26.0/${sessionRes.data.id}`;
         const uploadRes = await axios.post(uploadUrl, fileBuffer, {
             headers: { 'Authorization': `OAuth ${accessToken}`, 'file_offset': '0', 'Content-Type': mimeType }
         });
@@ -700,7 +706,7 @@ const FormData = require('form-data');
 const uploadMediaForSending = async (userId, filePath, mimeType, fileName) => {
     try {
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/media`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/media`;
 
         const formData = new FormData();
         formData.append('messaging_product', 'whatsapp');
@@ -731,7 +737,7 @@ const uploadMediaForSending = async (userId, filePath, mimeType, fileName) => {
 const uploadMediaBufferForSending = async (userId, buffer, mimeType, fileName) => {
     try {
         const { phoneNumberId, accessToken } = await getCredentials(userId);
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/media`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/media`;
 
         const formData = new FormData();
         formData.append('messaging_product', 'whatsapp');

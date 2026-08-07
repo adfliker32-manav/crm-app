@@ -271,7 +271,7 @@ ENCRYPTION_KEY=<your-encryption-key>
 
 ## What Your CRM Sends (Technical Reference)
 
-For every lead stage change, your CRM POSTs to `https://graph.facebook.com/v25.0/{PIXEL_ID}/events`:
+For every lead stage change, your CRM POSTs to `https://graph.facebook.com/v26.0/{PIXEL_ID}/events`:
 
 ```json
 {

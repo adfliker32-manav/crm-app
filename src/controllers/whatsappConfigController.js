@@ -35,7 +35,7 @@ exports.connectWhatsAppManual = async (req, res) => {
             return res.status(400).json({ success: false, message: 'WABA ID and Phone Number ID must be numeric.' });
         }
 
-        const GRAPH = 'https://graph.facebook.com/v25.0';
+        const GRAPH = 'https://graph.facebook.com/v26.0';
 
         // Verify credentials by fetching phone number details from Meta
         let displayPhone = null, verifiedName = null;
@@ -219,7 +219,7 @@ exports.testWhatsAppConnection = async (req, res) => {
             return res.status(400).json({ success: false, message: 'No access token stored. Please re-enter your credentials.' });
         }
 
-        const GRAPH = 'https://graph.facebook.com/v25.0';
+        const GRAPH = 'https://graph.facebook.com/v26.0';
         const results = {};
 
         // Check 1: Verify access token by fetching phone number details
@@ -356,7 +356,7 @@ exports.refreshTokenForOwner = async (ownerId) => {
         ? decryptToken(rawToken)
         : rawToken;
 
-    const GRAPH = 'https://graph.facebook.com/v25.0';
+    const GRAPH = 'https://graph.facebook.com/v26.0';
     const tokenRes = await axios.get(`${GRAPH}/oauth/access_token`, {
         params: { grant_type: 'fb_exchange_token', client_id: appId, client_secret: appSecret, fb_exchange_token: currentToken },
         timeout: 15000
@@ -397,7 +397,7 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Meta App ID or Meta App Secret is not configured in CRM server environment (.env).' });
         }
 
-        const GRAPH = 'https://graph.facebook.com/v25.0';
+        const GRAPH = 'https://graph.facebook.com/v26.0';
 
         // Exchange authorization code for business access token
         let accessToken = null;

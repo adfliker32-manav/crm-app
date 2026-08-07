@@ -18,6 +18,14 @@ const whatsAppConversationSchema = new mongoose.Schema({
         required: true,
         index: true
     },
+    // WhatsApp Business-Scoped User ID (BSUID) — durable contact identifier.
+    // As Meta rolls out Usernames, users may hide their phone number.
+    // BSUID is the only guaranteed identifier for such contacts.
+    waBsuid: {
+        type: String,
+        default: null,
+        index: true
+    },
     displayName: {
         type: String,
         default: null
@@ -28,7 +36,7 @@ const whatsAppConversationSchema = new mongoose.Schema({
     },
     phone: {
         type: String,
-        required: true
+        default: null   // No longer required — username-only contacts won't have a phone
     },
     lastMessage: {
         type: String,
@@ -90,6 +98,11 @@ const whatsAppConversationSchema = new mongoose.Schema({
 // Compound index for efficient queries
 whatsAppConversationSchema.index({ userId: 1, lastMessageAt: -1 });
 whatsAppConversationSchema.index({ userId: 1, waContactId: 1 }, { unique: true });
+// BSUID lookup — sparse unique so contacts without a BSUID don't collide.
+whatsAppConversationSchema.index(
+    { userId: 1, waBsuid: 1 },
+    { unique: true, partialFilterExpression: { waBsuid: { $type: 'string' } } }
+);
 
 whatsAppConversationSchema.plugin(saasPlugin);
 

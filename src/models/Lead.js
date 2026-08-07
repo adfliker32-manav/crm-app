@@ -141,6 +141,16 @@ const LeadSchema = new mongoose.Schema({
 
     // Idempotency key for Meta Lead Ads webhook. Meta retries on any non-2xx
     // (and sometimes regardless), so we dedupe by leadgen_id per tenant.
+    // WhatsApp Business-Scoped User ID (BSUID) — durable identifier for
+    // WhatsApp contacts. As Meta rolls out Usernames (June 2026+), users can
+    // hide their phone number. The BSUID persists across number changes and
+    // is the recommended primary key for WhatsApp identity going forward.
+    waBsuid: {
+        type: String,
+        default: null,
+        index: true
+    },
+
     metaLeadgenId: {
         type: String,
         default: null,
@@ -179,6 +189,11 @@ LeadSchema.index({ userId: 1, email: 1 });
 LeadSchema.index({ userId: 1, wonAt: -1 });
 LeadSchema.index({ userId: 1, lostAt: -1 });
 LeadSchema.index({ userId: 1, tags: 1 });
+// BSUID lookup — sparse so leads without a WhatsApp BSUID don't collide.
+LeadSchema.index(
+    { userId: 1, waBsuid: 1 },
+    { unique: true, partialFilterExpression: { waBsuid: { $type: 'string' } } }
+);
 // Sparse unique on (userId, metaLeadgenId) — only enforced when leadgen id present.
 // Allows the Meta webhook handler to upsert by leadgen id and stay idempotent
 // across retries without colliding with non-Meta leads (which have no leadgen id).

@@ -83,6 +83,18 @@ chatbotSessionSchema.pre('save', function() {
 });
 
 // Index for efficient queries
+// W9 FIX: Unique partial index — only ONE active session per conversation is allowed at the DB level.
+// This prevents duplicate sessions when two inbound messages arrive concurrently (race condition).
+// The partialFilterExpression restricts uniqueness only to active sessions, so completed/abandoned
+// sessions with the same conversationId are still allowed (historical audit trail preserved).
+chatbotSessionSchema.index(
+    { conversationId: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { status: 'active' },
+        name: 'unique_active_session_per_conversation'
+    }
+);
 chatbotSessionSchema.index({ conversationId: 1, status: 1 });
 chatbotSessionSchema.index({ userId: 1, flowId: 1 });
 chatbotSessionSchema.index({ lastInteractionAt: 1 }); // Index for cron job queries (NO TTL - sessions managed by followup service)

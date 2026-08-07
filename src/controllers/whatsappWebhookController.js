@@ -738,11 +738,12 @@ const processEntry = async (entry) => {
 // Process an incoming message
 const processIncomingMessage = async (message, contacts, userId, incomingPhoneNumberId) => {
     try {
-        const from = message.from; // Sender's phone number
+        const from = message.from; // Sender's phone number (may be null with Usernames)
+        const bsuid = message.user_id || null; // Business-Scoped User ID (v26+)
         const waMessageId = message.id;
         const timestamp = new Date(parseInt(message.timestamp) * 1000);
 
-        debug(`💬 processIncomingMessage: from=${from}, msgId=${waMessageId}, ts=${timestamp.toISOString()}`);
+        debug(`💬 processIncomingMessage: from=${from}, bsuid=${bsuid}, msgId=${waMessageId}, ts=${timestamp.toISOString()}`);
         debugJSON('💬 Full message object', message);
 
         // --- 1. IDEMPOTENCY CHECK ---
@@ -754,12 +755,12 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         }
 
         // --- 2. CONTACT PIPELINE ---
-        const contact = contacts?.find(c => c.wa_id === from);
+        const contact = contacts?.find(c => c.wa_id === from || c.user_id === bsuid);
         const displayName = contact?.profile?.name || null;
         debug(`   Contact display name: ${displayName || '(none)'}`);
 
-        // Try to link to existing lead by phone if creating a new conversation
-        const phoneLastTen = from.slice(-10);
+        // Normalize phone — may be null for username-only contacts
+        const phoneLastTen = from ? from.slice(-10) : null;
         // --- 3. FIX: FIND REAL CONVERSATION OWNER ---
         // Webhooks often resolve to the Agency/SuperAdmin `userId`, but a Manager/Agent 
         // might have sent the outbound template under their own disjoint `userId` while sharing
@@ -774,48 +775,77 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // Parallelize independent database reads to save significant overhead
         const { getCompanyUserIds } = require('../utils/whatsappUtils');
         const validUserIds = await getCompanyUserIds(userId);
-        // Match across the whole company so shared WhatsApp inboxes still link the right CRM lead.
-        const lead = await Lead.findOne({
-            userId: { $in: validUserIds },
-            phone: { $regex: phoneLastTen + '$' }
-        })
-            .sort({ updatedAt: -1, createdAt: -1 })
-            .lean();
 
-        // Find if any user sharing this phone number already has a conversation
-        // Use flexible matching: try exact match first, then last-10-digits suffix match
-        // This prevents duplicate conversations when phone formats differ
-        // (e.g., "New Chat" stores "9427177611" but webhook sends "919427177611")
-        let existingConversation = await WhatsAppConversation.findOne({
-            userId: { $in: validUserIds },
-            waContactId: from
-        }).sort({ lastMessageAt: -1 }).lean();
+        // ── DUAL-KEY LEAD LOOKUP ──────────────────────────────────────────
+        // BSUID-first resolution: find by BSUID if available, else by phone.
+        // This ensures contacts who hide their phone number are still matched.
+        let lead = null;
+        if (bsuid) {
+            lead = await Lead.findOne({
+                userId: { $in: validUserIds },
+                waBsuid: bsuid
+            }).sort({ updatedAt: -1, createdAt: -1 }).lean();
+        }
+        if (!lead && phoneLastTen) {
+            lead = await Lead.findOne({
+                userId: { $in: validUserIds },
+                phone: { $regex: phoneLastTen + '$' }
+            }).sort({ updatedAt: -1, createdAt: -1 }).lean();
+        }
 
-        if (!existingConversation) {
-            // Fallback: match by last 10 digits (handles country code mismatches)
+        // Backfill BSUID on existing lead if first time seeing it
+        if (lead && bsuid && !lead.waBsuid) {
+            await Lead.findByIdAndUpdate(lead._id, { $set: { waBsuid: bsuid } });
+            lead.waBsuid = bsuid; // update local copy
+            debug(`   Backfilled BSUID ${bsuid} on lead ${lead._id}`);
+        }
+
+        // ── DUAL-KEY CONVERSATION LOOKUP ──────────────────────────────────
+        // Try BSUID first, then phone-based waContactId (exact + suffix fallback)
+        let existingConversation = null;
+
+        if (bsuid) {
             existingConversation = await WhatsAppConversation.findOne({
                 userId: { $in: validUserIds },
-                waContactId: { $regex: phoneLastTen + '$' }
+                waBsuid: bsuid
             }).sort({ lastMessageAt: -1 }).lean();
             if (existingConversation) {
-                debug(`📱 Found existing conversation via phone suffix match: ${existingConversation._id} (waContactId: ${existingConversation.waContactId} → incoming: ${from})`);
+                debug(`📱 Found existing conversation via BSUID: ${existingConversation._id}`);
+            }
+        }
+
+        if (!existingConversation && from) {
+            existingConversation = await WhatsAppConversation.findOne({
+                userId: { $in: validUserIds },
+                waContactId: from
+            }).sort({ lastMessageAt: -1 }).lean();
+
+            if (!existingConversation && phoneLastTen) {
+                existingConversation = await WhatsAppConversation.findOne({
+                    userId: { $in: validUserIds },
+                    waContactId: { $regex: phoneLastTen + '$' }
+                }).sort({ lastMessageAt: -1 }).lean();
+                if (existingConversation) {
+                    debug(`📱 Found existing conversation via phone suffix match: ${existingConversation._id} (waContactId: ${existingConversation.waContactId} → incoming: ${from})`);
+                }
             }
         }
 
         // If found, append to that specific user's conversation to prevent duplicates.
         const targetUserId = existingConversation ? existingConversation.userId : userId;
         // Use the EXISTING conversation's waContactId to prevent creating a duplicate
-        const upsertContactId = existingConversation ? existingConversation.waContactId : from;
+        const upsertContactId = existingConversation ? existingConversation.waContactId : (from || bsuid);
 
         // --- 4. ATOMIC UPSERT ---
         // Guaranteed to never throw duplicate key exceptions on concurrent inserts
-        debug(`🔎 Upserting conversation: targetUserId=${targetUserId}, waContactId=${upsertContactId} (incoming from: ${from})`);
+        debug(`🔎 Upserting conversation: targetUserId=${targetUserId}, waContactId=${upsertContactId} (incoming from: ${from || bsuid})`);
 
         const updatePayload = {
             $setOnInsert: {
                 userId: targetUserId,
                 waContactId: upsertContactId,
-                phone: from,
+                phone: from || null,
+                waBsuid: bsuid,
                 leadId: lead?._id || null,
                 initiatedBy: 'customer',
                 'metadata.firstMessageAt': timestamp
@@ -836,6 +866,15 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
 
         if (displayName) {
             updatePayload.$set.displayName = displayName;
+        }
+
+        // Backfill BSUID on existing conversations that don't have it yet
+        if (bsuid && existingConversation && !existingConversation.waBsuid) {
+            updatePayload.$set.waBsuid = bsuid;
+        }
+        // Backfill phone on existing conversations that don't have it yet
+        if (from && existingConversation && !existingConversation.phone) {
+            updatePayload.$set.phone = from;
         }
 
         let conversation;
@@ -874,6 +913,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
             userId: targetUserId,
             waMessageId: waMessageId,
             direction: 'inbound',
+            waBsuid: bsuid,
             type: messageType,
             content: messageContent,
             status: 'delivered',

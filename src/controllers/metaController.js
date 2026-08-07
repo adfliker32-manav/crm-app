@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const axios = require('axios');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v26.0';
 const META_API_TIMEOUT = 10000; // 10s — all Meta API calls must have a timeout
 
 // ==========================================
@@ -132,7 +132,7 @@ const getAuthUrl = async (req, res) => {
             'business_management'   // required to fetch Business Manager pages via /me/businesses
         ].join(',');
 
-        let authUrl = `https://www.facebook.com/v25.0/dialog/oauth?` +
+        let authUrl = `https://www.facebook.com/v26.0/dialog/oauth?` +
             `client_id=${appId}` +
             `&redirect_uri=${encodeURIComponent(redirectUri)}` +
             `&state=${state}` +

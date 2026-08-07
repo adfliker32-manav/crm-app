@@ -10,7 +10,7 @@ const { queueLeadCreatedEffects } = require('../utils/leadEffects');
 const { checkAndRefreshToken } = require('./metaController');
 const telemetryService = require('../services/telemetryService');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v26.0';
 const META_API_TIMEOUT = 8000; // 8s — prevents hung threads on slow Meta API
 
 // Webhook verification (GET request from Meta)

@@ -18,7 +18,7 @@ const axios = require('axios');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const storage = require('./storageService');
 
-const META_GRAPH_URL = 'https://graph.facebook.com/v25.0';
+const META_GRAPH_URL = 'https://graph.facebook.com/v26.0';
 const META_API_TIMEOUT = 30000;          // media downloads are slower than API calls
 const MAX_MEDIA_BYTES = 100 * 1024 * 1024; // Meta's own document ceiling
 

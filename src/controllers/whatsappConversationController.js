@@ -149,7 +149,13 @@ exports.sendMessage = async (req, res) => {
         setImmediate(() => cancelActiveChatbots(conversation._id).catch(e => console.error('cancelActiveChatbots error:', e)));
 
         // Send via WhatsApp API
-        const result = await sendWhatsAppTextMessage(conversation.phone, text.trim(), userId);
+        // Resolve recipient: use phone if available, else BSUID for username-only contacts
+        const recipient = conversation.phone || conversation.waBsuid;
+        if (!recipient) {
+            return res.status(400).json({ message: 'Cannot send message: contact has no phone number or BSUID.' });
+        }
+        const recipientType = conversation.phone ? undefined : 'user_id';
+        const result = await sendWhatsAppTextMessage(recipient, text.trim(), userId, { recipientType });
         const waMessageId = result?.messages?.[0]?.id;
 
         // Create message record
@@ -631,7 +637,7 @@ exports.sendMediaMessage = async (req, res) => {
         const { phoneNumberId, accessToken } = creds;
 
         // Upload media to WhatsApp
-        const uploadUrl = `https://graph.facebook.com/v25.0/${phoneNumberId}/media`;
+        const uploadUrl = `https://graph.facebook.com/v26.0/${phoneNumberId}/media`;
         const FormData = require('form-data');
         const form = new FormData();
         form.append('messaging_product', 'whatsapp');
@@ -651,13 +657,18 @@ exports.sendMediaMessage = async (req, res) => {
         console.log(`✅ Media uploaded to WhatsApp, ID: ${mediaId}`);
 
         // Step 2: Send media message using the uploaded media ID
-        const sendUrl = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+        const sendUrl = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
+        const mediaRecipient = conversation.phone || conversation.waBsuid;
         const msgData = {
             messaging_product: 'whatsapp',
-            to: conversation.phone,
+            to: mediaRecipient,
             type: mediaType,
             [mediaType]: { id: mediaId }
         };
+        // BSUID support: username-only contacts need recipient_type: 'user_id'
+        if (!conversation.phone && conversation.waBsuid) {
+            msgData.recipient_type = 'user_id';
+        }
         if (caption && ['image', 'video', 'document'].includes(mediaType)) {
             msgData[mediaType].caption = caption;
         }

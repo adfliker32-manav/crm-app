@@ -105,14 +105,16 @@ async function processIncomingMessage(messageObj, value) {
         const contactObj = value.contacts?.[0];
         const phoneNumberId = value.metadata?.phone_number_id;
         
-        const from = messageObj.from;
+        const from = messageObj.from;           // Phone number (may be null with Usernames)
+        const bsuid = messageObj.user_id || null; // Business-Scoped User ID (v26+)
         const messageType = messageObj.type;
         const msgBody = messageType === 'text' ? (messageObj.text?.body || "") : "";
         const name = contactObj?.profile?.name || "Unknown";
 
-        console.log(`📩 Message from ${name} (${from}):`);
+        console.log(`📩 Message from ${name} (${from || bsuid}):`);
         console.log(`   Type: ${messageType}`);
         console.log(`   Body: ${msgBody || '(non-text message)'}`);
+        if (bsuid) console.log(`   BSUID: ${bsuid}`);
 
         // Skip if not a text message (for now)
         if (messageType !== 'text' || !msgBody) {
@@ -131,14 +133,19 @@ async function processIncomingMessage(messageObj, value) {
             return;
         }
 
-        // Normalize phone number (remove + and spaces)
-        const normalizedPhone = from.replace(/[^0-9]/g, '');
+        // Normalize phone number (remove + and spaces) — may be null for username-only contacts
+        const normalizedPhone = from ? from.replace(/[^0-9]/g, '') : null;
 
-        // Find lead using exact match (not regex — prevents ReDoS and collection scans)
-        let lead = await Lead.findOne({ 
-            phone: normalizedPhone,
-            userId: ownerUser._id 
-        });
+        // ── DUAL-KEY LEAD LOOKUP ──────────────────────────────────────────
+        // BSUID-first resolution: find by BSUID if available, else by phone.
+        // This ensures contacts who hide their phone number are still matched.
+        let lead = null;
+        if (bsuid) {
+            lead = await Lead.findOne({ waBsuid: bsuid, userId: ownerUser._id });
+        }
+        if (!lead && normalizedPhone) {
+            lead = await Lead.findOne({ phone: normalizedPhone, userId: ownerUser._id });
+        }
 
         const newMessage = { 
             text: msgBody, 
@@ -149,47 +156,79 @@ async function processIncomingMessage(messageObj, value) {
         if (lead) {
             lead.messages.push(newMessage);
             lead.updatedAt = new Date();
+            // Store BSUID on existing lead if first time seeing it
+            if (bsuid && !lead.waBsuid) {
+                lead.waBsuid = bsuid;
+            }
             await lead.save();
             console.log(`✅ Updated existing lead: ${lead.name}`);
         } else {
+            // For username-only contacts without a phone, use BSUID as identifier
+            const leadPhone = normalizedPhone || null;
+            const leadEmail = normalizedPhone
+                ? `${normalizedPhone}@whatsapp.user`
+                : `${(bsuid || 'unknown').substring(0, 20)}@whatsapp.bsuid`;
+
             lead = new Lead({
                 userId: ownerUser._id,
                 name: name,
-                phone: normalizedPhone,
-                email: `${normalizedPhone}@whatsapp.user`,
+                phone: leadPhone,
+                email: leadEmail,
                 status: 'New',
                 source: 'WhatsApp',
+                waBsuid: bsuid,
                 messages: [newMessage]
             });
             await lead.save();
-            console.log(`✅ Created new lead: ${name} (${normalizedPhone})`);
+            console.log(`✅ Created new lead: ${name} (${normalizedPhone || bsuid})`);
 
             queueLeadCreatedEffects(lead, ownerUser._id.toString(), { source: 'WhatsApp Inbound' });
         }
 
         // ============================================
         // Sync to New Conversation Data Model
-        // ⚠️ SECURITY FIX: Must set waContactId (required field)
-        // ⚠️ PERFORMANCE FIX: Use indexed field (waContactId) not unindexed (phone)
+        // ── DUAL-KEY CONVERSATION LOOKUP ─────────────
         // ============================================
         const waMessageId = messageObj.id;
+        // Use BSUID as the contact identifier if available, else phone
+        const contactId = normalizedPhone || bsuid;
 
-        let conversation = await WhatsAppConversation.findOne({
-            userId: ownerUser._id,
-            waContactId: normalizedPhone
-        });
+        // Try BSUID first, then phone-based waContactId
+        let conversation = null;
+        if (bsuid) {
+            conversation = await WhatsAppConversation.findOne({
+                userId: ownerUser._id,
+                waBsuid: bsuid
+            });
+        }
+        if (!conversation && normalizedPhone) {
+            conversation = await WhatsAppConversation.findOne({
+                userId: ownerUser._id,
+                waContactId: normalizedPhone
+            });
+        }
 
         if (!conversation) {
             conversation = new WhatsAppConversation({
                 userId: ownerUser._id,
                 leadId: lead._id,
-                waContactId: normalizedPhone,
+                waContactId: contactId,
                 phone: normalizedPhone,
+                waBsuid: bsuid,
                 displayName: name,
                 status: 'active',
                 unreadCount: 0,
                 metadata: { totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
             });
+        } else {
+            // Backfill BSUID on existing conversation if first time seeing it
+            if (bsuid && !conversation.waBsuid) {
+                conversation.waBsuid = bsuid;
+            }
+            // Backfill phone if we now have it but didn't before
+            if (normalizedPhone && !conversation.phone) {
+                conversation.phone = normalizedPhone;
+            }
         }
 
         // Ensure leadId is attached if it wasn't before
@@ -203,6 +242,7 @@ async function processIncomingMessage(messageObj, value) {
             userId: ownerUser._id,
             waMessageId: waMessageId,
             direction: 'inbound',
+            waBsuid: bsuid,
             type: messageType,
             content: { text: msgBody },
             status: 'delivered',  // Inbound is delivered by definition
@@ -220,7 +260,9 @@ async function processIncomingMessage(messageObj, value) {
                 $set: {
                     lastMessage: msgBody.substring(0, 100),
                     lastMessageAt: new Date(),
-                    lastMessageDirection: 'inbound'
+                    lastMessageDirection: 'inbound',
+                    ...(bsuid && !conversation.waBsuid ? { waBsuid: bsuid } : {}),
+                    ...(normalizedPhone && !conversation.phone ? { phone: normalizedPhone } : {})
                 },
                 $inc: { 
                     unreadCount: 1,
@@ -277,7 +319,7 @@ const sendReply = async (req, res) => {
 
         const { phoneNumberId, accessToken } = userCredentials;
         
-        const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+        const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
         
         await axios.post(url, {
             messaging_product: "whatsapp",

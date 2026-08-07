@@ -81,10 +81,10 @@ sequenceDiagram
     BE->>BE: Sanity check & sanitize parameters (regex validation)
     BE->>Meta: GET /oauth/access_token { client_id, client_secret, code }
     Meta-->>BE: Return Access Token (Customer-scoped System User token)
-    BE->>Meta: GET /v25.0/<phoneNumberId> { access_token }
+    BE->>Meta: GET /v26.0/<phoneNumberId> { access_token }
     Meta-->>BE: Return verified display name & phone number
     BE->>BE: Encrypt token and update IntegrationConfig (embeddedSignupConnected = true)
-    BE->>Meta: POST /v25.0/<wabaId>/subscribed_apps
+    BE->>Meta: POST /v26.0/<wabaId>/subscribed_apps
     Meta-->>BE: Subscription status (incoming webhook hook verified)
     BE-->>FE: Return Success Response
     FE->>User: Display "WhatsApp Connected (Meta Login)" badge
@@ -103,9 +103,9 @@ sequenceDiagram
    - The React component listens for `message` events, checks `event.origin` to ensure security (trusts only `facebook.com`), and holds both outputs in a combined state. The backend call is only triggered once both pieces are fully resolved.
 
 #### B. Backend Handling (Express Server)
-1. **Secure Exchange**: The backend receives the short-lived authorization code. It calls `https://graph.facebook.com/v25.0/oauth/access_token` alongside the secure `META_APP_SECRET` to trade it for a permanent customer-scoped System User Token.
+1. **Secure Exchange**: The backend receives the short-lived authorization code. It calls `https://graph.facebook.com/v26.0/oauth/access_token` alongside the secure `META_APP_SECRET` to trade it for a permanent customer-scoped System User Token.
 2. **Validation & Storage**: The backend makes a Graph API request to fetch the display phone number and name. It encrypts the token using the server's master `ENCRYPTION_KEY` and updates the `IntegrationConfig` collection, storing `embeddedSignupConnected = true` to demarcate the Meta Login path from the manual pathway.
-3. **Automatic Webhook Subscription**: The backend registers the client WABA to the app: `POST /v25.0/<wabaId>/subscribed_apps`. This triggers Meta to start routing incoming messaging events to your callback URL: `https://app.adfliker.com/webhook/whatsapp`.
+3. **Automatic Webhook Subscription**: The backend registers the client WABA to the app: `POST /v26.0/<wabaId>/subscribed_apps`. This triggers Meta to start routing incoming messaging events to your callback URL: `https://app.adfliker.com/webhook/whatsapp`.
 
 ---
 

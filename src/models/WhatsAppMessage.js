@@ -24,6 +24,11 @@ const whatsAppMessageSchema = new mongoose.Schema({
         enum: ['inbound', 'outbound'],
         required: true
     },
+    // WhatsApp Business-Scoped User ID of the contact (sender for inbound, recipient for outbound)
+    waBsuid: {
+        type: String,
+        default: null
+    },
     type: {
         type: String,
         // BUG #6 FIX: 'system' added — Meta sends system events (e.g. number-change
