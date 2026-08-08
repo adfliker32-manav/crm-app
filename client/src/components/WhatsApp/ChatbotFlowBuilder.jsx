@@ -20,6 +20,7 @@ import '@xyflow/react/dist/style.css';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import SmartLeadSettingsModal from './SmartLeadSettingsModal';
+import MediaLibrary from './MediaLibrary';
 
 // --- Custom Deletable + Reconnectable Edge ---
 const DeletableEdge = ({
@@ -178,6 +179,7 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const [saving, setSaving] = useState(false);
     const [selectedNode, setSelectedNode] = useState(null);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const [showMediaLibraryPicker, setShowMediaLibraryPicker] = useState(false);
     const [approvedTemplates, setApprovedTemplates] = useState([]);
     const [crmStages, setCrmStages] = useState([]);
     const [teamUsers, setTeamUsers] = useState([]);
@@ -886,27 +888,59 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                                 <option value="audio">Audio</option>
                                             </select>
                                         </div>
-                                        <div>
-                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Media URL (HTTPS)</label>
-                                            <input
-                                                value={selectedNode.data.mediaUrl || ''}
-                                                onChange={(e) => updateSelectedNodeData({ mediaUrl: e.target.value, mediaId: '' })}
-                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
-                                                placeholder="https://example.com/photo.jpg"
-                                            />
-                                            <p className="text-[11px] text-slate-500 mt-1">Must be a publicly accessible HTTPS URL.</p>
+
+                                        <div className="border-t border-slate-200 pt-3">
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Media Library Asset</label>
+                                            {selectedNode.data.mediaAssetId ? (
+                                                <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg p-2">
+                                                    <i className="fa-solid fa-photo-film text-emerald-500"></i>
+                                                    <span className="text-sm text-emerald-800 flex-1 truncate">
+                                                        {selectedNode.data.mediaAssetName || 'Selected Asset'}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => updateSelectedNodeData({ mediaAssetId: '', mediaAssetName: '' })}
+                                                        className="text-emerald-500 hover:text-emerald-700 px-1"
+                                                    >
+                                                        <i className="fa-solid fa-xmark"></i>
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowMediaLibraryPicker(true)}
+                                                    className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 hover:text-emerald-600 hover:border-emerald-300 transition"
+                                                >
+                                                    <i className="fa-solid fa-photo-film"></i> Choose from Media Library
+                                                </button>
+                                            )}
                                         </div>
-                                        <div>
-                                            <label className="block text-sm font-semibold text-slate-700 mb-2">— or — Meta Media ID</label>
-                                            <input
-                                                value={selectedNode.data.mediaId || ''}
-                                                onChange={(e) => updateSelectedNodeData({ mediaId: e.target.value, mediaUrl: '' })}
-                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
-                                                placeholder="e.g., 1234567890"
-                                            />
-                                            <p className="text-[11px] text-slate-500 mt-1">Use either a public URL or a Meta-uploaded media ID, not both.</p>
-                                        </div>
-                                        <p className="text-[11px] text-slate-500">Caption: use the &ldquo;Message Text&rdquo; field above.</p>
+
+                                        {!selectedNode.data.mediaAssetId && (
+                                            <>
+                                                <div>
+                                                    <label className="block text-sm font-semibold text-slate-700 mb-2">— or — Media URL (HTTPS)</label>
+                                                    <input
+                                                        value={selectedNode.data.mediaUrl || ''}
+                                                        onChange={(e) => updateSelectedNodeData({ mediaUrl: e.target.value, mediaId: '', mediaAssetId: '' })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                        placeholder="https://example.com/photo.jpg"
+                                                    />
+                                                    <p className="text-[11px] text-slate-500 mt-1">Must be a publicly accessible HTTPS URL.</p>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-semibold text-slate-700 mb-2">— or — Meta Media ID</label>
+                                                    <input
+                                                        value={selectedNode.data.mediaId || ''}
+                                                        onChange={(e) => updateSelectedNodeData({ mediaId: e.target.value, mediaUrl: '', mediaAssetId: '' })}
+                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-teal-500"
+                                                        placeholder="e.g., 1234567890"
+                                                    />
+                                                    <p className="text-[11px] text-slate-500 mt-1">Use either a public URL or a Meta-uploaded media ID.</p>
+                                                </div>
+                                            </>
+                                        )}
+                                        <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-200">Caption: use the &ldquo;Message Text&rdquo; field above.</p>
                                     </div>
                                 )}
 
@@ -1913,6 +1947,40 @@ const FlowBuilder = ({ flowId, onBack }) => {
                     }}
                     onClose={() => setShowSettingsModal(false)}
                 />
+            )}
+
+            {/* MEDIA LIBRARY MODAL */}
+            {showMediaLibraryPicker && (
+                <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4" onClick={() => setShowMediaLibraryPicker(false)}>
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+                        <div className="bg-gradient-to-r from-emerald-500 to-teal-500 p-5 text-white flex-shrink-0">
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-lg font-semibold flex items-center gap-2">
+                                    <i className="fa-solid fa-photo-film"></i> Choose from Media Library
+                                </h3>
+                                <button onClick={() => setShowMediaLibraryPicker(false)} className="text-white/80 hover:text-white transition">
+                                    <i className="fa-solid fa-xmark text-xl"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4">
+                            <MediaLibrary
+                                pickerMode={true}
+                                onSelect={(asset) => {
+                                    const typeMap = { IMAGE: 'image', VIDEO: 'video', DOCUMENT: 'document', AUDIO: 'audio' };
+                                    updateSelectedNodeData({
+                                        mediaAssetId: asset.id,
+                                        mediaAssetName: asset.label || asset.fileName,
+                                        mediaType: typeMap[asset.mediaType] || 'document',
+                                        mediaUrl: '',
+                                        mediaId: ''
+                                    });
+                                    setShowMediaLibraryPicker(false);
+                                }}
+                            />
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

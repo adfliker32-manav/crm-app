@@ -2168,7 +2168,65 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 if (rawMediaType !== mediaType) {
                     console.warn(`⚠️ [Chatbot] Media node ${nodeId} has invalid mediaType "${rawMediaType}". Falling back to "image".`);
                 }
-                const mediaIdentifier = node.data.mediaId || node.data.mediaUrl;
+                let mediaIdentifier = node.data.mediaId || node.data.mediaUrl;
+                let usedMediaAsset = false;
+                let mediaAssetOriginalName = '';
+
+                if (node.data.mediaAssetId) {
+                    try {
+                        const MediaAsset = require('../models/MediaAsset');
+                        const storage = require('./storageService');
+                        const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
+                        
+                        const asset = await MediaAsset.findOne({ _id: node.data.mediaAssetId });
+                        if (asset) {
+                            let buffer = await storage.getBuffer(asset.storageKey);
+                            let mimetype = asset.mimeType;
+                            mediaAssetOriginalName = asset.fileName;
+                            
+                            // Normalize images for Meta
+                            if (mediaType === 'image') {
+                                try {
+                                    const sharp = require('sharp');
+                                    buffer = await sharp(buffer)
+                                        .flatten({ background: { r: 255, g: 255, b: 255 } })
+                                        .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+                                        .jpeg({ quality: 92 })
+                                        .toBuffer();
+                                    mimetype = 'image/jpeg';
+                                    mediaAssetOriginalName = mediaAssetOriginalName.replace(/\.[^.]+$/, '.jpg');
+                                } catch (e) {
+                                    console.warn('⚠️ [Chatbot] Image normalization failed:', e.message);
+                                }
+                            }
+
+                            const creds = await getUserWhatsAppCredentials(session.userId);
+                            if (creds?.phoneNumberId && creds?.accessToken) {
+                                const uploadUrl = `https://graph.facebook.com/v26.0/${creds.phoneNumberId}/media`;
+                                const FormData = require('form-data');
+                                const form = new FormData();
+                                form.append('messaging_product', 'whatsapp');
+                                form.append('file', buffer, { filename: mediaAssetOriginalName, contentType: mimetype });
+                                form.append('type', mimetype);
+
+                                const uploadRes = await axios.post(uploadUrl, form, {
+                                    headers: { 'Authorization': `Bearer ${creds.accessToken}`, ...form.getHeaders() },
+                                    maxContentLength: Infinity,
+                                    maxBodyLength: Infinity
+                                });
+                                
+                                if (uploadRes.data?.id) {
+                                    mediaIdentifier = uploadRes.data.id;
+                                    usedMediaAsset = true;
+                                    // Bump usage stats async
+                                    MediaAsset.updateOne({ _id: asset._id }, { $inc: { usageCount: 1 }, $set: { lastUsedAt: new Date() } }).catch(() => {});
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.error(`⚠️ [Chatbot] Failed to resolve MediaAsset ${node.data.mediaAssetId}, falling back...`, err.message);
+                    }
+                }
 
                 if (mediaIdentifier) {
                     try {
@@ -2184,10 +2242,15 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                             ? { mediaUrl: mediaIdentifier } 
                             : { mediaId: mediaIdentifier };
                             
+                        if (usedMediaAsset) {
+                            mediaData.mediaAssetId = node.data.mediaAssetId;
+                            mediaData.fileName = mediaAssetOriginalName;
+                        }
+                            
                         await saveBotMessage(
                             session.conversationId, 
                             session.userId, 
-                            mediaCaption || `[${mediaType}]`, 
+                            mediaCaption || (usedMediaAsset ? `📎 ${mediaAssetOriginalName}` : `[${mediaType}]`), 
                             mediaType, 
                             mediaResult,
                             mediaData
