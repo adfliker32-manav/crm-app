@@ -2173,16 +2173,19 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 let mediaAssetOriginalName = '';
 
                 if (node.data.mediaAssetId) {
+                    // FIX #2: Declare asset outside inner try so the catch can use it
+                    // for a public-URL fallback when the Meta binary upload fails.
+                    let resolvedAsset = null;
                     try {
                         const MediaAsset = require('../models/MediaAsset');
                         const storage = require('./storageService');
                         const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
                         
-                        const asset = await MediaAsset.findOne({ _id: node.data.mediaAssetId });
-                        if (asset) {
-                            let buffer = await storage.getBuffer(asset.storageKey);
-                            let mimetype = asset.mimeType;
-                            mediaAssetOriginalName = asset.fileName;
+                        resolvedAsset = await MediaAsset.findOne({ _id: node.data.mediaAssetId });
+                        if (resolvedAsset) {
+                            let buffer = await storage.getBuffer(resolvedAsset.storageKey);
+                            let mimetype = resolvedAsset.mimeType;
+                            mediaAssetOriginalName = resolvedAsset.fileName;
                             
                             // Normalize images for Meta
                             if (mediaType === 'image') {
@@ -2219,12 +2222,30 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                                     mediaIdentifier = uploadRes.data.id;
                                     usedMediaAsset = true;
                                     // Bump usage stats async
-                                    MediaAsset.updateOne({ _id: asset._id }, { $inc: { usageCount: 1 }, $set: { lastUsedAt: new Date() } }).catch(() => {});
+                                    MediaAsset.updateOne({ _id: resolvedAsset._id }, { $inc: { usageCount: 1 }, $set: { lastUsedAt: new Date() } }).catch(() => {});
                                 }
                             }
                         }
                     } catch (err) {
-                        console.error(`⚠️ [Chatbot] Failed to resolve MediaAsset ${node.data.mediaAssetId}, falling back...`, err.message);
+                        console.error(`⚠️ [Chatbot] Failed to upload MediaAsset ${node.data.mediaAssetId} to Meta:`, err.message);
+                        // FIX #2: If the binary upload failed but mediaIdentifier is still
+                        // unset (no fallback mediaId/mediaUrl on the node), try the public
+                        // R2/storage URL so Meta can download the file itself.
+                        if (!mediaIdentifier && resolvedAsset?.storageKey) {
+                            try {
+                                const storageFallback = require('./storageService');
+                                const publicUrl = storageFallback.getPublicUrl(resolvedAsset.storageKey);
+                                if (publicUrl) {
+                                    mediaIdentifier = publicUrl;
+                                    mediaAssetOriginalName = mediaAssetOriginalName || resolvedAsset.fileName;
+                                    console.warn(`⚠️ [Chatbot] Falling back to public URL for MediaAsset ${node.data.mediaAssetId}: ${publicUrl}`);
+                                } else {
+                                    console.error(`❌ [Chatbot] No public URL available for MediaAsset ${node.data.mediaAssetId}. Media will not be sent.`);
+                                }
+                            } catch (urlErr) {
+                                console.error(`❌ [Chatbot] Public URL fallback also failed for MediaAsset ${node.data.mediaAssetId}:`, urlErr.message);
+                            }
+                        }
                     }
                 }
 
@@ -2238,7 +2259,10 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                             session.userId
                         );
                         
-                        const mediaData = mediaIdentifier.startsWith('http') 
+                        // FIX #4: Coerce to String before .startsWith() — Meta media IDs
+                        // are returned as numeric strings but defensive coercion prevents
+                        // a TypeError if the value is ever a plain number.
+                        const mediaData = String(mediaIdentifier).startsWith('http')
                             ? { mediaUrl: mediaIdentifier } 
                             : { mediaId: mediaIdentifier };
                             
@@ -2256,14 +2280,39 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                             mediaData
                         );
                     } catch (mediaErr) {
-                        console.error(`[Chatbot] Failed to send actual media, falling back to text link:`, mediaErr.message);
-                        const fallbackText = mediaCaption ? `${mediaCaption}\n\n${mediaIdentifier}` : mediaIdentifier;
-                        const fallbackResult = await sendWhatsAppTextMessage(conversation.phone, fallbackText, session.userId);
-                        await saveBotMessage(session.conversationId, session.userId, fallbackText, 'text', fallbackResult);
+                        const metaErrDetail = mediaErr.response?.data?.error || mediaErr.message;
+                        // FIX #5: Log the actual identifier so expired/inaccessible URLs
+                        // are immediately visible in logs without guessing.
+                        const identifierSnippet = String(mediaIdentifier).startsWith('http')
+                            ? `URL=${mediaIdentifier}`
+                            : `id=${mediaIdentifier}`;
+                        console.error(
+                            `❌ [Chatbot] Failed to send ${mediaType} media for node ${nodeId} (${identifierSnippet}). ` +
+                            `Meta error: ${JSON.stringify(metaErrDetail)}`
+                        );
+                        // Fallback: send caption text so the user isn't left with silence
+                        if (mediaCaption) {
+                            const fallbackText = `${mediaCaption}\n\n(Media could not be sent)`;
+                            const fallbackResult = await sendWhatsAppTextMessage(conversation.phone, fallbackText, session.userId);
+                            await saveBotMessage(session.conversationId, session.userId, fallbackText, 'text', fallbackResult);
+                        } else {
+                            const fallbackText = String(mediaIdentifier).startsWith('http') ? `📎 ${mediaIdentifier}` : `[${mediaType} – send failed]`;
+                            const fallbackResult = await sendWhatsAppTextMessage(conversation.phone, fallbackText, session.userId);
+                            await saveBotMessage(session.conversationId, session.userId, fallbackText, 'text', fallbackResult);
+                        }
                     }
-                } else if (mediaCaption) {
-                    const mediaCaptionResult = await sendWhatsAppTextMessage(conversation.phone, mediaCaption, session.userId);
-                    await saveBotMessage(session.conversationId, session.userId, mediaCaption, 'text', mediaCaptionResult);
+                } else {
+                    // FIX #1: Emit a clear warning so the missing-identifier failure
+                    // is always visible in logs (previously this was completely silent).
+                    console.warn(
+                        `⚠️ [Chatbot] Media node ${nodeId}: no mediaIdentifier could be resolved ` +
+                        `(mediaId="${node.data.mediaId}", mediaUrl="${node.data.mediaUrl}", ` +
+                        `mediaAssetId="${node.data.mediaAssetId}"). Cannot send ${mediaType} media.`
+                    );
+                    if (mediaCaption) {
+                        const mediaCaptionResult = await sendWhatsAppTextMessage(conversation.phone, mediaCaption, session.userId);
+                        await saveBotMessage(session.conversationId, session.userId, mediaCaption, 'text', mediaCaptionResult);
+                    }
                 }
 
                 // Auto-advance to next node

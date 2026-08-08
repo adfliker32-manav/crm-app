@@ -251,7 +251,9 @@ const sendMediaMessage = async (to, mediaType, mediaIdentifier, caption = null, 
             [mediaType]: isUrl ? { link: mediaIdentifier } : { id: mediaIdentifier }
         };
 
-        if (caption && ['image', 'video', 'document', 'audio'].includes(mediaType)) {
+        // FIX #3: Meta does NOT support captions on audio messages (returns error 100).
+        // Only image, video, and document accept a caption field.
+        if (caption && ['image', 'video', 'document'].includes(mediaType)) {
             data[mediaType].caption = caption;
         }
 
