@@ -180,6 +180,10 @@ const FlowBuilder = ({ flowId, onBack }) => {
     const [selectedNode, setSelectedNode] = useState(null);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [showMediaLibraryPicker, setShowMediaLibraryPicker] = useState(false);
+    // FIX: Capture the node ID at the moment the picker opens so the onSelect
+    // callback never depends on the selectedNode state (which may be stale or
+    // null by the time the user picks an asset from the modal).
+    const mediaPickerTargetNodeId = useRef(null);
     const [approvedTemplates, setApprovedTemplates] = useState([]);
     const [crmStages, setCrmStages] = useState([]);
     const [teamUsers, setTeamUsers] = useState([]);
@@ -908,7 +912,13 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                             ) : (
                                                 <button
                                                     type="button"
-                                                    onClick={() => setShowMediaLibraryPicker(true)}
+                                                    onClick={() => {
+                                                        // FIX: Snapshot the node ID before opening the picker.
+                                                        // The modal is a fixed overlay — by the time the user
+                                                        // clicks an asset, selectedNode may have been cleared.
+                                                        mediaPickerTargetNodeId.current = selectedNode.id;
+                                                        setShowMediaLibraryPicker(true);
+                                                    }}
                                                     className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 hover:text-emerald-600 hover:border-emerald-300 transition"
                                                 >
                                                     <i className="fa-solid fa-photo-film"></i> Choose from Media Library
@@ -1968,13 +1978,31 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                 pickerMode={true}
                                 onSelect={(asset) => {
                                     const typeMap = { IMAGE: 'image', VIDEO: 'video', DOCUMENT: 'document', AUDIO: 'audio' };
-                                    updateSelectedNodeData({
-                                        mediaAssetId: asset.id,
-                                        mediaAssetName: asset.label || asset.fileName,
-                                        mediaType: typeMap[asset.mediaType] || 'document',
-                                        mediaUrl: '',
-                                        mediaId: ''
-                                    });
+                                    const targetId = mediaPickerTargetNodeId.current;
+                                    if (!targetId) {
+                                        setShowMediaLibraryPicker(false);
+                                        return;
+                                    }
+                                    // FIX: Update nodes directly by the captured ID — never depends
+                                    // on selectedNode state, which may be null at callback time.
+                                    setNodes(nds => nds.map(n => {
+                                        if (n.id !== targetId) return n;
+                                        const updatedNode = {
+                                            ...n,
+                                            data: {
+                                                ...n.data,
+                                                mediaAssetId:   String(asset.id),
+                                                mediaAssetName: asset.label || asset.fileName,
+                                                mediaType:      typeMap[asset.mediaType] || 'document',
+                                                mediaUrl:       '',
+                                                mediaId:        ''
+                                            }
+                                        };
+                                        // Keep the right-panel in sync if this node is still selected
+                                        setSelectedNode(prev => prev?.id === targetId ? updatedNode : prev);
+                                        return updatedNode;
+                                    }));
+                                    mediaPickerTargetNodeId.current = null;
                                     setShowMediaLibraryPicker(false);
                                 }}
                             />
