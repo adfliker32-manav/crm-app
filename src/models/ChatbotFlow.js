@@ -136,8 +136,10 @@ const chatbotFlowSchema = new mongoose.Schema({
                 type: String,
                 enum: ['image', 'video', 'document', 'audio']
             },
-            mediaUrl: String,   // public HTTPS URL — sent as { link: ... }
-            mediaId: String,    // Meta media ID — sent as { id: ... }
+            mediaUrl: String,       // public HTTPS URL — sent as { link: ... }
+            mediaId: String,        // Meta media ID — sent as { id: ... }
+            mediaAssetId: String,   // Media Library asset _id (fetched from storage at send time)
+            mediaAssetName: String, // Human-readable filename for display in the node editor
             // For request_media nodes (inbound: ask user to upload media)
             acceptedMediaTypes: [{
                 type: String,

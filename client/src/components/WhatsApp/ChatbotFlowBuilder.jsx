@@ -1983,25 +1983,29 @@ const FlowBuilder = ({ flowId, onBack }) => {
                                         setShowMediaLibraryPicker(false);
                                         return;
                                     }
-                                    // FIX: Update nodes directly by the captured ID — never depends
-                                    // on selectedNode state, which may be null at callback time.
+
+                                    // Build the new data fields once
+                                    const newMediaFields = {
+                                        mediaAssetId:   String(asset.id || asset._id || ''),
+                                        mediaAssetName: asset.label || asset.fileName || 'Selected Asset',
+                                        mediaType:      typeMap[asset.mediaType] || 'document',
+                                        mediaUrl:       '',
+                                        mediaId:        ''
+                                    };
+
+                                    // 1. Update the nodes array (this is what gets saved to the DB)
                                     setNodes(nds => nds.map(n => {
                                         if (n.id !== targetId) return n;
-                                        const updatedNode = {
-                                            ...n,
-                                            data: {
-                                                ...n.data,
-                                                mediaAssetId:   String(asset.id),
-                                                mediaAssetName: asset.label || asset.fileName,
-                                                mediaType:      typeMap[asset.mediaType] || 'document',
-                                                mediaUrl:       '',
-                                                mediaId:        ''
-                                            }
-                                        };
-                                        // Keep the right-panel in sync if this node is still selected
-                                        setSelectedNode(prev => prev?.id === targetId ? updatedNode : prev);
-                                        return updatedNode;
+                                        return { ...n, data: { ...n.data, ...newMediaFields } };
                                     }));
+
+                                    // 2. Update selectedNode separately so the right-panel re-renders
+                                    //    immediately showing the green asset indicator.
+                                    setSelectedNode(prev => {
+                                        if (!prev || prev.id !== targetId) return prev;
+                                        return { ...prev, data: { ...prev.data, ...newMediaFields } };
+                                    });
+
                                     mediaPickerTargetNodeId.current = null;
                                     setShowMediaLibraryPicker(false);
                                 }}
