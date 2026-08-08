@@ -4,6 +4,7 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import useSocket from '../../hooks/useSocket';
+import MediaLibrary, { formatBytes as formatLibraryBytes } from './MediaLibrary';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Media helpers
@@ -165,8 +166,9 @@ const WhatsAppInbox = () => {
     const [startingChat, setStartingChat] = useState(false);
     const [showTemplatePicker, setShowTemplatePicker] = useState(false);
     const [filter, setFilter] = useState('all'); // all, unread, archived
-    const [mediaPreview, setMediaPreview] = useState(null); // { file, previewUrl, type }
+    const [mediaPreview, setMediaPreview] = useState(null); // { file, previewUrl, type, fromLibrary?, assetId?, assetName? }
     const [uploading, setUploading] = useState(false);
+    const [showMediaLibraryPicker, setShowMediaLibraryPicker] = useState(false);
     const [templateQuery, setTemplateQuery] = useState('');
     const [showInlineTemplatePicker, setShowInlineTemplatePicker] = useState(false);
     // ── Quick Replies (# shortcut) ──
@@ -599,13 +601,22 @@ const WhatsAppInbox = () => {
         setUploading(true);
         shouldScrollToBottomRef.current = true; // 💪 User sent media: scroll down
         try {
-            const formData = new FormData();
-            formData.append('file', mediaPreview.file);
-            if (newMessage.trim()) formData.append('caption', newMessage.trim());
-
-            const res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send-media`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
+            let res;
+            if (mediaPreview.fromLibrary) {
+                // Send from Media Library — no file upload needed
+                res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send-media-from-library`, {
+                    mediaAssetId: mediaPreview.assetId,
+                    caption: newMessage.trim() || ''
+                });
+            } else {
+                // Send from local file upload
+                const formData = new FormData();
+                formData.append('file', mediaPreview.file);
+                if (newMessage.trim()) formData.append('caption', newMessage.trim());
+                res = await api.post(`/whatsapp/conversations/${selectedChat._id}/send-media`, formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+            }
             setMessages(prev => {
                 const exists = prev.some(m => 
                     (m._id && m._id === res.data.message._id) || 
@@ -634,8 +645,28 @@ const WhatsAppInbox = () => {
         }
     };
 
+    // ── Media Library Selection Handler ──
+    const handleMediaLibrarySelect = (asset) => {
+        const typeMap = { IMAGE: 'image', VIDEO: 'video', DOCUMENT: 'document', AUDIO: 'audio' };
+        const type = typeMap[asset.mediaType] || 'document';
+        const previewUrl = asset.mediaType === 'IMAGE'
+            ? `${api.defaults.baseURL}/media-library/${asset.id}/raw?token=${encodeURIComponent(localStorage.getItem('token') || '')}`
+            : null;
+        setMediaPreview({
+            file: null,
+            previewUrl,
+            type,
+            fromLibrary: true,
+            assetId: asset.id,
+            assetName: asset.label || asset.fileName,
+            assetSize: asset.size,
+            assetMediaType: asset.mediaType
+        });
+        setShowMediaLibraryPicker(false);
+    };
+
     const handleCancelMedia = () => {
-        if (mediaPreview?.previewUrl) URL.revokeObjectURL(mediaPreview.previewUrl);
+        if (mediaPreview?.previewUrl && !mediaPreview?.fromLibrary) URL.revokeObjectURL(mediaPreview.previewUrl);
         setMediaPreview(null);
     };
 
@@ -1425,8 +1456,14 @@ const WhatsAppInbox = () => {
                                         </div>
                                     )}
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium text-[#111b21] truncate">{mediaPreview.file.name}</p>
-                                        <p className="text-xs text-[#8696a0]">{(mediaPreview.file.size / 1024).toFixed(1)} KB • {mediaPreview.type}</p>
+                                        <p className="text-sm font-medium text-[#111b21] truncate">{mediaPreview.fromLibrary ? mediaPreview.assetName : mediaPreview.file.name}</p>
+                                        <p className="text-xs text-[#8696a0]">
+                                            {mediaPreview.fromLibrary
+                                                ? `${formatLibraryBytes(mediaPreview.assetSize)} • ${mediaPreview.type}`
+                                                : `${(mediaPreview.file.size / 1024).toFixed(1)} KB • ${mediaPreview.type}`
+                                            }
+                                            {mediaPreview.fromLibrary && <span className="ml-1.5 text-emerald-600 font-semibold"><i className="fa-solid fa-photo-film mr-0.5 text-[10px]"></i>Library</span>}
+                                        </p>
                                     </div>
                                     <button onClick={handleCancelMedia} className="w-8 h-8 rounded-full hover:bg-red-50 flex items-center justify-center text-red-400 hover:text-red-500 transition" title="Cancel">
                                         <i className="fa-solid fa-xmark text-lg"></i>
@@ -1462,6 +1499,22 @@ const WhatsAppInbox = () => {
                                                     <span className="text-sm font-medium text-[#111b21]">{item.label}</span>
                                                 </button>
                                             ))}
+                                            {/* ── Media Library option ── */}
+                                            <div className="border-t border-slate-100 mt-1 pt-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setShowAttachMenu(false);
+                                                        setShowMediaLibraryPicker(true);
+                                                    }}
+                                                    className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50 transition text-left w-full"
+                                                >
+                                                    <div className="w-9 h-9 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-full flex items-center justify-center text-white">
+                                                        <i className="fa-solid fa-photo-film text-sm"></i>
+                                                    </div>
+                                                    <span className="text-sm font-medium text-[#111b21]">Media Library</span>
+                                                </button>
+                                            </div>
                                         </div>
                                     )}
                                 </div>
@@ -1768,6 +1821,31 @@ const WhatsAppInbox = () => {
                     </div>
                     <div className="flex-1 flex items-center justify-center p-12" onClick={() => setSelectedImage(null)}>
                         <img src={selectedImage} alt="Fullscreen" className="max-w-full max-h-full object-contain shadow-2xl rounded-sm" onClick={(e) => e.stopPropagation()} />
+                    </div>
+                </div>
+            )}
+
+            {/* ═══════════ MEDIA LIBRARY PICKER MODAL ═══════════ */}
+            {showMediaLibraryPicker && (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setShowMediaLibraryPicker(false)}>
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+                        <div className="bg-gradient-to-r from-emerald-500 to-teal-500 p-5 text-white flex-shrink-0">
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-lg font-semibold flex items-center gap-2">
+                                    <i className="fa-solid fa-photo-film"></i> Choose from Media Library
+                                </h3>
+                                <button onClick={() => setShowMediaLibraryPicker(false)} className="text-white/80 hover:text-white transition">
+                                    <i className="fa-solid fa-xmark text-xl"></i>
+                                </button>
+                            </div>
+                            <p className="text-sm text-white/85 mt-1">Select a file to send in this conversation</p>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4">
+                            <MediaLibrary
+                                pickerMode={true}
+                                onSelect={handleMediaLibrarySelect}
+                            />
+                        </div>
                     </div>
                 </div>
             )}

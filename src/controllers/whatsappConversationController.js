@@ -742,6 +742,183 @@ exports.sendMediaMessage = async (req, res) => {
     }
 };
 
+// Send media from the Media Library (no file upload — bytes come from object storage)
+exports.sendMediaFromLibrary = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const { id } = req.params;
+        const { mediaAssetId, caption = '' } = req.body;
+
+        if (!mediaAssetId) {
+            return res.status(400).json({ message: 'mediaAssetId is required' });
+        }
+
+        const companyUserIds = await getCompanyUserIds(userId);
+
+        const conversation = await WhatsAppConversation.findOne({ _id: id, userId: { $in: companyUserIds } });
+        if (!conversation) {
+            return res.status(404).json({ message: 'Conversation not found' });
+        }
+
+        // Cancel any active chatbot sessions — agent is taking over
+        setImmediate(() => cancelActiveChatbots(conversation._id).catch(e => console.error('cancelActiveChatbots error:', e)));
+
+        // Look up the media asset (tenant-scoped)
+        const MediaAsset = require('../models/MediaAsset');
+        const storage = require('../services/storageService');
+        const asset = await MediaAsset.findOne({ _id: mediaAssetId, userId: { $in: companyUserIds } });
+        if (!asset) {
+            return res.status(404).json({ message: 'Media asset not found in your library' });
+        }
+
+        // Map library mediaType to WhatsApp message type
+        const typeMap = { IMAGE: 'image', VIDEO: 'video', DOCUMENT: 'document', AUDIO: 'audio' };
+        const mediaType = typeMap[asset.mediaType] || 'document';
+
+        // Fetch bytes from object storage
+        let buffer = await storage.getBuffer(asset.storageKey);
+        let mimetype = asset.mimeType;
+        let originalname = asset.fileName;
+        let size = buffer.length;
+
+        // Normalize images (same as sendMediaMessage) to avoid Meta rejections
+        if (mediaType === 'image') {
+            try {
+                const sharp = require('sharp');
+                buffer = await sharp(buffer)
+                    .flatten({ background: { r: 255, g: 255, b: 255 } })
+                    .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+                    .jpeg({ quality: 92 })
+                    .toBuffer();
+                mimetype = 'image/jpeg';
+                originalname = originalname.replace(/\.[^.]+$/, '.jpg');
+                size = buffer.length;
+                console.log(`🖼️ [MediaLibrary] Image normalized to JPEG, size: ${(size / 1024).toFixed(0)} KB`);
+            } catch (sharpErr) {
+                console.warn('⚠️ [MediaLibrary] Image normalization failed, uploading original:', sharpErr.message);
+            }
+        }
+
+        // Upload to Meta
+        const axios = require('axios');
+        const creds = await getUserWhatsAppCredentials(userId);
+        if (!creds?.phoneNumberId || !creds?.accessToken) {
+            return res.status(400).json({
+                message: 'WhatsApp not configured. Go to Settings → WhatsApp Config to set up your credentials.'
+            });
+        }
+        const { phoneNumberId, accessToken } = creds;
+
+        const uploadUrl = `https://graph.facebook.com/v26.0/${phoneNumberId}/media`;
+        const FormData = require('form-data');
+        const form = new FormData();
+        form.append('messaging_product', 'whatsapp');
+        form.append('file', buffer, { filename: originalname, contentType: mimetype });
+        form.append('type', mimetype);
+
+        const MB = 1024 * 1024;
+        const uploadRes = await axios.post(uploadUrl, form, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                ...form.getHeaders()
+            },
+            maxContentLength: 100 * MB,
+            maxBodyLength: 100 * MB
+        });
+
+        const metaMediaId = uploadRes.data.id;
+        console.log(`✅ [MediaLibrary] Media uploaded to WhatsApp, ID: ${metaMediaId}`);
+
+        // Send the message
+        const sendUrl = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
+        const mediaRecipient = conversation.phone || conversation.waBsuid;
+        const msgData = {
+            messaging_product: 'whatsapp',
+            to: mediaRecipient,
+            type: mediaType,
+            [mediaType]: { id: metaMediaId }
+        };
+        if (!conversation.phone && conversation.waBsuid) {
+            msgData.recipient_type = 'user_id';
+        }
+        if (caption && ['image', 'video', 'document'].includes(mediaType)) {
+            msgData[mediaType].caption = caption;
+        }
+        if (mediaType === 'document') {
+            msgData[mediaType].filename = originalname;
+        }
+
+        const sendRes = await axios.post(sendUrl, msgData, {
+            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+        });
+
+        const waMessageId = sendRes.data.messages?.[0]?.id;
+        console.log(`✅ [MediaLibrary] Media message sent (${mediaType}):`, waMessageId);
+
+        // Save message record
+        const message = new WhatsAppMessage({
+            conversationId: conversation._id,
+            userId,
+            waMessageId,
+            direction: 'outbound',
+            type: mediaType,
+            content: {
+                mediaId: metaMediaId,
+                caption: caption || undefined,
+                fileName: originalname,
+                mimeType: mimetype,
+                text: caption || `📎 ${originalname}`
+            },
+            status: waMessageId ? 'sent' : 'pending',
+            timestamp: new Date(),
+            isAutomated: false
+        });
+        await message.save();
+
+        conversation.lastMessage = caption || `📎 ${originalname}`;
+        conversation.lastMessageAt = new Date();
+        conversation.lastMessageDirection = 'outbound';
+        conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
+        conversation.metadata.totalOutbound = (conversation.metadata.totalOutbound || 0) + 1;
+        await conversation.save();
+
+        // Bump usage stats on the library asset
+        MediaAsset.updateOne(
+            { _id: asset._id },
+            { $inc: { usageCount: 1 }, $set: { lastUsedAt: new Date() } }
+        ).catch(e => console.error('[MediaLibrary] usageCount bump failed:', e.message));
+
+        const savedMsg = message.toObject();
+        res.json({ success: true, message: savedMsg });
+
+        // Push to the whole team via Socket.IO
+        emitToUsers(companyUserIds, 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
+            conversationId: conversation._id,
+            message: savedMsg
+        });
+        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
+            conversationId: conversation._id,
+            updates: {
+                lastMessage: conversation.lastMessage,
+                lastMessageAt: conversation.lastMessageAt,
+                lastMessageDirection: 'outbound'
+            }
+        });
+    } catch (error) {
+        console.error('[MediaLibrary] Error sending media from library:', error.response?.data || error.message);
+        const metaError = error.response?.data?.error?.message || error.message;
+
+        let statusCode = error.response?.status || 500;
+        if (statusCode === 401) statusCode = 400;
+
+        res.status(statusCode).json({ message: `Error sending media: ${metaError}`, error: metaError });
+    }
+};
+
 // Proxy to download media from WhatsApp (frontend can't call Meta API directly)
 exports.downloadMediaProxy = async (req, res) => {
     try {
