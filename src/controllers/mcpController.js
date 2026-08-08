@@ -193,7 +193,7 @@ const TOOLS = [
                 source:             { type: 'string', description: 'Lead source (e.g. "Manual", "Meta", "WhatsApp"). Default: "Manual".' },
                 dealValue:          { type: 'number', description: 'Expected deal value in the workspace currency.' },
                 tags:               { type: 'array', items: { type: 'string' }, description: 'Tags to attach to the lead.' },
-                qualificationLevel: { type: 'string', enum: ['Cold', 'Warm', 'Hot'], description: 'Lead temperature. Default: "Cold".' }
+                qualificationLevel: { type: 'string', enum: ['None', 'Partial', 'Engaged', 'Qualified'], description: 'Lead temperature. Default: "None".' }
             },
             required: ['name']
         }
@@ -211,7 +211,7 @@ const TOOLS = [
                 status:             { type: 'string', description: 'New pipeline stage (e.g. "Qualified", "Won").' },
                 dealValue:          { type: 'number', description: 'Updated deal value.' },
                 tags:               { type: 'array', items: { type: 'string' }, description: 'Replacement tag list.' },
-                qualificationLevel: { type: 'string', enum: ['Cold', 'Warm', 'Hot'], description: 'Lead temperature.' }
+                qualificationLevel: { type: 'string', enum: ['None', 'Partial', 'Engaged', 'Qualified'], description: 'Lead temperature.' }
             },
             required: ['leadId']
         }
