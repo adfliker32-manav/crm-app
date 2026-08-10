@@ -1705,9 +1705,24 @@ const continueSession = async (session, userResponse, conversationId, userId, in
         // ── PRE-CHECK: Button re-selection takes priority over question/other nodes ──
         // If the user sends text that matches a button from a previously visited
         // button-node, pivot immediately — don't treat it as a question answer.
-        // The current node is skipped here: its own buttons are handled below, where
-        // the choice is also captured into the node's variable.
-        if (userResponse) {
+        // However, we FIRST check if the current node can consume the response natively.
+        // If it can, we skip this pre-check so we don't accidentally pivot backward
+        // in flows that reuse the same option text (e.g. multiple Yes/No questions).
+        let matchesCurrentNode = false;
+        if (userResponse || incomingMessage?.content?.buttonId) {
+            if (currentNode.type === 'list' && Array.isArray(currentNode.data?.items) && currentNode.data.items.length > 0) {
+                const items = normaliseListItems(currentNode.data.items);
+                const m = matchButton(items.map(it => ({ id: it.id, text: it.title })), userResponse, incomingMessage);
+                const asNumber = Number((userResponse || '').trim());
+                const isNumberMatch = Number.isInteger(asNumber) && asNumber >= 1 && asNumber <= items.length;
+                if (m || isNumberMatch) matchesCurrentNode = true;
+            } else if (['message', 'template', 'question'].includes(currentNode.type) && Array.isArray(currentNode.data?.buttons) && currentNode.data.buttons.length > 0) {
+                const m = matchButton(currentNode.data.buttons, userResponse, incomingMessage);
+                if (m) matchesCurrentNode = true;
+            }
+        }
+
+        if (!matchesCurrentNode && userResponse) {
             const _btnNodeTypes = new Set(['message', 'template', 'question']);
             const _seenIds = new Set([currentNode.id]);
             const _reversedVisited = [...session.visitedNodes].reverse().filter(e => {
