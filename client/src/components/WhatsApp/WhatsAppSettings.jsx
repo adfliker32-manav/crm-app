@@ -252,6 +252,10 @@ const WhatsAppSettings = () => {
                 config_id: config.waEmbeddedConfigId,
                 response_type: 'code',
                 override_default_response_type: true,
+                // Explicitly request the permissions needed to send template messages
+                // via the Cloud API. This supplements whatever the config_id specifies
+                // so reconnecting after a new permission is approved always picks it up.
+                scope: 'whatsapp_business_messaging,whatsapp_business_management',
                 extras: {
                     setup: {},
                     version: 'v4',

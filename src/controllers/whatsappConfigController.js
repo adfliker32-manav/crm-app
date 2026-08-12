@@ -168,12 +168,15 @@ exports.getWhatsAppConfig = async (req, res) => {
         const config = await IntegrationConfig.findOne({ userId: ownerId })
             .select('whatsapp.waPhoneNumberId whatsapp.wabaId whatsapp.displayPhone whatsapp.verifiedName whatsapp.waAppId whatsapp.embeddedSignupConnected');
 
+        // Support both META_CONFIG_ID (production) and WA_EMBEDDED_CONFIG_ID (legacy local)
+        const embeddedConfigId = process.env.WA_EMBEDDED_CONFIG_ID || process.env.META_CONFIG_ID || '';
+
         if (!config) {
             return res.json({
                 waPhoneNumberId: '',
                 isConfigured: false,
                 metaAppId: process.env.META_APP_ID || '',
-                waEmbeddedConfigId: process.env.WA_EMBEDDED_CONFIG_ID || ''
+                waEmbeddedConfigId: embeddedConfigId
             });
         }
 
@@ -187,7 +190,7 @@ exports.getWhatsAppConfig = async (req, res) => {
             embeddedSignupConnected: wa.embeddedSignupConnected || false,
             isConfigured:    !!(wa.waPhoneNumberId && wa.wabaId),
             metaAppId:       process.env.META_APP_ID || '',
-            waEmbeddedConfigId: process.env.WA_EMBEDDED_CONFIG_ID || ''
+            waEmbeddedConfigId: embeddedConfigId
         });
     } catch (error) {
         console.error('Error fetching WhatsApp config:', error);
@@ -399,15 +402,21 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
 
         const GRAPH = 'https://graph.facebook.com/v26.0';
 
-        // Exchange authorization code for business access token
+        // Exchange authorization code for business access token.
+        // Include redirect_uri if configured — Meta requires it to match
+        // what was used during the OAuth authorization step.
         let accessToken = null;
         try {
+            const tokenParams = {
+                client_id: appId,
+                client_secret: appSecret,
+                code: code
+            };
+            const redirectUri = process.env.META_REDIRECT_URI || process.env.WA_REDIRECT_URI || '';
+            if (redirectUri) tokenParams.redirect_uri = redirectUri;
+
             const tokenRes = await axios.get(`${GRAPH}/oauth/access_token`, {
-                params: {
-                    client_id: appId,
-                    client_secret: appSecret,
-                    code: code
-                },
+                params: tokenParams,
                 timeout: 10000
             });
             accessToken = tokenRes.data.access_token;
