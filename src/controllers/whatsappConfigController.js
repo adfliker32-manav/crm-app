@@ -426,6 +426,38 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Exchange did not return an access token.' });
         }
 
+        // ── TOKEN PERMISSION AUDIT ───────────────────────────────────────────
+        // Query Meta's debug_token endpoint to log the exact scopes the
+        // exchanged token carries. This is critical for diagnosing #200
+        // permission errors: if whatsapp_business_messaging is missing here
+        // the token was issued without it and no amount of retrying will help.
+        try {
+            const debugRes = await axios.get(`${GRAPH}/debug_token`, {
+                params: { input_token: accessToken, access_token: `${appId}|${appSecret}` },
+                timeout: 10000
+            });
+            const debugData = debugRes.data?.data;
+            console.log(`🔍 [TOKEN AUDIT] Embedded signup token for tenant ${req.tenantId}:`);
+            console.log(`   Token type  : ${debugData?.type}`);
+            console.log(`   App ID      : ${debugData?.app_id}`);
+            console.log(`   User ID     : ${debugData?.user_id}`);
+            console.log(`   Scopes      : ${(debugData?.scopes || []).join(', ')}`);
+            console.log(`   Granular    : ${JSON.stringify(debugData?.granular_scopes || [])}`);
+            console.log(`   Expires     : ${debugData?.expires_at ? new Date(debugData.expires_at * 1000).toISOString() : 'never'}`);
+            console.log(`   Valid       : ${debugData?.is_valid}`);
+
+            const hasMessaging = (debugData?.scopes || []).includes('whatsapp_business_messaging') ||
+                (debugData?.granular_scopes || []).some(s => s.scope === 'whatsapp_business_messaging');
+            if (!hasMessaging) {
+                console.error(`⚠️ [TOKEN AUDIT] Token is MISSING whatsapp_business_messaging! Templates will fail with #200.`);
+                console.error(`   To fix: In Meta Developer Console → your Embedded Signup config → set Feature Type to "WhatsApp Business App Onboarding" and reconnect.`);
+            } else {
+                console.log(`   ✅ whatsapp_business_messaging is PRESENT — templates should work.`);
+            }
+        } catch (auditErr) {
+            console.warn(`⚠️ [TOKEN AUDIT] debug_token call failed (non-fatal):`, auditErr.response?.data || auditErr.message);
+        }
+
         // Verify credentials and get phone display info
         let displayPhone = null, verifiedName = null;
         try {

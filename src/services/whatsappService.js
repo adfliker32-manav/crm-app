@@ -167,6 +167,32 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
             );
         }
         console.error('❌ FAILED TO SEND WHATSAPP:', error.response?.data || error.message);
+        // ── PERMISSION AUDIT on #200 ─────────────────────────────────────
+        // When we get code 200 (permission error), introspect the token to
+        // show exactly which scopes it has. This is the smoking-gun log.
+        if (error.response?.data?.error?.code === 200 || error.response?.data?.error?.code === 10) {
+            try {
+                const { phoneNumberId: _pnid, accessToken: _at } = await getCredentials(userId);
+                const tokenFirst10 = _at ? _at.substring(0, 10) + '...' : 'null';
+                const tokenLen = _at ? _at.length : 0;
+                console.error(`🔍 [SEND AUDIT] Token used: ${tokenFirst10} (length=${tokenLen}), phoneNumberId=${_pnid}, userId=${userId}`);
+                // Try debug_token if we have app credentials
+                const _appId = process.env.META_APP_ID;
+                const _appSecret = process.env.META_APP_SECRET;
+                if (_appId && _appSecret) {
+                    const debugRes = await axios.get(`https://graph.facebook.com/v26.0/debug_token`, {
+                        params: { input_token: _at, access_token: `${_appId}|${_appSecret}` },
+                        timeout: 5000
+                    });
+                    const d = debugRes.data?.data;
+                    console.error(`🔍 [SEND AUDIT] Token scopes: ${(d?.scopes || []).join(', ')}`);
+                    console.error(`🔍 [SEND AUDIT] Granular: ${JSON.stringify(d?.granular_scopes || [])}`);
+                    console.error(`🔍 [SEND AUDIT] Token type=${d?.type}, app_id=${d?.app_id}, valid=${d?.is_valid}`);
+                }
+            } catch (auditErr) {
+                console.error(`🔍 [SEND AUDIT] Could not introspect token:`, auditErr.message);
+            }
+        }
         throw error;
     }
 };
