@@ -403,20 +403,17 @@ exports.connectWhatsAppEmbedded = async (req, res) => {
         const GRAPH = 'https://graph.facebook.com/v26.0';
 
         // Exchange authorization code for business access token.
-        // Include redirect_uri if configured — Meta requires it to match
-        // what was used during the OAuth authorization step.
+        // NOTE: FB.login JS SDK popup flow does NOT use redirect_uri during
+        // authorization, so we must NOT include it in the exchange — Meta
+        // will reject the exchange with a redirect_uri mismatch if we do.
         let accessToken = null;
         try {
-            const tokenParams = {
-                client_id: appId,
-                client_secret: appSecret,
-                code: code
-            };
-            const redirectUri = process.env.META_REDIRECT_URI || process.env.WA_REDIRECT_URI || '';
-            if (redirectUri) tokenParams.redirect_uri = redirectUri;
-
             const tokenRes = await axios.get(`${GRAPH}/oauth/access_token`, {
-                params: tokenParams,
+                params: {
+                    client_id: appId,
+                    client_secret: appSecret,
+                    code: code
+                },
                 timeout: 10000
             });
             accessToken = tokenRes.data.access_token;
