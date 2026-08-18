@@ -242,6 +242,235 @@ const authorizeTicketAccess = async (req, res, next) => {
     }
 };
 
+// ── AI Support Auto-Reply Engine ─────────────────────────────────────────────
+// Shared between createTicket (first reply) and sendMessage (follow-ups).
+// AI replies up to MAX_AI_REPLIES times per ticket, then auto-transfers to human.
+// If customer explicitly asks for a human, transfers immediately.
+// If a real human admin has already replied, AI stays silent.
+const MAX_AI_REPLIES = 5;
+const SUPERADMIN_VIRTUAL_OID = new mongoose.Types.ObjectId(SUPERADMIN_VIRTUAL_ID);
+
+// Detect explicit requests to speak with a human agent.
+const WANTS_HUMAN_RE = /\b(human|real\s?person|talk\s+to\s+(someone|a\s+person|human|agent|support)|connect\s.{0,15}(human|agent|person|support)|transfer|escalate|speak\s.{0,10}(human|agent|person)|need\s.{0,10}(human|agent|someone)|live\s+(agent|chat|support|person))\b/i;
+
+async function triggerAiSupportReply(ticket, { customerText }) {
+    try {
+        const GlobalSetting = require('../models/GlobalSetting');
+
+        const [cfgDoc, globalGemini, globalOpenai] = await Promise.all([
+            GlobalSetting.findOne({ key: 'ai_support_config' }).lean(),
+            GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
+            GlobalSetting.findOne({ key: 'global_openai_api_key' })
+        ]);
+
+        const cfg = cfgDoc?.value || {};
+        if (!cfg.enabled) return;
+
+        // ── Guard: has a real human admin already replied on this ticket? ─────
+        const humanTookOver = await SupportMessage.exists({
+            ticketId: ticket._id,
+            senderRole: 'superadmin',
+            senderId: { $ne: SUPERADMIN_VIRTUAL_OID }
+        });
+        if (humanTookOver) {
+            console.log(`🤖 [Support] Ticket ${ticket._id}: human admin active, AI stays silent.`);
+            return;
+        }
+
+        // ── Guard: AI reply count ────────────────────────────────────────────
+        const aiReplyCount = await SupportMessage.countDocuments({
+            ticketId: ticket._id,
+            senderId: SUPERADMIN_VIRTUAL_OID
+        });
+        if (aiReplyCount >= MAX_AI_REPLIES) {
+            console.log(`🤖 [Support] Ticket ${ticket._id}: AI limit (${MAX_AI_REPLIES}) reached, silent.`);
+            return;
+        }
+
+        // ── Decrypt provider API key ─────────────────────────────────────────
+        const { decryptToken } = require('../utils/encryptionUtils');
+        const provider = cfg.provider || 'gemini';
+        const apiKey = provider === 'openai'
+            ? decryptToken(globalOpenai?.value)
+            : decryptToken(globalGemini?.value);
+        if (!apiKey) {
+            console.warn(`🤖 [Support] AI enabled but no global ${provider} key configured.`);
+            return;
+        }
+
+        // ── Check: customer explicitly wants a human? ────────────────────────
+        const wantsHuman = WANTS_HUMAN_RE.test(customerText || '');
+        const isLastAllowedReply = aiReplyCount >= MAX_AI_REPLIES - 1;
+
+        if (wantsHuman || isLastAllowedReply) {
+            const reason = wantsHuman ? 'customer requested' : 'reply limit reached';
+            console.log(`🤖 [Support] Ticket ${ticket._id}: transferring to human (${reason}).`);
+
+            const transferText = wantsHuman
+                ? "I understand you'd like to speak with a human agent. I'm connecting you now \u2014 a support team member will respond to you shortly. Thank you for your patience!"
+                : "I'm going to connect you with a human support agent who can assist you further. A team member will respond shortly. Thank you for your patience!";
+
+            const transferMsg = await SupportMessage.create({
+                ticketId: ticket._id,
+                senderId: SUPERADMIN_VIRTUAL_OID,
+                senderRole: 'superadmin',
+                senderName: `${cfg.agentName || 'AI Support'} (AI)`,
+                text: transferText,
+                attachments: []
+            });
+
+            await recordAiSupportUsage(0);
+
+            ticket.status = 'admin_replied';
+            ticket.unreadByUser = (ticket.unreadByUser || 0) + 1;
+            ticket.unreadByAdmin = Math.max(ticket.unreadByAdmin || 0, 1);
+            ticket.lastMessageAt = new Date();
+            await ticket.save();
+
+            emitToTenantUser(ticket.createdBy, 'support:newMessage', { ticketId: ticket._id, message: transferMsg });
+            emitToSuperAdmins('support:newMessage', { ticketId: ticket._id, message: transferMsg });
+            emitToSuperAdmins('support:transferToHuman', { ticketId: ticket._id, subject: ticket.subject });
+            return;
+        }
+
+        // ── Normal AI reply ──────────────────────────────────────────────────
+        console.log(`🤖 [Support] AI replying to ticket ${ticket._id} (reply ${aiReplyCount + 1}/${MAX_AI_REPLIES})`);
+
+        const defaultSupportPrompt = `You are the Support AI for our CRM Platform.
+A user (CRM tenant agent/manager) has created a support ticket.
+Provide a helpful, polite, and technical response to resolve their issue.
+If they ask about billing, SMTP config, WhatsApp setup, or Facebook lead ads sync, use your knowledge of CRM platforms to guide them step-by-step.
+If you cannot solve their issue, tell them you are forwarding this to a human administrator.`;
+
+        const basePrompt = cfg.systemPrompt && cfg.systemPrompt.trim()
+            ? cfg.systemPrompt.trim()
+            : defaultSupportPrompt;
+
+        // ── Knowledge Resources: score relevant ones ─────────────────────────
+        const allResources = Array.isArray(cfg.knowledgeResources) ? cfg.knowledgeResources : [];
+        const activeResources = allResources.filter(r => r.isActive !== false);
+        let relevantResources = [];
+
+        if (activeResources.length > 0) {
+            let recentTexts = '';
+            try {
+                const recentMsgs = await SupportMessage.find({ ticketId: ticket._id })
+                    .sort({ createdAt: -1 }).limit(15).select('text').lean();
+                recentTexts = recentMsgs.map(m => m.text || '').join(' ');
+            } catch (_) {
+                recentTexts = customerText;
+            }
+
+            const ticketContext = `${ticket.subject} ${recentTexts} ${ticket.tag || ''}`.toLowerCase();
+
+            const scored = activeResources.map(r => {
+                let score = 0;
+                if (r.category && ticketContext.includes(r.category.toLowerCase())) score += 3;
+                const tags = Array.isArray(r.tags) ? r.tags : [];
+                let tagPoints = 0;
+                for (const t of tags) {
+                    if (t && ticketContext.includes(t.toLowerCase())) {
+                        tagPoints += 2;
+                        if (tagPoints >= 6) break;
+                    }
+                }
+                score += tagPoints;
+                if (r.description) {
+                    const words = r.description.toLowerCase().split(/\W+/).filter(w => w.length > 4);
+                    const uniqueWords = [...new Set(words)].slice(0, 30);
+                    for (const w of uniqueWords) {
+                        if (ticketContext.includes(w)) score += 1;
+                    }
+                }
+                return { resource: r, score };
+            });
+
+            relevantResources = scored
+                .filter(s => s.score >= 2)
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 3)
+                .map(s => s.resource);
+
+            if (relevantResources.length > 0) {
+                console.log(
+                    `🤖 [Support] Ticket ${ticket._id}: injecting ${relevantResources.length} resource(s): ` +
+                    relevantResources.map(r => `"${r.title}" (${r.id || 'no-id'})`).join(', ')
+                );
+            }
+        }
+
+        // ── Build system prompt ───────────────────────────────────────────────
+        const remainingReplies = MAX_AI_REPLIES - aiReplyCount - 1;
+
+        let systemPrompt = `${basePrompt}
+
+After providing a solution or sharing a resource, ask the customer if the solution helped or if they would like to connect with a human support agent.
+If the customer says they are satisfied or the issue is resolved, respond with a brief friendly closing message.
+You have ${remainingReplies} reply(ies) remaining before this conversation is automatically transferred to a human agent.
+
+Ticket Details:
+- Subject: ${ticket.subject}
+- Tag: ${ticket.tag || 'general'}
+- Submitter: ${ticket.createdByName || ''} (${ticket.createdByRole || ''})`;
+
+        if (relevantResources.length > 0) {
+            const resourceLines = relevantResources.map(r =>
+                `Title: ${r.title}\nURL: ${r.url}\nWhen to use: ${r.description}\nCategory: ${r.category}\nType: ${r.type}`
+            ).join('\n\n');
+
+            systemPrompt += `\n\n--- AVAILABLE KNOWLEDGE RESOURCES ---\nThe following resources are verified and configured by the Adfliker Super Admin.\n\nUse a resource ONLY when it is directly relevant to the customer's current issue.\nFirst answer the customer's question fully using your knowledge and the available context.\nIf a relevant resource would genuinely help the customer, include the exact URL as an additional helpful resource.\n\nCRITICAL: Only provide URLs that exist in the resources listed below.\nNever create, invent, guess, modify, shorten, or replace a URL.\nIf no relevant resource is useful for this specific question, do not mention any resource at all.\n\n${resourceLines}\n--- END KNOWLEDGE RESOURCES ---`;
+        }
+
+        // ── Conversation history ──────────────────────────────────────────────
+        const historyMsgs = await SupportMessage.find({ ticketId: ticket._id })
+            .sort({ createdAt: 1 }).limit(20).select('text senderRole').lean();
+
+        const conversationHistory = historyMsgs.map(m => ({
+            role: m.senderRole === 'customer' ? 'user' : 'assistant',
+            text: m.text || ''
+        }));
+        if (!conversationHistory.length) {
+            conversationHistory.push({ role: 'user', text: customerText || `Ticket: ${ticket.subject}` });
+        }
+
+        const { reply, usage } = await generateReply({
+            provider,
+            apiKey,
+            modelName: cfg.model || 'gemini-2.5-flash',
+            systemPrompt,
+            conversationHistory,
+            leadContext: {}
+        });
+
+        const credits = await aiCreditService.computeCredits({
+            model: cfg.model,
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens
+        });
+        await recordAiSupportUsage(credits);
+
+        const aiMsg = await SupportMessage.create({
+            ticketId: ticket._id,
+            senderId: SUPERADMIN_VIRTUAL_OID,
+            senderRole: 'superadmin',
+            senderName: `${cfg.agentName || 'AI Support'} (AI)`,
+            text: reply,
+            attachments: []
+        });
+
+        ticket.status = 'admin_replied';
+        ticket.unreadByUser = (ticket.unreadByUser || 0) + 1;
+        ticket.unreadByAdmin = 0;
+        ticket.lastMessageAt = new Date();
+        await ticket.save();
+
+        emitToTenantUser(ticket.createdBy, 'support:newMessage', { ticketId: ticket._id, message: aiMsg });
+        emitToSuperAdmins('support:newMessage', { ticketId: ticket._id, message: aiMsg });
+    } catch (aiErr) {
+        console.error('Support AI reply failed:', aiErr.message);
+    }
+}
+
 // ─────────────────────────────────────────────
 // CUSTOMER (tenant-side) — any logged-in user
 // ─────────────────────────────────────────────
@@ -293,179 +522,8 @@ const createTicket = async (req, res) => {
 
         res.status(201).json({ ticket });
 
-        // 🤖 AI Support Assistant auto-reply — PLATFORM-OWNED (super-admin controlled).
-        // Support tickets go customer → platform, so the platform's own config (global
-        // key, super-admin prompt/model) answers them. The tenant is NOT charged; usage
-        // is tracked platform-side for the super-admin to monitor.
-        setImmediate(async () => {
-            try {
-                const GlobalSetting = require('../models/GlobalSetting');
-
-                const [cfgDoc, globalGemini, globalOpenai] = await Promise.all([
-                    GlobalSetting.findOne({ key: 'ai_support_config' }).lean(),
-                    GlobalSetting.findOne({ key: 'global_gemini_api_key' }),
-                    GlobalSetting.findOne({ key: 'global_openai_api_key' })
-                ]);
-
-                const cfg = cfgDoc?.value || {};
-                if (!cfg.enabled) return; // super-admin controls this, not the tenant
-
-                const { decryptToken } = require('../utils/encryptionUtils');
-                const provider = cfg.provider || 'gemini';
-                const apiKey = provider === 'openai'
-                    ? decryptToken(globalOpenai?.value)
-                    : decryptToken(globalGemini?.value);
-                if (!apiKey) {
-                    console.warn(`🤖 [Support] AI support is enabled but no global ${provider} key is configured.`);
-                    return;
-                }
-
-                console.log(`🤖 [Support] Platform AI support responding to ticket ${ticket._id}`);
-
-                const defaultSupportPrompt = `You are the Support AI for our CRM Platform.
-A user (CRM tenant agent/manager) has created a support ticket.
-Provide a helpful, polite, and technical response to resolve their issue.
-If they ask about billing, SMTP config, WhatsApp setup, or Facebook lead ads sync, use your knowledge of CRM platforms to guide them step-by-step.
-If you cannot solve their issue, tell them you are forwarding this to a human administrator.`;
-
-                const basePrompt = cfg.systemPrompt && cfg.systemPrompt.trim()
-                    ? cfg.systemPrompt.trim()
-                    : defaultSupportPrompt;
-
-                // ── Knowledge Resources: select relevant ones only ───────────────────
-                // Score each active resource against the full ticket context (subject,
-                // tag, and recent conversation messages — not just the first message).
-                // Only resources scoring ≥ 2 are passed to the AI (max 3).
-                // autoTag is a scoring *signal* (via the tag in context), never a hard gate.
-                const allResources = Array.isArray(cfg.knowledgeResources) ? cfg.knowledgeResources : [];
-                const activeResources = allResources.filter(r => r.isActive !== false);
-                let relevantResources = [];
-
-                if (activeResources.length > 0) {
-                    // Gather recent conversation messages (up to 15) for richer context.
-                    // For brand-new tickets this is just the first message; for future
-                    // extensions (follow-up AI replies) it captures evolving conversation.
-                    let recentTexts = '';
-                    try {
-                        const recentMsgs = await SupportMessage.find({ ticketId: ticket._id })
-                            .sort({ createdAt: -1 })
-                            .limit(15)
-                            .select('text')
-                            .lean();
-                        recentTexts = recentMsgs.map(m => m.text || '').join(' ');
-                    } catch (_) {
-                        // Fallback — at minimum we have the first message.
-                        recentTexts = firstMessage;
-                    }
-
-                    // Build a normalised context string from all available ticket data.
-                    const ticketContext = `${subject} ${recentTexts} ${tag}`.toLowerCase();
-
-                    const scored = activeResources.map(r => {
-                        let score = 0;
-
-                        // +3 if the resource category appears in context
-                        if (r.category && ticketContext.includes(r.category.toLowerCase())) {
-                            score += 3;
-                        }
-
-                        // +2 per matching tag (capped at +6 total)
-                        const tags = Array.isArray(r.tags) ? r.tags : [];
-                        let tagPoints = 0;
-                        for (const t of tags) {
-                            if (t && ticketContext.includes(t.toLowerCase())) {
-                                tagPoints += 2;
-                                if (tagPoints >= 6) break;
-                            }
-                        }
-                        score += tagPoints;
-
-                        // +1 per significant word (>4 chars) in the description that appears in context
-                        if (r.description) {
-                            const words = r.description.toLowerCase().split(/\W+/).filter(w => w.length > 4);
-                            const uniqueWords = [...new Set(words)].slice(0, 30);
-                            for (const w of uniqueWords) {
-                                if (ticketContext.includes(w)) score += 1;
-                            }
-                        }
-
-                        return { resource: r, score };
-                    });
-
-                    relevantResources = scored
-                        .filter(s => s.score >= 2)
-                        .sort((a, b) => b.score - a.score)
-                        .slice(0, 3)
-                        .map(s => s.resource);
-
-                    if (relevantResources.length > 0) {
-                        console.log(
-                            `🤖 [Support] Ticket ${ticket._id}: injecting ${relevantResources.length} knowledge resource(s): ` +
-                            relevantResources.map(r => `"${r.title}" (${r.id || 'no-id'})`).join(', ')
-                        );
-                    }
-                }
-
-                // ── Build final system prompt ─────────────────────────────────────────
-                // System Prompt and Knowledge Resources are separate responsibilities:
-                // System Prompt  = how the AI should behave.
-                // Knowledge Resources = external information the AI may recommend.
-                let systemPrompt = `${basePrompt}
-
-Ticket Details:
-- Subject: ${subject}
-- Tag: ${tag}
-- Submitter Name: ${sender?.name || req.user.name || ''} (${sender?.role || req.user.role || ''})`;
-
-                if (relevantResources.length > 0) {
-                    const resourceLines = relevantResources.map(r =>
-                        `Title: ${r.title}\nURL: ${r.url}\nWhen to use: ${r.description}\nCategory: ${r.category}\nType: ${r.type}`
-                    ).join('\n\n');
-
-                    systemPrompt += `\n\n--- AVAILABLE KNOWLEDGE RESOURCES ---\nThe following resources are verified and configured by the Adfliker Super Admin.\n\nUse a resource ONLY when it is directly relevant to the customer's current issue.\nFirst answer the customer's question fully using your knowledge and the available context.\nIf a relevant resource would genuinely help the customer, include the exact URL as an additional helpful resource.\n\nCRITICAL: Only provide URLs that exist in the resources listed below.\nNever create, invent, guess, modify, shorten, or replace a URL.\nIf no relevant resource is useful for this specific question, do not mention any resource at all.\n\n${resourceLines}\n--- END KNOWLEDGE RESOURCES ---`;
-                }
-
-                const { reply, usage } = await generateReply({
-                    provider,
-                    apiKey,
-                    modelName: cfg.model || 'gemini-2.5-flash',
-                    systemPrompt,
-                    conversationHistory: [
-                        { role: 'user', text: firstMessage || `Ticket Created: ${subject}` }
-                    ],
-                    leadContext: {}
-                });
-
-                // Track platform-side credit usage for the super-admin monitor.
-                // The tenant is never charged — this is the platform's own support cost.
-                const credits = await aiCreditService.computeCredits({
-                    model: cfg.model,
-                    inputTokens: usage?.inputTokens,
-                    outputTokens: usage?.outputTokens
-                });
-                await recordAiSupportUsage(credits);
-
-                const aiMsg = await SupportMessage.create({
-                    ticketId: ticket._id,
-                    senderId: new mongoose.Types.ObjectId(SUPERADMIN_VIRTUAL_ID),
-                    senderRole: 'superadmin',
-                    senderName: `${cfg.agentName || 'AI Support'} (AI)`,
-                    text: reply,
-                    attachments: []
-                });
-
-                ticket.status = 'admin_replied';
-                ticket.unreadByUser = (ticket.unreadByUser || 0) + 1;
-                ticket.unreadByAdmin = 0;
-                ticket.lastMessageAt = new Date();
-                await ticket.save();
-
-                emitToTenantUser(ticket.createdBy, 'support:newMessage', { ticketId: ticket._id, message: aiMsg });
-                emitToSuperAdmins('support:newMessage', { ticketId: ticket._id, message: aiMsg });
-            } catch (aiErr) {
-                console.error('Support AI Assistant failed:', aiErr.message);
-            }
-        });
+        // 🤖 AI auto-reply — handled by the shared engine (first reply on ticket creation).
+        setImmediate(() => triggerAiSupportReply(ticket, { customerText: firstMessage }));
     } catch (err) {
         console.error('createTicket error:', err);
         discardUploads(req);
@@ -554,6 +612,11 @@ const sendMessage = async (req, res) => {
         }
 
         res.status(201).json({ message: msg, ticket });
+
+        // 🤖 AI follow-up reply — only for customer messages, handled by shared engine.
+        if (!isSuper) {
+            setImmediate(() => triggerAiSupportReply(ticket, { customerText: text }));
+        }
     } catch (err) {
         console.error('sendMessage error:', err);
         discardUploads(req);
