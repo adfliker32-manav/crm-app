@@ -206,7 +206,7 @@ const SupportInboxView = () => {
                 </div>
 
                 {/* Conversation */}
-                <div className="col-span-8 flex flex-col">
+                <div className="col-span-8 flex flex-col h-full overflow-hidden">
                     {!activeTicket && (
                         <div className="flex-1 flex items-center justify-center text-slate-400">
                             <p>Select a ticket to view the conversation</p>
