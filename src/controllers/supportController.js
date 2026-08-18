@@ -259,7 +259,7 @@ const createTicket = async (req, res) => {
             return res.status(400).json({ message: 'Please describe your issue or attach a screenshot/video' });
         }
 
-        const tag = autoTag(`${subject} ${firstMessage}`);
+        const tag = (req.body.category || '').trim() || autoTag(`${subject} ${firstMessage}`);
 
         // JWT only carries userId/role/name — fetch email for super admin display
         const sender = await User.findById(userId).select('name email role').lean();

@@ -14,12 +14,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 const EmailCampaign = require('../models/EmailCampaign');
+const EmailTemplate = require('../models/EmailTemplate');
 const Lead = require('../models/Lead');
 const { sendEmail } = require('./emailService');
 const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 const { peekEmailDailyLimit } = require('../utils/workflowRateLimiter');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { resolveAttachments } = require('../utils/emailAttachments');
 
 // Small batches keep each job short so cancellation is responsive and one
 // failing tenant cannot monopolise the worker.
@@ -114,6 +116,22 @@ const processBatch = async (campaignId) => {
     const User = require('../models/User');
     const owner = await User.findById(campaign.userId).select('name companyName').lean();
 
+    // Resolve template attachments once per batch — avoids redundant
+    // object-storage reads for every single lead.
+    let batchAttachments = [];
+    if (campaign.templateId) {
+        try {
+            const template = await EmailTemplate.findById(campaign.templateId)
+                .select('attachments')
+                .lean();
+            if (template?.attachments?.length > 0) {
+                batchAttachments = await resolveAttachments(template.attachments, String(campaign.userId));
+            }
+        } catch (attErr) {
+            console.warn(`⚠️ [Campaign] Could not resolve template attachments for ${campaign.name}:`, attErr.message);
+        }
+    }
+
     let sent = 0, failed = 0, skipped = 0;
 
     for (const lead of leads) {
@@ -147,7 +165,8 @@ const processBatch = async (campaignId) => {
                 isAutomated: true,
                 triggerType: 'campaign',
                 templateId: campaign.templateId || null,
-                leadId: lead._id
+                leadId: lead._id,
+                attachments: batchAttachments.length > 0 ? batchAttachments : undefined
             });
             sent++;
         } catch (err) {

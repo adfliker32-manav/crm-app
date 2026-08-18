@@ -75,6 +75,8 @@ const EmailInbox = () => {
     const [composeMessage, setComposeMessage] = useState('');
     const [composeSchedule, setComposeSchedule] = useState('');
     const [composeFiles, setComposeFiles] = useState([]);
+    const [composeTemplates, setComposeTemplates] = useState([]);
+    const [composeTemplateId, setComposeTemplateId] = useState('');
 
     const scrollRef = useRef(null);
     const replyFileInput = useRef(null);
@@ -296,11 +298,27 @@ const EmailInbox = () => {
     const resetCompose = () => {
         setComposeEmail(''); setComposeSubject(''); setComposeMessage('');
         setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); setComposeFiles([]);
+        setComposeTemplateId('');
         setDraftId(null);
         if (composeFileInput.current) composeFileInput.current.value = '';
     };
 
-    const openCompose = () => { resetCompose(); setShowNewChatModal(true); };
+    const openCompose = () => {
+        resetCompose();
+        setShowNewChatModal(true);
+        // Fetch templates for the dropdown
+        api.get('/email-templates').then(r => setComposeTemplates(r.data || [])).catch(() => {});
+    };
+
+    const applyComposeTemplate = (id) => {
+        setComposeTemplateId(id);
+        if (!id) return;
+        const tpl = composeTemplates.find(t => t._id === id);
+        if (tpl) {
+            setComposeSubject(tpl.subject || '');
+            setComposeMessage(tpl.body || '');
+        }
+    };
 
     // ── Drafts ───────────────────────────────────────────────────────────────
     const loadDrafts = async () => {
@@ -385,6 +403,8 @@ const EmailInbox = () => {
                 html: htmlBody,
                 text: composeMessage.trim()
             };
+
+            if (composeTemplateId) payload.templateId = composeTemplateId;
 
             if (composeCc.trim()) payload.cc = composeCc.trim();
             if (composeBcc.trim()) payload.bcc = composeBcc.trim();
@@ -1117,6 +1137,29 @@ const EmailInbox = () => {
                                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
                                     />
                                 </div>
+                            </div>
+                            {/* Template Picker */}
+                            <div>
+                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Use Template (Optional)</label>
+                                <select
+                                    value={composeTemplateId}
+                                    onChange={(e) => applyComposeTemplate(e.target.value)}
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
+                                >
+                                    <option value="">— Write from scratch —</option>
+                                    {composeTemplates.filter(t => t.isActive).map(t => (
+                                        <option key={t._id} value={t._id}>{t.name}{t.attachments?.length > 0 ? ` (${t.attachments.length} attachment${t.attachments.length > 1 ? 's' : ''})` : ''}</option>
+                                    ))}
+                                </select>
+                                {composeTemplateId && (() => {
+                                    const tpl = composeTemplates.find(t => t._id === composeTemplateId);
+                                    return tpl?.attachments?.length > 0 ? (
+                                        <p className="text-[11px] text-blue-600 mt-1.5 font-semibold">
+                                            <i className="fa-solid fa-paperclip mr-1"></i>
+                                            {tpl.attachments.length} template attachment{tpl.attachments.length > 1 ? 's' : ''} will be included automatically.
+                                        </p>
+                                    ) : null;
+                                })()}
                             </div>
                             <div>
                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Subject</label>

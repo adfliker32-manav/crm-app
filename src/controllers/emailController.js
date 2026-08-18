@@ -8,7 +8,7 @@ const sendEmailController = async (req, res) => {
         console.log("📧 Email Controller Hit!");
         console.log("Request Data:", req.body);
 
-        const { to, subject, text, html, cc, bcc, scheduledFor } = req.body;
+        const { to, subject, text, html, cc, bcc, scheduledFor, templateId } = req.body;
 
         // Validation
         if (!to) {
@@ -55,6 +55,22 @@ const sendEmailController = async (req, res) => {
             size: file.size
         }));
 
+        // When a template is selected in the compose modal, resolve its stored
+        // attachments (object storage) and merge them with any user-uploaded files.
+        if (templateId) {
+            try {
+                const EmailTemplate = require('../models/EmailTemplate');
+                const { resolveAttachments } = require('../utils/emailAttachments');
+                const template = await EmailTemplate.findOne({ _id: templateId, userId: tenantId });
+                if (template?.attachments?.length > 0) {
+                    const tplAttachments = await resolveAttachments(template.attachments, tenantId);
+                    attachments.push(...tplAttachments);
+                }
+            } catch (tplErr) {
+                console.warn('⚠️ Could not resolve template attachments:', tplErr.message);
+            }
+        }
+
         // Prepare email options (include userId for user-specific credentials).
         // `conversational` marks this as a human-typed 1:1 message: no
         // unsubscribe footer, and a marketing opt-out does not block the reply.
@@ -67,7 +83,8 @@ const sendEmailController = async (req, res) => {
             cc: cc || null,
             bcc: bcc || null,
             conversational: true,
-            attachments: attachments.length > 0 ? attachments : undefined
+            attachments: attachments.length > 0 ? attachments : undefined,
+            templateId: templateId || null
         };
 
         // FIX F4: Add In-Reply-To / References headers for proper email threading
