@@ -2362,11 +2362,71 @@ const AI_SUPPORT_DEFAULTS = {
     model: 'gemini-2.5-flash',
     agentName: 'AI Support',
     systemPrompt: '',
+    knowledgeResources: [],
     // usage counters (updated by the support flow, read-only here)
     creditsUsedThisMonth: 0,
     creditsUsedTotal: 0,
     repliesTotal: 0,
     usageMonth: ''
+};
+
+const VALID_RESOURCE_TYPES = ['video', 'documentation', 'help_article', 'other'];
+
+// Simple URL format validator — no external deps.
+const isValidUrl = (str) => {
+    try {
+        const u = new URL(str);
+        return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch (_) {
+        return false;
+    }
+};
+
+// Sanitize and validate a single knowledge resource object.
+// Returns { ok, error, resource } where resource is the cleaned object.
+// Each resource gets a stable `id` — preserved on updates, generated for new ones.
+const validateKnowledgeResource = (raw, idx) => {
+    if (!raw || typeof raw !== 'object') {
+        return { ok: false, error: `Resource at index ${idx} is not a valid object.` };
+    }
+    const title       = String(raw.title       || '').trim().substring(0, 200);
+    const url         = String(raw.url         || '').trim().substring(0, 2048);
+    const description = String(raw.description || '').trim().substring(0, 1000);
+    const category    = String(raw.category    || '').trim().substring(0, 100);
+    const type        = String(raw.type        || '').trim().toLowerCase();
+
+    if (!title)       return { ok: false, error: `Resource ${idx + 1}: title is required.` };
+    if (!url)         return { ok: false, error: `Resource ${idx + 1}: url is required.` };
+    if (!description) return { ok: false, error: `Resource ${idx + 1}: description is required.` };
+    if (!category)    return { ok: false, error: `Resource ${idx + 1}: category is required.` };
+    if (!type)        return { ok: false, error: `Resource ${idx + 1}: type is required.` };
+
+    if (!isValidUrl(url)) {
+        return { ok: false, error: `Resource ${idx + 1}: url is not a valid http/https URL.` };
+    }
+    if (!VALID_RESOURCE_TYPES.includes(type)) {
+        return { ok: false, error: `Resource ${idx + 1}: type must be one of: ${VALID_RESOURCE_TYPES.join(', ')}.` };
+    }
+
+    // Tags — accept array or comma-separated string; always store as array of lowercase strings.
+    let tags = [];
+    if (Array.isArray(raw.tags)) {
+        tags = raw.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean).slice(0, 20);
+    } else if (raw.tags && typeof raw.tags === 'string') {
+        tags = raw.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean).slice(0, 20);
+    }
+
+    const isActive = raw.isActive !== undefined ? !!raw.isActive : true;
+
+    // Stable resource ID — preserve existing, generate for new resources.
+    const id = (raw.id && mongoose.Types.ObjectId.isValid(raw.id))
+        ? String(raw.id)
+        : new mongoose.Types.ObjectId().toString();
+
+    return {
+        ok: true,
+        resource: { id, title, url, description, category, tags, type, isActive }
+    };
 };
 
 // @desc  Get the platform AI Support config + usage stats
@@ -2382,7 +2442,8 @@ const getAiSupportConfig = async (req, res) => {
                 provider: cfg.provider,
                 model: cfg.model,
                 agentName: cfg.agentName,
-                systemPrompt: cfg.systemPrompt
+                systemPrompt: cfg.systemPrompt,
+                knowledgeResources: Array.isArray(cfg.knowledgeResources) ? cfg.knowledgeResources : []
             },
             usage: {
                 creditsUsedThisMonth: cfg.creditsUsedThisMonth || 0,
@@ -2403,21 +2464,41 @@ const getAiSupportConfig = async (req, res) => {
 // @route PUT /api/superadmin/ai-support-config
 const updateAiSupportConfig = async (req, res) => {
     try {
-        const { enabled, provider, model, agentName, systemPrompt } = req.body;
+        const { enabled, provider, model, agentName, systemPrompt, knowledgeResources } = req.body;
+
         if (provider !== undefined && !['gemini', 'openai'].includes(provider)) {
             return res.status(400).json({ message: 'Invalid provider — must be "gemini" or "openai".' });
         }
+
+        // ── Validate knowledgeResources if provided ──────────────────────────
+        let validatedResources;
+        if (knowledgeResources !== undefined) {
+            if (!Array.isArray(knowledgeResources)) {
+                return res.status(400).json({ message: 'knowledgeResources must be an array.' });
+            }
+            if (knowledgeResources.length > 200) {
+                return res.status(400).json({ message: 'knowledgeResources cannot contain more than 200 entries.' });
+            }
+            validatedResources = [];
+            for (let i = 0; i < knowledgeResources.length; i++) {
+                const result = validateKnowledgeResource(knowledgeResources[i], i);
+                if (!result.ok) return res.status(400).json({ message: result.error });
+                validatedResources.push(result.resource);
+            }
+        }
+
         const doc = await GlobalSetting.findOne({ key: AI_SUPPORT_KEY });
         const current = doc?.value || { ...AI_SUPPORT_DEFAULTS };
 
         const merged = {
             ...AI_SUPPORT_DEFAULTS,
             ...current,
-            ...(enabled !== undefined ? { enabled: !!enabled } : {}),
-            ...(provider !== undefined ? { provider } : {}),
-            ...(model !== undefined ? { model } : {}),
-            ...(agentName !== undefined ? { agentName } : {}),
-            ...(systemPrompt !== undefined ? { systemPrompt: String(systemPrompt).substring(0, 2000) } : {})
+            ...(enabled !== undefined          ? { enabled: !!enabled } : {}),
+            ...(provider !== undefined         ? { provider } : {}),
+            ...(model !== undefined            ? { model } : {}),
+            ...(agentName !== undefined        ? { agentName } : {}),
+            ...(systemPrompt !== undefined     ? { systemPrompt: String(systemPrompt).substring(0, 2000) } : {}),
+            ...(validatedResources !== undefined ? { knowledgeResources: validatedResources } : {})
         };
 
         await GlobalSetting.updateOne(
@@ -2432,15 +2513,24 @@ const updateAiSupportConfig = async (req, res) => {
             action: 'AI_SUPPORT_CONFIG_UPDATE',
             targetType: 'GlobalSetting',
             targetName: AI_SUPPORT_KEY,
-            details: { enabled: merged.enabled, provider: merged.provider, model: merged.model },
+            details: {
+                enabled: merged.enabled,
+                provider: merged.provider,
+                model: merged.model,
+                knowledgeResourcesCount: (merged.knowledgeResources || []).length
+            },
             req
         });
 
         res.json({
             success: true,
             config: {
-                enabled: merged.enabled, provider: merged.provider, model: merged.model,
-                agentName: merged.agentName, systemPrompt: merged.systemPrompt
+                enabled: merged.enabled,
+                provider: merged.provider,
+                model: merged.model,
+                agentName: merged.agentName,
+                systemPrompt: merged.systemPrompt,
+                knowledgeResources: merged.knowledgeResources || []
             }
         });
     } catch (err) {

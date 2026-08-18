@@ -15,6 +15,33 @@ const MODELS_BY_PROVIDER = {
     ]
 };
 
+const RESOURCE_TYPES = [
+    { value: 'video',         label: 'Video' },
+    { value: 'documentation', label: 'Documentation' },
+    { value: 'help_article',  label: 'Help Article' },
+    { value: 'other',         label: 'Other' }
+];
+
+const emptyResource = () => ({
+    title: '',
+    url: '',
+    description: '',
+    category: '',
+    tags: '',
+    type: 'video',
+    isActive: true
+});
+
+// ── Inline field component to reduce repetition ─────────────────────────────
+const Field = ({ label, required, children }) => (
+    <div>
+        <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+            {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+        </label>
+        {children}
+    </div>
+);
+
 const AiSupportSettingsModal = ({ isOpen, onClose }) => {
     const { showSuccess, showError } = useNotification();
     const [loading, setLoading] = useState(false);
@@ -26,6 +53,10 @@ const AiSupportSettingsModal = ({ isOpen, onClose }) => {
     const [agentName, setAgentName] = useState('AI Support');
     const [systemPrompt, setSystemPrompt] = useState('');
     const [usage, setUsage] = useState(null);
+
+    // Knowledge Resources state
+    const [knowledgeResources, setKnowledgeResources] = useState([]);
+    const [expandedIdx, setExpandedIdx] = useState(null);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -39,6 +70,14 @@ const AiSupportSettingsModal = ({ isOpen, onClose }) => {
                 setAgentName(c.agentName || 'AI Support');
                 setSystemPrompt(c.systemPrompt || '');
                 setUsage(res.data.usage || null);
+                // Populate resources — convert stored tags array back to comma-string for the input
+                const stored = Array.isArray(c.knowledgeResources) ? c.knowledgeResources : [];
+                setKnowledgeResources(stored.map(r => ({
+                    ...r,
+                    id: r.id || '',  // preserve server-generated stable ID
+                    tags: Array.isArray(r.tags) ? r.tags.join(', ') : (r.tags || '')
+                })));
+                setExpandedIdx(null);
             })
             .catch(err => {
                 console.error('Failed to load AI support config:', err);
@@ -52,10 +91,67 @@ const AiSupportSettingsModal = ({ isOpen, onClose }) => {
         setModel(p === 'openai' ? 'gpt-4o-mini' : 'gemini-2.5-flash');
     };
 
+    // ── Resource helpers ─────────────────────────────────────────────────────
+    const addResource = () => {
+        const next = [...knowledgeResources, emptyResource()];
+        setKnowledgeResources(next);
+        setExpandedIdx(next.length - 1);
+    };
+
+    const removeResource = (idx) => {
+        const next = knowledgeResources.filter((_, i) => i !== idx);
+        setKnowledgeResources(next);
+        setExpandedIdx(prev => (prev === idx ? null : prev > idx ? prev - 1 : prev));
+    };
+
+    const updateResource = (idx, field, value) => {
+        setKnowledgeResources(prev =>
+            prev.map((r, i) => i === idx ? { ...r, [field]: value } : r)
+        );
+    };
+
+    const toggleResource = (idx) => setExpandedIdx(prev => prev === idx ? null : idx);
+
+    // ── Save ─────────────────────────────────────────────────────────────────
     const handleSave = async () => {
+        // Client-side validation for resources
+        for (let i = 0; i < knowledgeResources.length; i++) {
+            const r = knowledgeResources[i];
+            if (!r.title.trim())       { showError(`Resource ${i + 1}: Title is required.`);            return; }
+            if (!r.url.trim())         { showError(`Resource ${i + 1}: URL is required.`);              return; }
+            if (!r.description.trim()) { showError(`Resource ${i + 1}: Description is required.`);     return; }
+            if (!r.category.trim())    { showError(`Resource ${i + 1}: Category is required.`);         return; }
+            if (!r.type)               { showError(`Resource ${i + 1}: Resource Type is required.`);   return; }
+            try { new URL(r.url.trim()); } catch (_) {
+                showError(`Resource ${i + 1}: URL must be a valid http/https URL.`);
+                return;
+            }
+        }
+
+        // Convert tags string → array before sending; pass through id for existing resources
+        const resourcesPayload = knowledgeResources.map(r => ({
+            ...(r.id ? { id: r.id } : {}),  // omit id for new resources — server generates one
+            title: r.title,
+            url: r.url,
+            description: r.description,
+            category: r.category,
+            type: r.type,
+            isActive: r.isActive,
+            tags: r.tags
+                ? r.tags.split(',').map(t => t.trim()).filter(Boolean)
+                : []
+        }));
+
         setSaving(true);
         try {
-            await api.put('/superadmin/ai-support-config', { enabled, provider, model, agentName, systemPrompt });
+            await api.put('/superadmin/ai-support-config', {
+                enabled,
+                provider,
+                model,
+                agentName,
+                systemPrompt,
+                knowledgeResources: resourcesPayload
+            });
             showSuccess('AI Support settings saved.');
             onClose();
         } catch (err) {
@@ -67,6 +163,8 @@ const AiSupportSettingsModal = ({ isOpen, onClose }) => {
     };
 
     if (!isOpen) return null;
+
+    const inputCls = 'w-full p-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm text-slate-800 font-medium bg-white';
 
     return (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
@@ -171,6 +269,161 @@ const AiSupportSettingsModal = ({ isOpen, onClose }) => {
                                     <p className="text-xs text-slate-400">Leave empty to use the built-in default support prompt.</p>
                                     <span className={`text-xs font-bold ${systemPrompt.length > 1900 ? 'text-red-500' : 'text-slate-400'}`}>{systemPrompt.length}/2000</span>
                                 </div>
+                            </div>
+
+                            {/* ── Knowledge Resources ──────────────────────────────────────── */}
+                            <div>
+                                <div className="flex items-center justify-between mb-1">
+                                    <div>
+                                        <p className="font-bold text-sm text-slate-800 flex items-center gap-2">
+                                            <i className="fa-solid fa-book-open text-blue-500 text-sm"></i>
+                                            Knowledge Resources
+                                        </p>
+                                        <p className="text-xs text-slate-500 mt-0.5">
+                                            Videos, articles, and docs the AI can recommend when directly relevant to a ticket. Resources are separate from the System Prompt.
+                                        </p>
+                                    </div>
+                                    <span className="text-xs font-bold text-slate-400 shrink-0 ml-4">{knowledgeResources.length} resource{knowledgeResources.length !== 1 ? 's' : ''}</span>
+                                </div>
+
+                                <div className="space-y-2 mt-3">
+                                    {knowledgeResources.map((r, idx) => (
+                                        <div key={idx} className="border border-slate-200 rounded-xl overflow-hidden">
+                                            {/* Resource card header */}
+                                            <div
+                                                className="flex items-center gap-3 p-3 bg-slate-50 cursor-pointer hover:bg-slate-100 transition select-none"
+                                                onClick={() => toggleResource(idx)}
+                                            >
+                                                {/* Type icon */}
+                                                <span className="shrink-0 w-7 h-7 rounded-lg bg-blue-100 flex items-center justify-center">
+                                                    {r.type === 'video'         && <i className="fa-solid fa-play text-blue-600 text-[10px]"></i>}
+                                                    {r.type === 'documentation' && <i className="fa-solid fa-file-lines text-blue-600 text-[10px]"></i>}
+                                                    {r.type === 'help_article'  && <i className="fa-solid fa-circle-question text-blue-600 text-[10px]"></i>}
+                                                    {r.type === 'other'         && <i className="fa-solid fa-link text-blue-600 text-[10px]"></i>}
+                                                </span>
+
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-semibold text-slate-800 truncate">
+                                                        {r.title || <span className="text-slate-400 italic font-normal">Untitled resource</span>}
+                                                    </p>
+                                                    {r.category && <p className="text-[11px] text-slate-400 font-medium">{r.category}</p>}
+                                                </div>
+
+                                                {/* Active badge */}
+                                                <span className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${r.isActive ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-500'}`}>
+                                                    {r.isActive ? 'Active' : 'Inactive'}
+                                                </span>
+
+                                                {/* Remove */}
+                                                <button
+                                                    type="button"
+                                                    onClick={e => { e.stopPropagation(); removeResource(idx); }}
+                                                    className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition"
+                                                    title="Remove resource"
+                                                >
+                                                    <i className="fa-solid fa-trash text-xs"></i>
+                                                </button>
+
+                                                <i className={`fa-solid fa-chevron-down text-slate-400 text-xs transition-transform shrink-0 ${expandedIdx === idx ? 'rotate-180' : ''}`}></i>
+                                            </div>
+
+                                            {/* Resource form (expanded) */}
+                                            {expandedIdx === idx && (
+                                                <div className="p-4 space-y-3 border-t border-slate-100 bg-white">
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                        <Field label="Title" required>
+                                                            <input
+                                                                type="text"
+                                                                value={r.title}
+                                                                onChange={e => updateResource(idx, 'title', e.target.value)}
+                                                                placeholder="How to Connect WhatsApp Number"
+                                                                className={inputCls}
+                                                            />
+                                                        </Field>
+                                                        <Field label="Category" required>
+                                                            <input
+                                                                type="text"
+                                                                value={r.category}
+                                                                onChange={e => updateResource(idx, 'category', e.target.value)}
+                                                                placeholder="WhatsApp"
+                                                                className={inputCls}
+                                                            />
+                                                        </Field>
+                                                    </div>
+
+                                                    <Field label="URL" required>
+                                                        <input
+                                                            type="url"
+                                                            value={r.url}
+                                                            onChange={e => updateResource(idx, 'url', e.target.value)}
+                                                            placeholder="https://youtube.com/watch?v=..."
+                                                            className={inputCls}
+                                                        />
+                                                    </Field>
+
+                                                    <Field label="Description / When to Use" required>
+                                                        <textarea
+                                                            value={r.description}
+                                                            onChange={e => updateResource(idx, 'description', e.target.value)}
+                                                            rows={3}
+                                                            placeholder="Use when the customer asks how to connect their WhatsApp number with Meta."
+                                                            className={inputCls + ' resize-none'}
+                                                        />
+                                                    </Field>
+
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                        <Field label="Resource Type" required>
+                                                            <select
+                                                                value={r.type}
+                                                                onChange={e => updateResource(idx, 'type', e.target.value)}
+                                                                className={inputCls}
+                                                            >
+                                                                {RESOURCE_TYPES.map(t => (
+                                                                    <option key={t.value} value={t.value}>{t.label}</option>
+                                                                ))}
+                                                            </select>
+                                                        </Field>
+                                                        <Field label="Tags">
+                                                            <input
+                                                                type="text"
+                                                                value={r.tags}
+                                                                onChange={e => updateResource(idx, 'tags', e.target.value)}
+                                                                placeholder="whatsapp, meta, connection"
+                                                                className={inputCls}
+                                                            />
+                                                            <p className="text-[10px] text-slate-400 mt-1">Comma-separated. Used to match relevant tickets.</p>
+                                                        </Field>
+                                                    </div>
+
+                                                    {/* Active toggle */}
+                                                    <div className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2.5">
+                                                        <div>
+                                                            <p className="text-xs font-bold text-slate-700">Active</p>
+                                                            <p className="text-[11px] text-slate-400">Inactive resources are ignored by the AI.</p>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => updateResource(idx, 'isActive', !r.isActive)}
+                                                            className={`shrink-0 w-10 h-5 rounded-full transition-colors flex items-center p-0.5 ${r.isActive ? 'bg-blue-600 justify-end' : 'bg-slate-300 justify-start'}`}
+                                                        >
+                                                            <span className="w-4 h-4 rounded-full bg-white shadow-sm"></span>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Add resource button */}
+                                <button
+                                    type="button"
+                                    onClick={addResource}
+                                    className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-slate-200 text-sm font-semibold text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/50 transition"
+                                >
+                                    <i className="fa-solid fa-plus text-xs"></i>
+                                    Add Resource
+                                </button>
                             </div>
                         </>
                     )}

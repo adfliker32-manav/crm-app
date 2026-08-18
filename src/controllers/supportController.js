@@ -332,12 +332,98 @@ If you cannot solve their issue, tell them you are forwarding this to a human ad
                     ? cfg.systemPrompt.trim()
                     : defaultSupportPrompt;
 
-                const systemPrompt = `${basePrompt}
+                // ── Knowledge Resources: select relevant ones only ───────────────────
+                // Score each active resource against the full ticket context (subject,
+                // tag, and recent conversation messages — not just the first message).
+                // Only resources scoring ≥ 2 are passed to the AI (max 3).
+                // autoTag is a scoring *signal* (via the tag in context), never a hard gate.
+                const allResources = Array.isArray(cfg.knowledgeResources) ? cfg.knowledgeResources : [];
+                const activeResources = allResources.filter(r => r.isActive !== false);
+                let relevantResources = [];
+
+                if (activeResources.length > 0) {
+                    // Gather recent conversation messages (up to 15) for richer context.
+                    // For brand-new tickets this is just the first message; for future
+                    // extensions (follow-up AI replies) it captures evolving conversation.
+                    let recentTexts = '';
+                    try {
+                        const recentMsgs = await SupportMessage.find({ ticketId: ticket._id })
+                            .sort({ createdAt: -1 })
+                            .limit(15)
+                            .select('text')
+                            .lean();
+                        recentTexts = recentMsgs.map(m => m.text || '').join(' ');
+                    } catch (_) {
+                        // Fallback — at minimum we have the first message.
+                        recentTexts = firstMessage;
+                    }
+
+                    // Build a normalised context string from all available ticket data.
+                    const ticketContext = `${subject} ${recentTexts} ${tag}`.toLowerCase();
+
+                    const scored = activeResources.map(r => {
+                        let score = 0;
+
+                        // +3 if the resource category appears in context
+                        if (r.category && ticketContext.includes(r.category.toLowerCase())) {
+                            score += 3;
+                        }
+
+                        // +2 per matching tag (capped at +6 total)
+                        const tags = Array.isArray(r.tags) ? r.tags : [];
+                        let tagPoints = 0;
+                        for (const t of tags) {
+                            if (t && ticketContext.includes(t.toLowerCase())) {
+                                tagPoints += 2;
+                                if (tagPoints >= 6) break;
+                            }
+                        }
+                        score += tagPoints;
+
+                        // +1 per significant word (>4 chars) in the description that appears in context
+                        if (r.description) {
+                            const words = r.description.toLowerCase().split(/\W+/).filter(w => w.length > 4);
+                            const uniqueWords = [...new Set(words)].slice(0, 30);
+                            for (const w of uniqueWords) {
+                                if (ticketContext.includes(w)) score += 1;
+                            }
+                        }
+
+                        return { resource: r, score };
+                    });
+
+                    relevantResources = scored
+                        .filter(s => s.score >= 2)
+                        .sort((a, b) => b.score - a.score)
+                        .slice(0, 3)
+                        .map(s => s.resource);
+
+                    if (relevantResources.length > 0) {
+                        console.log(
+                            `🤖 [Support] Ticket ${ticket._id}: injecting ${relevantResources.length} knowledge resource(s): ` +
+                            relevantResources.map(r => `"${r.title}" (${r.id || 'no-id'})`).join(', ')
+                        );
+                    }
+                }
+
+                // ── Build final system prompt ─────────────────────────────────────────
+                // System Prompt and Knowledge Resources are separate responsibilities:
+                // System Prompt  = how the AI should behave.
+                // Knowledge Resources = external information the AI may recommend.
+                let systemPrompt = `${basePrompt}
 
 Ticket Details:
 - Subject: ${subject}
 - Tag: ${tag}
 - Submitter Name: ${sender?.name || req.user.name || ''} (${sender?.role || req.user.role || ''})`;
+
+                if (relevantResources.length > 0) {
+                    const resourceLines = relevantResources.map(r =>
+                        `Title: ${r.title}\nURL: ${r.url}\nWhen to use: ${r.description}\nCategory: ${r.category}\nType: ${r.type}`
+                    ).join('\n\n');
+
+                    systemPrompt += `\n\n--- AVAILABLE KNOWLEDGE RESOURCES ---\nThe following resources are verified and configured by the Adfliker Super Admin.\n\nUse a resource ONLY when it is directly relevant to the customer's current issue.\nFirst answer the customer's question fully using your knowledge and the available context.\nIf a relevant resource would genuinely help the customer, include the exact URL as an additional helpful resource.\n\nCRITICAL: Only provide URLs that exist in the resources listed below.\nNever create, invent, guess, modify, shorten, or replace a URL.\nIf no relevant resource is useful for this specific question, do not mention any resource at all.\n\n${resourceLines}\n--- END KNOWLEDGE RESOURCES ---`;
+                }
 
                 const { reply, usage } = await generateReply({
                     provider,
