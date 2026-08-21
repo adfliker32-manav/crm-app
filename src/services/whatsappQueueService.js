@@ -39,6 +39,14 @@ const defineWhatsAppJobs = (agenda) => {
                 return;
             }
 
+            // 🔒 BUG-1 FIX: Skip chatbot actions for expired tenants.
+            const { isTenantExpired } = require('../utils/tenantStatus');
+            if (session.userId && await isTenantExpired(session.userId)) {
+                console.log(`⏸️ [Queue] Skipping chatbot node — tenant plan expired (session ${sessionId})`);
+                await job.remove();
+                return;
+            }
+
             // ── No-Reply Timeout Guard ────────────────────────────────────────
             // If this job was scheduled as a no-reply timeout on a question node,
             // skip it if the customer already answered (session moved past that node).

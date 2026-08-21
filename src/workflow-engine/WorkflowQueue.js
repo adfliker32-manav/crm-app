@@ -330,6 +330,16 @@ const startWorkflowWorker = () => {
 
             if (name === 'EXECUTE_NODE') {
                 const { executionId, nodeId, tokenId, iterPath, iterItem, requeueAttempt } = data;
+
+                // 🔒 BUG-1 FIX: Skip workflow nodes for expired tenants.
+                const { isTenantExpired } = require('../utils/tenantStatus');
+                const _exec = await require('mongoose').model('WorkflowExecution')
+                    .findById(executionId).select('tenantId').lean();
+                if (_exec && await isTenantExpired(_exec.tenantId)) {
+                    console.log(`⏸️ [WorkflowWorker] Skipping node "${nodeId}" — tenant plan expired (exec ${executionId})`);
+                    return;
+                }
+
                 console.log(`[WorkflowWorker] Executing node "${nodeId}"${iterPath ? ` [${iterPath}]` : ''} for execution ${executionId}`);
                 // C3/C7 FIX: the engine needs the branch token (to tell a re-delivery
                 // from a join arrival) and the attempt counters (so it only declares

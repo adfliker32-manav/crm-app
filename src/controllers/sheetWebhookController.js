@@ -80,7 +80,14 @@ const receiveSheetPush = async (req, res) => {
         }
 
         // 4b. Get custom field definitions (only query we still need)
-        const workspace = await WorkspaceSettings.findOne({ userId }).select('customFieldDefinitions').lean();
+        const workspace = await WorkspaceSettings.findOne({ userId }).select('customFieldDefinitions planExpiryDate').lean();
+        
+        // BUG #1 FIX (Follow-up): Prevent sheet sync for expired tenants.
+        if (workspace?.planExpiryDate && Date.now() > new Date(workspace.planExpiryDate).getTime()) {
+            console.warn(`⚠️ [Sheet Push] User ${userId} subscription is EXPIRED. Rejecting sheet sync.`);
+            return res.status(403).json({ success: false, message: 'Subscription expired. Please upgrade your plan to resume Google Sheet sync.' });
+        }
+        
         const customFieldDefs = workspace?.customFieldDefinitions || [];
 
         // 5. Dedup check — scoped to THIS BATCH's candidates.
@@ -215,6 +222,17 @@ const receiveSheetPush = async (req, res) => {
         // outside the try, makes both paths behave identically.
         let insertedCount = 0;
         if (newLeadsToInsert.length > 0) {
+            // 🔒 BUG-5 FIX: Enforce lead limit before bulk insert via Sheet sync.
+            const { checkLeadLimit } = require('../utils/leadLimitGuard');
+            const limitCheck = await checkLeadLimit(userId, newLeadsToInsert.length);
+            if (!limitCheck.allowed) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'lead_limit_reached',
+                    message: limitCheck.message
+                });
+            }
+
             let insertedLeads = [];
             try {
                 insertedLeads = await Lead.insertMany(newLeadsToInsert, { ordered: false });

@@ -980,74 +980,82 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         if (messageType === 'system') {
             console.log(`[Webhook] System message stored (id=${waMessageId}) — automation/chatbot pipeline skipped.`);
         } else {
-        setImmediate(async () => {
-            try {
-                // Step 1: Check if this inbound message resolves a pending WAIT_FOR_REPLY watcher (legacy engine)
-                const { handleWatcherReply } = require('../services/AutomationService');
-                await handleWatcherReply(conversation._id);
-            } catch (err) {
-                console.error('❌ handleWatcherReply error:', err);
-            }
+            // BUG #1 FIX (Follow-up): Skip automations & chatbot for expired tenants.
+            // Data is safely stored in DB, but background services halt until renewal.
+            const { isTenantExpired } = require('../utils/tenantStatus');
+            const isExpired = await isTenantExpired(targetUserId);
+            if (isExpired) {
+                console.log(`[Webhook] Tenant ${targetUserId} subscription is EXPIRED. Automation/chatbot pipeline skipped.`);
+            } else {
+                setImmediate(async () => {
+                    try {
+                        // Step 1: Check if this inbound message resolves a pending WAIT_FOR_REPLY watcher (legacy engine)
+                        const { handleWatcherReply } = require('../services/AutomationService');
+                        await handleWatcherReply(conversation._id);
+                    } catch (err) {
+                        console.error('❌ handleWatcherReply error:', err);
+                    }
 
-            try {
-                // Step 1b: Resolve any pending Workflow Engine WHATSAPP_REPLY wait signal (new engine)
-                const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
-                await WorkflowEngine.resolveWaitSignal({
-                    signalType:   'WHATSAPP_REPLY',
-                    channelId:    conversation._id,
-                    tenantId:     conversation.userId,   // BUG #3 FIX: scope to this tenant
-                    payload:      { message: messageDoc.content?.text || '' },
-                    resolvedPort: 'replied'
+                    try {
+                        // Step 1b: Resolve any pending Workflow Engine WHATSAPP_REPLY wait signal (new engine)
+                        const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+                        await WorkflowEngine.resolveWaitSignal({
+                            signalType:   'WHATSAPP_REPLY',
+                            channelId:    conversation._id,
+                            tenantId:     conversation.userId,   // BUG #3 FIX: scope to this tenant
+                            payload:      { message: messageDoc.content?.text || '' },
+                            resolvedPort: 'replied'
+                        });
+
+                        // Step 1c: Fire new Workflow Engine WHATSAPP_REPLY start trigger
+                        // WF-H1: pass the reply text as a first-class field. The raw Meta
+                        // object nests it at message.text.body, so a workflow branching on
+                        // "did they say yes" had to know Meta's wire format — and before the
+                        // trigger.* namespace existed it could not read the message at all.
+                        await WorkflowEngine.fireTrigger('WHATSAPP_REPLY', {
+                            lead,
+                            tenantId: conversation.userId,
+                            messageText: messageDoc.content?.text || '',
+                            messageType,
+                            conversationId: conversation._id,
+                            message
+                        });
+                    } catch (err) {
+                        console.error('❌ WorkflowEngine WHATSAPP_REPLY error:', err);
+                    }
+
+                    try {
+                        // Step 2: Score the reply and pause any active drip sequences
+                        if (conversation.leadId) {
+                            const { updateLeadScore } = require('../services/leadScoringService');
+                            const { pauseLeadSequences } = require('../services/sequenceService');
+                            await Promise.all([
+                                updateLeadScore(conversation.leadId, 'WHATSAPP_REPLIED'),
+                                pauseLeadSequences(conversation.leadId)
+                            ]);
+                        }
+                    } catch (err) {
+                        console.error('❌ Scoring/sequence pause error:', err);
+                    }
+
+                    try {
+                        // Step 3: Trigger chatbot/auto-reply logic (runs AFTER watcher completes)
+                        // W9 FIX: Serialize chatbot processing per-conversation to prevent the
+                        // rapid-burst race condition. If the customer sends 3 messages in 1 second
+                        // the bot was processing all 3 concurrently, making message 2 look like the
+                        // answer to a question the bot just asked in message 1. The lock forces each
+                        // message’s chatbot call to finish before the next one begins.
+                        debug('🤖 Running chatbot engine in background (serialized by conversation lock)...');
+                        const chatbotEngine = require('../services/chatbotEngineService');
+                        await runWithChatbotLock(conversation._id, () =>
+                            chatbotEngine.processIncomingMessage(messageDoc, conversation._id, targetUserId)
+                        );
+                        debug('🤖 Chatbot engine finished in background');
+                    } catch (err) {
+                        console.error('❌ Background chatbot error:', err);
+                    }
                 });
-
-                // Step 1c: Fire new Workflow Engine WHATSAPP_REPLY start trigger
-                // WF-H1: pass the reply text as a first-class field. The raw Meta
-                // object nests it at message.text.body, so a workflow branching on
-                // "did they say yes" had to know Meta's wire format — and before the
-                // trigger.* namespace existed it could not read the message at all.
-                await WorkflowEngine.fireTrigger('WHATSAPP_REPLY', {
-                    lead,
-                    tenantId: conversation.userId,
-                    messageText: messageDoc.content?.text || '',
-                    messageType,
-                    conversationId: conversation._id,
-                    message
-                });
-            } catch (err) {
-                console.error('❌ WorkflowEngine WHATSAPP_REPLY error:', err);
-            }
-
-            try {
-                // Step 2: Score the reply and pause any active drip sequences
-                if (conversation.leadId) {
-                    const { updateLeadScore } = require('../services/leadScoringService');
-                    const { pauseLeadSequences } = require('../services/sequenceService');
-                    await Promise.all([
-                        updateLeadScore(conversation.leadId, 'WHATSAPP_REPLIED'),
-                        pauseLeadSequences(conversation.leadId)
-                    ]);
-                }
-            } catch (err) {
-                console.error('❌ Scoring/sequence pause error:', err);
-            }
-
-            try {
-                // Step 3: Trigger chatbot/auto-reply logic (runs AFTER watcher completes)
-                // W9 FIX: Serialize chatbot processing per-conversation to prevent the
-                // rapid-burst race condition. If the customer sends 3 messages in 1 second
-                // the bot was processing all 3 concurrently, making message 2 look like the
-                // answer to a question the bot just asked in message 1. The lock forces each
-                // message’s chatbot call to finish before the next one begins.
-                debug('🤖 Running chatbot engine in background (serialized by conversation lock)...');
-                const chatbotEngine = require('../services/chatbotEngineService');
-                await runWithChatbotLock(conversation._id, () =>
-                    chatbotEngine.processIncomingMessage(messageDoc, conversation._id, targetUserId)
-                );
-                debug('🤖 Chatbot engine finished in background');
-            } catch (err) {
-                console.error('❌ Background chatbot error:', err);
-            }
-        });
+            } // end isExpired else
         } // end if (messageType !== 'system')
 
     } catch (error) {

@@ -1,10 +1,11 @@
 const express = require('express');
 const router  = express.Router();
 const workflowLibraryController = require('../controllers/workflowLibraryController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
+const requireModule      = require('../middleware/moduleMiddleware');
 const validateObjectId   = require('../middleware/validateObjectId');
 
-router.use(authMiddleware);
+router.use(authMiddleware, requireModule('automations'), requireFeature('automation.workflow'));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMMUNITY WORKFLOW LIBRARY

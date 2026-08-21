@@ -193,10 +193,25 @@ const applyCoupon = async (req, res) => {
         // account look like a paying customer: it vanished from the SuperAdmin
         // trial-tracking dashboards (which filter on subscriptionStatus:'trial')
         // and the customer's own Billing page showed them as fully subscribed.
-        await WorkspaceSettings.findOneAndUpdate(
-            { userId: req.tenantId },
-            { $set: { planExpiryDate: newExpiry, subscriptionStatus: 'trial' } }
+        
+        // BUG-9 FIX: Atomically push to appliedCoupons to prevent race condition 
+        // where same tenant redeems multiple times concurrently.
+        const updatedWs = await WorkspaceSettings.findOneAndUpdate(
+            { 
+                userId: req.tenantId, 
+                appliedCoupons: { $ne: coupon.code } 
+            },
+            { 
+                $set: { planExpiryDate: newExpiry, subscriptionStatus: 'trial' },
+                $addToSet: { appliedCoupons: coupon.code }
+            }
         );
+
+        if (!updatedWs) {
+            // Revert coupon claim if they already redeemed this code
+            await Coupon.updateOne({ _id: coupon._id }, { $inc: { usedCount: -1 } });
+            return res.status(400).json({ message: 'You have already applied this coupon to your workspace.' });
+        }
 
         res.json({ success: true, extensionDays: coupon.extensionDays, newExpiryDate: newExpiry });
     } catch (err) {

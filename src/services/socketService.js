@@ -82,7 +82,7 @@ const initSocket = (httpServer) => {
             // reading it off the socket (or the token) leaves it undefined, and an
             // undefined value in a query filter is dropped by BSON rather than
             // matching nothing — which silently turns the guard into a no-op.
-            const userDoc = await User.findById(userId).select('tokenVersion is_active parentId').lean();
+            const userDoc = await User.findById(userId).select('tokenVersion is_active parentId role').lean();
             if (!userDoc) {
                 console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: user no longer exists`);
                 return next(new Error('Account no longer exists'));
@@ -94,6 +94,23 @@ const initSocket = (httpServer) => {
             if ((decoded.tv || 0) !== (userDoc.tokenVersion || 0)) {
                 console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: session revoked`);
                 return next(new Error('Session revoked'));
+            }
+
+            // BUG-10 FIX: WebSocket channels not subscription-gated.
+            // If the workspace is expired, do not allow real-time channels (which stream
+            // premium features like WhatsApp/Emails) to remain open.
+            const WorkspaceSettings = require('../models/WorkspaceSettings');
+            const tenantId = userDoc.role === 'agent' ? userDoc.parentId : userDoc._id;
+            // Agencies and SuperAdmins don't have workspaces in the same way, or they are lifetime free.
+            if (userDoc.role === 'manager' || userDoc.role === 'agent') {
+                const ws = await WorkspaceSettings.findOne({ userId: tenantId }).select('planExpiryDate').lean();
+                if (ws?.planExpiryDate) {
+                    const expiry = new Date(ws.planExpiryDate).getTime();
+                    if (Date.now() > expiry) {
+                        console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: workspace subscription expired`);
+                        return next(new Error('subscription_required'));
+                    }
+                }
             }
 
             socket.userId = userId;

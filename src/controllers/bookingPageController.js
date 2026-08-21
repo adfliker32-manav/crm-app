@@ -224,6 +224,10 @@ const submitBooking = async (req, res) => {
 
             let leadWasCreated = false;
             if (!lead) {
+                // 🔒 BUG-5 FIX: Check lead limit before creating from booking page.
+                const { checkLeadLimit } = require('../utils/leadLimitGuard');
+                const limitCheck = await checkLeadLimit(page.userId);
+                if (limitCheck.allowed) {
                 const newLead = new Lead({
                     userId: page.userId,
                     name: customerName,
@@ -243,6 +247,7 @@ const submitBooking = async (req, res) => {
                 leadWasCreated = true;
 
                 queueLeadCreatedEffects(newLead, page.userId.toString(), { source: 'Booking Page' });
+                } // end limitCheck.allowed
             }
 
             const leadId = lead?._id || null;

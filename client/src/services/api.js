@@ -101,6 +101,32 @@ api.interceptors.response.use(
             }
         }
 
+        // ── 403 module_locked or feature_locked — Stale Frontend Entitlements ──
+        // The backend denied access to a module or feature that the frontend thought
+        // the user had. This means the frontend's localStorage `user.entitlements`
+        // is stale (e.g. plan changed by admin or expired). We patch the local state
+        // and force a reload. The reload re-evaluates the <FeatureGate> which will
+        // now natively render the <UpgradeWall> instead of attempting API calls.
+        if (status === 403 && (error.response?.data?.error === 'module_locked' || error.response?.data?.error === 'feature_locked')) {
+            try {
+                const userStr = localStorage.getItem('user');
+                if (userStr) {
+                    const userObj = JSON.parse(userStr);
+                    if (!userObj.entitlements) userObj.entitlements = {};
+                    const key = error.response.data.feature || error.response.data.module;
+                    if (key) {
+                        userObj.entitlements[key] = false;
+                        localStorage.setItem('user', JSON.stringify(userObj));
+                        // Delay slightly so the UI doesn't visually flicker abruptly
+                        setTimeout(() => window.location.reload(), 100);
+                        return Promise.reject(error);
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to patch stale entitlements:', e);
+            }
+        }
+
         // ── 403 subscription_required — account is READ-ONLY (trial/plan lapsed) ──
         // A write was attempted on a lapsed account. We do NOT redirect or log out —
         // the user keeps read-only access and the PaymentBanner shows the Subscribe

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const emailConversationController = require('../controllers/emailConversationController');
 const validateObjectId = require('../middleware/validateObjectId');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
 const checkPermission = require('../middleware/checkPermission');
 
@@ -10,7 +10,7 @@ const checkPermission = require('../middleware/checkPermission');
 // authenticated agent could read the whole tenant inbox by calling the API
 // directly. The Email module gate was missing here too, meaning tenants
 // without the module kept full access.
-router.use(authMiddleware, requireModule('email'), checkPermission('viewEmails'));
+router.use(authMiddleware, requireModule('email'), requireFeature('email.inbox'), checkPermission('viewEmails'));
 
 router.get('/', emailConversationController.getConversations);
 

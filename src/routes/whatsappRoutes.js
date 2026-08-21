@@ -43,40 +43,40 @@ router.get('/analytics', authMiddleware, requireModule('whatsapp'), whatsappAnal
 // ============================================
 
 // Get all conversations
-router.get('/conversations', authMiddleware, requireModule('whatsapp'), whatsappConversationController.getConversations);
+router.get('/conversations', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), whatsappConversationController.getConversations);
 
 // Get unread count (for badge)
-router.get('/conversations/unread', authMiddleware, requireModule('whatsapp'), whatsappConversationController.getUnreadCount);
+router.get('/conversations/unread', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), whatsappConversationController.getUnreadCount);
 
 // Start new conversation
-router.post('/conversations/new', authMiddleware, requireModule('whatsapp'), validateObjectId({ body: ['leadId'] }), whatsappConversationController.startConversation);
+router.post('/conversations/new', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId({ body: ['leadId'] }), whatsappConversationController.startConversation);
 
 // Get single conversation with messages
-router.get('/conversations/:id', authMiddleware, requireModule('whatsapp'), validateObjectId('id'), whatsappConversationController.getConversation);
+router.get('/conversations/:id', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.getConversation);
 
 // Clear all stored messages in a conversation
-router.delete('/conversations/:id/messages', authMiddleware, requireModule('whatsapp'), validateObjectId('id'), whatsappConversationController.clearConversationMessages);
+router.delete('/conversations/:id/messages', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.clearConversationMessages);
 
 // Send message in conversation
-router.post('/conversations/:id/send', authMiddleware, requireModule('whatsapp'), validateObjectId('id'), whatsappConversationController.sendMessage);
+router.post('/conversations/:id/send', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.sendMessage);
 
 // Mark conversation as read
-router.put('/conversations/:id/read', authMiddleware, requireModule('whatsapp'), validateObjectId('id'), whatsappConversationController.markAsRead);
+router.put('/conversations/:id/read', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.markAsRead);
 
 // Link conversation to lead
-router.post('/conversations/:id/link', authMiddleware, requireModule('whatsapp'), validateObjectId({ params: ['id'], body: ['leadId'] }), whatsappConversationController.linkToLead);
+router.post('/conversations/:id/link', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId({ params: ['id'], body: ['leadId'] }), whatsappConversationController.linkToLead);
 
 // Update conversation status (archive/unarchive/spam)
-router.put('/conversations/:id/status', authMiddleware, requireModule('whatsapp'), validateObjectId('id'), whatsappConversationController.updateStatus);
+router.put('/conversations/:id/status', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.updateStatus);
 
 // Resume chatbot (manual unpause)
-router.put('/conversations/:id/resume-chatbot', authMiddleware, requireModule('whatsapp'), validateObjectId('id'), whatsappConversationController.resumeChatbot);
+router.put('/conversations/:id/resume-chatbot', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.resumeChatbot);
 
 // Send media in conversation (file upload via multer)
-router.post('/conversations/:id/send-media', authMiddleware, requireModule('whatsapp'), upload.single('file'), validateObjectId('id'), whatsappConversationController.sendMediaMessage);
+router.post('/conversations/:id/send-media', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), upload.single('file'), validateObjectId('id'), whatsappConversationController.sendMediaMessage);
 
 // Send media from Media Library (no file upload — asset already in object storage)
-router.post('/conversations/:id/send-media-from-library', authMiddleware, requireModule('whatsapp'), validateObjectId('id'), whatsappConversationController.sendMediaFromLibrary);
+router.post('/conversations/:id/send-media-from-library', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.sendMediaFromLibrary);
 
 // Download media proxy (frontend can't call Meta API directly).
 // <img>/<audio>/<video>/download tags cannot set an Authorization header, so the

@@ -462,7 +462,7 @@ exports.testBroadcast = async (req, res) => {
             template.name,
             userId,
             metaComponents,
-            template.language || 'en_US'
+            template.language
         );
 
         if (!result || result.success === false) {

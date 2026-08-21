@@ -1043,6 +1043,11 @@ const toolHandlers = {
         const { name, phone, email, status, source, dealValue, tags, qualificationLevel } = args;
         if (!name || typeof name !== 'string' || !name.trim()) throw new Error('"name" is required.');
 
+        // 🔒 BUG-5 FIX: Enforce lead limit before creating via MCP/AI.
+        const { checkLeadLimit } = require('../utils/leadLimitGuard');
+        const limitCheck = await checkLeadLimit(tenantId);
+        if (!limitCheck.allowed) throw new Error(limitCheck.message);
+
         const lead = await Lead.create({
             userId: tenantId,
             name: name.trim(),

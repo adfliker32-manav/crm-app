@@ -246,6 +246,14 @@ exports.captureLead = async (req, res) => {
     }
 
     try {
+        // 🔒 BUG-5 FIX: Enforce lead limit before creating a new lead.
+        const { checkLeadLimit } = require('../utils/leadLimitGuard');
+        const limitCheck = await checkLeadLimit(workspace.userId);
+        if (!limitCheck.allowed) {
+            // Return 200 OK so the public form doesn't show an error to the visitor
+            return res.json({ success: true, message: 'Lead capacity reached' });
+        }
+
         // ── LAYER 6: Deduplication ───────────────────────────────────────
         const dupQuery = { userId: workspace.userId };
         const orClauses = [];

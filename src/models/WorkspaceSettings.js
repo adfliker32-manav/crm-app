@@ -34,6 +34,11 @@ const workspaceSettingsSchema = new mongoose.Schema({
         default: null,
         index: true
     },
+    // BUG-9 FIX: Track applied coupons to prevent multiple redeems and race conditions
+    appliedCoupons: {
+        type: [String],
+        default: []
+    },
     subscriptionId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Subscription',

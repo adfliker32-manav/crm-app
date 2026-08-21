@@ -1,11 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const aiProxyController = require('../controllers/aiProxyController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
 
-// Secure all AI Proxy routes with authMiddleware
-router.use(authMiddleware);
+// Secure all AI Proxy routes with authMiddleware and enforce AI feature access
+router.use(authMiddleware, requireFeature('settings.claudeAI'));
 
 // SECURITY: writing AI config and running test completions both spend from the
 // tenant's AI credit wallet, and the settings carry the voice-automation API key.

@@ -236,8 +236,17 @@ async function processLeadgenWebhook(pageId, leadgenData) {
 
 // Distribute a fetched lead to all matching tenants — used by both normal path and 30-min retry
 async function distributeLeadToTenants(leadDetails, configs, form_id, leadgen_id) {
+    const { isTenantExpired } = require('../utils/tenantStatus');
+    
     for (const config of configs) {
         const { meta, userId } = config;
+        
+        // BUG #1 FIX (Follow-up): Skip meta lead drop for expired tenants.
+        if (await isTenantExpired(userId)) {
+            console.log(`⚠️ Tenant ${userId} subscription is EXPIRED. Skipping Meta lead sync.`);
+            continue;
+        }
+
         if (meta.metaFormId && meta.metaFormId !== form_id) {
             console.log(`⚠️ Form ${form_id} doesn't match tenant ${userId}'s form ${meta.metaFormId}`);
             continue;

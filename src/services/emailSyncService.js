@@ -32,6 +32,14 @@ const resolveLead = async (tenantId, to, { allowCreate }) => {
     if (!allowCreate) return null;
 
     try {
+        // 🔒 BUG-5 FIX: Enforce lead limit before auto-creating from outbound email.
+        const { checkLeadLimit } = require('../utils/leadLimitGuard');
+        const _ll = await checkLeadLimit(tenantId);
+        if (!_ll.allowed) {
+            console.warn(`⚠️ [EmailSync] Lead limit reached for tenant ${tenantId} — skipping auto-create for ${email}`);
+            return null;
+        }
+
         const lead = await Lead.create({
             userId: tenantId,
             email,

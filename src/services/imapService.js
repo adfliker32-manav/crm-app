@@ -53,6 +53,14 @@ async function processIncomingEmail(user, messageData, parsedMail) {
     // Check if a Lead exists
     let lead = await Lead.findOne({ email: normalizedFrom, userId: user._id });
     if (!lead) {
+        // 🔒 BUG-5 FIX: Enforce lead limit before auto-creating from email.
+        const { checkLeadLimit } = require('../utils/leadLimitGuard');
+        const _ll = await checkLeadLimit(user._id);
+        if (!_ll.allowed) {
+            console.warn(`⚠️ [IMAP] Lead limit reached for tenant ${user._id} — skipping auto-create for ${normalizedFrom}`);
+            return;
+        }
+
         const name = parsedMail.from.value[0].name || normalizedFrom.split('@')[0];
         try {
             lead = await Lead.create({

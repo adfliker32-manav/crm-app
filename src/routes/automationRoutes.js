@@ -9,7 +9,8 @@ const validateObjectId = require('../middleware/validateObjectId');
 router.use(authMiddleware);
 
 // Require at least one automation feature enabled on this tenant's plan.
-router.use(requireFeature(['whatsappAutomation', 'emailAutomation']));
+// Also require the legacy automation feature flag explicitly.
+router.use(requireFeature(['whatsappAutomation', 'emailAutomation']), requireFeature('automation.legacy'));
 
 // Only managers can create/edit automations
 router.use(checkPermission('manageTeam'));

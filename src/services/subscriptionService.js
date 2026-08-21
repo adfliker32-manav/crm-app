@@ -12,6 +12,7 @@ const CommissionLog = require('../models/CommissionLog');
 const WithdrawalRequest = require('../models/WithdrawalRequest');
 const SystemSetting = require('../models/SystemSetting');
 const { resolveEffective } = require('../constants/featureRegistry');
+const { clearTenantCache } = require('../middleware/authMiddleware');
 
 
 // Domain logic shared by the billing controller, webhook handler, and cron
@@ -58,11 +59,33 @@ const applyPlanToWorkspace = async (clientId, plan) => {
         // Single source of truth: top-level agentLimit must equal planFeatures.agentLimit.
         agentLimit: resolvedAgentLimit
     };
-    return WorkspaceSettings.findOneAndUpdate(
+    const updatedSettings = await WorkspaceSettings.findOneAndUpdate(
         { userId: clientId },
         { $set: update },
         { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
+
+    // BUG-4 FIX: Automatically enforce agent limits on downgrade.
+    // If the new plan has a lower agent limit, find all active agents sorted by
+    // creation date (oldest first). If the count exceeds the limit, deactivate the newest ones.
+    const activeAgents = await User.find({ parentId: clientId, role: 'agent', is_active: true }).sort({ createdAt: 1 });
+    if (activeAgents.length > resolvedAgentLimit) {
+        const excessCount = activeAgents.length - resolvedAgentLimit;
+        // The newest agents are at the end of the array.
+        const agentsToDeactivate = activeAgents.slice(-excessCount);
+        const agentIds = agentsToDeactivate.map(a => a._id);
+        
+        await User.updateMany(
+            { _id: { $in: agentIds } },
+            { $set: { is_active: false } }
+        );
+        console.log(`[Subscription] Plan downgrade for tenant ${clientId}. Deactivated ${excessCount} newest agent(s) to match limit of ${resolvedAgentLimit}.`);
+    }
+
+    // BUG-3 FIX: Clear the 5-min auth cache so the user instantly gets access to new plan modules
+    clearTenantCache(clientId);
+
+    return updatedSettings;
 };
 
 // ─── Start subscribe flow ──────────────────────────────────────────────────
@@ -661,10 +684,14 @@ const enforceDowngrade = async (clientId) => {
         {
             $set: {
                 subscriptionStatus: 'expired',
-                autoDebitEnabled:   false
+                autoDebitEnabled:   false,
+                activeModules: [],
+                featureFlags: {}
             }
         }
     );
+    // BUG-8 FIX: Clear cache so the downgraded permissions take effect immediately
+    clearTenantCache(clientId);
     auditLogger.log({
         actor: null,
         actorName: 'System (Autodebit sweep)',

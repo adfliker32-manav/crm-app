@@ -159,6 +159,19 @@ exports.createLead = async (req, res) => {
             leadData.customData = safeCustom;
         }
 
+        // 🔒 BUG-5 FIX: Enforce lead limit before creating via External API.
+        const { checkLeadLimit } = require('../utils/leadLimitGuard');
+        const limitCheck = await checkLeadLimit(req.tenantId);
+        if (!limitCheck.allowed) {
+            return res.status(403).json({
+                success: false,
+                error: 'lead_limit_reached',
+                message: limitCheck.message,
+                currentCount: limitCheck.currentCount,
+                limit: limitCheck.limit
+            });
+        }
+
         // Add initial note if provided
         const lead = new Lead(leadData);
         if (notes && typeof notes === 'string') {
@@ -477,7 +490,7 @@ exports.sendWhatsAppTemplate = async (req, res) => {
             templateName,
             req.tenantId,
             components,
-            languageCode || template.language || 'en_US'
+            languageCode || template.language
         );
 
         res.json({

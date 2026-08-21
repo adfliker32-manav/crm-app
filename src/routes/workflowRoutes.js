@@ -4,7 +4,7 @@ const router  = express.Router();
 const workflowController          = require('../controllers/workflowController');
 const workflowExecutionController = require('../controllers/workflowExecutionController');
 const workflowLibraryController    = require('../controllers/workflowLibraryController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const checkPermission    = require('../middleware/checkPermission');
 const requireModule      = require('../middleware/moduleMiddleware');
 const validateObjectId   = require('../middleware/validateObjectId');
@@ -44,7 +44,7 @@ router.use(authMiddleware);
 // Workflows are the more powerful automation surface, so leaving them ungated let
 // a tenant without the automations module use the whole engine via the API.
 // Must run AFTER authMiddleware — it reads req.workspace.activeModules.
-router.use(requireModule('automations'));
+router.use(requireModule('automations'), requireFeature('automation.workflow'));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTHORIZATION (C6 FIX)

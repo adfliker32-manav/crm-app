@@ -437,13 +437,21 @@ const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en'
         const { phoneNumberId, accessToken } = await getCredentials(userId);
         const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
 
+        // W1 FIX: Auto-resolve the language from the stored template when not
+        // explicitly provided. The chatbot engine, followup service, lead alerts,
+        // and other callers pass `languageCode` from the flow config or template
+        // record, but the value may be the schema default ('en') while the real
+        // template was approved under a different code at Meta. Resolving here
+        // ensures the (name, language) pair always matches what Meta has.
+        const resolvedLanguage = await resolveTemplateLanguage(templateName, userId, languageCode);
+
         const data = {
             messaging_product: "whatsapp",
             to,
             type: "template",
             template: {
                 name: templateName,
-                language: { code: languageCode }
+                language: { code: resolvedLanguage }
             }
         };
 

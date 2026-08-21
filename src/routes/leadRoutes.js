@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const leadController = require('../controllers/leadController');
 const sheetSyncController = require('../controllers/sheetSyncController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
 const { validate, schemas } = require('../middleware/validateRequest');
 const rateLimit = require('express-rate-limit');
@@ -18,14 +18,14 @@ const bulkLimiter = rateLimit({
 // ⚠️ SECURITY: Rate limit write operations to prevent spam and abuse
 const writeLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute window
-    max: 30,
-    message: { success: false, error: 'rate_limit', message: 'Too many write requests. Please slow down.' }
+    max: 60,
+    message: { success: false, error: 'rate_limit', message: 'Too many requests. Please slow down.' }
 });
 
 const deleteLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
+    windowMs: 60 * 1000,
     max: 20,
-    message: { success: false, error: 'rate_limit', message: 'Too many delete requests. Please wait.' }
+    message: { success: false, error: 'rate_limit', message: 'Too many delete requests. Please slow down.' }
 });
 
 // Dedicated limiter for bulk export. Kept separate from bulkLimiter so a legit
@@ -49,13 +49,13 @@ const exportLimiter = rateLimit({
 // lead-injection endpoint — so any authenticated agent could read it, or rotate
 // it and break the tenant's sheet sync. `accessSettings` defaults to false for
 // agents and is the same gate tagRoutes/emailRoutes already use.
-router.get('/sheet-sync-config', authMiddleware, checkPermission('accessSettings'), sheetSyncController.getSheetSyncConfig);
-router.put('/sheet-sync-config', authMiddleware, checkPermission('accessSettings'), sheetSyncController.updateSheetSyncConfig);
-router.post('/google-sheets-list', authMiddleware, checkPermission('accessSettings'), sheetSyncController.listGoogleSheets);
-router.post('/sheet-headers', authMiddleware, checkPermission('accessSettings'), sheetSyncController.fetchSheetHeaders);
-router.post('/sheet-sync-config/regenerate-secret', authMiddleware, checkPermission('accessSettings'), sheetSyncController.regenerateWebhookSecret);
+router.get('/sheet-sync-config', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.sheetSync'), sheetSyncController.getSheetSyncConfig);
+router.put('/sheet-sync-config', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.sheetSync'), sheetSyncController.updateSheetSyncConfig);
+router.post('/google-sheets-list', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.sheetSync'), sheetSyncController.listGoogleSheets);
+router.post('/sheet-headers', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.sheetSync'), sheetSyncController.fetchSheetHeaders);
+router.post('/sheet-sync-config/regenerate-secret', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.sheetSync'), sheetSyncController.regenerateWebhookSecret);
 // Used by LeadAssignmentSettings to patch defaultAssignedAgent without changing the full sync config
-router.post('/update-sheet-sync-config', authMiddleware, checkPermission('accessSettings'), sheetSyncController.updateSheetSyncConfig);
+router.post('/update-sheet-sync-config', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.sheetSync'), sheetSyncController.updateSheetSyncConfig);
 
 // 1. Sync Google Sheet (Manual — MUST BE BEFORE /:id routes!)
 router.post('/sync-sheet', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.syncLeads);

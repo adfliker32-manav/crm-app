@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const chatbotController = require('../controllers/chatbotController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
 const validateObjectId = require('../middleware/validateObjectId');
 
-// All routes require authentication and the explicit chatbot module
-router.use(authMiddleware, requireModule('chatbot'));
+// All routes require authentication, the explicit chatbot module, and the flow builder flag
+router.use(authMiddleware, requireModule('chatbot'), requireFeature('whatsapp.chatbot.flow'));
 
 // Get all flows
 router.get('/', chatbotController.getFlows);

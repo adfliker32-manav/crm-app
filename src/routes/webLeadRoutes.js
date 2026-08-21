@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const webLeadController = require('../controllers/webLeadController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
 const rateLimit = require('express-rate-limit');
 
@@ -32,8 +32,8 @@ router.post('/capture', captureRateLimit, webLeadController.captureLead);
 // (silently breaking every customer landing page), or point `defaultAgent` at
 // themselves to self-assign all inbound web leads. The permission defaults to
 // false for agents, matching tagRoutes/emailRoutes.
-router.get('/config', authMiddleware, checkPermission('accessSettings'), webLeadController.getConfig);
-router.put('/config', authMiddleware, checkPermission('accessSettings'), webLeadController.updateConfig);
-router.post('/regenerate', authMiddleware, checkPermission('accessSettings'), webLeadController.regenerateKey);
+router.get('/config', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.webLead'), webLeadController.getConfig);
+router.put('/config', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.webLead'), webLeadController.updateConfig);
+router.post('/regenerate', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.webLead'), webLeadController.regenerateKey);
 
 module.exports = router;

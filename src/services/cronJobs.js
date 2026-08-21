@@ -29,9 +29,16 @@ const runTimeInStageTrigger = async () => {
         const rules = await AutomationRule.find({ isActive: true, trigger: 'TIME_IN_STAGE' }).lean();
         if (!rules.length) return;
 
-        console.log(`[TimeInStage] Checking ${rules.length} TIME_IN_STAGE rule(s)…`);
+        // 🔒 BUG-1 FIX: Skip rules belonging to expired tenants.
+        const { getExpiredTenantIds } = require('../utils/tenantStatus');
+        const expiredIds = await getExpiredTenantIds(rules.map(r => r.tenantId));
 
-        for (const rule of rules) {
+        const activeRules = rules.filter(r => !expiredIds.has(r.tenantId.toString()));
+        if (!activeRules.length) return;
+
+        console.log(`[TimeInStage] Checking ${activeRules.length} TIME_IN_STAGE rule(s) (${rules.length - activeRules.length} skipped — tenant expired)…`);
+
+        for (const rule of activeRules) {
             const minutesRequired = rule.delayMinutes || 0;
             if (minutesRequired <= 0) continue;
 
@@ -235,6 +242,14 @@ const runAppointmentReminders = async () => {
 
         if (appts24h.length + appts1h.length === 0) return;
 
+        // 🔒 BUG-1 FIX: Skip appointment reminders for expired tenants.
+        const { getExpiredTenantIds } = require('../utils/tenantStatus');
+        const allApptTenants = [...appts24h, ...appts1h].map(a => a.userId);
+        const expiredTenants = await getExpiredTenantIds(allApptTenants);
+        const filter24 = appts24h.filter(a => !expiredTenants.has(a.userId.toString()));
+        const filter1  = appts1h.filter(a => !expiredTenants.has(a.userId.toString()));
+        if (filter24.length + filter1.length === 0) return;
+
         // ── FIX N+1: Batch-fetch all templates upfront ──────────────────────────────
         // Previously: WhatsAppTemplate.findOne() called inside every per-appointment
         // loop iteration = O(n) sequential DB reads.
@@ -336,10 +351,10 @@ const runAppointmentReminders = async () => {
             await Appointment.findByIdAndUpdate(appt._id, { $set: { [flagField]: true } });
         };
 
-        for (const appt of appts24h) await sendReminder(appt, map24h, 'reminder24hSent', '24h');
-        for (const appt of appts1h) await sendReminder(appt, map1h, 'reminder1hSent', '1h');
+        for (const appt of filter24) await sendReminder(appt, map24h, 'reminder24hSent', '24h');
+        for (const appt of filter1) await sendReminder(appt, map1h, 'reminder1hSent', '1h');
 
-        console.log(`📅 [AppointmentReminder] Processed ${appts24h.length} 24h + ${appts1h.length} 1h reminders`);
+        console.log(`📅 [AppointmentReminder] Processed ${filter24.length} 24h + ${filter1.length} 1h reminders`);
     } catch (err) {
         console.error('❌ [AppointmentReminder] Cron error:', err.message);
     }
@@ -380,7 +395,12 @@ const runLostLeadRecovery = async () => {
 
         console.log(`🔄 [LostLeadRecovery] Processing ${trulyLost.length} lead(s) for re-engagement`);
 
+        // 🔒 BUG-1 FIX: Skip leads belonging to expired tenants.
+        const { getExpiredTenantIds } = require('../utils/tenantStatus');
+        const expiredTenants = await getExpiredTenantIds(trulyLost.map(l => l.userId));
+
         for (const lead of trulyLost) {
+            if (expiredTenants.has(lead.userId.toString())) continue;
             const template = await WhatsAppTemplate.findOne({
                 userId: lead.userId,
                 isAutomated: true,
@@ -760,6 +780,10 @@ const runFollowUpTemplateSend = async () => {
 
         console.log(`📨 [FollowUpTemplate] Processing ${leads.length} lead(s) with scheduled templates`);
 
+        // 🔒 BUG-1 FIX: Skip leads belonging to expired tenants.
+        const { getExpiredTenantIds } = require('../utils/tenantStatus');
+        const expiredTenants = await getExpiredTenantIds(leads.map(l => l.userId));
+
         // ── FIX N+1: Batch-fetch users and email templates upfront ──────────────
         // Previously: User.findById() and EmailTemplate.findOne() were called inside
         // the per-lead loop — O(n) sequential queries for n email-type leads.
@@ -779,6 +803,8 @@ const runFollowUpTemplateSend = async () => {
         const templateMap = new Map(emailTemplates.map(t => [t._id.toString(), t]));
 
         for (const lead of leads) {
+            // 🔒 BUG-1 FIX: Skip leads whose tenant plan has expired.
+            if (expiredTenants.has(lead.userId.toString())) continue;
             try {
                 if (lead.followUpTemplateType === 'whatsapp') {
                     if (!lead.phone) {

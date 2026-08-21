@@ -163,6 +163,14 @@ async function processIncomingMessage(messageObj, value) {
             await lead.save();
             console.log(`✅ Updated existing lead: ${lead.name}`);
         } else {
+            // 🔒 BUG-5 FIX: Enforce lead limit before auto-creating from WhatsApp.
+            const { checkLeadLimit } = require('../utils/leadLimitGuard');
+            const limitCheck = await checkLeadLimit(ownerUser._id);
+            if (!limitCheck.allowed) {
+                console.warn(`⚠️ [Webhook] Lead limit reached for tenant ${ownerUser._id} — skipping auto-create for ${normalizedPhone || bsuid}`);
+                return res.status(200).json({ success: true, message: 'Lead limit reached' });
+            }
+
             // For username-only contacts without a phone, use BSUID as identifier
             const leadPhone = normalizedPhone || null;
             const leadEmail = normalizedPhone

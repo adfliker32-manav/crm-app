@@ -81,6 +81,16 @@ async function _processBroadcastJob(job) {
         return;
     }
 
+    // 🔒 BUG-1 FIX: Block broadcasts for expired tenants.
+    const { isTenantExpired } = require('../utils/tenantStatus');
+    if (await isTenantExpired(leadOwnerId)) {
+        await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
+            $set: { status: 'FAILED', errorMessage: 'Subscription plan has expired. Renew from Billing to send broadcasts.' }
+        });
+        console.log(`⏸️ [Broadcast ${broadcastId}] Blocked — tenant plan expired.`);
+        return;
+    }
+
     // Transition SCHEDULED → PROCESSING when the delayed job fires
     if (broadcast.status === 'SCHEDULED') {
         await WhatsAppBroadcast.findByIdAndUpdate(broadcastId, {
@@ -340,7 +350,7 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
             tplContext
         );
 
-        const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language || 'en_US');
+        const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language);
 
         // A successful send returns Meta's raw body ({ messages: [...] }). There is
         // no success flag, and a FAILURE never reaches this line at all —

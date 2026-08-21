@@ -1573,6 +1573,14 @@ const evaluateSmartLead = async (session, flow, conversation) => {
             qualificationReason += `Crossed baseline threshold.`;
         }
 
+        // 🔒 BUG-5 FIX: Enforce lead limit before chatbot creates a lead.
+        const { checkLeadLimit } = require('../utils/leadLimitGuard');
+        const _limitCheck = await checkLeadLimit(session.userId);
+        if (!_limitCheck.allowed) {
+            console.warn(`⚠️ [Chatbot] Lead limit reached for tenant ${session.userId} — skipping lead creation`);
+            return; // Skip lead creation, chatbot flow continues
+        }
+
         const lead = new Lead(buildLeadPayloadFromSession(session, conversation, {
             status: newLeadStatus,
             qualificationLevel: currentLevel,
@@ -2880,6 +2888,12 @@ const executeAction = async (actionData, session, conversation) => {
 
                 // ── Step 3: Still no lead → create one on the spot ────────────
                 if (!leadForStage) {
+                    // 🔒 BUG-5 FIX: Enforce lead limit before chatbot auto-creates a lead.
+                    const { checkLeadLimit } = require('../utils/leadLimitGuard');
+                    const _ll = await checkLeadLimit(session.userId);
+                    if (!_ll.allowed) {
+                        console.warn(`⚠️ [Chatbot] Lead limit reached — skipping auto-create in change_stage`);
+                    } else {
                     leadForStage = new Lead(buildLeadPayloadFromSession(session, conversation, {
                         source: 'WhatsApp Chatbot',
                         status: newStage,
@@ -2904,6 +2918,7 @@ const executeAction = async (actionData, session, conversation) => {
                             .catch(e => console.error('[Chatbot] Meta CAPI error (change_stage create):', e.message));
                     }
                     break; // Already created with correct stage, no need to update again
+                    } // end else (limit allowed)
                 }
 
                 // ── Update the stage ──────────────────────────────────────────
@@ -3093,6 +3108,13 @@ const executeAction = async (actionData, session, conversation) => {
                     }
                 } else {
                     // ── CREATE PATH: No lead found → create new ───────────────
+                    // 🔒 BUG-5 FIX: Enforce lead limit before chatbot creates a lead.
+                    const { checkLeadLimit } = require('../utils/leadLimitGuard');
+                    const _ll3 = await checkLeadLimit(session.userId);
+                    if (!_ll3.allowed) {
+                        console.warn(`⚠️ [Chatbot] Lead limit reached — skipping create_lead action`);
+                        break;
+                    }
                     lead = new Lead(buildLeadPayloadFromSession(session, conversation, {
                         source: actionData.actionData?.source || 'WhatsApp Chatbot',
                         status: targetStage,

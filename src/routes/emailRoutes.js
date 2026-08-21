@@ -54,7 +54,7 @@ if (!emailController.sendEmail) {
 // Path: /api/email/send — rate limited to 30/min per user
 // FIX S2: `sendEmails` was enforced on the lead-detail send route but not here,
 // so an agent denied that permission could still send by calling this endpoint.
-router.post('/send', authMiddleware, requireModule('email'), checkPermission('sendEmails'), emailSendLimiter, handleAttachmentUpload, meterUsage('email'), emailController.sendEmail);
+router.post('/send', authMiddleware, requireModule('email'), checkPermission('sendEmails'), requireFeature('email.inbox'), emailSendLimiter, handleAttachmentUpload, meterUsage('email'), emailController.sendEmail);
 
 // Email Configuration Routes
 const emailConfigController = require('../controllers/emailConfigController');
@@ -87,8 +87,8 @@ router.post('/campaign', authMiddleware, requireModule('email'), checkPermission
 router.delete('/campaign/:campaignId', validateObjectId({ params: ['campaignId'] }), authMiddleware, requireModule('email'), checkPermission('sendBulkEmails'), requireFeature('campaigns'), emailController.cancelCampaign);
 
 // F3: Email drafts
-router.get('/drafts', authMiddleware, requireModule('email'), checkPermission('viewEmails'), emailController.getDrafts);
-router.post('/drafts', authMiddleware, requireModule('email'), checkPermission('viewEmails'), emailController.saveDraft);
-router.delete('/drafts/:draftId', validateObjectId({ params: ['draftId'] }), authMiddleware, requireModule('email'), checkPermission('viewEmails'), emailController.deleteDraft);
+router.get('/drafts', authMiddleware, requireModule('email'), checkPermission('viewEmails'), requireFeature('email.inbox'), emailController.getDrafts);
+router.post('/drafts', authMiddleware, requireModule('email'), checkPermission('viewEmails'), requireFeature('email.inbox'), emailController.saveDraft);
+router.delete('/drafts/:draftId', validateObjectId({ params: ['draftId'] }), authMiddleware, requireModule('email'), checkPermission('viewEmails'), requireFeature('email.inbox'), emailController.deleteDraft);
 
 module.exports = router;

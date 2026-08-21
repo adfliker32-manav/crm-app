@@ -21,6 +21,7 @@ const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 const { peekEmailDailyLimit } = require('../utils/workflowRateLimiter');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { isTenantExpired } = require('../utils/tenantStatus');
 const { resolveAttachments } = require('../utils/emailAttachments');
 
 // Small batches keep each job short so cancellation is responsive and one
@@ -75,6 +76,15 @@ const processBatch = async (campaignId) => {
     // Cancelled or paused between batches — stop cleanly.
     if (campaign.status !== 'sending') {
         console.log(`⏹️ [Campaign] ${campaign.name} is ${campaign.status} — halting batch drain.`);
+        return false;
+    }
+
+    // 🔒 BUG-1 FIX: Pause campaign for expired tenants.
+    if (await isTenantExpired(campaign.userId)) {
+        campaign.status = 'paused';
+        campaign.error = 'Paused: subscription plan has expired.';
+        await campaign.save();
+        console.log(`⏸️ [Campaign] ${campaign.name} paused — tenant plan expired.`);
         return false;
     }
 

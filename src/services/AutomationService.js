@@ -11,6 +11,7 @@ const { sendEmail } = require('./emailService');
 const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
 const { logActivity } = require('./auditService');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { isTenantExpired } = require('../utils/tenantStatus');
 const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 const { emitToUser } = require('./socketService');
@@ -286,6 +287,12 @@ const evaluateLead = async (lead, triggerType) => {
 
         if (!lead || !lead.userId) return;
 
+        // 🔒 BUG-1 FIX: Skip automations for expired tenants (trial/plan lapsed).
+        // Automations are PAUSED, not deleted — re-subscribing reactivates them.
+        if (await isTenantExpired(lead.userId)) {
+            return;
+        }
+
         // Find totally active rules matching this exact trigger
         const rules = await AutomationRule.find({ tenantId: lead.userId, isActive: true, trigger: triggerType });
         if (!rules || rules.length === 0) return;
@@ -368,6 +375,14 @@ const defineAutomationJobs = (agenda) => {
     agenda.define('EXECUTE_AUTOMATION_ACTION', async (job) => {
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) {
             console.log(`🛑 AUTOMATION KILL SWITCH ACTIVE. Blocked scheduled background job.`);
+            return;
+        }
+
+        // 🔒 BUG-1 FIX: Skip scheduled automation jobs for expired tenants.
+        const { ruleId: _rId } = job.attrs.data;
+        const _rule = await AutomationRule.findById(_rId).select('tenantId').lean();
+        if (_rule && await isTenantExpired(_rule.tenantId)) {
+            console.log(`⏸️ [Automation] Skipping job — tenant plan expired (rule ${_rId})`);
             return;
         }
 

@@ -5,6 +5,9 @@ const bpCtrl   = require('../controllers/bookingPageController');
 const slotCtrl = require('../controllers/slotController');
 const validateObjectId = require('../middleware/validateObjectId');
 const { validate, schemas } = require('../middleware/validateRequest');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
+
+router.use(authMiddleware, requireFeature('appointments'));
 
 // ─── Specific named routes (must come BEFORE /:id) ──────────────────────────
 router.get('/stats',               apptCtrl.getAppointmentStats);

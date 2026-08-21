@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
 const { getDashboardSummary } = require('../controllers/dashboardController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 
 // ⚠️ SECURITY: This is the heaviest aggregation endpoint in the app (multi-facet
 // dashboard query) with no prior throttle — rate-limit to prevent a single
@@ -14,6 +14,6 @@ const dashboardLimiter = rateLimit({
 });
 
 // Single endpoint that returns all dashboard data in one shot
-router.get('/summary', authMiddleware, dashboardLimiter, getDashboardSummary);
+router.get('/summary', authMiddleware, requireFeature('dashboard'), dashboardLimiter, getDashboardSummary);
 
 module.exports = router;

@@ -5,6 +5,7 @@ const User = require('../models/User');
 const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
 const { isFeatureDisabled } = require('../utils/systemConfig');
+const { isTenantExpired } = require('../utils/tenantStatus');
 
 let globalAgendaInstance = null;
 
@@ -25,6 +26,9 @@ const scheduleStepJob = async (enrollmentId, delayHours) => {
 const enrollLeadInSequences = async (lead, triggerType, triggerStage = null) => {
     try {
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
+
+        // 🔒 BUG-1 FIX: Skip enrollment for expired tenants.
+        if (await isTenantExpired(lead.userId)) return;
 
         const query = { tenantId: lead.userId, isActive: true, trigger: triggerType };
         if (triggerType === 'STAGE_CHANGED' && triggerStage) {
@@ -188,6 +192,13 @@ const processSequenceStep = async (enrollmentId) => {
 
     const enrollment = await SequenceEnrollment.findById(enrollmentId);
     if (!enrollment || enrollment.status !== 'active') return;
+
+    // 🔒 BUG-1 FIX: Skip step execution for expired tenants.
+    // Enrollment stays 'active' so re-subscribing resumes the sequence.
+    if (await isTenantExpired(enrollment.tenantId)) {
+        console.log(`⏸️ [Sequence] Skipping step — tenant plan expired (enrollment ${enrollmentId})`);
+        return;
+    }
 
     const sequence = await Sequence.findById(enrollment.sequenceId);
     if (!sequence || !sequence.isActive) {

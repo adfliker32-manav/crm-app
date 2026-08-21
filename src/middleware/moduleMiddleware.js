@@ -40,6 +40,7 @@ const requireModule = (moduleName) => {
                 return res.status(403).json({
                     success: false,
                     error: 'module_locked',
+                    module: moduleName,
                     message: `Upgrade required: The '${moduleName.toUpperCase()}' module is not included in your current subscription plan.`
                 });
             }
