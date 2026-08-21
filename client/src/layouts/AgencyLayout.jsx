@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import AgencySidebar from '../components/AgencySidebar';
 import SupportWidget from '../components/Support/SupportWidget';
 import PaymentBanner from '../components/PaymentBanner';
@@ -20,6 +20,9 @@ const AgencyLayout = () => {
         return () => clearTimeout(timer);
     }, []);
 
+    const location = useLocation();
+    const isDashboard = location.pathname === '/agency/dashboard';
+
     return (
         <div className="flex h-screen bg-[#06080F] overflow-hidden font-sans">
             {/* Dedicated Reseller Sidebar */}
@@ -32,7 +35,7 @@ const AgencyLayout = () => {
                     <Outlet />
                 </main>
             </div>
-            <SupportWidget />
+            {isDashboard && <SupportWidget />}
         </div>
     );
 };

@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import SupportWidget from '../components/Support/SupportWidget';
 import PaymentBanner from '../components/PaymentBanner';
@@ -28,6 +28,8 @@ const Layout = () => {
 
     const { socket } = useSocket();
     const { showError, showInfo, showSuccess } = useNotification();
+    const location = useLocation();
+    const isDashboard = location.pathname === '/dashboard';
 
     // ⚠️ Listen for account deletion — auto-logout if admin removes this agent
     useEffect(() => {
@@ -78,7 +80,7 @@ const Layout = () => {
                     <Outlet />
                 </main>
             </div>
-            <SupportWidget />
+            {isDashboard && <SupportWidget />}
         </div>
     );
 };
