@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const whatsappConversationController = require('../controllers/whatsappConversationController');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
 const validateObjectId = require('../middleware/validateObjectId');
 const { meterUsage } = require('../middleware/usageMeter');
