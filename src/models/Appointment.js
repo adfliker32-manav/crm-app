@@ -4,6 +4,8 @@ const saasPlugin = require('./plugins/saasPlugin');
 const appointmentSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     leadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead', default: null },
+    // Which booking page this appointment came from — used for per-service conflict scoping
+    bookingPageId: { type: mongoose.Schema.Types.ObjectId, ref: 'BookingPage', default: null, index: true },
     // Customer info (captured from booking form — may not have a lead yet)
     customerName: { type: String, required: true, trim: true },
     customerPhone: { type: String, required: true, trim: true },
@@ -48,6 +50,8 @@ const appointmentSchema = new mongoose.Schema({
 
 appointmentSchema.index({ userId: 1, appointmentDate: 1, status: 1 });
 appointmentSchema.index({ userId: 1, customerPhone: 1 });
+// Per-service conflict check index (conflictScope: 'service')
+appointmentSchema.index({ bookingPageId: 1, serviceType: 1, appointmentDate: 1, status: 1 });
 // Reminder cron scans upcoming appointments by their true instant.
 appointmentSchema.index({ status: 1, appointmentAt: 1 });
 

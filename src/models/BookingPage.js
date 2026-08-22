@@ -74,7 +74,12 @@ const bookingPageSchema = new mongoose.Schema({
     // Optional description shown on the public booking page
     description: { type: String, default: '', trim: true },
     // User-editable URL prefix (slug = slugPrefix-userId_last8 or book-userId_last8)
-    slugPrefix: { type: String, default: '', trim: true }
+    slugPrefix: { type: String, default: '', trim: true },
+    // Conflict scope: determines how double-booking is detected.
+    // 'page'    → (default) any booking on this page blocks the same slot for everyone
+    // 'service' → each service (Turf A, Dr. Sweta…) has its own independent calendar;
+    //             booking Turf A at 11 AM does NOT block Turf B at 11 AM.
+    conflictScope: { type: String, enum: ['page', 'service'], default: 'page' }
 }, { timestamps: true });
 
 bookingPageSchema.plugin(saasPlugin);

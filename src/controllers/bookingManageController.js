@@ -100,8 +100,12 @@ const rescheduleAppointmentByToken = async (req, res) => {
 
         // Same rules as a new booking, but keep the original service and ignore this
         // appointment when checking for conflicts.
+        // serviceType is passed so that in service-scope mode the conflict check is
+        // correctly scoped to THIS resource (e.g. only Turf A bookings, not Turf B).
         const availability = await checkAvailability(page, {
-            appointmentDate, appointmentTime, excludeApptId: appt._id
+            appointmentDate, appointmentTime,
+            serviceType: appt.serviceType,   // keep original service; also needed for per-service scope
+            excludeApptId: appt._id
         });
         if (!availability.ok) return res.status(availability.code).json({ message: availability.message });
 
@@ -119,13 +123,20 @@ const rescheduleAppointmentByToken = async (req, res) => {
 
         // Concurrency guard: lose to any earlier active booking now sharing this slot,
         // and roll back to the original slot rather than dropping the appointment.
-        const earlier = await Appointment.findOne({
+        // In service-scope mode also scope by bookingPageId+serviceType so Turf A
+        // doesn't incorrectly lose to a Turf B booking at the same time.
+        const rescheduleConcurrencyQuery = {
             userId: appt.userId,
             appointmentDate: appt.appointmentDate,
             appointmentTime,
             status: { $in: MODIFIABLE },
             _id: { $lt: appt._id }
-        }).select('_id').lean();
+        };
+        if ((page.conflictScope || 'page') === 'service') {
+            rescheduleConcurrencyQuery.bookingPageId = appt.bookingPageId;
+            rescheduleConcurrencyQuery.serviceType   = appt.serviceType;
+        }
+        const earlier = await Appointment.findOne(rescheduleConcurrencyQuery).select('_id').lean();
         if (earlier) {
             appt.appointmentDate = oldDate;
             appt.appointmentTime = oldTime;

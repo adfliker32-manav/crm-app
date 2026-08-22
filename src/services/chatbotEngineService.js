@@ -18,6 +18,7 @@ const { generateReply, mapReplyToOption } = require('./aiService');
 const aiCreditService = require('./aiCreditService');
 const { decryptToken } = require('../utils/encryptionUtils');
 const { resolveTemplate } = require('../utils/templateResolver');
+const { checkAvailability, sendBookingConfirmation } = require('./bookingAvailabilityService');
 
 const normalizeBaseUrl = (value) => {
     const v = String(value || '').trim();
@@ -784,6 +785,35 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
         ? `${aiConfig.ai.systemPrompt}\n${buildRescueContext(session, currentNode)}`
         : aiConfig.ai.systemPrompt;
 
+    // Build booking context: let the AI know what services and time slots are
+    // actually available so it never hallucinates unavailable options.
+    let bookingContextText = '';
+    try {
+        const bp = await BookingPage.findOne({ userId: tenantId }).select(
+            'services availableDays timeSlots sendConfirmation'
+        ).lean();
+        if (bp && bp.services?.length) {
+            const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+            const days = (bp.availableDays || []).map(d => dayNames[d]).join(', ');
+            const slots = (bp.timeSlots || []).map(s => s.time).join(', ');
+            bookingContextText =
+                '\n=== BOOKING AVAILABILITY ===\n' +
+                `Available Services: ${bp.services.join(', ')}\n` +
+                (days   ? `Available Days: ${days}\n`  : '') +
+                (slots  ? `Available Times: ${slots}\n` : '') +
+                'IMPORTANT: Only offer services, days, and times listed above. ' +
+                'If the customer asks for a time or service NOT in this list, ' +
+                'politely decline and offer the correct options instead.\n' +
+                '=== END BOOKING AVAILABILITY ===\n';
+        }
+    } catch (bpErr) {
+        console.warn('[Chatbot] Could not load booking page for AI context:', bpErr.message);
+    }
+
+    const effectiveSystemPrompt = bookingContextText
+        ? `${systemPrompt}\n${bookingContextText}`
+        : systemPrompt;
+
     const WhatsAppTemplate = require('../models/WhatsAppTemplate');
     const availableTemplates = await WhatsAppTemplate.find({ userId: tenantId, status: 'APPROVED' }).select('name category').lean();
 
@@ -792,7 +822,7 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
             provider: aiConfig.ai.provider,
             apiKey: apiKey,
             modelName: aiConfig.ai.model,
-            systemPrompt,
+            systemPrompt: effectiveSystemPrompt,
             conversationHistory: history,
             leadContext: leadDetails,
             availableTemplates
@@ -2950,45 +2980,95 @@ const executeAction = async (actionData, session, conversation) => {
 
             case 'book_appointment': {
                 const Appointment = require('../models/Appointment');
-                const BookingPage = require('../models/BookingPage');
-                const WhatsAppTemplate = require('../models/WhatsAppTemplate');
-                const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } = require('./whatsappService');
+                const { sendWhatsAppTextMessage: _waText } = require('./whatsappService');
                 const { serviceType, appointmentDate, appointmentTime } = actionData.actionData || {};
-                
+
                 console.log(`🤖 [Chatbot] executeAction(book_appointment) Data:`, JSON.stringify(actionData.actionData));
 
                 if (appointmentDate && appointmentTime && serviceType) {
                     const customerName = getFirstPopulatedVariable(session.variables, [
                         'name', 'full_name', 'customer_name', 'firstName'
                     ]) || conversation.displayName || conversation.phone;
-                    
-                    
+                    const customerEmail = getFirstPopulatedVariable(session.variables, [
+                        'email', 'email_address', 'emailAddress'
+                    ]) || null;
+
                     try {
-                        // Validate the date before creating the document
+                        // ── 1. Validate date ───────────────────────────────────────────────
                         const parsedDate = new Date(appointmentDate);
                         if (isNaN(parsedDate.getTime())) {
-                            console.error(`❌ [Chatbot] book_appointment: Invalid date value from AI: "${appointmentDate}"`);
-                            const retryMsg = "I had trouble understanding the date. Could you please confirm the date again? (e.g., August 5th)";
-                            const retryResult = await sendWhatsAppTextMessage(conversation.phone, retryMsg, session.userId);
+                            console.error(`❌ [Chatbot] book_appointment: Invalid date: "${appointmentDate}"`);
+                            const retryMsg = 'I had trouble understanding the date. Could you please confirm it again? (e.g., August 5th)';
+                            const retryResult = await _waText(conversation.phone, retryMsg, session.userId);
                             await saveBotMessage(session.conversationId, session.userId, retryMsg, 'text', retryResult);
                             break;
                         }
 
+                        // ── 2. Availability check against BookingPage rules ────────────────
+                        // Format date as YYYY-MM-DD for checkAvailability
+                        const apptDateStr = parsedDate.toISOString().slice(0, 10);
+                        const bookingPage = await BookingPage.findOne({ userId: session.userId }).lean();
+
+                        if (bookingPage) {
+                            const avail = await checkAvailability(bookingPage, {
+                                appointmentDate: apptDateStr,
+                                appointmentTime,
+                                serviceType
+                            });
+                            if (!avail.ok) {
+                                console.log(`🤖 [Chatbot] book_appointment blocked (${avail.code}): ${avail.message}`);
+                                // Tell the customer the slot isn't available and ask them to pick another
+                                const unavailMsg = avail.code === 409
+                                    ? `Sorry, that time slot is already taken. Could you pick a different time? Available times: ${(bookingPage.timeSlots || []).map(s => s.time).join(', ')}`
+                                    : `Sorry, I can't book that slot — ${avail.message} Please provide a valid date, time, and service.`;
+                                const unavailResult = await _waText(conversation.phone, unavailMsg, session.userId);
+                                await saveBotMessage(session.conversationId, session.userId, unavailMsg, 'text', unavailResult);
+                                break;
+                            }
+                        }
+
+                        // ── 3. Save the appointment ────────────────────────────────────────
                         const appt = new Appointment({
-                            userId: session.userId,
-                            leadId: conversation.leadId || null,
-                            customerName: customerName,
-                            customerPhone: conversation.phone,
-                            serviceType: serviceType,
+                            userId:          session.userId,
+                            bookingPageId:   bookingPage?._id || null,
+                            leadId:          conversation.leadId || null,
+                            customerName,
+                            customerPhone:   conversation.phone,
+                            customerEmail:   customerEmail || '',
+                            serviceType,
                             appointmentDate: parsedDate,
-                            appointmentTime: appointmentTime,
-                            source: 'chatbot',
-                            status: 'Pending',
-                            manageToken: require('../utils/appointmentUtils').generateManageToken()
+                            appointmentTime,
+                            source:          'chatbot',
+                            status:          'Pending',
+                            manageToken:     require('../utils/appointmentUtils').generateManageToken()
                         });
                         await appt.save();
                         console.log(`🤖 [Chatbot] book_appointment: created appointment ${appt._id} for ${customerName}`);
-                        
+
+                        // ── 4. Concurrency guard ───────────────────────────────────────────
+                        // If two chatbot sessions raced, the later ObjectId loses.
+                        const concurrencyQ = {
+                            userId:          session.userId,
+                            appointmentDate: appt.appointmentDate,
+                            appointmentTime,
+                            status:          { $in: ['Pending', 'Confirmed'] },
+                            _id:             { $lt: appt._id }
+                        };
+                        // In service-scope mode also narrow to the same resource
+                        if (bookingPage && (bookingPage.conflictScope || 'page') === 'service') {
+                            concurrencyQ.bookingPageId = bookingPage._id;
+                            concurrencyQ.serviceType   = serviceType;
+                        }
+                        const earlier = await Appointment.findOne(concurrencyQ).select('_id').lean();
+                        if (earlier) {
+                            await Appointment.deleteOne({ _id: appt._id });
+                            const racedMsg = `Sorry, that time slot was just taken by someone else! Could you pick a different time?${bookingPage ? ` Available times: ${(bookingPage.timeSlots || []).map(s => s.time).join(', ')}` : ''}`;
+                            const racedResult = await _waText(conversation.phone, racedMsg, session.userId);
+                            await saveBotMessage(session.conversationId, session.userId, racedMsg, 'text', racedResult);
+                            break;
+                        }
+
+                        // ── 5. Fire workflow trigger ───────────────────────────────────────
                         try {
                             const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
                             const Lead = require('../models/Lead');
@@ -2996,61 +3076,74 @@ const executeAction = async (actionData, session, conversation) => {
                             if (conversation.leadId) {
                                 leadForWf = await Lead.findById(conversation.leadId).lean();
                             }
-                            // Fire the workflow trigger so automations can run
-                            WorkflowEngine.fireTrigger('APPOINTMENT_BOOKED', { 
-                                lead: leadForWf, 
-                                appointment: appt 
+                            WorkflowEngine.fireTrigger('APPOINTMENT_BOOKED', {
+                                lead: leadForWf,
+                                appointment: appt
                             }).catch(err => console.error('[Chatbot] WorkflowEngine APPOINTMENT_BOOKED error:', err.message));
                         } catch (wfErr) {
                             console.error('[Chatbot] Failed to fire WorkflowEngine trigger:', wfErr.message);
                         }
-                        // Send a confirmation message directly so the customer
-                        // always gets feedback, even when no Workflow automation
-                        // is set up for APPOINTMENT_BOOKED.
-                        try {
-                            const dateObj = new Date(appointmentDate);
-                            const formattedDate = dateObj.toLocaleDateString('en-US', {
-                                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-                                timeZone: 'UTC'
-                            });
+
+                        // ── 6. Confirmation: use the shared sender (same as public page) ───
+                        // This sends the WhatsApp template/plain-text + email + ICS
+                        // configured on the BookingPage, not a hardcoded message.
+                        if (bookingPage) {
                             const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
-                            const manageUrl = (appt.manageToken && frontendUrl)
-                                ? `${frontendUrl}/book/manage/${appt.manageToken}`
-                                : '';
-                            const confirmMsg = `Hi ${customerName}! ✅ Your appointment has been confirmed.\n\n` +
-                                `📅 *Date:* ${formattedDate}\n` +
-                                `⏰ *Time:* ${appointmentTime}\n` +
-                                `🏷️ *Service:* ${serviceType}\n\n` +
-                                `We look forward to seeing you!` +
-                                (manageUrl ? `\n\nReschedule or cancel: ${manageUrl}` : '');
-                            const confirmResult = await sendWhatsAppTextMessage(conversation.phone, confirmMsg, session.userId);
-                            await saveBotMessage(session.conversationId, session.userId, confirmMsg, 'text', confirmResult);
-                        } catch (confirmErr) {
-                            console.error('[Chatbot] Failed to send booking confirmation message:', confirmErr.message);
+                            const formattedDate = parsedDate.toLocaleDateString('en-US', {
+                                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'
+                            });
+                            sendBookingConfirmation(
+                                bookingPage,
+                                appt,
+                                {
+                                    name:         customerName,
+                                    phone:        conversation.phone,
+                                    email:        customerEmail,
+                                    serviceType,
+                                    formattedDate,
+                                    appointmentTime,
+                                    notes:        ''
+                                },
+                                frontendUrl
+                            ).catch(e => console.error('[Chatbot] sendBookingConfirmation error:', e.message));
+                        } else {
+                            // No BookingPage configured — send a minimal plain-text fallback
+                            try {
+                                const dateObj = new Date(appointmentDate);
+                                const formattedDate = dateObj.toLocaleDateString('en-US', {
+                                    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'
+                                });
+                                const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+                                const manageUrl = (appt.manageToken && frontendUrl)
+                                    ? `${frontendUrl}/book/manage/${appt.manageToken}` : '';
+                                const confirmMsg = `Hi ${customerName}! ✅ Your appointment has been confirmed.\n\n` +
+                                    `📅 *Date:* ${formattedDate}\n` +
+                                    `⏰ *Time:* ${appointmentTime}\n` +
+                                    `🏷️ *Service:* ${serviceType}\n\n` +
+                                    `We look forward to seeing you!` +
+                                    (manageUrl ? `\n\nReschedule or cancel: ${manageUrl}` : '');
+                                const confirmResult = await _waText(conversation.phone, confirmMsg, session.userId);
+                                await saveBotMessage(session.conversationId, session.userId, confirmMsg, 'text', confirmResult);
+                            } catch (confirmErr) {
+                                console.error('[Chatbot] Failed to send fallback booking confirmation:', confirmErr.message);
+                            }
                         }
+
                     } catch (saveErr) {
                         console.error('❌ Failed to save appointment in database:', saveErr.message, saveErr.stack);
-                        console.error('❌ Appointment data was:', JSON.stringify({
-                            userId: session.userId,
-                            customerName: customerName,
-                            customerPhone: conversation.phone,
-                            serviceType, appointmentDate, appointmentTime
-                        }));
                         try {
                             const errMsg = "I'm sorry, I couldn't save your appointment due to an internal error. Please try again or contact support.";
-                            const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
+                            const errResult = await _waText(conversation.phone, errMsg, session.userId);
                             await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);
                         } catch (msgErr) {
                             console.error('Failed to send save-error message:', msgErr.message);
                         }
                         break;
                     }
-                    
-                    // Additional confirmation can also be sent via Workflow Engine.
                 } else {
                     try {
                         const errMsg = "Oops, I missed some details! Could you please confirm the exact date, time, and service you'd like to book?";
-                        const errResult = await sendWhatsAppTextMessage(conversation.phone, errMsg, session.userId);
+                        const errResult = await _waText(conversation.phone, errMsg, session.userId);
                         await saveBotMessage(session.conversationId, session.userId, errMsg, 'text', errResult);
                     } catch (err) {
                         console.error('Failed to send fallback message for missing appointment details:', err.message);

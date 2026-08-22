@@ -628,12 +628,23 @@ exports.createAppointment = async (req, res) => {
             if (leadDoc) apptData.leadId = leadDoc._id;
         }
 
-        // Double-booking guard. The public booking form and the customer reschedule
-        // flow both validate availability server-side; this path wrote straight to
-        // the collection, so the API could silently book a slot that was already
-        // taken. Third-party CRMs are NOT bound to the booking page's slot grid, so
-        // we deliberately enforce only the conflict rule (plus the page's buffer
-        // when one is configured) rather than the full public-form ruleset.
+        // ── Resolve BookingPage: link bookingPageId + respect conflictScope ────
+        // External CRMs are not bound to the booking page's slot grid (no hour
+        // validation, no minNotice, etc.) but they SHOULD respect conflictScope
+        // so a "Dr. Sweta" booking via API doesn't block "Dr. Mira" in the app.
+        let extBookingPage = null;
+        try {
+            extBookingPage = await require('../models/BookingPage')
+                .findOne({ userId: req.tenantId })
+                .select('_id conflictScope bufferMinutes')
+                .lean();
+        } catch { /* non-fatal */ }
+        if (extBookingPage?._id) apptData.bookingPageId = extBookingPage._id;
+
+        // Double-booking guard. Third-party CRMs are NOT bound to the booking
+        // page's slot grid, so we enforce only the conflict rule (+ page buffer).
+        // In service-scope mode, also narrow by serviceType so resources don't
+        // block each other.
         const conflict = await findSlotConflict(req.tenantId, d, apptData.appointmentTime);
         if (conflict) {
             return res.status(409).json({
@@ -650,6 +661,32 @@ exports.createAppointment = async (req, res) => {
         const tzOffset = await resolveTenantTzOffset(req.tenantId);
         if (tzOffset !== null) appointment.$locals.tzOffsetMinutes = tzOffset;
         await appointment.save();
+
+        // ── Send WhatsApp + email + ICS confirmation (same as all other paths) ─
+        // Even API-created appointments should notify the customer — the CRM
+        // pushes the data in, but the customer still needs their booking
+        // confirmed on WhatsApp and via email with a calendar invite.
+        if (extBookingPage) {
+            const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+            const formattedDate = d.toLocaleDateString('en-US', {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'
+            });
+            const { sendBookingConfirmation } = require('../services/bookingAvailabilityService');
+            sendBookingConfirmation(
+                extBookingPage,
+                appointment,
+                {
+                    name:          apptData.customerName,
+                    phone:         apptData.customerPhone,
+                    email:         apptData.customerEmail,
+                    serviceType:   apptData.serviceType,
+                    formattedDate,
+                    appointmentTime: apptData.appointmentTime,
+                    notes:         apptData.notes
+                },
+                frontendUrl
+            ).catch(e => console.error('[ExtAPI] sendBookingConfirmation error:', e.message));
+        }
 
         if (leadDoc) {
             leadDoc.history.push({

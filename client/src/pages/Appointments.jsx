@@ -589,6 +589,7 @@ function BookingPageCustomizer() {
     const [isActive, setIsActive]                       = useState(true);
     const [maxAdvanceDays, setMaxAdvanceDays]           = useState(30);
     const [bufferMinutes, setBufferMinutes]             = useState(0);
+    const [conflictScope, setConflictScope]             = useState('page');
     const [thankYouMessage, setThankYouMessage]         = useState('');
     const [description, setDescription]                 = useState('');
     const [slugPrefix, setSlugPrefix]                   = useState('');
@@ -616,6 +617,7 @@ function BookingPageCustomizer() {
                 setIsActive(d.isActive !== false);
                 setMaxAdvanceDays(d.maxAdvanceDays || 30);
                 setBufferMinutes(d.bufferMinutes || 0);
+                setConflictScope(d.conflictScope || 'page');
                 setThankYouMessage(d.thankYouMessage || '');
                 setDescription(d.description || '');
                 setSlugPrefix(d.slugPrefix || '');
@@ -647,6 +649,7 @@ function BookingPageCustomizer() {
                 leadStageId: leadStageId || null,
                 confirmationTemplateId: confirmationTemplateId || null,
                 sendConfirmation, isActive, maxAdvanceDays, bufferMinutes,
+                conflictScope,
                 thankYouMessage, description, slugPrefix, customQuestions
             });
             setConfig(res.data);
@@ -968,6 +971,58 @@ function BookingPageCustomizer() {
                                         Prevents back-to-back bookings without a gap.
                                     </p>
                                 </CField>
+                            </div>
+
+                            {/* ── Conflict Scope Toggle ── */}
+                            <div className="mt-6 pt-5 border-t border-slate-100">
+                                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Calendar Mode</p>
+                                <p className="text-xs text-slate-400 mb-3">
+                                    Choose how double-booking is detected when you have multiple resources (e.g. two doctors, two turfs).
+                                </p>
+                                <div className="flex flex-col sm:flex-row gap-3">
+                                    <button
+                                        onClick={() => setConflictScope('page')}
+                                        className={`flex-1 flex items-start gap-3 p-4 rounded-xl border-2 text-left transition-all ${
+                                            conflictScope === 'page'
+                                                ? 'border-blue-500 bg-blue-50 shadow-sm shadow-blue-100'
+                                                : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/40'
+                                        }`}>
+                                        <div className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                                            conflictScope === 'page' ? 'border-blue-500' : 'border-slate-300'
+                                        }`}>
+                                            {conflictScope === 'page' && <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />}
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-700">Shared Calendar <span className="text-[10px] font-bold bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full ml-1">Default</span></p>
+                                            <p className="text-xs text-slate-400 mt-0.5">One booking at any given time — like a single doctor or single room. If 11 AM is taken, it's blocked for everyone.</p>
+                                        </div>
+                                    </button>
+                                    <button
+                                        onClick={() => setConflictScope('service')}
+                                        className={`flex-1 flex items-start gap-3 p-4 rounded-xl border-2 text-left transition-all ${
+                                            conflictScope === 'service'
+                                                ? 'border-emerald-500 bg-emerald-50 shadow-sm shadow-emerald-100'
+                                                : 'border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/40'
+                                        }`}>
+                                        <div className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                                            conflictScope === 'service' ? 'border-emerald-500' : 'border-slate-300'
+                                        }`}>
+                                            {conflictScope === 'service' && <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />}
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-700">Independent Calendars per Resource</p>
+                                            <p className="text-xs text-slate-400 mt-0.5">Each service has its own calendar. Dr. Sweta booking at 11 AM does <strong>not</strong> block Dr. Mira at 11 AM — they run in parallel.</p>
+                                        </div>
+                                    </button>
+                                </div>
+                                {conflictScope === 'service' && (
+                                    <div className="mt-3 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                                        <i className="fa-solid fa-triangle-exclamation text-amber-500 text-xs mt-0.5 shrink-0" />
+                                        <p className="text-xs text-amber-700">
+                                            In this mode, customers will first select <strong>which resource</strong> they want (Step 0 on the booking page) before choosing a date and time. Make sure your Services list above matches your actual resources (e.g. "Dr. Sweta", "Dr. Mira", "Turf A", "Turf B").
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         </CSection>
                         <SectionNav currentId="schedule" onNavigate={setActiveSection} onSave={handleSave} saving={saving} />

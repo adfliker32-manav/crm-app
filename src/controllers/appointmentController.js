@@ -1,5 +1,7 @@
 const Appointment = require('../models/Appointment');
+const BookingPage = require('../models/BookingPage');
 const Lead = require('../models/Lead');
+const { sendBookingConfirmation } = require('../services/bookingAvailabilityService');
 
 // ─── 1. Get all appointments (admin) ────────────────────────────────────────
 
@@ -71,8 +73,40 @@ const createAppointment = async (req, res) => {
             return res.status(400).json({ message: 'Name, phone, service, date and time are required.' });
         }
 
+        // ─── Resolve BookingPage for bookingPageId + conflict scope ─────────
+        // Even for manual bookings we link the appointment to the tenant's
+        // booking page. This ensures conflictScope: 'service' works correctly:
+        // a manually-created "Dr. Sweta" appointment won't block "Dr. Mira".
+        const bookingPage = await BookingPage.findOne({ userId }).select('_id conflictScope').lean();
+        const conflictScope = bookingPage?.conflictScope || 'page';
+
+        // ─── Double-booking guard ────────────────────────────────────────────
+        const dayStart = new Date(appointmentDate); dayStart.setUTCHours(0, 0, 0, 0);
+        const dayEnd   = new Date(appointmentDate); dayEnd.setUTCHours(23, 59, 59, 999);
+
+        const conflictQ = {
+            userId,
+            appointmentDate: { $gte: dayStart, $lte: dayEnd },
+            appointmentTime,
+            status: { $in: ['Pending', 'Confirmed'] }
+        };
+        // In service-scope mode, only count conflicts for the same resource.
+        if (conflictScope === 'service' && bookingPage) {
+            conflictQ.bookingPageId = bookingPage._id;
+            conflictQ.serviceType   = serviceType;
+        }
+
+        const conflict = await Appointment.findOne(conflictQ).select('_id customerName').lean();
+        if (conflict) {
+            return res.status(409).json({
+                message: `This time slot (${appointmentTime}) is already booked. Please choose a different time.`
+            });
+        }
+        // ────────────────────────────────────────────────────────────────────
+
         const appt = new Appointment({
             userId,
+            bookingPageId: bookingPage?._id || null,
             customerName,
             customerPhone,
             customerEmail: customerEmail || '',
@@ -85,6 +119,31 @@ const createAppointment = async (req, res) => {
             status: 'Pending'
         });
         await appt.save();
+
+        // ── Send WhatsApp + email + ICS confirmation (same as public page) ───
+        // Admin-created appointments notify the customer exactly the same way as
+        // a public web booking — WhatsApp template if configured, plain-text
+        // fallback, and an email with an .ics calendar invite.
+        if (bookingPage) {
+            const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+            const formattedDate = new Date(appointmentDate).toLocaleDateString('en-US', {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'
+            });
+            sendBookingConfirmation(
+                bookingPage,
+                appt,
+                {
+                    name:          customerName,
+                    phone:         customerPhone,
+                    email:         customerEmail || '',
+                    serviceType,
+                    formattedDate,
+                    appointmentTime,
+                    notes:         notes || ''
+                },
+                frontendUrl
+            ).catch(e => console.error('[Appointment] sendBookingConfirmation error:', e.message));
+        }
 
         if (leadId) {
             const lead = await Lead.findOne({ _id: leadId, userId });
@@ -141,6 +200,29 @@ const updateAppointment = async (req, res) => {
         if (rescheduled) {
             appt.reminder24hSent = false;
             appt.reminder1hSent  = false;
+
+            // ── Double-booking guard on reschedule ────────────────────────────
+            // Prevent an admin from moving an appointment onto a slot that is
+            // already occupied by another Pending/Confirmed booking.
+            // We exclude this appointment itself (_id $ne) so it never conflicts
+            // with its own previous record during a same-slot status-only update.
+            const dayStart = new Date(appt.appointmentDate); dayStart.setUTCHours(0, 0, 0, 0);
+            const dayEnd   = new Date(appt.appointmentDate); dayEnd.setUTCHours(23, 59, 59, 999);
+
+            const conflict = await Appointment.findOne({
+                userId,
+                _id:             { $ne: appt._id },
+                appointmentDate: { $gte: dayStart, $lte: dayEnd },
+                appointmentTime: appt.appointmentTime,
+                status:          { $in: ['Pending', 'Confirmed'] }
+            }).select('_id customerName').lean();
+
+            if (conflict) {
+                return res.status(409).json({
+                    message: `That time slot (${appt.appointmentTime}) is already booked by another appointment. Please choose a different time.`
+                });
+            }
+            // ────────────────────────────────────────────────────────────────
         }
 
         await appt.save();

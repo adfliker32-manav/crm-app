@@ -108,10 +108,16 @@ export default function BookingPage() {
     const [customAnswers, setCustomAnswers] = useState({});
     const [submitting, setSubmitting]       = useState(false);
     const [submitError, setSubmitError]     = useState('');
+    const [slotTakenError, setSlotTakenError] = useState('');
 
     useEffect(() => {
         axios.get(`${API_BASE}/book/${slug}`)
-            .then(res  => { setPage(res.data); setLoading(false); })
+            .then(res  => {
+                setPage(res.data);
+                // In service-scope mode, start at step 0 (resource selection)
+                if (res.data?.conflictScope === 'service') setStep(0);
+                setLoading(false);
+            })
             .catch(() => { setError('This booking page is not available.'); setLoading(false); });
     }, [slug]);
 
@@ -120,22 +126,44 @@ export default function BookingPage() {
         [page?.availableDays, page?.maxAdvanceDays]
     );
 
-    const fetchSlots = useCallback(async (date) => {
+    // Whether this page uses per-resource (per-service) booking flow
+    const isServiceScope = page?.conflictScope === 'service';
+
+    const fetchSlots = useCallback(async (date, serviceOverride) => {
         if (!date || !slug) return;
         setSlotsLoading(true);
         setAvailableSlots([]);
         setSelectedTime('');
         try {
-            const res = await axios.get(`${API_BASE}/book/${slug}/slots`, { params: { date: toDateStr(date) } });
+            // In service-scope mode, pass the selected service so the backend
+            // only counts bookings for that specific resource (Turf A, Dr. Sweta…)
+            const params = { date: toDateStr(date) };
+            const svc = serviceOverride !== undefined ? serviceOverride : selectedService;
+            if (isServiceScope && svc) params.service = svc;
+            const res = await axios.get(`${API_BASE}/book/${slug}/slots`, { params });
             setAvailableSlots(res.data.slots || []);
         } catch {
             setAvailableSlots(page?.timeSlots || []);
         } finally {
             setSlotsLoading(false);
         }
-    }, [slug, page?.timeSlots]);
+    }, [slug, page?.timeSlots, isServiceScope, selectedService]);
+
+    // In service-scope mode, selecting a resource clears date/time and advances
+    // to the slot-picker step so the calendar reflects that resource's bookings.
+    const handleServiceSelect = (svc) => {
+        setSelectedService(svc);
+        setSlotTakenError('');
+        if (isServiceScope) {
+            setSelectedDate(null);
+            setSelectedTime('');
+            setAvailableSlots([]);
+            setStep(1);
+        }
+    };
 
     const handleDateSelect = (d) => { setSelectedDate(d); fetchSlots(d); };
+    const handleTimeSelect = (time) => { setSelectedTime(time); setSlotTakenError(''); };
     const primaryColor     = (page?.primaryColor && page.primaryColor.trim()) ? page.primaryColor.trim() : '#3b82f6';
     const tintBg           = `${primaryColor}14`; // ~8% alpha tint of brand color
     const canContinue      = selectedService && selectedDate && selectedTime;
@@ -159,7 +187,20 @@ export default function BookingPage() {
             });
             setStep(3);
         } catch (err) {
-            setSubmitError(err.response?.data?.message || 'Something went wrong. Please try again.');
+            const status = err.response?.status;
+            const message = err.response?.data?.message || 'Something went wrong. Please try again.';
+
+            if (status === 409) {
+                // Slot was grabbed by someone else between selection and submission.
+                // Clear the stale selection, refresh available slots, and send the
+                // user back to Step 1 so they can pick a free time.
+                setSelectedTime('');
+                setSlotTakenError(message);
+                setStep(1);
+                if (selectedDate) fetchSlots(selectedDate);
+            } else {
+                setSubmitError(message);
+            }
         } finally {
             setSubmitting(false);
         }
@@ -235,12 +276,15 @@ export default function BookingPage() {
                 {/* ── Steps Indicator ── */}
                 {step !== 3 && (
                     <div className="px-8 py-4 border-y border-slate-100 bg-slate-50/50 flex items-center justify-center gap-6 shrink-0">
-                        {[{ n: 1, label: 'Date & Time' }, { n: 2, label: 'Your Details' }].map((s, i, arr) => (
+                        {(isServiceScope
+                            ? [{ n: 0, label: 'Select Resource' }, { n: 1, label: 'Date & Time' }, { n: 2, label: 'Your Details' }]
+                            : [{ n: 1, label: 'Date & Time' }, { n: 2, label: 'Your Details' }]
+                        ).map((s, i, arr) => (
                             <React.Fragment key={s.n}>
                                 <div className="flex items-center gap-2.5">
                                     <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-all duration-300 ${step >= s.n ? 'text-white shadow-md' : 'bg-slate-200 text-slate-400'}`}
                                         style={step >= s.n ? { backgroundColor: primaryColor, shadowColor: `${primaryColor}40` } : {}}>
-                                        {step > s.n ? <i className="fa-solid fa-check"></i> : s.n}
+                                        {step > s.n ? <i className="fa-solid fa-check"></i> : (isServiceScope ? i + 1 : s.n)}
                                     </div>
                                     <span className={`text-xs font-semibold transition-colors duration-300 ${step >= s.n ? 'text-slate-800' : 'text-slate-400'}`}>
                                         {s.label}
@@ -294,9 +338,84 @@ export default function BookingPage() {
                         </div>
                     )}
 
+                    {/* ── Step 0: Resource / Service Selection (service-scope mode only) ── */}
+                    {step === 0 && isServiceScope && (
+                        <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
+                            {page.description && (
+                                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-6">
+                                    <p className="text-slate-600 text-sm leading-relaxed text-center">{page.description}</p>
+                                </div>
+                            )}
+
+                            <section>
+                                <div className="flex items-center gap-3 mb-6">
+                                    <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: tintBg, color: primaryColor }}>
+                                        <i className="fa-solid fa-layer-group text-lg"></i>
+                                    </div>
+                                    <div>
+                                        <h3 className="text-base font-extrabold text-slate-900">Choose a Resource</h3>
+                                        <p className="text-xs text-slate-500 mt-0.5">Select what you&apos;d like to book</p>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    {(page.services || []).map(svc => {
+                                        const isSel = selectedService === svc;
+                                        return (
+                                            <button key={svc} type="button" onClick={() => handleServiceSelect(svc)}
+                                                className="group relative px-6 py-5 rounded-2xl text-left border-2 transition-all duration-200 hover:scale-[1.02] hover:-translate-y-0.5"
+                                                style={isSel
+                                                    ? { borderColor: primaryColor, backgroundColor: `${primaryColor}10` }
+                                                    : { borderColor: '#e2e8f0', backgroundColor: '#fff' }
+                                                }>
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <p className="font-bold text-slate-900 text-sm">{svc}</p>
+                                                        <p className="text-xs text-slate-400 mt-0.5 font-medium">Tap to view availability →</p>
+                                                    </div>
+                                                    <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-all"
+                                                        style={{ backgroundColor: isSel ? primaryColor : '#f1f5f9', color: isSel ? '#fff' : '#94a3b8' }}>
+                                                        <i className="fa-solid fa-arrow-right text-sm"></i>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </section>
+                        </div>
+                    )}
+
                     {/* ── Step 1: Slot Selection ── */}
                     {step === 1 && (
                         <div className="space-y-10 animate-in fade-in slide-in-from-right-4 duration-300">
+                            {/* Slot-taken warning — shown when redirected back from Step 2 */}
+                            {slotTakenError && (
+                                <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl p-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                                    <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+                                        <i className="fa-solid fa-clock-rotate-left text-amber-600 text-sm"></i>
+                                    </div>
+                                    <div>
+                                        <p className="text-sm font-bold text-amber-900 mb-0.5">That slot was just taken!</p>
+                                        <p className="text-xs text-amber-700 leading-relaxed">{slotTakenError} Please pick another available time below.</p>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Selected resource chip (service-scope mode) — tap to go back & change */}
+                            {isServiceScope && selectedService && (
+                                <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-2 px-4 py-2 rounded-xl border-2 text-sm font-bold"
+                                        style={{ borderColor: primaryColor, color: primaryColor, backgroundColor: `${primaryColor}10` }}>
+                                        <i className="fa-solid fa-layer-group text-xs"></i>
+                                        {selectedService}
+                                    </div>
+                                    <button type="button" onClick={() => setStep(0)}
+                                        className="text-xs font-semibold text-slate-400 hover:text-slate-700 underline underline-offset-2 transition-colors">
+                                        Change
+                                    </button>
+                                </div>
+                            )}
                             {page.description && (
                                 <div className="bg-slate-50 border border-slate-100 rounded-2xl p-6">
                                     <p className="text-slate-600 text-sm leading-relaxed text-center">
@@ -305,8 +424,8 @@ export default function BookingPage() {
                                 </div>
                             )}
 
-                            {/* Services */}
-                            {(page.services || []).length > 0 && (
+                            {/* Services — only shown when NOT in service-scope mode */}
+                            {!isServiceScope && (page.services || []).length > 0 && (
                                 <section>
                                     <div className="flex items-center gap-2 mb-4">
                                         <i className="fa-solid fa-briefcase text-slate-400"></i>
@@ -316,7 +435,7 @@ export default function BookingPage() {
                                         {page.services.map(svc => {
                                             const isSel = selectedService === svc;
                                             return (
-                                                <button key={svc} type="button" onClick={() => setSelectedService(svc)}
+                                                <button key={svc} type="button" onClick={() => handleServiceSelect(svc)}
                                                     className="px-5 py-4 rounded-xl text-sm font-semibold border transition-all duration-200 text-left hover:scale-[1.02]"
                                                     style={{ ...touchProps, ...(isSel ? selectedStyle : unselectedStyle) }}>
                                                     {svc}
@@ -385,7 +504,7 @@ export default function BookingPage() {
                                                         {group.slots.map(slot => {
                                                             const isSel = selectedTime === slot.time;
                                                             return (
-                                                                <button key={slot.time} type="button" onClick={() => setSelectedTime(slot.time)}
+                                                                <button key={slot.time} type="button" onClick={() => handleTimeSelect(slot.time)}
                                                                     className="py-3 rounded-xl text-sm font-bold border transition-all duration-200 hover:scale-[1.03]"
                                                                     style={{ ...touchProps, ...(isSel ? selectedStyle : unselectedStyle) }}>
                                                                     {slot.time}
@@ -405,7 +524,9 @@ export default function BookingPage() {
                                 <button type="button" onClick={() => setStep(2)} disabled={!canContinue}
                                     className="w-full py-4 rounded-xl text-white font-bold text-base shadow-lg transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none hover:shadow-xl hover:-translate-y-0.5"
                                     style={{ backgroundColor: primaryColor, shadowColor: `${primaryColor}60`, ...touchProps }}>
-                                    {canContinue ? `Continue with ${selectedTime}` : 'Select service, date & time'}
+                                    {canContinue
+                                        ? `Continue with ${selectedTime}`
+                                        : isServiceScope ? 'Select a date & time' : 'Select service, date & time'}
                                 </button>
                             </div>
                         </div>

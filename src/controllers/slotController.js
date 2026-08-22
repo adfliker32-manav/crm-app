@@ -8,7 +8,7 @@ const { timeToMinutes, conflicts, deriveAppointmentAt, DEFAULT_TZ_OFFSET_MINUTES
 const getAvailableSlots = async (req, res) => {
     try {
         const slug = String(req.params.slug || '').toLowerCase().trim();
-        const { date }  = req.query;
+        const { date, service } = req.query;
 
         if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date))
             return res.status(400).json({ message: 'date query param required (YYYY-MM-DD)' });
@@ -21,14 +21,27 @@ const getAvailableSlots = async (req, res) => {
             return res.json({ slots: [] });
 
         const bufferMinutes = page.bufferMinutes || 0;
+        const conflictScope = page.conflictScope || 'page';
 
-        // Pending + Confirmed appointments on that day
-        const appts = await Appointment.find({
+        // Build the appointments query based on conflict scope:
+        //   'service' → only count bookings for the requested service (resource)
+        //               so Turf A at 11 AM doesn't block Turf B at 11 AM.
+        //   'page'    → count all bookings on this page for that day (original behaviour).
+        const apptQuery = {
             userId: page.userId,
-            appointmentDate: { $gte: new Date(`${date}T00:00:00.000Z`), $lte: new Date(`${date}T23:59:59.999Z`) },
+            appointmentDate: {
+                $gte: new Date(`${date}T00:00:00.000Z`),
+                $lte: new Date(`${date}T23:59:59.999Z`)
+            },
             status: { $in: ['Pending', 'Confirmed'] }
-        }).select('appointmentTime').lean();
+        };
 
+        if (conflictScope === 'service' && service) {
+            apptQuery.bookingPageId = page._id;
+            apptQuery.serviceType   = service;
+        }
+
+        const appts = await Appointment.find(apptQuery).select('appointmentTime').lean();
         const bookedMins = appts.map(a => timeToMinutes(a.appointmentTime)).filter(m => m >= 0);
 
         // Blocked slots for that day

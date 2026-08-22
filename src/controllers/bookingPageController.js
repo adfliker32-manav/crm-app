@@ -6,7 +6,7 @@ const User = require('../models/User');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const mongoose = require('mongoose');
 const { escapeHtml, generateManageToken, buildIcs } = require('../utils/appointmentUtils');
-const { checkAvailability } = require('../services/bookingAvailabilityService');
+const { checkAvailability, sendBookingConfirmation } = require('../services/bookingAvailabilityService');
 const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } = require('../services/whatsappService');
 const { sendEmail } = require('../services/emailService');
 const { emitToUser } = require('../services/socketService');
@@ -128,7 +128,9 @@ const getPublicBookingPage = async (req, res) => {
             customQuestions: page.customQuestions || [],
             thankYouMessage: page.thankYouMessage || '',
             description:     page.description     || '',
-            slugPrefix:      page.slugPrefix      || ''
+            slugPrefix:      page.slugPrefix      || '',
+            // Controls the booking flow UI and per-service conflict detection
+            conflictScope:   page.conflictScope   || 'page'
         });
     } catch (err) {
         console.error('getPublicBookingPage error:', err);
@@ -175,6 +177,7 @@ const submitBooking = async (req, res) => {
 
         const appt = new Appointment({
             userId:          page.userId,
+            bookingPageId:   page._id,
             customerName,
             customerPhone:   normalizedPhone,
             customerEmail:   customerEmail || '',
@@ -194,13 +197,21 @@ const submitBooking = async (req, res) => {
         // Concurrency guard: two submits can both pass the availability check above
         // and race to save. If an earlier active booking exists for the same exact
         // slot, this one loses and is rolled back. (ObjectIds are creation-ordered.)
-        const earlier = await Appointment.findOne({
+        // In service-scope mode, scope by bookingPageId+serviceType so Turf A racing
+        // with another Turf A booking is correctly detected, but a concurrent Turf B
+        // booking at the same time does NOT trigger a false rollback.
+        const concurrencyQuery = {
             userId: page.userId,
             appointmentDate: appt.appointmentDate,
             appointmentTime,
             status: { $in: ['Pending', 'Confirmed'] },
             _id: { $lt: appt._id }
-        }).select('_id').lean();
+        };
+        if ((page.conflictScope || 'page') === 'service') {
+            concurrencyQuery.bookingPageId = page._id;
+            concurrencyQuery.serviceType   = serviceType;
+        }
+        const earlier = await Appointment.findOne(concurrencyQuery).select('_id').lean();
         if (earlier) {
             await Appointment.deleteOne({ _id: appt._id });
             return res.status(409).json({ message: 'Sorry, that time slot was just booked. Please choose another.' });
@@ -319,130 +330,24 @@ const submitBooking = async (req, res) => {
             console.error('[Booking Page] confirmBooking lead sync error:', err.message);
         }
 
-        // Send WhatsApp + email confirmations in parallel (independent operations)
-        if (page.sendConfirmation) {
-            const bookingData = {
-                name: customerName,
-                date: formattedDate,
-                time: appointmentTime,
-                service: serviceType,
-                businessName: page.businessName || ''
-            };
-
-            // Self-service manage link (reschedule / cancel) + calendar invite.
-            const manageUrl = `${resolveFrontendUrl(req)}/book/manage/${appt.manageToken}`;
-            const icsContent = buildIcs({
-                uid:            `appt-${appt._id}@adfliker`,
-                start:          appointmentAt,
-                durationMinutes: Number(page.slotDurationMinutes || 30),
-                summary:        `${serviceType} — ${page.businessName || 'Appointment'}`,
-                description:    `Booking with ${page.businessName || ''}. Manage: ${manageUrl}`,
-                organizerName:  page.businessName || 'Appointment'
-            });
-
-            // Escape all customer-supplied values — they arrive from an unauthenticated
-            // public form and must never be interpolated into HTML raw.
-            const eName    = escapeHtml(customerName);
-            const eService = escapeHtml(serviceType);
-            const eDate    = escapeHtml(formattedDate);
-            const eTime    = escapeHtml(appointmentTime);
-            const eNotes   = escapeHtml(notes);
-            const eBiz     = escapeHtml(page.businessName || '');
-            const eManage  = escapeHtml(manageUrl);
-
-            const emailHtml = customerEmail?.trim() ? `
-                <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;">
-                    <h2 style="color:#1e293b;margin-bottom:4px;">✅ Appointment Confirmed</h2>
-                    <p style="color:#64748b;margin-top:0;">Hi <strong>${eName}</strong>, your appointment has been booked!</p>
-                    <table style="width:100%;border-collapse:collapse;margin:20px 0;">
-                        <tr><td style="padding:10px 0;color:#64748b;font-size:14px;">Service</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${eService}</td></tr>
-                        <tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Date</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${eDate}</td></tr>
-                        <tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Time</td><td style="padding:10px 0;font-weight:600;color:#1e293b;">${eTime}</td></tr>
-                        ${notes ? `<tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px 0;color:#64748b;font-size:14px;">Notes</td><td style="padding:10px 0;color:#1e293b;">${eNotes}</td></tr>` : ''}
-                    </table>
-                    <div style="text-align:center;margin:20px 0;">
-                        <a href="${eManage}" style="display:inline-block;padding:11px 22px;background:#3b82f6;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;">Reschedule or Cancel</a>
-                    </div>
-                    <p style="color:#94a3b8;font-size:12px;text-align:center;">A calendar invite (.ics) is attached — tap it to add this to your calendar.</p>
-                    <p style="color:#94a3b8;font-size:12px;margin-top:24px;">${eBiz}</p>
-                </div>
-            ` : null;
-
-            const sends = [];
-
-            if (page.confirmationTemplateId) {
-                const tpl = await WhatsAppTemplate.findOne({ _id: page.confirmationTemplateId })
-                    .select('name language components status')
-                    .lean();
-
-                if (tpl?.name && tpl.status === 'APPROVED') {
-                    const components = buildBookingTemplateComponents(tpl.components || [], bookingData);
-                    sends.push(
-                        sendWhatsAppTemplateMessage(
-                            normalizedPhone,
-                            tpl.name,
-                            tpl.language || 'en',
-                            components,
-                            page.userId,
-                            { isAutomated: true, triggerType: 'booking_confirmation' }
-                        )
-                            .then(() => Appointment.findByIdAndUpdate(appt._id, { confirmationSent: true }))
-                            .catch(e => console.warn('[Booking] WhatsApp template confirmation failed:', e.message))
-                    );
-                }
-            }
-
-            // Backward-compatible fallback (older configs) — use plain text only if no template selected.
-            if (sends.length === 0) {
-                const tplContext = buildTemplateContext({
-                    lead: {
-                        name: bookingData.name,
-                        email: customerEmail,
-                        phone: normalizedPhone,
-                        customData: {
-                            date: bookingData.date,
-                            time: bookingData.time,
-                            service: bookingData.service
-                        }
-                    },
-                    appointment: {
-                        ...appt.toObject(),
-                        manageLink: manageUrl
-                    }
-                });
-                let waMsg = resolveTemplate(page.confirmationMessage, tplContext);
-                if (manageUrl && !waMsg.includes(manageUrl)) {
-                    waMsg += `\n\nReschedule or cancel: ${manageUrl}`;
-                }
-
-                sends.push(
-                    sendWhatsAppTextMessage(normalizedPhone, waMsg, page.userId)
-                        .then(() => Appointment.findByIdAndUpdate(appt._id, { confirmationSent: true }))
-                        .catch(e => console.warn('[Booking] WhatsApp confirmation failed:', e.message))
-                );
-            }
-
-            if (emailHtml) {
-                sends.push(
-                    sendEmail({
-                        to:      customerEmail.trim(),
-                        subject: `✅ Appointment Confirmed — ${serviceType} on ${formattedDate}`,
-                        html:    emailHtml,
-                        userId:  page.userId,
-                        transactional: true,
-                        attachments: [{
-                            filename:    'appointment.ics',
-                            content:     icsContent,
-                            contentType: 'text/calendar; charset=utf-8; method=PUBLISH'
-                        }]
-                    })
-                        .then(() => Appointment.findByIdAndUpdate(appt._id, { confirmationSent: true }))
-                        .catch(e => console.warn('[Booking] Email confirmation failed:', e.message))
-                );
-            }
-
-            await Promise.all(sends);
-        }
+        // Send WhatsApp (template or plain-text) + email + ICS via the shared
+        // helper — the same path used by the AI chatbot's book_appointment action,
+        // so confirmations are always identical regardless of booking source.
+        sendBookingConfirmation(
+            page,
+            appt,
+            {
+                name:          customerName,
+                phone:         normalizedPhone,
+                email:         customerEmail,
+                serviceType,
+                formattedDate,
+                notes,
+                appointmentAt,
+                appointmentTime
+            },
+            resolveFrontendUrl(req)
+        ).catch(e => console.error('[Booking] sendBookingConfirmation error:', e.message));
 
         // Real-time notification to admin's Appointments page
         try {
@@ -503,7 +408,8 @@ const updateMyBookingPage = async (req, res) => {
             'confirmationTemplateId', 'leadStageId',
             'sendConfirmation', 'isActive', 'maxAdvanceDays', 'bufferMinutes',
             'timezoneOffsetMinutes', 'minNoticeMinutes', 'slotDurationMinutes',
-            'customQuestions', 'thankYouMessage', 'description', 'slugPrefix'
+            'customQuestions', 'thankYouMessage', 'description', 'slugPrefix',
+            'conflictScope'
         ];
         const updates = {};
         allowed.forEach(key => { if (req.body[key] !== undefined) updates[key] = req.body[key]; });
