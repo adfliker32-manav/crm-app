@@ -120,33 +120,43 @@ const FunnelChart = ({ period: parentPeriod, dateRange }) => {
 
     /* ── Zero-leads empty state ──────────────────────────────────────── */
     if (data.totalLeads === 0) {
+        const isAllTime = localPeriod === 'all';
         return (
             <div className="space-y-4">
                 <PeriodPills />
                 <div className="flex flex-col items-center justify-center py-16 text-center gap-5">
-                    <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-blue-100 to-violet-100 flex items-center justify-center">
-                        <i className="fa-solid fa-filter text-blue-400 text-3xl" />
+                    <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
+                        <i className={`fa-solid ${isAllTime ? 'fa-folder-open text-slate-400' : 'fa-filter text-blue-400'} text-3xl`} />
                     </div>
                     <div>
-                        <p className="text-slate-700 font-bold text-lg">No leads in this period</p>
+                        <p className="text-slate-700 font-bold text-lg">
+                            {isAllTime ? 'Your pipeline is empty' : 'No leads in this period'}
+                        </p>
                         <p className="text-slate-400 text-sm mt-1 max-w-sm">
-                            {data.hint || 'No leads were created during the selected period. Try a wider range.'}
+                            {isAllTime 
+                                ? 'You do not have any leads in your CRM yet. Add your first lead to see the sales funnel.'
+                                : (data.hint || 'No leads were created during the selected period. Try a wider range.')
+                            }
                         </p>
                     </div>
-                    <div className="flex flex-wrap gap-3 justify-center">
-                        <button
-                            onClick={() => setLocalPeriod('all')}
-                            className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 text-white rounded-xl text-sm font-semibold shadow-lg shadow-blue-500/25 hover:shadow-xl transition-all duration-300 flex items-center gap-2"
-                        >
-                            <i className="fa-solid fa-infinity" /> Show All Time
-                        </button>
-                        <button
-                            onClick={() => setLocalPeriod('year')}
-                            className="px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50 transition-all flex items-center gap-2"
-                        >
-                            <i className="fa-solid fa-calendar" /> This Year
-                        </button>
-                    </div>
+                    {!isAllTime && (
+                        <div className="flex flex-wrap gap-3 justify-center">
+                            <button
+                                onClick={() => setLocalPeriod('all')}
+                                className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 text-white rounded-xl text-sm font-semibold shadow-lg shadow-blue-500/25 hover:shadow-xl transition-all duration-300 flex items-center gap-2"
+                            >
+                                <i className="fa-solid fa-infinity" /> Show All Time
+                            </button>
+                            {localPeriod !== 'year' && (
+                                <button
+                                    onClick={() => setLocalPeriod('year')}
+                                    className="px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50 transition-all flex items-center gap-2"
+                                >
+                                    <i className="fa-solid fa-calendar" /> This Year
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
         );
