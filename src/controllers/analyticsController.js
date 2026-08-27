@@ -2,6 +2,7 @@ const Goal = require('../models/Goal');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
 const Task = require('../models/Task');
+const Stage = require('../models/Stage');
 const mongoose = require('mongoose');
 const { getDateRange, isValidDate } = require('../utils/dateRange');
 
@@ -125,24 +126,51 @@ const setGoal = async (req, res) => {
 };
 
 // GET Funnel Analysis (stage drop-off for the whole team)
+// Dynamically resolves stage order from the tenant's Stage model.
+// Supports period='all' to bypass date filtering and show all-time data.
 const getFunnelAnalysis = async (req, res) => {
     try {
         const { period = 'month', startDate, endDate } = req.query;
-        const { start, end } = getDateRange(period, startDate, endDate);
 
-        if (!hasValidDateRange(start, end)) {
-            return res.status(400).json({ message: 'Invalid date range' });
+        // --- Date filter ---
+        // 'all' means no date restriction — show every lead ever created.
+        let dateMatch = {};
+        if (period !== 'all') {
+            const { start, end } = getDateRange(period, startDate, endDate);
+            if (!hasValidDateRange(start, end)) {
+                return res.status(400).json({ message: 'Invalid date range' });
+            }
+            dateMatch = { createdAt: { $gte: start, $lte: end } };
         }
 
+        // --- Resolve stage order from tenant's custom stages (sorted by order) ---
+        const DEFAULT_STAGES = ['New', 'Contacted', 'Qualified', 'Proposal Sent', 'Negotiation', 'Won'];
+        let stageOrder = DEFAULT_STAGES;
+        let usingCustomStages = false;
+
+        try {
+            const customStages = await Stage.find({ userId: req.tenantId })
+                .sort({ order: 1 })
+                .select('name order')
+                .lean();
+            if (customStages && customStages.length > 0) {
+                stageOrder = customStages.map(s => s.name);
+                usingCustomStages = true;
+            }
+        } catch (_) {
+            // Stage model lookup failure is non-fatal — fall back to defaults
+        }
+
+        // --- Aggregate lead counts per status + time-to-close ---
         const [aggResult] = await Lead.aggregate([
-            { $match: { ...req.dataScope, createdAt: { $gte: start, $lte: end } } },
+            { $match: { ...req.dataScope, ...dateMatch } },
             {
                 $facet: {
                     stageCounts: [
-                        { $group: { _id: { $ifNull: ["$status", "New"] }, count: { $sum: 1 } } }
+                        { $group: { _id: { $ifNull: ['$status', 'New'] }, count: { $sum: 1 } } }
                     ],
                     timeToClose: [
-                        { $match: { status: { $regex: /won/i } } }, // Filter won leads
+                        { $match: { status: { $regex: /won/i } } },
                         {
                             $group: {
                                 _id: null,
@@ -150,8 +178,8 @@ const getFunnelAnalysis = async (req, res) => {
                                 totalDays: {
                                     $sum: {
                                         $divide: [
-                                            { $subtract: ["$updatedAt", "$createdAt"] },
-                                            1000 * 60 * 60 * 24 // Ms to days
+                                            { $subtract: ['$updatedAt', '$createdAt'] },
+                                            1000 * 60 * 60 * 24 // ms → days
                                         ]
                                     }
                                 }
@@ -159,63 +187,78 @@ const getFunnelAnalysis = async (req, res) => {
                         }
                     ],
                     totalLeads: [
-                        { $count: "count" }
+                        { $count: 'count' }
                     ]
                 }
             }
         ]);
 
         const rawStageCounts = aggResult.stageCounts || [];
+        // Map: stageName → count (for known stages)
         const stageCounts = {};
-        rawStageCounts.forEach(s => stageCounts[s._id] = s.count);
+        rawStageCounts.forEach(s => { stageCounts[s._id] = s.count; });
 
         const timeToCloseStats = (aggResult.timeToClose && aggResult.timeToClose[0]) || { closeCount: 0, totalDays: 0 };
-        const avgTimeToClose = timeToCloseStats.closeCount > 0 
-            ? (timeToCloseStats.totalDays / timeToCloseStats.closeCount).toFixed(1) 
+        const avgTimeToClose = timeToCloseStats.closeCount > 0
+            ? (timeToCloseStats.totalDays / timeToCloseStats.closeCount).toFixed(1)
             : null;
 
-        const totalLeadsCount = (aggResult.totalLeads && aggResult.totalLeads[0]) ? aggResult.totalLeads[0].count : 0;
+        const totalLeadsCount = (aggResult.totalLeads && aggResult.totalLeads[0])
+            ? aggResult.totalLeads[0].count
+            : 0;
 
-        const stageOrder = ['New', 'Contacted', 'Qualified', 'Proposal Sent', 'Negotiation', 'Won'];
+        // --- Orphan stages: lead statuses NOT in the configured stageOrder ---
+        // Append them at the end so they're still visible in the funnel.
+        const orphanStages = Object.keys(stageCounts)
+            .filter(s => s && !stageOrder.includes(s))
+            .sort();
+        const fullStageOrder = [...stageOrder, ...orphanStages];
 
-        // Calculate cumulative "reached" counts (bottom-up sum)
+        // --- Calculate cumulative "reached" counts (bottom-up accumulation) ---
+        // A lead currently in "Won" was also in "New", so earlier stages
+        // inherit all counts from later stages.
         let runningTotal = 0;
         const reachedCounts = {};
-        
-        for (let i = stageOrder.length - 1; i >= 0; i--) {
-            const stage = stageOrder[i];
+        for (let i = fullStageOrder.length - 1; i >= 0; i--) {
+            const stage = fullStageOrder[i];
             runningTotal += (stageCounts[stage] || 0);
             reachedCounts[stage] = runningTotal;
         }
+        // Ensure the first stage never undercounts the total
+        if (fullStageOrder.length > 0) {
+            reachedCounts[fullStageOrder[0]] = Math.max(reachedCounts[fullStageOrder[0]] || 0, totalLeadsCount);
+        }
 
-        Object.keys(stageCounts).forEach(s => {
-            if (!stageOrder.includes(s)) {
-                runningTotal += stageCounts[s]; 
-            }
-        });
-        
-        reachedCounts['New'] = Math.max(reachedCounts['New'] || 0, totalLeadsCount);
-
-        const funnelWithDropoff = stageOrder.map((stage, i) => {
+        // --- Build funnel array with drop-off info ---
+        const funnelWithDropoff = fullStageOrder.map((stage, i) => {
             const reached = reachedCounts[stage] || 0;
-            const nextStage = stageOrder[i + 1];
+            const nextStage = fullStageOrder[i + 1];
             const nextReached = nextStage ? (reachedCounts[nextStage] || 0) : 0;
-            
             const dropped = Math.max(0, reached - nextReached);
             const dropRate = reached > 0 ? ((dropped / reached) * 100).toFixed(1) : 0;
-            
-            return { 
-                stage, 
-                count: reached, 
-                currentInStage: stageCounts[stage] || 0, 
-                dropped: i === stageOrder.length - 1 ? 0 : dropped, 
-                dropRate: i === stageOrder.length - 1 ? 0 : parseFloat(dropRate) 
+
+            return {
+                stage,
+                count: reached,
+                currentInStage: stageCounts[stage] || 0,
+                dropped: i === fullStageOrder.length - 1 ? 0 : dropped,
+                dropRate: i === fullStageOrder.length - 1 ? 0 : parseFloat(dropRate)
             };
         });
 
+        // Provide a hint when the selected period returned 0 leads,
+        // so the frontend can show actionable guidance.
+        const hint = totalLeadsCount === 0
+            ? `No leads found for this period. Try selecting a wider date range or click "All Time".`
+            : null;
+
         res.json({
-            period, totalLeads: totalLeadsCount, funnel: funnelWithDropoff,
-            avgTimeToCloseDays: avgTimeToClose ? parseFloat(avgTimeToClose) : null
+            period,
+            totalLeads: totalLeadsCount,
+            funnel: funnelWithDropoff,
+            avgTimeToCloseDays: avgTimeToClose ? parseFloat(avgTimeToClose) : null,
+            usingCustomStages,
+            hint
         });
     } catch (err) {
         console.error('getFunnelAnalysis error:', err);
