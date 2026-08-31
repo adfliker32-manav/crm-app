@@ -73,7 +73,8 @@ const ClaudeAISettings = () => {
         }
     };
 
-    const browserUrl = `${MCP_URL}?key=${revealedKey || maskedKey || 'YOUR_MCP_KEY'}`;
+    // OAuth 2.1 flow requires the base URL only. Claude.ai will prompt for the key on the authorization page.
+    const browserUrl = MCP_URL;
 
     const handleCopyUrl = async () => {
         try {
@@ -301,7 +302,7 @@ const ClaudeAISettings = () => {
             <div className="space-y-3">
                 <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wider">Connect via Browser (Claude.ai)</h4>
                 <p className="text-xs text-slate-500">
-                    Using Claude.ai in the browser? Copy this link and paste it into your <strong>Connectors</strong> settings on Claude.ai to connect.
+                    Using Claude.ai in the browser? Copy this link and paste it into your <strong>Connectors</strong> settings. Claude will then open an authorization page where you will paste your API key from above.
                 </p>
                 <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
                     <i className="fa-solid fa-link text-slate-400 flex-shrink-0 text-sm"></i>
@@ -326,7 +327,7 @@ const ClaudeAISettings = () => {
                 {!hasKey && (
                     <p className="text-xs text-amber-600 flex items-center gap-1.5">
                         <i className="fa-solid fa-circle-info"></i>
-                        Generate an API key first to get your browser connection URL.
+                        Generate an API key first, as you will need to paste it during the Claude.ai connection process.
                     </p>
                 )}
             </div>
