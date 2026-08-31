@@ -43,6 +43,8 @@ const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
 const { renderManageBookingPage } = require('./src/views/manageBookingPage');
 const webLeadRoutes = require('./src/routes/webLeadRoutes'); // Web-to-Lead embed
 const mcpRoutes = require('./src/routes/mcpRoutes'); // Claude AI / MCP server
+const oauthRoutes = require('./src/routes/oauthRoutes'); // OAuth 2.1 for Claude.ai browser connector
+const { getMetadata: oauthMetadata } = require('./src/controllers/oauthController');
 const sequenceRoutes = require('./src/routes/sequenceRoutes'); // Drip Sequences
 const billingRoutes = require('./src/routes/billingRoutes'); // Razorpay Autodebit Subscriptions
 const { router: invoicePublicRoute } = require('./src/routes/invoicePublicRoute'); // Public invoice viewer (HMAC-secured)
@@ -112,6 +114,15 @@ const corsOptions = {
 // Apply CORS middleware only to API, Webhook, and Uploads endpoints.
 // Standard page navigations or redirects should not be blocked by CORS origin checks.
 app.use((req, res, next) => {
+  // OAuth endpoints need open CORS — Claude.ai's domain must reach them.
+  // These are public OAuth endpoints that any MCP client may call.
+  if (req.path.startsWith('/.well-known/') || req.path.startsWith('/oauth/')) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') return res.status(204).end();
+    return next();
+  }
   if (req.path.startsWith('/api/') || req.path.startsWith('/webhook/') || req.path.startsWith('/uploads') || req.path.startsWith('/socket.io')) {
     return cors(corsOptions)(req, res, next);
   }
@@ -690,6 +701,11 @@ app.use('/api/voice-templates', voiceTemplateRoutes);
 app.use('/api/activity-logs', require('./src/routes/activityLogRoutes'));
 app.use('/api/reports', reportRoutes); // Reports & Analytics
 app.use('/mcp', mcpRoutes);           // Claude AI MCP server (API-key auth, no JWT)
+
+// OAuth 2.1 endpoints for Claude.ai browser connector (public — no JWT)
+// Metadata discovery must live at /.well-known/ per RFC 8414.
+app.get('/.well-known/oauth-authorization-server', oauthMetadata);
+app.use('/oauth', oauthRoutes);
 app.use('/api/ai', aiProxyRoutes);
 
 // 🔗 Third-Party CRM Integration API (API-key auth, not JWT — for external systems)
