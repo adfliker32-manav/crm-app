@@ -21,7 +21,7 @@ module.exports = function saasPlugin(schema, options) {
     });
 
     // 2. Overload Query Mappers for Soft Delete Isolation
-    const typesToOverride = ['find', 'findOne', 'findOneAndUpdate', 'countDocuments', 'updateMany'];
+    const typesToOverride = ['find', 'findOne', 'findOneAndUpdate', 'countDocuments', 'updateMany', 'distinct'];
     
     typesToOverride.forEach(type => {
         schema.pre(type, function() {

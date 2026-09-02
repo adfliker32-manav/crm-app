@@ -783,8 +783,8 @@ const syncLeads = async (req, res) => {
         const { normalizePhone } = require('../services/duplicateService');
 
         const [existingEmailList, existingPhoneList] = await Promise.all([
-            Lead.distinct('email', { userId: userId, email: { $ne: null } }),
-            Lead.distinct('phone', { userId: userId, phone: { $ne: null } })
+            Lead.distinct('email', { userId: userId, email: { $ne: null }, deletedAt: null }),
+            Lead.distinct('phone', { userId: userId, phone: { $ne: null }, deletedAt: null })
         ]);
 
         const existingEmails = new Set(existingEmailList.map(e => e?.trim().toLowerCase()).filter(Boolean));
@@ -1417,8 +1417,8 @@ const bulkImportLeads = async (req, res) => {
         // Previously: Lead.find({userId}).select('phone email').lean() loaded every document.
         // Now: distinct() returns only unique values — orders of magnitude less memory.
         const [existingPhoneList, existingEmailList] = await Promise.all([
-            Lead.distinct('phone', { userId: ownerId, phone: { $ne: null } }),
-            Lead.distinct('email', { userId: ownerId, email: { $ne: null } })
+            Lead.distinct('phone', { userId: ownerId, phone: { $ne: null }, deletedAt: null }),
+            Lead.distinct('email', { userId: ownerId, email: { $ne: null }, deletedAt: null })
         ]);
         const existingPhones = new Set(existingPhoneList.map(p => normalizePhone(p)).filter(Boolean));
         const existingEmails = new Set(existingEmailList.map(e => e?.trim().toLowerCase()).filter(Boolean));
