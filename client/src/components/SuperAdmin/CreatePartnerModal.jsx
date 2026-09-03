@@ -31,8 +31,9 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
         maxAccounts: '100',
         leadLimit: '500',
         agentLimit: '3',
-        rateLimitPerMinute: '120',
-        rateLimitPerDay: '10000',
+        rateLimitPerMinute: '200',
+        rateLimitPerDay: '5000',
+        rateLimitFloor: '200',
         allowDirectLogin: false,
         showPoweredBy: true,
     });
@@ -68,8 +69,9 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
                     activeModules: ['leads', 'whatsapp'],
                 },
                 rateLimit: {
-                    perMinute: Number(form.rateLimitPerMinute) || 120,
-                    perDay: Number(form.rateLimitPerDay) || 10000,
+                    perAccountPerMinute: Number(form.rateLimitPerMinute) || 200,
+                    perAccountPerDay: Number(form.rateLimitPerDay) || 5000,
+                    floor: Number(form.rateLimitFloor) || 200,
                 },
                 allowDirectLogin: form.allowDirectLogin,
                 showPoweredBy: form.showPoweredBy,
@@ -272,10 +274,11 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
 
                     {/* API Settings */}
                     <div>
-                        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">API Rate Limits</h3>
-                        <div className="grid grid-cols-2 gap-3">
+                        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">API Rate Limits</h3>
+                        <p className="text-xs text-slate-400 mb-3">Scales automatically: <strong>accounts × per-account rate</strong></p>
+                        <div className="grid grid-cols-3 gap-3">
                             <div>
-                                <label className="text-sm font-medium text-slate-700">Requests/min</label>
+                                <label className="text-sm font-medium text-slate-700">Per Account / min</label>
                                 <input
                                     value={form.rateLimitPerMinute}
                                     onChange={e => handleChange('rateLimitPerMinute', e.target.value)}
@@ -284,7 +287,7 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
                                 />
                             </div>
                             <div>
-                                <label className="text-sm font-medium text-slate-700">Daily Cap</label>
+                                <label className="text-sm font-medium text-slate-700">Per Account / day</label>
                                 <input
                                     value={form.rateLimitPerDay}
                                     onChange={e => handleChange('rateLimitPerDay', e.target.value)}
@@ -292,6 +295,22 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
                                     className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
                                 />
                             </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-700">Floor (min)</label>
+                                <input
+                                    value={form.rateLimitFloor}
+                                    onChange={e => handleChange('rateLimitFloor', e.target.value)}
+                                    type="number" min="1"
+                                    className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
+                                />
+                            </div>
+                        </div>
+                        <div className="mt-2 bg-cyan-50 border border-cyan-200 rounded-lg px-3 py-2 text-xs text-slate-500">
+                            <i className="fa-solid fa-circle-info text-cyan-500 mr-1" />
+                            Example with {form.maxAccounts || 100} accounts:
+                            <strong className="text-cyan-700 ml-1">
+                                {Math.max(Number(form.rateLimitFloor) || 200, (Number(form.maxAccounts) || 100) * (Number(form.rateLimitPerMinute) || 200)).toLocaleString()} req/min
+                            </strong>
                         </div>
                     </div>
 

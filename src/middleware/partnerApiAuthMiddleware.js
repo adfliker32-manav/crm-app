@@ -77,29 +77,48 @@ const partnerAuth = async (req, res, next) => {
             });
         }
 
-        // Rate limiting
-        const limits = partner.rateLimit || { perMinute: 120, perDay: 10000 };
-        const bucket = getRateBucket(apiKey, limits);
+        // ── Dynamic Rate Limit Calculation ─────────────────────────────────────
+        // Effective limit = max(floor, accountCount × perAccountPerMinute)
+        // This scales naturally: more accounts = more allowed throughput.
+        const rl = partner.rateLimit || {};
+        const perAccountPerMin = rl.perAccountPerMinute ?? 200;
+        const perAccountPerDay = rl.perAccountPerDay    ?? 5000;
+        const floor            = rl.floor               ?? 200;
+        const accountCount     = Math.max(1, partner.accountIds?.length || 0);
+
+        const effectivePerMinute = Math.max(floor, accountCount * perAccountPerMin);
+        const effectivePerDay    = Math.max(floor * 48, accountCount * perAccountPerDay);
+
+        // Rate bucket (in-memory sliding window per partner key)
+        const bucket = getRateBucket(apiKey, { perMinute: effectivePerMinute, perDay: effectivePerDay });
         bucket.minuteCount++;
         bucket.dayCount++;
 
-        // Set rate limit headers
-        res.set('X-RateLimit-Limit', String(limits.perMinute));
-        res.set('X-RateLimit-Remaining', String(Math.max(0, limits.perMinute - bucket.minuteCount)));
-        res.set('X-RateLimit-Reset', String(Math.ceil(bucket.minuteReset / 1000)));
+        // Expose limit info in headers (so partner devs can see their allocation)
+        res.set('X-RateLimit-Limit',          String(effectivePerMinute));
+        res.set('X-RateLimit-Remaining',      String(Math.max(0, effectivePerMinute - bucket.minuteCount)));
+        res.set('X-RateLimit-Reset',          String(Math.ceil(bucket.minuteReset / 1000)));
+        res.set('X-RateLimit-Account-Count',  String(accountCount));
+        res.set('X-RateLimit-Per-Account',    String(perAccountPerMin));
 
-        if (bucket.minuteCount > limits.perMinute) {
+        if (bucket.minuteCount > effectivePerMinute) {
             return res.status(429).json({
                 success: false,
                 error: 'rate_limit',
-                message: `Rate limit exceeded. Max ${limits.perMinute} requests per minute.`
+                message: `Rate limit exceeded. Your limit is ${effectivePerMinute} req/min (${accountCount} accounts × ${perAccountPerMin}/min).`,
+                limit: effectivePerMinute,
+                accountCount,
+                perAccount: perAccountPerMin
             });
         }
-        if (bucket.dayCount > limits.perDay) {
+        if (bucket.dayCount > effectivePerDay) {
             return res.status(429).json({
                 success: false,
                 error: 'daily_limit',
-                message: `Daily limit exceeded. Max ${limits.perDay} requests per day.`
+                message: `Daily limit exceeded. Your limit is ${effectivePerDay} req/day (${accountCount} accounts × ${perAccountPerDay}/day).`,
+                limit: effectivePerDay,
+                accountCount,
+                perAccount: perAccountPerDay
             });
         }
 

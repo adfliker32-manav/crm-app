@@ -68,10 +68,14 @@ const partnerAppSchema = new mongoose.Schema({
         }
     },
 
-    // ── API Rate Limiting ───────────────────────────────────────────────────
+    // ── API Rate Limiting (Dynamic — scales with provisioned account count) ─────
+    // Effective limit = max(rateLimitFloor, accountIds.length × perAccountPerMinute)
+    // Example: 5 accounts × 200/min = 1000 req/min for the whole partner app.
+    // rateLimitFloor ensures new partners (0 accounts) still get basic access.
     rateLimit: {
-        perMinute: { type: Number, default: 120 },
-        perDay:    { type: Number, default: 10000 }
+        perAccountPerMinute: { type: Number, default: 200  },  // per account per minute
+        perAccountPerDay:    { type: Number, default: 5000 },  // per account per day
+        floor:               { type: Number, default: 200  },  // minimum even with 0 accounts
     },
 
     // ── Access Control ──────────────────────────────────────────────────────

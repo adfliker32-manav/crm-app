@@ -37,7 +37,7 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
         allowedModules: partner.allowedModules || [],
         maxAccounts: partner.maxAccounts || 100,
         accountDefaults: partner.accountDefaults || { leadLimit: 500, agentLimit: 3 },
-        rateLimit: partner.rateLimit || { perMinute: 120, perDay: 10000 },
+        rateLimit: partner.rateLimit || { perAccountPerMinute: 200, perAccountPerDay: 5000, floor: 200 },
         allowDirectLogin: partner.allowDirectLogin || false,
         showPoweredBy: partner.showPoweredBy !== false,
         webhookUrl: partner.webhookUrl || '',
@@ -160,21 +160,48 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
 
             {/* API Rate Limits */}
             <section>
-                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">API Rate Limits</h3>
-                <div className="grid grid-cols-2 gap-3">
+                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">API Rate Limits</h3>
+                <p className="text-xs text-slate-400 mb-3">
+                    Limits scale with account count: <strong>accounts × per-account rate</strong>
+                </p>
+                <div className="grid grid-cols-3 gap-3">
                     <div>
-                        <label className="text-sm font-medium text-slate-700">Requests/min</label>
-                        <input type="number" value={form.rateLimit.perMinute}
-                            onChange={e => handleNested('rateLimit', 'perMinute', Number(e.target.value))}
+                        <label className="text-sm font-medium text-slate-700">Per Account / min</label>
+                        <input type="number" value={form.rateLimit.perAccountPerMinute}
+                            onChange={e => handleNested('rateLimit', 'perAccountPerMinute', Number(e.target.value))}
                             className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
                     </div>
                     <div>
-                        <label className="text-sm font-medium text-slate-700">Daily Cap</label>
-                        <input type="number" value={form.rateLimit.perDay}
-                            onChange={e => handleNested('rateLimit', 'perDay', Number(e.target.value))}
+                        <label className="text-sm font-medium text-slate-700">Per Account / day</label>
+                        <input type="number" value={form.rateLimit.perAccountPerDay}
+                            onChange={e => handleNested('rateLimit', 'perAccountPerDay', Number(e.target.value))}
+                            className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                    </div>
+                    <div>
+                        <label className="text-sm font-medium text-slate-700">Floor (0 accounts)</label>
+                        <input type="number" value={form.rateLimit.floor}
+                            onChange={e => handleNested('rateLimit', 'floor', Number(e.target.value))}
                             className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
                     </div>
                 </div>
+                {/* Live preview */}
+                {(() => {
+                    const n = partner.accounts?.length || 0;
+                    const effMin = Math.max(form.rateLimit.floor || 200, n * (form.rateLimit.perAccountPerMinute || 200));
+                    const effDay = Math.max((form.rateLimit.floor || 200) * 48, n * (form.rateLimit.perAccountPerDay || 5000));
+                    return (
+                        <div className="mt-3 bg-cyan-50 border border-cyan-200 rounded-lg px-4 py-2.5 flex items-center gap-3 text-sm">
+                            <i className="fa-solid fa-calculator text-cyan-500" />
+                            <span className="text-slate-600">
+                                Current effective limit:
+                                <strong className="text-cyan-700 ml-1">{effMin.toLocaleString()} req/min</strong>
+                                <span className="text-slate-400 mx-1">·</span>
+                                <strong className="text-cyan-700">{effDay.toLocaleString()} req/day</strong>
+                                <span className="text-slate-400 ml-2">({n} accounts × {form.rateLimit.perAccountPerMinute || 200})</span>
+                            </span>
+                        </div>
+                    );
+                })()}
             </section>
 
             {/* Access Control */}

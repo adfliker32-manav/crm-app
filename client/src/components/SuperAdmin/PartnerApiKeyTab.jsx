@@ -140,7 +140,23 @@ const PartnerApiKeyTab = ({ partner, onRefresh }) => {
                 )}
                 <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
                     <span>Total this week: <span className="font-bold text-slate-600">{last7.reduce((s, d) => s + d.count, 0).toLocaleString()}</span></span>
-                    <span>Limits: {partner.rateLimit?.perMinute || 120}/min, {(partner.rateLimit?.perDay || 10000).toLocaleString()}/day</span>
+                    {(() => {
+                        const rl = partner.rateLimit || {};
+                        const n = Math.max(1, partner.accounts?.length || partner.accountIds?.length || 0);
+                        const perMin = rl.perAccountPerMinute ?? 200;
+                        const perDay = rl.perAccountPerDay ?? 5000;
+                        const floor  = rl.floor ?? 200;
+                        const effMin = Math.max(floor, n * perMin);
+                        const effDay = Math.max(floor * 48, n * perDay);
+                        return (
+                            <span title={`${n} accounts × ${perMin}/min = ${effMin}/min`}>
+                                Limit: <strong className="text-slate-600">{effMin.toLocaleString()}/min</strong>
+                                <span className="mx-1">·</span>
+                                <strong className="text-slate-600">{effDay.toLocaleString()}/day</strong>
+                                <span className="text-slate-300 ml-1">({n} accts × {perMin})</span>
+                            </span>
+                        );
+                    })()}
                 </div>
             </section>
         </div>
