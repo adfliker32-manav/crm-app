@@ -37,7 +37,7 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
         allowedModules: partner.allowedModules || [],
         maxAccounts: partner.maxAccounts || 100,
         accountDefaults: partner.accountDefaults || { leadLimit: 500, agentLimit: 3 },
-        rateLimit: partner.rateLimit || { perAccountPerMinute: 200, perAccountPerDay: 5000, floor: 200 },
+        rateLimit: partner.rateLimit || { perAccountPerMinute: 30, perAccountPerDay: 500, floor: 30 },
         allowDirectLogin: partner.allowDirectLogin || false,
         showPoweredBy: partner.showPoweredBy !== false,
         webhookUrl: partner.webhookUrl || '',

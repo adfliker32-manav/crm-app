@@ -73,9 +73,9 @@ const partnerAppSchema = new mongoose.Schema({
     // Example: 5 accounts × 200/min = 1000 req/min for the whole partner app.
     // rateLimitFloor ensures new partners (0 accounts) still get basic access.
     rateLimit: {
-        perAccountPerMinute: { type: Number, default: 200  },  // per account per minute
-        perAccountPerDay:    { type: Number, default: 5000 },  // per account per day
-        floor:               { type: Number, default: 200  },  // minimum even with 0 accounts
+        perAccountPerMinute: { type: Number, default: 30   },  // 30 req/min per account (realistic for WhatsApp CRM)
+        perAccountPerDay:    { type: Number, default: 500  },  // 500 req/day per account
+        floor:               { type: Number, default: 30   },  // minimum even with 0 accounts
     },
 
     // ── Access Control ──────────────────────────────────────────────────────
