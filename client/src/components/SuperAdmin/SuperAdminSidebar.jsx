@@ -68,6 +68,7 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
             items: [
                 { id: 'agency-management', icon: 'fa-network-wired', label: 'Agency Management', color: 'text-purple-600 font-bold', badge: pendingWithdrawals },
                 { id: 'direct-clients', icon: 'fa-user-tie', label: 'Direct Clients', color: 'text-emerald-600' },
+                { id: 'partner-apps', icon: 'fa-puzzle-piece', label: 'Partner Apps', color: 'text-cyan-500 font-semibold' },
                 { id: 'finance', icon: 'fa-sack-dollar', label: 'Billing & Finance', color: 'text-emerald-500 font-bold' },
                 { id: 'plans', icon: 'fa-layer-group', label: 'Plan Catalog', color: 'text-indigo-500 font-semibold' },
                 { id: 'coupons', icon: 'fa-tag', label: 'Coupon Codes', color: 'text-pink-500 font-semibold' },

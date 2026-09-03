@@ -16,6 +16,7 @@ import EmailInbox from '../components/Email/EmailInbox';
 import SuperAdminCommSettings from '../components/SuperAdmin/SuperAdminCommSettings';
 import SuperAdminVoiceTemplates from '../components/SuperAdmin/SuperAdminVoiceTemplates';
 import AiCreditsView from '../components/SuperAdmin/AiCreditsView';
+import PartnerAppsView from '../components/SuperAdmin/PartnerAppsView';
 
 
 const SuperAdmin = () => {
@@ -29,6 +30,8 @@ const SuperAdmin = () => {
                 return <AgencyManagementModule />;
             case 'direct-clients':
                 return <DirectClientsView />;
+            case 'partner-apps':
+                return <PartnerAppsView />;
             case 'finance':
                 return <FinanceView />;
             case 'plans':

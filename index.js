@@ -53,6 +53,7 @@ const extApiRoutes    = require('./src/routes/extApiRoutes');    // Third-party 
 const extApiKeyRoutes = require('./src/routes/extApiKeyRoutes'); // Key management for External API
 const workflowRoutes  = require('./src/routes/workflowRoutes');  // Workflow Engine (n8n-style)
 const workflowLibraryRoutes = require('./src/routes/workflowLibraryRoutes'); // Community Workflow Library
+const partnerApiRoutes = require('./src/routes/partnerApiRoutes'); // Partner CRM Embed API
 
 
 const app = express();
@@ -714,6 +715,9 @@ app.use('/api/v1', extApiRoutes);
 
 // Key management for External API (JWT auth — workspace owner only)
 app.use('/api/ext-api', authMiddleware, requireFeature('settings.apiAccess'), extApiKeyRoutes);
+
+// 🧩 Partner CRM Integration API (partner-key auth — for embedded WhatsApp module)
+app.use('/api/partner/v1', partnerApiRoutes);
 
 
 // Meta Webhook URL: /api/meta/webhook

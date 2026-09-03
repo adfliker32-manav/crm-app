@@ -20,3 +20,11 @@ Thumbs.db
 .vscode/
 .idea/
 .cursor/cashfree-skills/
+
+# Generated images / binary assets (not source code)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+UsersAdmin*

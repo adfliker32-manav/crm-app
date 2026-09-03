@@ -7,6 +7,7 @@ const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const telemetryService = require('../services/telemetryService');
 const { emitToUser, emitToConversation } = require('../services/socketService');
+const { forwardIfPartnerAccount } = require('../services/partnerWebhookService');
 
 // ============================================================
 // 🔒 PER-CONVERSATION CHATBOT SERIALIZATION LOCK
@@ -728,6 +729,24 @@ const processEntry = async (entry) => {
                 }
             } else {
                 debug('   ℹ️  No statuses array in this change');
+            }
+
+            // 🧩 PARTNER WEBHOOK FORWARDING — fire-and-forget, runs AFTER normal processing
+            if (value.messages?.length) {
+                for (const msg of value.messages) {
+                    forwardIfPartnerAccount(user._id, 'message.received', {
+                        from: msg.from, type: msg.type, messageId: msg.id,
+                        text: msg.text?.body || null, timestamp: msg.timestamp
+                    }).catch(() => {});
+                }
+            }
+            if (value.statuses?.length) {
+                for (const st of value.statuses) {
+                    forwardIfPartnerAccount(user._id, 'message.status_update', {
+                        messageId: st.id, status: st.status, recipientId: st.recipient_id,
+                        timestamp: st.timestamp
+                    }).catch(() => {});
+                }
             }
         } else {
             debug(`   ⏭️  Skipping change with field: "${change.field}"`);

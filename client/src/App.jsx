@@ -50,6 +50,7 @@ const Plans = lazy(() => import('./pages/Plans'));
 const Billing = lazy(() => import('./pages/Billing'));
 const VoiceHub = lazy(() => import('./pages/VoiceHub'));
 const WorkflowBuilder = lazy(() => import('./pages/WorkflowBuilder'));
+const EmbedWhatsApp = lazy(() => import('./pages/EmbedWhatsApp'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -75,6 +76,10 @@ function App() {
                         <Route path="/deletion-status" element={<DataDeletionStatus />} />
                         <Route path="/payment-required" element={<PaymentRequired />} />
                         <Route path="/plans" element={<Plans />} />
+
+                        {/* Partner CRM Embed — standalone page, no sidebar/header.
+                            Auth is handled via embed-token exchange inside the component. */}
+                        <Route path="/embed/whatsapp" element={<EmbedWhatsApp />} />
 
                         <Route element={<ProtectedRoute />}>
                           <Route path="/super-admin" element={<SuperAdmin />} />

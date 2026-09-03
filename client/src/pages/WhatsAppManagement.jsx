@@ -13,13 +13,13 @@ import AISettings from '../components/Settings/AISettings';
 import FeatureGate from '../components/FeatureGate';
 import { hasEntitlement } from '../utils/entitlements';
 
-const WhatsAppManagement = () => {
+const WhatsAppManagement = ({ embedded = false }) => {
     const { user } = useAuth();
-    const canManageTeam = ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
+    const canManageTeam = embedded || ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
     // Plan entitlement for the AI layer (sub-feature). The flow builder is free
     // with WhatsApp; only the AI Chatbot draws a plan feature → gate it separately.
     const aiChatbotEntitled = hasEntitlement(user, 'whatsapp.chatbot.ai');
-    const canViewWhatsApp = canManageTeam || user?.permissions?.viewWhatsApp === true;
+    const canViewWhatsApp = embedded || canManageTeam || user?.permissions?.viewWhatsApp === true;
 
     const [activeTab, setActiveTab] = useState('inbox');
     const [editingFlowId, setEditingFlowId] = useState(null);
@@ -29,6 +29,7 @@ const WhatsAppManagement = () => {
     const [chatbotView, setChatbotView] = useState('flows');
 
     const hasModule = (moduleName) => {
+        if (embedded) return true; // embedded mode has full access
         if (['superadmin', 'agency'].includes(user?.role)) return true;
         if (moduleName === 'chatbot') {
             // The WhatsApp chatbot / visual flow builder is FREE and available to anyone

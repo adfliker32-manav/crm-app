@@ -267,5 +267,34 @@ router.get('/partner/agencies', authMiddleware, requireSuperAdmin, listAgencyPar
 router.get('/partner/withdrawals', authMiddleware, requireSuperAdmin, listWithdrawals);
 router.put('/partner/withdrawals/:id/process', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, processWithdrawal);
 
+// 🧩 PARTNER APP MANAGEMENT — Third-party CRM integrations
+const {
+    createPartner,
+    listPartners,
+    getPartner,
+    updatePartner,
+    deactivatePartner,
+    regenerateKey,
+    generateBill,
+    markBillPaid,
+    getApiUsage,
+    freezePartnerAccount,
+    unfreezePartnerAccount,
+    deletePartnerAccount
+} = require('../controllers/partnerAppAdminController');
+
+router.get('/partner-apps', authMiddleware, requireSuperAdmin, listPartners);
+router.post('/partner-apps', authMiddleware, requireSuperAdmin, createPartner);
+router.get('/partner-apps/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getPartner);
+router.put('/partner-apps/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updatePartner);
+router.delete('/partner-apps/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deactivatePartner);
+router.post('/partner-apps/:id/regenerate-key', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, regenerateKey);
+router.post('/partner-apps/:id/generate-bill', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, generateBill);
+router.put('/partner-apps/:id/billing/:billId/mark-paid', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, markBillPaid);
+router.get('/partner-apps/:id/api-usage', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getApiUsage);
+router.put('/partner-apps/:id/accounts/:accountId/freeze', validateObjectId({ params: ['id', 'accountId'] }), authMiddleware, requireSuperAdmin, freezePartnerAccount);
+router.put('/partner-apps/:id/accounts/:accountId/unfreeze', validateObjectId({ params: ['id', 'accountId'] }), authMiddleware, requireSuperAdmin, unfreezePartnerAccount);
+router.delete('/partner-apps/:id/accounts/:accountId', validateObjectId({ params: ['id', 'accountId'] }), authMiddleware, requireSuperAdmin, deletePartnerAccount);
+
 module.exports = router;
 
