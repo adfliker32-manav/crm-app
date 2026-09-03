@@ -11,6 +11,8 @@ import NoteModal from '../components/Dashboard/NoteModal';
 import DuplicateLeadsModal from '../components/Dashboard/DuplicateLeadsModal';
 import ImportCSVModal from '../components/Dashboard/ImportCSVModal';
 import ExportCSVModal from '../components/Dashboard/ExportCSVModal';
+import EnrollInSequenceModal from '../components/Sequences/EnrollInSequenceModal';
+
 import Papa from 'papaparse';
 import { useNotification } from '../context/NotificationContext';
 import { useConfirm } from '../context/ConfirmContext';
@@ -59,6 +61,9 @@ const Leads = () => {
     const [exportSelectedLeads, setExportSelectedLeads] = useState(null); // null = export all, array = export selected
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [selectedLead, setSelectedLead] = useState(null);
+    const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
+    const [enrollLead, setEnrollLead] = useState(null);
+
 
     const fetchData = useCallback(async () => {
         try {
@@ -392,6 +397,12 @@ const Leads = () => {
         setSelectedLead(lead);
         setIsNoteModalOpen(true);
     };
+
+    const handleEnrollClick = (lead) => {
+        setEnrollLead(lead);
+        setIsEnrollModalOpen(true);
+    };
+
 
     const handleBulkDelete = async (ids) => {
         const confirmed = await showDanger(
@@ -938,6 +949,7 @@ const Leads = () => {
                             onLeadClick={handleLeadClick}
                             onStatusChange={handleStatusChange}
                             onNoteClick={handleNoteClick}
+                            onEnrollClick={handleEnrollClick}
                             onBulkDelete={handleBulkDelete}
                             onBulkStatusUpdate={handleBulkStatusUpdate}
                             onBulkTag={handleBulkTag}
@@ -946,6 +958,7 @@ const Leads = () => {
                             onBulkExport={handleBulkExport}
                             onRefresh={fetchData}
                         />
+
                     </div>
                 </div>
             )}
@@ -1041,8 +1054,16 @@ const Leads = () => {
                 selectedIds={exportSelectedLeads ? exportSelectedLeads.map(l => l._id) : null}
                 exportLabel={exportSelectedLeads ? `${exportSelectedLeads.length} Selected Leads` : undefined}
             />
+
+            <EnrollInSequenceModal
+                isOpen={isEnrollModalOpen}
+                onClose={() => { setIsEnrollModalOpen(false); setEnrollLead(null); }}
+                lead={enrollLead}
+                onSuccess={() => {}}
+            />
         </div>
     );
 };
 
 export default Leads;
+

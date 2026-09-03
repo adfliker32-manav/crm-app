@@ -6,11 +6,13 @@ const StepSchema = new mongoose.Schema({
     delayHours: { type: Number, default: 0 },
     action: {
         type: { type: String, enum: ['SEND_WHATSAPP', 'SEND_EMAIL'], required: true },
-        templateId: { type: String, default: null },   // WhatsApp approved template name
-        subject: { type: String, default: null },       // Email subject
-        body: { type: String, default: null }           // Email body (supports {{variables}})
+        templateId:      { type: String, default: null },
+        emailTemplateId: { type: mongoose.Schema.Types.ObjectId, ref: 'EmailTemplate', default: null },
+        subject: { type: String, default: null },
+        body:    { type: String, default: null }
     }
 }, { _id: false });
+
 
 const SequenceSchema = new mongoose.Schema({
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },

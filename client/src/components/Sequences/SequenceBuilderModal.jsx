@@ -12,14 +12,24 @@ const TRIGGER_OPTIONS = [
 const newStep = () => ({
     stepNumber: 1,
     delayHours: 0,
-    action: { type: 'SEND_WHATSAPP', templateId: '', subject: '', body: '' }
+    action: { type: 'SEND_WHATSAPP', templateId: '', emailTemplateId: '', useEmailTemplate: false, subject: '', body: '' }
 });
+
+// ── Delay helpers ─────────────────────────────────────────────────────────────
+// We store delay as total hours internally (backend model uses delayHours).
+// The UI splits this into days + hours for user-friendliness.
+const hoursToDaysHours = (totalHours) => {
+    const h = Number(totalHours) || 0;
+    return { days: Math.floor(h / 24), hours: h % 24 };
+};
+const daysHoursToTotalHours = (days, hours) => (Number(days) || 0) * 24 + (Number(hours) || 0);
 
 const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null }) => {
     const { showNotification } = useNotification();
     const [loading, setLoading] = useState(false);
     const [stages, setStages] = useState([]);
     const [whatsappTemplates, setWhatsappTemplates] = useState([]);
+    const [emailTemplates, setEmailTemplates] = useState([]);
 
     const defaultSeq = {
         name: '',
@@ -45,9 +55,11 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                         delayHours: s.delayHours || 0,
                         action: {
                             type: s.action?.type || 'SEND_WHATSAPP',
-                            templateId: s.action?.templateId || '',
+                            templateId:      s.action?.templateId      || '',
+                            emailTemplateId: s.action?.emailTemplateId || '',
+                            useEmailTemplate: !!s.action?.emailTemplateId,
                             subject: s.action?.subject || '',
-                            body: s.action?.body || ''
+                            body:    s.action?.body    || ''
                         }
                     }))
                     : [newStep()]
@@ -59,13 +71,19 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
 
     const fetchContext = async () => {
         try {
-            const [stageRes, waRes] = await Promise.all([
+            const [stageRes, waRes, etRes] = await Promise.all([
                 api.get('/stages').catch(() => ({ data: [] })),
                 api.get('/whatsapp/templates').catch(() => ({ data: {} })),
+                api.get('/email-templates').catch(() => ({ data: [] })),
             ]);
             setStages(stageRes.data || []);
             const tList = waRes.data?.templates || waRes.data?.data || [];
             setWhatsappTemplates(tList.filter(t => t.status === 'APPROVED'));
+            // email-templates endpoint returns array directly or { templates: [] }
+            const etList = Array.isArray(etRes.data)
+                ? etRes.data
+                : (etRes.data?.templates || etRes.data?.data || []);
+            setEmailTemplates(etList.filter(t => t.isActive !== false));
         } catch (err) {
             console.error('Failed to load context', err);
         }
@@ -114,8 +132,13 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
             if (step.action.type === 'SEND_WHATSAPP' && !step.action.templateId) {
                 return showNotification('error', `Step ${i + 1}: pick a WhatsApp template`);
             }
-            if (step.action.type === 'SEND_EMAIL' && (!step.action.subject?.trim() || !step.action.body?.trim())) {
-                return showNotification('error', `Step ${i + 1}: email subject and body are required`);
+            if (step.action.type === 'SEND_EMAIL') {
+                if (step.action.useEmailTemplate && !step.action.emailTemplateId) {
+                    return showNotification('error', `Step ${i + 1}: pick an email template`);
+                }
+                if (!step.action.useEmailTemplate && (!step.action.subject?.trim() || !step.action.body?.trim())) {
+                    return showNotification('error', `Step ${i + 1}: email subject and body are required`);
+                }
             }
             if (step.delayHours < 0) {
                 return showNotification('error', `Step ${i + 1}: delay cannot be negative`);
@@ -124,6 +147,30 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
 
         setLoading(true);
         try {
+            // Resolve email template subject/body from chosen template if applicable
+            const resolveEmailAction = (action) => {
+                if (action.type !== 'SEND_EMAIL') {
+                    return { type: action.type, templateId: action.templateId || null, subject: null, body: null, emailTemplateId: null };
+                }
+                if (action.useEmailTemplate && action.emailTemplateId) {
+                    const tpl = emailTemplates.find(t => t._id === action.emailTemplateId || t.id === action.emailTemplateId);
+                    return {
+                        type: 'SEND_EMAIL',
+                        templateId: null,
+                        emailTemplateId: action.emailTemplateId,
+                        subject: tpl?.subject || action.subject || null,
+                        body:    tpl?.body    || action.body    || null,
+                    };
+                }
+                return {
+                    type: 'SEND_EMAIL',
+                    templateId: null,
+                    emailTemplateId: null,
+                    subject: action.subject || null,
+                    body:    action.body    || null,
+                };
+            };
+
             const payload = {
                 name: seq.name.trim(),
                 trigger: seq.trigger,
@@ -133,12 +180,7 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                 steps: seq.steps.map((s, i) => ({
                     stepNumber: i + 1,
                     delayHours: Number(s.delayHours) || 0,
-                    action: {
-                        type: s.action.type,
-                        templateId: s.action.type === 'SEND_WHATSAPP' ? (s.action.templateId || null) : null,
-                        subject:    s.action.type === 'SEND_EMAIL'    ? (s.action.subject    || null) : null,
-                        body:       s.action.type === 'SEND_EMAIL'    ? (s.action.body       || null) : null,
-                    }
+                    action: resolveEmailAction(s.action)
                 }))
             };
             if (editingSequence?._id) {
@@ -162,9 +204,11 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
     const formatDelay = (hours) => {
         const h = Number(hours) || 0;
         if (h === 0) return 'Immediately';
-        if (h < 24) return `Wait ${h}h`;
-        const d = h / 24;
-        return d === Math.floor(d) ? `Wait ${d}d` : `Wait ${d.toFixed(1)}d`;
+        const d = Math.floor(h / 24);
+        const rem = h % 24;
+        if (d === 0) return `Wait ${rem}h`;
+        if (rem === 0) return `Wait ${d}d`;
+        return `Wait ${d}d ${rem}h`;
     };
 
     return (
@@ -282,6 +326,7 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                                         idx={idx}
                                         total={seq.steps.length}
                                         whatsappTemplates={whatsappTemplates}
+                                        emailTemplates={emailTemplates}
                                         onUpdate={(patch) => updateStep(idx, patch)}
                                         onUpdateAction={(patch) => updateStepAction(idx, patch)}
                                         onRemove={() => removeStep(idx)}
@@ -359,12 +404,45 @@ const ToggleRow = ({ checked, onChange, title, subtitle, icon }) => (
     </div>
 );
 
-const StepCard = ({ step, idx, total, whatsappTemplates, onUpdate, onUpdateAction, onRemove, onMoveUp, onMoveDown, formatDelay }) => {
+// ── Step Card ─────────────────────────────────────────────────────────────────
+const StepCard = ({
+    step, idx, total,
+    whatsappTemplates, emailTemplates,
+    onUpdate, onUpdateAction,
+    onRemove, onMoveUp, onMoveDown, formatDelay
+}) => {
     const isWhatsApp = step.action.type === 'SEND_WHATSAPP';
+
+    // Split delayHours into days + hours for the UI
+    const { days, hours } = hoursToDaysHours(step.delayHours);
+
+    const handleDaysChange = (e) => {
+        const d = Math.max(0, Number(e.target.value) || 0);
+        onUpdate({ delayHours: daysHoursToTotalHours(d, hours) });
+    };
+    const handleHoursChange = (e) => {
+        const h = Math.min(23, Math.max(0, Number(e.target.value) || 0));
+        onUpdate({ delayHours: daysHoursToTotalHours(days, h) });
+    };
+
+    // When an email template is selected, prefill subject/body for preview
+    const handleEmailTemplateSelect = (e) => {
+        const id = e.target.value;
+        if (!id) {
+            onUpdateAction({ emailTemplateId: '', subject: '', body: '' });
+            return;
+        }
+        const tpl = emailTemplates.find(t => (t._id || t.id) === id);
+        onUpdateAction({
+            emailTemplateId: id,
+            subject: tpl?.subject || '',
+            body:    tpl?.body    || '',
+        });
+    };
 
     return (
         <div className="relative">
-            {/* Delay rail label */}
+            {/* Step label */}
             <div className="relative flex items-center gap-3 mb-2">
                 <div className="w-10 h-10 rounded-full bg-white border-4 border-white ring-2 ring-indigo-300 flex items-center justify-center text-indigo-600 font-bold text-xs shrink-0 z-10 shadow-sm">
                     {idx + 1}
@@ -375,7 +453,8 @@ const StepCard = ({ step, idx, total, whatsappTemplates, onUpdate, onUpdateActio
             </div>
 
             <div className="ml-12 bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition">
-                {/* Action type tabs */}
+
+                {/* Action type tabs + controls */}
                 <div className="flex items-center justify-between mb-3 gap-2">
                     <div className="inline-flex bg-slate-100 p-1 rounded-lg">
                         <button
@@ -399,57 +478,75 @@ const StepCard = ({ step, idx, total, whatsappTemplates, onUpdate, onUpdateActio
                     </div>
 
                     <div className="flex items-center gap-1">
-                        <button
-                            type="button"
-                            onClick={onMoveUp}
-                            disabled={idx === 0}
-                            title="Move up"
-                            className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition"
-                        >
+                        <button type="button" onClick={onMoveUp} disabled={idx === 0} title="Move up"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition">
                             <i className="fa-solid fa-arrow-up text-xs"></i>
                         </button>
-                        <button
-                            type="button"
-                            onClick={onMoveDown}
-                            disabled={idx === total - 1}
-                            title="Move down"
-                            className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition"
-                        >
+                        <button type="button" onClick={onMoveDown} disabled={idx === total - 1} title="Move down"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition">
                             <i className="fa-solid fa-arrow-down text-xs"></i>
                         </button>
-                        <button
-                            type="button"
-                            onClick={onRemove}
-                            disabled={total === 1}
-                            title="Remove step"
-                            className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-transparent transition"
-                        >
+                        <button type="button" onClick={onRemove} disabled={total === 1} title="Remove step"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-transparent transition">
                             <i className="fa-solid fa-trash-can text-xs"></i>
                         </button>
                     </div>
                 </div>
 
-                {/* Delay input */}
-                <div className="flex items-center gap-2 mb-3">
-                    <label className="text-xs font-semibold text-slate-500 whitespace-nowrap">
+                {/* ── Delay: Days + Hours inputs ─────────────────────────────── */}
+                <div className="mb-3">
+                    <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+                        <i className="fa-regular fa-clock mr-1 text-indigo-400"></i>
                         {idx === 0 ? 'Wait after enrollment:' : 'Wait after previous step:'}
                     </label>
-                    <input
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={step.delayHours}
-                        onChange={(e) => onUpdate({ delayHours: e.target.value })}
-                        className="w-20 px-2 py-1 border border-slate-200 rounded-md text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-                    />
-                    <span className="text-xs text-slate-500">hours</span>
-                    {step.delayHours >= 24 && (
-                        <span className="text-[11px] text-slate-400">= {(step.delayHours / 24).toFixed(1)} days</span>
-                    )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                        {/* Days */}
+                        <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-indigo-500/30 focus-within:border-indigo-400 transition">
+                            <input
+                                type="number"
+                                min="0"
+                                max="365"
+                                value={days}
+                                onChange={handleDaysChange}
+                                className="w-14 text-sm font-semibold text-slate-700 text-center bg-transparent focus:outline-none"
+                            />
+                            <span className="text-xs font-medium text-slate-400">days</span>
+                        </div>
+
+                        <span className="text-slate-300 font-bold text-sm">+</span>
+
+                        {/* Hours */}
+                        <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-indigo-500/30 focus-within:border-indigo-400 transition">
+                            <input
+                                type="number"
+                                min="0"
+                                max="23"
+                                value={hours}
+                                onChange={handleHoursChange}
+                                className="w-14 text-sm font-semibold text-slate-700 text-center bg-transparent focus:outline-none"
+                            />
+                            <span className="text-xs font-medium text-slate-400">hours</span>
+                        </div>
+
+                        {/* Total pill */}
+                        {(days > 0 || hours > 0) && (
+                            <span className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-600 text-[11px] font-semibold px-2.5 py-1 rounded-full border border-indigo-100">
+                                <i className="fa-solid fa-hourglass-half text-[10px]"></i>
+                                {step.delayHours}h total
+                            </span>
+                        )}
+
+                        {days === 0 && hours === 0 && (
+                            <span className="text-[11px] text-emerald-600 font-semibold bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full">
+                                ⚡ Sends immediately
+                            </span>
+                        )}
+                    </div>
                 </div>
 
-                {/* Action body */}
+                {/* ── Action body ────────────────────────────────────────────── */}
                 {isWhatsApp ? (
+                    /* WhatsApp — unchanged template dropdown */
                     <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1.5">WhatsApp Template</label>
                         {whatsappTemplates.length === 0 ? (
@@ -471,30 +568,95 @@ const StepCard = ({ step, idx, total, whatsappTemplates, onUpdate, onUpdateActio
                         )}
                     </div>
                 ) : (
-                    <div className="space-y-2">
-                        <div>
-                            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Subject</label>
-                            <input
-                                type="text"
-                                value={step.action.subject || ''}
-                                onChange={(e) => onUpdateAction({ subject: e.target.value })}
-                                placeholder="e.g. Quick follow-up, {{leadName}}"
-                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-                            />
+                    /* Email — template picker OR custom compose */
+                    <div className="space-y-3">
+
+                        {/* Toggle: use template vs write custom */}
+                        <div className="flex items-center gap-2">
+                            <div className="inline-flex bg-slate-100 p-0.5 rounded-lg">
+                                <button
+                                    type="button"
+                                    onClick={() => onUpdateAction({ useEmailTemplate: true })}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${
+                                        step.action.useEmailTemplate
+                                            ? 'bg-white text-blue-600 shadow-sm'
+                                            : 'text-slate-500 hover:text-slate-700'
+                                    }`}
+                                >
+                                    <i className="fa-solid fa-layer-group text-[10px]"></i> Use Template
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => onUpdateAction({ useEmailTemplate: false, emailTemplateId: '' })}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${
+                                        !step.action.useEmailTemplate
+                                            ? 'bg-white text-blue-600 shadow-sm'
+                                            : 'text-slate-500 hover:text-slate-700'
+                                    }`}
+                                >
+                                    <i className="fa-solid fa-pen-to-square text-[10px]"></i> Custom
+                                </button>
+                            </div>
                         </div>
-                        <div>
-                            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Body</label>
-                            <textarea
-                                rows="4"
-                                value={step.action.body || ''}
-                                onChange={(e) => onUpdateAction({ body: e.target.value })}
-                                placeholder="Hi {{leadName}},&#10;&#10;Just checking in…"
-                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 resize-y"
-                            />
-                            <p className="text-[11px] text-slate-400 mt-1">
-                                Variables: <code className="bg-slate-100 px-1 rounded">{'{{leadName}}'}</code> · <code className="bg-slate-100 px-1 rounded">{'{{leadEmail}}'}</code> · <code className="bg-slate-100 px-1 rounded">{'{{companyName}}'}</code>
-                            </p>
-                        </div>
+
+                        {step.action.useEmailTemplate ? (
+                            /* Template picker */
+                            emailTemplates.length === 0 ? (
+                                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center gap-2">
+                                    <i className="fa-solid fa-triangle-exclamation"></i>
+                                    No email templates found. Create one in Email → Templates first.
+                                </div>
+                            ) : (
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">Email Template</label>
+                                    <select
+                                        value={step.action.emailTemplateId || ''}
+                                        onChange={handleEmailTemplateSelect}
+                                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                                    >
+                                        <option value="">— Select email template —</option>
+                                        {emailTemplates.map(t => (
+                                            <option key={t._id || t.id} value={t._id || t.id}>
+                                                {t.name} {t.subject ? `· "${t.subject.slice(0, 40)}${t.subject.length > 40 ? '…' : ''}"` : ''}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    {/* Preview of selected template */}
+                                    {step.action.emailTemplateId && step.action.subject && (
+                                        <div className="mt-2 bg-blue-50/70 border border-blue-100 rounded-lg px-3 py-2 text-xs text-blue-800">
+                                            <span className="font-semibold">Subject:</span> {step.action.subject}
+                                        </div>
+                                    )}
+                                </div>
+                            )
+                        ) : (
+                            /* Custom compose */
+                            <>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">Subject</label>
+                                    <input
+                                        type="text"
+                                        value={step.action.subject || ''}
+                                        onChange={(e) => onUpdateAction({ subject: e.target.value })}
+                                        placeholder="e.g. Quick follow-up, {{leadName}}"
+                                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">Body</label>
+                                    <textarea
+                                        rows="4"
+                                        value={step.action.body || ''}
+                                        onChange={(e) => onUpdateAction({ body: e.target.value })}
+                                        placeholder={`Hi {{leadName}},\n\nJust checking in…`}
+                                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 resize-y"
+                                    />
+                                    <p className="text-[11px] text-slate-400 mt-1">
+                                        Variables: <code className="bg-slate-100 px-1 rounded">{'{{leadName}}'}</code> · <code className="bg-slate-100 px-1 rounded">{'{{leadEmail}}'}</code> · <code className="bg-slate-100 px-1 rounded">{'{{companyName}}'}</code>
+                                    </p>
+                                </div>
+                            </>
+                        )}
                     </div>
                 )}
             </div>

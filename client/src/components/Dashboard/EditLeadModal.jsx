@@ -2,44 +2,45 @@ import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 
 const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
-    const [formData, setFormData] = useState({ name: '', phone: '', email: '' });
-    const [customData, setCustomData] = useState({});
+    const [formData, setFormData] = useState({ name: '', phone: '', email: '', dealValue: '', nextFollowUpDate: '' });
+    const [customData, setCustomData]   = useState({});
     const [selectedTags, setSelectedTags] = useState([]);
     const [customFields, setCustomFields] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState(null);
+    const [loading, setLoading]  = useState(false);
+    const [error, setError]      = useState(null);
 
-    // Template scheduling state
-    const [sendTemplate, setSendTemplate] = useState(false);
-    const [templateType, setTemplateType] = useState('whatsapp');
+    // Follow-up template scheduling
+    const [sendTemplate, setSendTemplate]       = useState(false);
+    const [templateType, setTemplateType]       = useState('whatsapp');
     const [selectedTemplate, setSelectedTemplate] = useState('');
-    const [templates, setTemplates] = useState([]);
+    const [templates, setTemplates]             = useState([]);
     const [loadingTemplates, setLoadingTemplates] = useState(false);
 
+    // ── Populate form when modal opens ──────────────────────────────────────
     useEffect(() => {
         if (isOpen && lead) {
             setFormData({
-                name: lead.name || '',
-                phone: lead.phone || '',
-                email: lead.email || '',
-                dealValue: lead.dealValue || '',
-                nextFollowUpDate: lead.nextFollowUpDate ? new Date(lead.nextFollowUpDate).toISOString().split('T')[0] : ''
+                name:             lead.name             || '',
+                phone:            lead.phone            || '',
+                email:            lead.email            || '',
+                dealValue:        lead.dealValue        || '',
+                nextFollowUpDate: lead.nextFollowUpDate
+                    ? new Date(lead.nextFollowUpDate).toISOString().split('T')[0]
+                    : ''
             });
             setSelectedTags(lead.tags || []);
             setSendTemplate(false);
             setTemplateType('whatsapp');
             setSelectedTemplate('');
             setTemplates([]);
-
-            // Populate the custom fields layout and prefill with existing lead data
+            setError(null);
             fetchCustomFields(lead.customData || {});
         }
     }, [isOpen, lead]);
 
-    // Fetch templates when user enables scheduling or switches type
+    // ── Fetch templates when follow-up scheduling is enabled ────────────────
     useEffect(() => {
         if (!sendTemplate || !formData.nextFollowUpDate) return;
-
         const fetchTemplates = async () => {
             setLoadingTemplates(true);
             setSelectedTemplate('');
@@ -53,13 +54,9 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
                     const list = Array.isArray(res.data) ? res.data : (res.data?.templates || []);
                     setTemplates(list);
                 }
-            } catch {
-                setTemplates([]);
-            } finally {
-                setLoadingTemplates(false);
-            }
+            } catch { setTemplates([]); }
+            finally  { setLoadingTemplates(false); }
         };
-
         fetchTemplates();
     }, [sendTemplate, templateType]);
 
@@ -67,32 +64,19 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
         try {
             const res = await api.get('/custom-fields');
             setCustomFields(res.data || []);
-            
-            // Map the initial customData combining definitions and existing lead data
-            const initialCustomData = {};
-            (res.data || []).forEach(field => {
-                initialCustomData[field.key] = existingData[field.key] || '';
-            });
-            setCustomData(initialCustomData);
-        } catch (err) {
-            console.error('Failed to fetch custom fields:', err);
-        }
+            const init = {};
+            (res.data || []).forEach(f => { init[f.key] = existingData[f.key] || ''; });
+            setCustomData(init);
+        } catch (err) { console.error('Failed to fetch custom fields:', err); }
     };
 
-    const handleChange = (e) => {
-        setFormData({ ...formData, [e.target.name]: e.target.value });
-    };
-
-    const handleCustomFieldChange = (key, value) => {
-        setCustomData(prev => ({ ...prev, [key]: value }));
-    };
+    const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
+    const handleCustomFieldChange = (key, value) => setCustomData(prev => ({ ...prev, [key]: value }));
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
         setError(null);
-
-        // Required fields validation
         for (const field of customFields) {
             if (field.required && !customData[field.key]) {
                 setError(`${field.label} is required`);
@@ -100,7 +84,6 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
                 return;
             }
         }
-
         try {
             const payload = {
                 ...formData,
@@ -110,7 +93,6 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
                 followUpTemplateName: (sendTemplate && formData.nextFollowUpDate && selectedTemplate) ? selectedTemplate : null,
             };
             const res = await api.put(`/leads/${lead._id}`, payload);
-            // Pass back the merged lead (server response has latest data)
             const updatedLead = res.data?.lead ?? { ...lead, ...payload };
             onSuccess(updatedLead);
             onClose();
@@ -120,281 +102,227 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
             } else {
                 setError(err.response?.data?.message || 'Failed to update lead');
             }
-        } finally {
-            setLoading(false);
-        }
+        } finally { setLoading(false); }
     };
 
-    const renderCustomField = (field) => {
-        const baseInputClass = "w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none";
+    // ── Shared input style ───────────────────────────────────────────────────
+    const INPUT = "w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition";
 
+    const renderCustomField = (field) => {
         switch (field.type) {
             case 'dropdown':
                 return (
-                    <select
-                        value={customData[field.key] || ''}
-                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
-                        className={baseInputClass}
-                        required={field.required}
-                    >
+                    <select value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} required={field.required}>
                         <option value="">Select {field.label}</option>
-                        {(field.options || []).map((opt, idx) => (
-                            <option key={idx} value={opt}>{opt}</option>
-                        ))}
+                        {(field.options || []).map((opt, i) => <option key={i} value={opt}>{opt}</option>)}
                     </select>
                 );
-            case 'date':
-                return (
-                    <input
-                        type="date"
-                        value={customData[field.key] || ''}
-                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
-                        className={baseInputClass}
-                        required={field.required}
-                    />
-                );
-            case 'number':
-                return (
-                    <input
-                        type="number"
-                        value={customData[field.key] || ''}
-                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
-                        className={baseInputClass}
-                        placeholder={`Enter ${field.label}`}
-                        required={field.required}
-                    />
-                );
-            case 'email':
-                return (
-                    <input
-                        type="email"
-                        value={customData[field.key] || ''}
-                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
-                        className={baseInputClass}
-                        placeholder={`Enter ${field.label}`}
-                        required={field.required}
-                    />
-                );
-            case 'phone':
-                return (
-                    <input
-                        type="tel"
-                        value={customData[field.key] || ''}
-                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
-                        className={baseInputClass}
-                        placeholder={`Enter ${field.label}`}
-                        required={field.required}
-                    />
-                );
-            default: // text
-                return (
-                    <input
-                        type="text"
-                        value={customData[field.key] || ''}
-                        onChange={(e) => handleCustomFieldChange(field.key, e.target.value)}
-                        className={baseInputClass}
-                        placeholder={`Enter ${field.label}`}
-                        required={field.required}
-                    />
-                );
+            case 'date':    return <input type="date"   value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} required={field.required} />;
+            case 'number':  return <input type="number" value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
+            case 'email':   return <input type="email"  value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
+            case 'phone':   return <input type="tel"    value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
+            default:        return <input type="text"   value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
         }
     };
+
+    const SectionDivider = ({ label }) => (
+        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+            <span className="w-4 h-px bg-slate-300 inline-block"></span>
+            {label}
+            <span className="flex-1 h-px bg-slate-100 inline-block"></span>
+        </p>
+    );
 
     if (!isOpen || !lead) return null;
 
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 animate-fade-in-up">
-            <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
-                <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-bold text-gray-800">Edit Lead</h3>
-                    <button onClick={onClose} className="text-gray-400 hover:text-red-500">
-                        <i className="fa-solid fa-times text-xl"></i>
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden">
+
+                {/* ── Header ── */}
+                <div className="bg-gradient-to-r from-indigo-600 via-violet-600 to-purple-600 px-6 py-5 flex items-center justify-between shrink-0">
+                    <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-xl bg-white/15 backdrop-blur flex items-center justify-center">
+                            <i className="fa-solid fa-pen-to-square text-white text-lg"></i>
+                        </div>
+                        <div>
+                            <h2 className="text-lg font-bold text-white">Edit Lead</h2>
+                            <p className="text-indigo-100 text-xs truncate max-w-[280px]">
+                                Editing: <span className="font-semibold">{lead.name}</span>
+                            </p>
+                        </div>
+                    </div>
+                    <button onClick={onClose} className="w-9 h-9 rounded-lg bg-white/15 hover:bg-white/25 text-white transition flex items-center justify-center">
+                        <i className="fa-solid fa-xmark text-base"></i>
                     </button>
                 </div>
 
-                {error && <div className="bg-red-100 text-red-700 p-3 rounded-lg mb-4 text-sm">{error}</div>}
+                {/* ── Scrollable Body ── */}
+                <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
 
-                <form onSubmit={handleSubmit} className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                        <input
-                            type="text"
-                            name="name"
-                            value={formData.name}
-                            onChange={handleChange}
-                            required
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
-                        <input
-                            type="text"
-                            name="phone"
-                            value={formData.phone}
-                            onChange={handleChange}
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                        <input
-                            type="email"
-                            name="email"
-                            value={formData.email}
-                            onChange={handleChange}
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-                            <i className="fa-solid fa-indian-rupee-sign text-green-500"></i>
-                            Deal Value (Optional)
-                        </label>
-                        <input
-                            type="number"
-                            name="dealValue"
-                            min="0"
-                            value={formData.dealValue}
-                            onChange={handleChange}
-                            placeholder="Enter deal value"
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Next Follow-up Date</label>
-                        <input
-                            type="date"
-                            name="nextFollowUpDate"
-                            value={formData.nextFollowUpDate}
-                            onChange={handleChange}
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                        />
-
-                        {/* Auto-send template on follow-up day */}
-                        {formData.nextFollowUpDate && (
-                            <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg p-3">
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={sendTemplate}
-                                        onChange={(e) => setSendTemplate(e.target.checked)}
-                                        className="w-4 h-4 text-blue-600 rounded"
-                                    />
-                                    <span className="text-sm font-medium text-blue-800">
-                                        <i className="fa-solid fa-paper-plane mr-1"></i>
-                                        Auto-send a message on this date
-                                    </span>
-                                </label>
-
-                                {sendTemplate && (
-                                    <div className="mt-3 space-y-2">
-                                        <div className="flex gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => setTemplateType('whatsapp')}
-                                                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-medium border transition ${templateType === 'whatsapp' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300 hover:border-green-400'}`}
-                                            >
-                                                <i className="fa-brands fa-whatsapp mr-1"></i> WhatsApp
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => setTemplateType('email')}
-                                                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-medium border transition ${templateType === 'email' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}
-                                            >
-                                                <i className="fa-solid fa-envelope mr-1"></i> Email
-                                            </button>
-                                        </div>
-
-                                        {loadingTemplates ? (
-                                            <p className="text-xs text-gray-500 flex items-center gap-1">
-                                                <i className="fa-solid fa-spinner fa-spin"></i> Loading templates...
-                                            </p>
-                                        ) : (
-                                            <select
-                                                value={selectedTemplate}
-                                                onChange={(e) => setSelectedTemplate(e.target.value)}
-                                                className="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                            >
-                                                <option value="">— Select template —</option>
-                                                {templates.map(t => (
-                                                    <option key={t._id || t.name} value={templateType === 'whatsapp' ? t.name : t._id}>
-                                                        {t.name}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        )}
-                                        {templates.length === 0 && !loadingTemplates && (
-                                            <p className="text-xs text-amber-600">
-                                                No {templateType === 'whatsapp' ? 'approved WhatsApp' : 'email'} templates found.
-                                            </p>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Tags */}
-                    {userTags && userTags.length > 0 && (
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Tags</label>
-                            <div className="flex flex-wrap gap-2 p-3 border border-gray-300 rounded-lg bg-gray-50 max-h-32 overflow-y-auto">
-                                {userTags.map(tag => (
-                                    <label key={tag._id} className="flex items-center gap-2 cursor-pointer text-sm">
-                                        <input
-                                            type="checkbox"
-                                            checked={selectedTags.includes(tag.name)}
-                                            onChange={(e) => {
-                                                if (e.target.checked) setSelectedTags([...selectedTags, tag.name]);
-                                                else setSelectedTags(selectedTags.filter(t => t !== tag.name));
-                                            }}
-                                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                        />
-                                        <span className="px-2 py-0.5 rounded border text-xs" style={{ backgroundColor: `${tag.color}20`, color: tag.color, borderColor: `${tag.color}40` }}>
-                                            {tag.name}
-                                        </span>
-                                    </label>
-                                ))}
-                            </div>
+                    {/* Error banner */}
+                    {error && (
+                        <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-xl text-sm">
+                            <i className="fa-solid fa-circle-exclamation shrink-0"></i>
+                            {error}
                         </div>
                     )}
 
-                    {/* Custom Fields */}
-                    {customFields.length > 0 && (
-                        <>
-                            <div className="border-t border-gray-200 pt-3 mt-3">
-                                <p className="text-xs text-gray-400 uppercase font-bold mb-2">Additional Information</p>
-                            </div>
-                            {customFields.map(field => (
-                                <div key={field.key}>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        {field.label}
-                                        {field.required && <span className="text-red-500"> *</span>}
-                                    </label>
-                                    {renderCustomField(field)}
-                                </div>
-                            ))}
-                        </>
-                    )}
+                    <form onSubmit={handleSubmit} id="edit-lead-form" className="space-y-5">
 
-                    <div className="flex justify-end gap-3 pt-4">
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition shadow-md disabled:opacity-70"
-                        >
-                            {loading ? 'Saving...' : 'Save Changes'}
-                        </button>
-                    </div>
-                </form>
+                        {/* ── Contact Info ── */}
+                        <div className="space-y-3">
+                            <SectionDivider label="Contact Information" />
+
+                            {/* Name + Phone */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+                                        Full Name <span className="text-red-500">*</span>
+                                    </label>
+                                    <input type="text" name="name" required value={formData.name} onChange={handleChange} className={INPUT} placeholder="e.g. Rahul Sharma" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1.5">Phone</label>
+                                    <input type="text" name="phone" value={formData.phone} onChange={handleChange} className={INPUT} placeholder="+91 98765 43210" />
+                                </div>
+                            </div>
+
+                            {/* Email + Deal Value */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1.5">Email</label>
+                                    <input type="email" name="email" value={formData.email} onChange={handleChange} className={INPUT} placeholder="email@example.com" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1.5 flex items-center gap-1">
+                                        <i className="fa-solid fa-indian-rupee-sign text-emerald-500 text-[10px]"></i> Deal Value
+                                    </label>
+                                    <input type="number" name="dealValue" min="0" value={formData.dealValue} onChange={handleChange} className={INPUT} placeholder="e.g. 50000" />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* ── Follow-up ── */}
+                        <div className="space-y-3">
+                            <SectionDivider label="Follow-up" />
+
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+                                    <i className="fa-regular fa-calendar-check mr-1 text-indigo-400"></i>
+                                    Next Follow-up Date
+                                </label>
+                                <input type="date" name="nextFollowUpDate" value={formData.nextFollowUpDate} onChange={handleChange} className={INPUT} />
+                            </div>
+
+                            {/* Auto-send template on follow-up day */}
+                            {formData.nextFollowUpDate && (
+                                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4">
+                                    <label className="flex items-center gap-2.5 cursor-pointer">
+                                        <input type="checkbox" checked={sendTemplate} onChange={e => setSendTemplate(e.target.checked)}
+                                            className="w-4 h-4 text-indigo-600 rounded border-gray-300" />
+                                        <span className="text-sm font-medium text-indigo-800">
+                                            <i className="fa-solid fa-paper-plane mr-1 text-indigo-500"></i>
+                                            Auto-send a message on this date
+                                        </span>
+                                    </label>
+
+                                    {sendTemplate && (
+                                        <div className="mt-3 space-y-3">
+                                            {/* Channel toggle */}
+                                            <div className="inline-flex bg-white border border-indigo-200 p-1 rounded-lg gap-1">
+                                                <button type="button" onClick={() => setTemplateType('whatsapp')}
+                                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${templateType === 'whatsapp' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                                    <i className="fa-brands fa-whatsapp"></i> WhatsApp
+                                                </button>
+                                                <button type="button" onClick={() => setTemplateType('email')}
+                                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${templateType === 'email' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                                    <i className="fa-solid fa-envelope"></i> Email
+                                                </button>
+                                            </div>
+
+                                            {loadingTemplates ? (
+                                                <p className="text-xs text-slate-500 flex items-center gap-1.5">
+                                                    <i className="fa-solid fa-spinner fa-spin text-indigo-400"></i> Loading templates…
+                                                </p>
+                                            ) : templates.length === 0 ? (
+                                                <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
+                                                    No {templateType === 'whatsapp' ? 'approved WhatsApp' : 'email'} templates found.
+                                                </p>
+                                            ) : (
+                                                <select value={selectedTemplate} onChange={e => setSelectedTemplate(e.target.value)} className={INPUT}>
+                                                    <option value="">— Select template —</option>
+                                                    {templates.map(t => (
+                                                        <option key={t._id || t.name} value={templateType === 'whatsapp' ? t.name : t._id}>{t.name}</option>
+                                                    ))}
+                                                </select>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* ── Tags ── */}
+                        {userTags && userTags.length > 0 && (
+                            <div className="space-y-3">
+                                <SectionDivider label="Tags" />
+                                <div className="flex flex-wrap gap-2 p-3 border border-slate-200 rounded-xl bg-slate-50/50 max-h-28 overflow-y-auto">
+                                    {userTags.map(tag => (
+                                        <label key={tag._id} className="flex items-center gap-1.5 cursor-pointer">
+                                            <input type="checkbox"
+                                                checked={selectedTags.includes(tag.name)}
+                                                onChange={e => {
+                                                    if (e.target.checked) setSelectedTags([...selectedTags, tag.name]);
+                                                    else setSelectedTags(selectedTags.filter(t => t !== tag.name));
+                                                }}
+                                                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
+                                            />
+                                            <span className="px-2 py-0.5 rounded-full border text-xs font-medium"
+                                                style={{ backgroundColor: `${tag.color}20`, color: tag.color, borderColor: `${tag.color}40` }}>
+                                                {tag.name}
+                                            </span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ── Custom Fields ── */}
+                        {customFields.length > 0 && (
+                            <div className="space-y-3">
+                                <SectionDivider label="Additional Information" />
+                                <div className="grid grid-cols-2 gap-3">
+                                    {customFields.map(field => (
+                                        <div key={field.key} className={field.type === 'textarea' ? 'col-span-2' : ''}>
+                                            <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+                                                {field.label}
+                                                {field.required && <span className="text-red-500 ml-1">*</span>}
+                                            </label>
+                                            {renderCustomField(field)}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                    </form>
+                </div>
+
+                {/* ── Sticky Footer ── */}
+                <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2 shrink-0">
+                    <button type="button" onClick={onClose} disabled={loading}
+                        className="px-5 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-200/70 transition disabled:opacity-50">
+                        Cancel
+                    </button>
+                    <button type="submit" form="edit-lead-form" disabled={loading}
+                        className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 shadow-md hover:shadow-lg transition disabled:opacity-50">
+                        {loading
+                            ? <><i className="fa-solid fa-spinner fa-spin"></i> Saving…</>
+                            : <><i className="fa-solid fa-floppy-disk"></i> Save Changes</>
+                        }
+                    </button>
+                </div>
             </div>
         </div>
     );

@@ -36,7 +36,8 @@ const ScoreBadge = ({ score = 0 }) => {
 
 const PAGE_SIZE = 50;
 
-const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onBulkTag, onBulkRemoveTag, onBulkAssign, onBulkExport, onRefresh }) => {
+const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdit, onDelete, onStatusChange, onNoteClick, onEnrollClick, onLeadClick, onBulkDelete, onBulkStatusUpdate, onBulkTag, onBulkRemoveTag, onBulkAssign, onBulkExport, onRefresh }) => {
+
     const { user } = useAuth();
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
@@ -514,6 +515,15 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                                             >
                                                 <i className="fa-regular fa-note-sticky text-xs"></i>
                                             </button>
+                                            {onEnrollClick && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); onEnrollClick(lead); }}
+                                                    className="w-8 h-8 rounded-lg bg-violet-50 hover:bg-violet-100 text-violet-600 transition flex items-center justify-center border border-violet-200"
+                                                    title="Enroll in Sequence"
+                                                >
+                                                    <i className="fa-solid fa-paper-plane text-xs"></i>
+                                                </button>
+                                            )}
                                             {(user?.role === 'manager' || user?.role === 'superadmin' || user?.permissions?.editLeads !== false) && (
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); onEdit(lead); }}

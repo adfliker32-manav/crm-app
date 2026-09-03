@@ -104,7 +104,7 @@ const getEnrollments = async (req, res) => {
     try {
         const { leadId, sequenceId, status } = req.query;
         const query = { tenantId: req.tenantId };
-        if (leadId && mongoose.Types.ObjectId.isValid(leadId)) query.leadId = leadId;
+        if (leadId   && mongoose.Types.ObjectId.isValid(leadId))   query.leadId   = leadId;
         if (sequenceId && mongoose.Types.ObjectId.isValid(sequenceId)) query.sequenceId = sequenceId;
         if (status) query.status = status;
 
@@ -120,4 +120,58 @@ const getEnrollments = async (req, res) => {
     }
 };
 
-module.exports = { getSequences, createSequence, updateSequence, deleteSequence, getEnrollments };
+const manualEnroll = async (req, res) => {
+    try {
+        const { id } = req.params;          // sequence id
+        const { leadId } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(id))     return res.status(400).json({ message: 'Invalid sequence ID' });
+        if (!leadId || !mongoose.Types.ObjectId.isValid(leadId)) return res.status(400).json({ message: 'Valid leadId is required' });
+
+        // Sequence must exist and belong to this tenant
+        const seq = await Sequence.findOne({ _id: id, tenantId: req.tenantId }).lean();
+        if (!seq) return res.status(404).json({ message: 'Sequence not found' });
+        if (!seq.isActive) return res.status(400).json({ message: 'Sequence is inactive — activate it first' });
+
+        // Check lead belongs to tenant
+        const Lead = require('../models/Lead');
+        const lead = await Lead.findOne({ _id: leadId, userId: req.tenantId }).lean();
+        if (!lead) return res.status(404).json({ message: 'Lead not found' });
+
+        // Prevent duplicate active enrollment
+        const existing = await SequenceEnrollment.findOne({
+            sequenceId: id,
+            leadId,
+            status: { $in: ['active', 'paused'] }
+        }).lean();
+        if (existing) return res.status(409).json({ message: 'Lead is already enrolled in this sequence' });
+
+        // Use the sequence engine to enroll
+        const { enrollLeadInSequences } = require('../services/sequenceService');
+        // enrollLeadInSequences filters by trigger — for manual we call with the lead object directly
+        // but we need to force-enroll regardless of trigger, so we create the enrollment directly
+        const enrollment = await SequenceEnrollment.create({
+            tenantId: req.tenantId,
+            sequenceId: id,
+            leadId,
+            status: 'active',
+            currentStep: 0,
+            enrolledAt: new Date()
+        });
+
+        // Schedule the first step immediately
+        const { scheduleStepJob } = require('../services/sequenceService');
+        await scheduleStepJob({ enrollmentId: enrollment._id, sequenceId: id, stepIndex: 0, delayHours: seq.steps[0]?.delayHours || 0 });
+
+        // Increment enrollmentCount on the sequence
+        await Sequence.updateOne({ _id: id }, { $inc: { enrollmentCount: 1 } });
+
+        res.status(201).json({ success: true, enrollmentId: enrollment._id });
+    } catch (err) {
+        console.error('[manualEnroll]', err);
+        res.status(500).json({ message: err.message || 'Server error' });
+    }
+};
+
+module.exports = { getSequences, createSequence, updateSequence, deleteSequence, getEnrollments, manualEnroll };
+
