@@ -10,6 +10,8 @@ const PartnerApiKeyTab = ({ partner, onRefresh }) => {
     const [usage, setUsage] = useState([]);
     const [loadingUsage, setLoadingUsage] = useState(true);
     const [copied, setCopied] = useState(false);
+    const [newlyGeneratedKey, setNewlyGeneratedKey] = useState(null); // holds full key after regenerate
+    const [showKey, setShowKey] = useState(false);
 
     useEffect(() => { fetchUsage(); }, [partner._id]);
 
@@ -31,15 +33,17 @@ const PartnerApiKeyTab = ({ partner, onRefresh }) => {
 
         try {
             const res = await api.post(`/superadmin/partner-apps/${partner._id}/regenerate-key`);
-            // Show the new key in an alert since it's only shown once
-            showSuccess('New key generated — share it with the partner');
-            navigator.clipboard.writeText(res.data.apiKey);
+            // Store the full new key locally — onRefresh() returns masked version
+            setNewlyGeneratedKey(res.data.apiKey);
+            setShowKey(true); // auto-reveal so user can copy it
+            showSuccess('✅ New API key generated — copy it now, it will be hidden after!');
             onRefresh();
         } catch { showError('Failed to regenerate key'); }
     };
 
     const handleCopyKey = () => {
-        navigator.clipboard.writeText(partner.apiKey || '');
+        // Copy the newly generated full key if available, else the masked partner.apiKey
+        navigator.clipboard.writeText(newlyGeneratedKey || partner.apiKey || '');
         setCopied(true);
         setTimeout(() => setCopied(false), 3000);
     };
@@ -64,17 +68,39 @@ const PartnerApiKeyTab = ({ partner, onRefresh }) => {
             {/* Current Key */}
             <section>
                 <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">API Key</h3>
-                <div className="bg-slate-50 rounded-xl p-4">
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="font-mono text-sm text-slate-600 break-all">
-                            {partner.apiKey || 'Key not available (masked)'}
+
+                {/* Banner shown only right after regeneration */}
+                {newlyGeneratedKey && (
+                    <div className="mb-3 flex items-start gap-2 bg-amber-50 border border-amber-300 rounded-xl p-3 text-xs text-amber-800">
+                        <i className="fa-solid fa-triangle-exclamation mt-0.5 flex-shrink-0" />
+                        <span><strong>Copy this key now!</strong> It will be hidden once you leave this page. The old key is already invalid.</span>
+                    </div>
+                )}
+
+                <div className={`rounded-xl p-4 ${newlyGeneratedKey ? 'bg-amber-50 border border-amber-200' : 'bg-slate-50'}`}>
+                    <div className="flex items-center justify-between mb-3 gap-2">
+                        <div className="font-mono text-sm break-all flex-1 text-slate-700">
+                            {newlyGeneratedKey
+                                ? (showKey ? newlyGeneratedKey : `${newlyGeneratedKey.slice(0, 12)}${'•'.repeat(20)}`)
+                                : (partner.apiKey || 'Key not available (masked)')
+                            }
                         </div>
-                        <button onClick={handleCopyKey}
-                            className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                                copied ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                            }`}>
-                            {copied ? <><i className="fa-solid fa-check mr-1" />Copied</> : <><i className="fa-solid fa-clipboard mr-1" />Copy</>}
-                        </button>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                            {/* Show/hide toggle — only useful when we have the full key */}
+                            {newlyGeneratedKey && (
+                                <button onClick={() => setShowKey(v => !v)}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-600 hover:bg-slate-300 transition">
+                                    <i className={`fa-solid ${showKey ? 'fa-eye-slash' : 'fa-eye'} mr-1`} />
+                                    {showKey ? 'Hide' : 'Reveal'}
+                                </button>
+                            )}
+                            <button onClick={handleCopyKey}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                                    copied ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                                }`}>
+                                {copied ? <><i className="fa-solid fa-check mr-1" />Copied</> : <><i className="fa-solid fa-clipboard mr-1" />Copy</>}
+                            </button>
+                        </div>
                     </div>
                     <div className="flex items-center gap-4 text-xs text-slate-400">
                         <span><i className="fa-solid fa-calendar mr-1" />Created {new Date(partner.createdAt).toLocaleDateString('en-IN')}</span>

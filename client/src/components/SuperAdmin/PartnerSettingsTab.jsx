@@ -78,6 +78,14 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
         } catch { showError('Failed to deactivate partner'); }
     };
 
+    const handleActivate = async () => {
+        try {
+            await api.put(`/superadmin/partner-apps/${partner._id}`, { isActive: true });
+            showSuccess('Partner activated — API access restored');
+            onRefresh();
+        } catch { showError('Failed to activate partner'); }
+    };
+
     return (
         <div className="space-y-8 max-w-2xl">
             {/* Basic Info */}
@@ -209,12 +217,30 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
             {/* Danger Zone */}
             <section className="border-t border-red-200 pt-6">
                 <h3 className="text-sm font-bold text-red-500 uppercase tracking-wider mb-3">Danger Zone</h3>
-                <button onClick={handleDeactivate}
-                    className="px-5 py-2.5 border-2 border-red-300 text-red-600 rounded-xl font-semibold hover:bg-red-50 transition text-sm">
-                    <i className="fa-solid fa-power-off mr-2" />
-                    Deactivate Partner
-                </button>
-                <p className="text-xs text-slate-400 mt-2">Stops all API access immediately. Embed iframes will stop working.</p>
+
+                {partner.isActive ? (
+                    <>
+                        <button onClick={handleDeactivate}
+                            className="px-5 py-2.5 border-2 border-red-300 text-red-600 rounded-xl font-semibold hover:bg-red-50 transition text-sm">
+                            <i className="fa-solid fa-power-off mr-2" />
+                            Deactivate Partner
+                        </button>
+                        <p className="text-xs text-slate-400 mt-2">Stops all API access immediately. Embed iframes will stop working.</p>
+                    </>
+                ) : (
+                    <>
+                        <div className="mb-3 flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-sm text-red-700 font-medium">
+                            <i className="fa-solid fa-circle-xmark" />
+                            This partner is currently <strong>deactivated</strong>. All API access is blocked.
+                        </div>
+                        <button onClick={handleActivate}
+                            className="px-5 py-2.5 border-2 border-emerald-400 text-emerald-700 rounded-xl font-semibold hover:bg-emerald-50 transition text-sm">
+                            <i className="fa-solid fa-circle-check mr-2" />
+                            Activate Partner
+                        </button>
+                        <p className="text-xs text-slate-400 mt-2">Restores full API access for this partner and their customers.</p>
+                    </>
+                )}
             </section>
         </div>
     );
