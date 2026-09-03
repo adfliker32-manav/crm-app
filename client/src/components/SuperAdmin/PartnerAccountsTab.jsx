@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars */
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
@@ -10,6 +10,18 @@ const PartnerAccountsTab = ({ partner, onRefresh }) => {
     const [search, setSearch] = useState('');
     const [filter, setFilter] = useState('all');
     const [menuOpen, setMenuOpen] = useState(null);
+    const menuRef = useRef(null);
+
+    // Close dropdown on outside click
+    useEffect(() => {
+        const handleOutside = (e) => {
+            if (menuRef.current && !menuRef.current.contains(e.target)) {
+                setMenuOpen(null);
+            }
+        };
+        document.addEventListener('mousedown', handleOutside);
+        return () => document.removeEventListener('mousedown', handleOutside);
+    }, []);
 
     const accounts = partner.accounts || [];
 
@@ -123,13 +135,13 @@ const PartnerAccountsTab = ({ partner, onRefresh }) => {
                                     {acc.status === 'Active' ? (
                                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-semibold">Active</span>
                                     ) : (
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-semibold">Frozen</span>
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-semibold">Frozen</span>
                                     )}
                                 </td>
                                 <td className="py-3 px-3 text-center text-xs text-slate-400">
                                     {new Date(acc.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
                                 </td>
-                                <td className="py-3 px-3 text-center relative">
+                                <td className="py-3 px-3 text-center relative" ref={menuOpen === acc.accountId ? menuRef : null}>
                                     <button
                                         onClick={(e) => { e.stopPropagation(); setMenuOpen(menuOpen === acc.accountId ? null : acc.accountId); }}
                                         className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"

@@ -102,8 +102,8 @@ const PartnerBillingTab = ({ partner, onRefresh }) => {
                                     {new Date(bill.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
                                 </td>
                                 <td className="py-3 px-3 text-center text-slate-700">{bill.activeAccounts}</td>
-                                <td className="py-3 px-3 text-center text-slate-700">₹{bill.rate}</td>
-                                <td className="py-3 px-3 text-center font-bold text-slate-900">₹{bill.amount.toLocaleString('en-IN')}</td>
+                                <td className="py-3 px-3 text-center text-slate-700">{partner.currency || '₹'}{bill.rate}</td>
+                                <td className="py-3 px-3 text-center font-bold text-slate-900">{partner.currency || '₹'}{bill.amount.toLocaleString('en-IN')}</td>
                                 <td className="py-3 px-3 text-center">
                                     {bill.status === 'paid' ? (
                                         <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-semibold">

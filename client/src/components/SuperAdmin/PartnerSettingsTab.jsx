@@ -16,6 +16,13 @@ const ALL_MODULES = [
     { key: 'reports', label: 'Reports' },
 ];
 
+const WEBHOOK_EVENTS = [
+    { key: 'message.received',      label: 'Message Received',        desc: 'When a WhatsApp message is received' },
+    { key: 'message.status_update', label: 'Message Status Update',   desc: 'Sent / delivered / read / failed' },
+    { key: 'account.created',       label: 'Account Created',         desc: 'When a sub-account is provisioned' },
+    { key: 'account.frozen',        label: 'Account Frozen/Unfrozen', desc: 'Account status changes' },
+];
+
 const PartnerSettingsTab = ({ partner, onRefresh }) => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
@@ -192,18 +199,49 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
             {/* Webhook */}
             <section>
                 <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">Webhook</h3>
-                <div>
-                    <label className="text-sm font-medium text-slate-700">Webhook URL</label>
-                    <input value={form.webhookUrl} onChange={e => handleChange('webhookUrl', e.target.value)}
-                        placeholder="https://partner-crm.com/webhooks/adfliker"
-                        className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                <div className="space-y-3">
+                    <div>
+                        <label className="text-sm font-medium text-slate-700">Webhook URL</label>
+                        <input value={form.webhookUrl} onChange={e => handleChange('webhookUrl', e.target.value)}
+                            placeholder="https://partner-crm.com/webhooks/adfliker"
+                            className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                    </div>
+
+                    {/* Webhook Events */}
+                    <div>
+                        <label className="text-sm font-medium text-slate-700 block mb-2">Subscribed Events</label>
+                        <div className="space-y-1">
+                            {WEBHOOK_EVENTS.map(ev => (
+                                <label key={ev.key} className="flex items-start gap-3 p-2.5 rounded-lg hover:bg-slate-50 cursor-pointer transition">
+                                    <input
+                                        type="checkbox"
+                                        checked={(form.webhookEvents || []).includes(ev.key)}
+                                        onChange={() => {
+                                            const current = form.webhookEvents || [];
+                                            handleChange('webhookEvents',
+                                                current.includes(ev.key)
+                                                    ? current.filter(e => e !== ev.key)
+                                                    : [...current, ev.key]
+                                            );
+                                        }}
+                                        className="w-4 h-4 text-cyan-600 rounded mt-0.5 flex-shrink-0"
+                                    />
+                                    <div>
+                                        <p className="text-sm text-slate-700 font-medium">{ev.label}</p>
+                                        <p className="text-xs text-slate-400">{ev.desc}</p>
+                                    </div>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+
+                    {partner.webhookSecret && (
+                        <p className="text-xs text-slate-400 mt-2">
+                            <i className="fa-solid fa-lock mr-1" />
+                            Signing Secret: {partner.webhookSecret.slice(0, 10)}{'•'.repeat(20)}
+                        </p>
+                    )}
                 </div>
-                {partner.webhookSecret && (
-                    <p className="text-xs text-slate-400 mt-2">
-                        <i className="fa-solid fa-lock mr-1" />
-                        Secret: {partner.webhookSecret.slice(0, 10)}{'•'.repeat(20)}
-                    </p>
-                )}
             </section>
 
             {/* Save */}
