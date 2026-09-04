@@ -26,7 +26,17 @@ const ADFLIKER_MODELS = [
     { id: 'gpt-4o', provider: 'openai', name: 'Adfliker Ultra', desc: 'Maximum capability, premium' },
 ];
 
-const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates }) => {
+// Lead properties the Update Field node is allowed to write, mirroring
+// ALLOWED_FIELD_PREFIXES in src/workflow-engine/nodes/crm/UpdateCustomFieldNode.js.
+// The server still enforces the real allowlist — this list only saves the user
+// from guessing key names.
+const BUILT_IN_LEAD_FIELDS = [
+    'name', 'phone', 'email', 'dealValue', 'source', 'notes', 'address', 'company',
+    'website', 'leadValue', 'budget', 'closingDate', 'referredBy', 'industry',
+    'jobTitle', 'department', 'timezone', 'language', 'priority'
+];
+
+const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates, customFields, nodeData }) => {
     const v = value ?? field.defaultValue ?? '';
 
     const inputStyle = {
@@ -80,6 +90,103 @@ const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates }) =
             </select>
         </div>
     );
+
+    // Picker of the workspace's custom fields + writable lead properties, with a
+    // free-text box so an advanced user can still type a key we don't list.
+    if (field.type === 'custom_field_select') {
+        const known = [
+            ...(customFields || []).map(cf => ({
+                value: `customData.${cf.key}`,
+                label: `${cf.label}${cf.type === 'dropdown' ? ' (dropdown)' : cf.type === 'multiselect' ? ' (multi-select)' : ''}`
+            })),
+            ...BUILT_IN_LEAD_FIELDS.map(f => ({ value: f, label: f }))
+        ];
+        const isKnown = known.some(k => k.value === v);
+        return (
+            <div>
+                <label style={labelStyle}>{field.label}{field.required && <span style={{ color: '#EF4444' }}> *</span>}</label>
+                <select
+                    style={{ ...inputStyle, cursor: 'pointer' }}
+                    value={isKnown ? v : '__custom__'}
+                    onChange={e => onChange(field.key, e.target.value === '__custom__' ? '' : e.target.value)}
+                >
+                    <option value="">-- Select Field --</option>
+                    {(customFields || []).length > 0 && (
+                        <optgroup label="Custom Fields">
+                            {known.filter(k => k.value.startsWith('customData.')).map(k => (
+                                <option key={k.value} value={k.value}>{k.label}</option>
+                            ))}
+                        </optgroup>
+                    )}
+                    <optgroup label="Lead Properties">
+                        {known.filter(k => !k.value.startsWith('customData.')).map(k => (
+                            <option key={k.value} value={k.value}>{k.label}</option>
+                        ))}
+                    </optgroup>
+                    <option value="__custom__">Other (type manually)…</option>
+                </select>
+                {(!isKnown) && (
+                    <input
+                        style={{ ...inputStyle, marginTop: 6 }}
+                        type="text"
+                        value={v}
+                        placeholder={field.placeholder || 'e.g. customData.product'}
+                        onChange={e => onChange(field.key, e.target.value)}
+                    />
+                )}
+                {field.description && <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>{field.description}</p>}
+            </div>
+        );
+    }
+
+    // Value box that becomes a dropdown when the field chosen above has options.
+    if (field.type === 'custom_field_value') {
+        const selectedKey = nodeData?.[field.dependsOn || 'fieldKey'] || '';
+        const def = selectedKey.startsWith('customData.')
+            ? (customFields || []).find(cf => cf.key === selectedKey.slice('customData.'.length))
+            : null;
+        const options = def && (def.type === 'dropdown' || def.type === 'multiselect') ? (def.options || []) : [];
+
+        if (options.length > 0) {
+            const isKnown = options.includes(v);
+            return (
+                <div>
+                    <label style={labelStyle}>{field.label}{field.required && <span style={{ color: '#EF4444' }}> *</span>}</label>
+                    <select
+                        style={{ ...inputStyle, cursor: 'pointer' }}
+                        value={isKnown ? v : '__custom__'}
+                        onChange={e => onChange(field.key, e.target.value === '__custom__' ? '' : e.target.value)}
+                    >
+                        <option value="">-- Select Value --</option>
+                        {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                        {/* Kept so a value can still be built from {{variables}}. */}
+                        <option value="__custom__">Other / use a variable…</option>
+                    </select>
+                    {!isKnown && (
+                        <div style={{ marginTop: 6 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 4 }}>
+                                <VariableSelector onInsert={val => onChange(field.key, v + val)} />
+                            </div>
+                            <input style={inputStyle} type="text" value={v} placeholder="e.g. {{lead.source}}" onChange={e => onChange(field.key, e.target.value)} />
+                        </div>
+                    )}
+                    <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>
+                        Options come from Settings → Custom Fields.
+                    </p>
+                </div>
+            );
+        }
+
+        return (
+            <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <label style={{ ...labelStyle, marginBottom: 0 }}>{field.label}{field.required && <span style={{ color: '#EF4444' }}> *</span>}</label>
+                    <VariableSelector onInsert={val => onChange(field.key, v + val)} />
+                </div>
+                <input style={inputStyle} type="text" value={v} placeholder={field.placeholder || ''} onChange={e => onChange(field.key, e.target.value)} />
+            </div>
+        );
+    }
 
     if (field.type === 'stage_select') return (
         <div>
@@ -314,19 +421,22 @@ export default function ConfigSidebar({
     const [stages, setStages] = useState([]);
     const [users, setUsers] = useState([]);
     const [waTemplates, setWaTemplates] = useState([]);
+    const [customFields, setCustomFields] = useState([]);
 
     useEffect(() => {
         const load = async () => {
             try {
-                const [s, u, w] = await Promise.all([
+                const [s, u, w, cf] = await Promise.all([
                     api.get('/stages').catch(() => ({ data: [] })),
                     api.get('/auth/my-team?includeManager=true').catch(() => ({ data: [] })),
-                    api.get('/whatsapp/templates').catch(() => ({ data: {} }))
+                    api.get('/whatsapp/templates').catch(() => ({ data: {} })),
+                    api.get('/custom-fields').catch(() => ({ data: [] }))
                 ]);
                 setStages(s.data || []);
                 setUsers(u.data || []);
                 const tmpl = w.data?.templates || w.data?.data || [];
                 setWaTemplates(tmpl.filter(t => t.status === 'APPROVED'));
+                setCustomFields(cf.data || []);
             } catch {}
         };
         load();
@@ -552,7 +662,8 @@ export default function ConfigSidebar({
                 <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
                     {schema.fields.map(field => (
                         <FieldRenderer key={field.key} field={field} value={nodeData[field.key]}
-                            onChange={handleChange} stages={stages} users={users} waTemplates={waTemplates} />
+                            onChange={handleChange} stages={stages} users={users} waTemplates={waTemplates}
+                            customFields={customFields} nodeData={nodeData} />
                     ))}
                 </div>
             </div>

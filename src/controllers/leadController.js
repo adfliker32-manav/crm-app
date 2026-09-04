@@ -21,6 +21,8 @@ const {
     parseBoundedInteger,
     runInBackground
 } = require('../utils/controllerHelpers');
+const { validateCustomData, coerceCustomData } = require('../utils/customFieldValidation');
+const { deleteDocumentsForLeads } = require('../services/leadDocumentService');
 
 const DEFAULT_LEAD_PAGE = 1;
 const DEFAULT_LEAD_PAGE_SIZE = 100;
@@ -94,6 +96,36 @@ const applyLeadUpdates = (lead, updates) => {
     });
 };
 
+// Custom field definitions for a workspace. Cheap, indexed, single-field read —
+// the manual lead paths need it on every write to enforce dropdown option lists.
+const getCustomFieldDefs = async (ownerId) => {
+    const settings = await WorkspaceSettings.findOne({ userId: ownerId })
+        .select('customFieldDefinitions')
+        .lean();
+    return settings?.customFieldDefinitions || [];
+};
+
+// Translate `?cf=budget:50k&cf=service:SEO` into Mongo conditions.
+// A multiselect stores an array, and Mongo equality on an array field matches
+// when the array CONTAINS the value — so one expression covers both types.
+const applyCustomFieldFilters = (query, rawCf, definitions) => {
+    if (!rawCf) return;
+    const entries = Array.isArray(rawCf) ? rawCf : [rawCf];
+    const validKeys = new Set(definitions.map(d => d.key));
+
+    for (const entry of entries.slice(0, 10)) {
+        const raw = String(entry ?? '');
+        const sep = raw.indexOf(':');
+        if (sep <= 0) continue;
+        const key = raw.slice(0, sep).trim();
+        const value = raw.slice(sep + 1).trim();
+        // Only keys the admin actually defined — never let a caller probe
+        // arbitrary customData paths through the filter bar.
+        if (!key || !value || !validKeys.has(key)) continue;
+        query[`customData.${key}`] = value.slice(0, 500);
+    }
+};
+
 
 const sendMetaEventIfEnabled = async (lead, newStatus, oldStatus) => {
     // Outbox-backed single entry point: resolves config (incl. agent → parent
@@ -141,6 +173,12 @@ const getLeads = async (req, res) => {
                 const op = req.query.tagMatch === 'any' ? '$in' : '$all';
                 query.tags = { [op]: tagNames };
             }
+        }
+
+        // Custom field filter — ?cf=<key>:<value>, repeatable (AND across keys).
+        if (req.query.cf) {
+            const defs = await getCustomFieldDefs(req.tenantId);
+            applyCustomFieldFilters(query, req.query.cf, defs);
         }
 
         const [leads, total] = await Promise.all([
@@ -232,6 +270,20 @@ const createLead = async (req, res) => {
             }
         }
 
+        // Custom field values must match the option list the admin defined.
+        // The Add Lead form already restricts this; enforcing it here closes the
+        // same hole for anything hitting the API directly.
+        const customFieldDefs = await getCustomFieldDefs(ownerId);
+        const customCheck = validateCustomData(customData, customFieldDefs);
+        if (!customCheck.valid) {
+            return res.status(400).json({
+                success: false,
+                error: 'invalid_custom_fields',
+                message: customCheck.errors[0],
+                errors: customCheck.errors
+            });
+        }
+
         const newLead = new Lead({
             userId: ownerId,
             name,
@@ -239,7 +291,7 @@ const createLead = async (req, res) => {
             phone,
             status: status || DEFAULT_LEAD_STATUS,
             source: source || DEFAULT_LEAD_SOURCE,
-            customData: customData || {}
+            customData: customCheck.cleaned
         });
 
         // If the lead is created directly as closed, capture close timestamp
@@ -355,6 +407,27 @@ const updateLead = async (req, res) => {
         }
 
         const updates = { ...req.body };
+
+        // Same option-list enforcement as create. `partial` because an edit may
+        // touch only some fields, and `existingData` so a value stored before an
+        // admin retired its option still round-trips instead of blocking the save.
+        if (hasOwn(updates, 'customData')) {
+            const customFieldDefs = await getCustomFieldDefs(ownerId);
+            const customCheck = validateCustomData(updates.customData, customFieldDefs, {
+                existingData: lead.customData, // Mongoose Map — normalised inside
+                partial: true
+            });
+            if (!customCheck.valid) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'invalid_custom_fields',
+                    message: customCheck.errors[0],
+                    errors: customCheck.errors
+                });
+            }
+            updates.customData = customCheck.cleaned;
+        }
+
         applyNextFollowUpDateUpdate(lead, updates);
 
         // Handle follow-up template fields alongside nextFollowUpDate
@@ -524,6 +597,11 @@ const deleteLead = async (req, res) => {
         if (!deletedLead) {
             return res.status(404).json({ message: "Lead not found or access denied" });
         }
+
+        // Leads are hard-deleted, so their attachments must be reclaimed from
+        // object storage here — nothing else references those bytes afterwards
+        // and they would be billed forever. Never throws.
+        await deleteDocumentsForLeads(ownerId, [deletedLead._id]);
 
         // Log deletion
         logActivity({
@@ -796,6 +874,9 @@ const syncLeads = async (req, res) => {
         const leadsToInsert = [];
         const emailsInThisBatch = new Set();
         const phonesInThisBatch = new Set();
+        // Dropdown/multi-select cells matching no defined option — imported as-is.
+        let syncUnmappedCount = 0;
+        const syncUnmappedSamples = new Set();
 
         for (const row of parsed.data) {
             const keys = Object.keys(row);
@@ -808,13 +889,22 @@ const syncLeads = async (req, res) => {
             const finalPhone = phoneKey ? row[phoneKey]?.toString() : 'No Phone';
 
             // Build customData by iterating over CRM's custom fields only
-            const customData = {};
+            const rawCustomData = {};
             customFieldDefs.forEach(field => {
                 const matchingHeader = keys.find(k => k.toLowerCase() === field.label.toLowerCase());
                 if (matchingHeader && row[matchingHeader]) {
-                    customData[field.key] = row[matchingHeader];
+                    rawCustomData[field.key] = row[matchingHeader];
                 }
             });
+
+            // Sheet cells are machine-supplied: snap dropdown/multi-select values
+            // onto the defined option list so they group correctly. A cell matching
+            // no option is imported verbatim and counted, never a reason to skip.
+            const { cleaned: customData, unmapped } = coerceCustomData(rawCustomData, customFieldDefs);
+            if (unmapped.length > 0) {
+                syncUnmappedCount += unmapped.length;
+                for (const u of unmapped) syncUnmappedSamples.add(`"${u.value}" (${u.label})`);
+            }
 
             if (finalEmail || finalPhone !== 'No Phone') {
                 const normEmail = finalEmail ? finalEmail.toLowerCase() : null;
@@ -865,7 +955,21 @@ const syncLeads = async (req, res) => {
             }, 0);
         }
 
-        res.json({ success: true, message: `${count} New Leads Imported!` });
+        if (syncUnmappedCount > 0) {
+            console.warn(
+                `⚠️ [Sheet Sync] User ${userId}: ${syncUnmappedCount} cell(s) outside the defined option list ` +
+                `— imported as-is: ${[...syncUnmappedSamples].slice(0, 5).join(', ')}`
+            );
+        }
+
+        res.json({
+            success: true,
+            message: `${count} New Leads Imported!`,
+            ...(syncUnmappedCount > 0 ? {
+                unmappedCustomValues: syncUnmappedCount,
+                unmappedSamples: [...syncUnmappedSamples].slice(0, 10)
+            } : {})
+        });
     } catch (err) {
         console.error("Sync Sheet Error:", err);
         res.status(500).json({ message: "Error syncing sheet" });
@@ -1373,6 +1477,12 @@ const autoDeleteDuplicates = async (req, res) => {
         if (allDupIds.length > 0) {
             const result = await Lead.deleteMany({ _id: { $in: allDupIds } });
             deletedCount = result.deletedCount;
+
+            // Reclaim the deleted leads' attachments from object storage. Runs
+            // detached: a large duplicate sweep should not hold the response
+            // open on R2 round-trips, and the helper never throws.
+            runInBackground('[LeadDocuments] duplicate-sweep cleanup',
+                () => deleteDocumentsForLeads(ownerId, allDupIds));
         }
 
         // Log activity
@@ -1407,7 +1517,13 @@ const bulkImportLeads = async (req, res) => {
     try {
         let ownerId = req.tenantId;
 
-        const { leads } = req.body; // Expects an array: [{name, email, phone, source, status, customData}]
+        const { leads, quiet } = req.body; // Expects an array: [{name, email, phone, source, status, customData}]
+
+        // Quiet import (migrating existing contacts): suppress the welcome
+        // email/WhatsApp only. Sequences, automation rules, workflows and alerts
+        // still run — see queueLeadCreatedEffects. Coerced strictly so a stray
+        // truthy string can never silence a normal import by accident.
+        const quietImport = quiet === true;
 
         if (!leads || !Array.isArray(leads) || leads.length === 0) {
             return res.status(400).json({ message: "No leads provided for import." });
@@ -1423,6 +1539,13 @@ const bulkImportLeads = async (req, res) => {
         const existingPhones = new Set(existingPhoneList.map(p => normalizePhone(p)).filter(Boolean));
         const existingEmails = new Set(existingEmailList.map(e => e?.trim().toLowerCase()).filter(Boolean));
 
+        // CSV values are machine-supplied, so we COERCE rather than reject: a cell
+        // reading "premium plan" snaps onto the option "Premium Plan" so filters
+        // and reports group it correctly. Anything unmatched imports verbatim and
+        // is reported back, so a typo in the sheet never costs the user the row.
+        const customFieldDefs = await getCustomFieldDefs(ownerId);
+        const unmappedValues = new Map(); // "label: value" → count
+
         const newLeadsToInsert = [];
         let duplicateCount = 0;
 
@@ -1437,6 +1560,12 @@ const bulkImportLeads = async (req, res) => {
             if (isPhoneDup || isEmailDup) {
                 duplicateCount++;
             } else {
+                const { cleaned, unmapped } = coerceCustomData(lead.customData, customFieldDefs);
+                for (const u of unmapped) {
+                    const label = `${u.label}: ${u.value}`;
+                    unmappedValues.set(label, (unmappedValues.get(label) || 0) + 1);
+                }
+
                 newLeadsToInsert.push({
                     userId: ownerId,
                     name: lead.name || 'Unknown',
@@ -1445,7 +1574,7 @@ const bulkImportLeads = async (req, res) => {
                     source: lead.source || 'CSV Import',
                     status: lead.status || 'New',
                     tags: Array.isArray(lead.tags) ? lead.tags : [],
-                    customData: lead.customData || {},
+                    customData: cleaned,
                     assignedTo: req.user.role === 'agent' ? getRequestUserId(req.user) : undefined
                 });
 
@@ -1456,7 +1585,24 @@ const bulkImportLeads = async (req, res) => {
         }
 
         if (newLeadsToInsert.length > 0) {
-            await Lead.insertMany(newLeadsToInsert);
+            const insertedLeads = await Lead.insertMany(newLeadsToInsert);
+
+            // Imported rows are real leads and must enter sequences, automation
+            // rules and workflows like every other source. This was missing
+            // entirely: CSV leads landed in the pipeline and nothing ever ran,
+            // while the sibling syncLeads (Sheet import) fired effects correctly.
+            // skipCapi mirrors that path — imported rows are historical records,
+            // not fresh conversions, so sending Meta events with event_time = now
+            // would flood Meta with wrongly-timestamped data.
+            setTimeout(() => {
+                insertedLeads.forEach(newLead =>
+                    queueLeadCreatedEffects(newLead, ownerId, {
+                        skipCapi: true,
+                        skipWelcome: quietImport,
+                        source: quietImport ? 'CSV Import (quiet)' : 'CSV Import'
+                    })
+                );
+            }, 0);
 
             // Log activity
             logActivity({
@@ -1465,7 +1611,9 @@ const bulkImportLeads = async (req, res) => {
                 actionType: 'LEAD_CREATED',
                 entityType: 'Lead',
                 entityName: 'Bulk Import',
-                metadata: { importedCount: newLeadsToInsert.length, skippedDuplicates: duplicateCount },
+                // `quiet` is recorded so "why did these leads never get a welcome
+                // message?" is answerable months later from the audit trail alone.
+                metadata: { importedCount: newLeadsToInsert.length, skippedDuplicates: duplicateCount, quiet: quietImport },
                 companyId: ownerId
             }).catch(err => console.error('Audit log error:', err));
         }
@@ -1474,7 +1622,14 @@ const bulkImportLeads = async (req, res) => {
             success: true,
             message: "Import complete",
             importedCount: newLeadsToInsert.length,
-            duplicateCount
+            duplicateCount,
+            quiet: quietImport,
+            // Values that did not match any option on a dropdown/multi-select
+            // field. They WERE imported as-is — this is a heads-up, not an error.
+            unmappedCustomValues: [...unmappedValues.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 20)
+                .map(([value, count]) => ({ value, count }))
         });
 
     } catch (err) {
@@ -1602,11 +1757,25 @@ const bulkDeleteLeads = async (req, res) => {
             return res.status(400).json({ message: 'Too many leads in one request. Delete at most 500 at a time.' });
         }
 
+        // Resolve which of the requested ids are actually in scope BEFORE
+        // deleting. An agent's dataScope narrows to leads assigned to them, so
+        // the requested list is not the deleted list — cascading attachment
+        // cleanup over the raw ids would wipe documents off leads that survive.
+        const scopedLeads = await Lead.find({ _id: { $in: ids }, ...req.dataScope })
+            .select('_id').lean();
+        const scopedIds = scopedLeads.map(l => l._id);
+
         // Tenant-scoped delete — can only delete leads you own
         const result = await Lead.deleteMany({
-            _id: { $in: ids },
+            _id: { $in: scopedIds },
             ...req.dataScope
         });
+
+        // Reclaim attachments for exactly those leads (detached; never throws).
+        if (scopedIds.length > 0) {
+            runInBackground('[LeadDocuments] bulk-delete cleanup',
+                () => deleteDocumentsForLeads(req.tenantId, scopedIds));
+        }
 
         logActivity({
             userId: getRequestUserId(req.user),
@@ -1655,10 +1824,46 @@ const bulkUpdateStatus = async (req, res) => {
             return res.status(400).json({ message: 'Too many leads in one request. Update at most 500 at a time.' });
         }
 
+        // Snapshot the in-scope leads BEFORE the write. Stage-change effects need
+        // each lead's previous stage, and dataScope means "ids requested" is not
+        // the same set as "leads this user may actually touch".
+        const targets = await Lead.find({ _id: { $in: ids }, ...req.dataScope })
+            .select('_id name email phone userId status assignedTo')
+            .lean();
+
+        // Mirror the single-lead path (updateLead): moving a stage stamps
+        // stageEnteredAt, and won/lost timestamps drive the revenue reports.
+        // Without these, bulk-moving leads to "Won" left wonAt empty and the
+        // reports under-counted.
+        const now = new Date();
+        const stageFields = { status, stageEnteredAt: now };
+        if (/won/i.test(status)) {
+            stageFields.wonAt = now;
+            stageFields.lostAt = null;
+        } else if (/lost|dead/i.test(status)) {
+            stageFields.lostAt = now;
+        }
+
         const result = await Lead.updateMany(
             { _id: { $in: ids }, ...req.dataScope },
-            { $set: { status } }
+            { $set: stageFields }
         );
+
+        // Bulk stage changes now get the SAME automation surface as dragging one
+        // lead across the board — sequences, automation rules, workflows, score.
+        // Previously this endpoint only wrote the status, so "select 50 leads →
+        // Cold Lead" silently ran nothing while moving them one-by-one ran
+        // everything. Only leads whose stage actually changed are fired.
+        // Deliberately no Meta CAPI here: queueLeadStageChangeEffects carries
+        // none, and a 500-lead reclassification is not 500 conversions.
+        const movedLeads = targets.filter(l => l.status !== status);
+        if (movedLeads.length > 0) {
+            setTimeout(() => {
+                movedLeads.forEach(prev =>
+                    queueLeadStageChangeEffects({ ...prev, status }, prev.status)
+                );
+            }, 0);
+        }
 
         logActivity({
             userId: getRequestUserId(req.user),

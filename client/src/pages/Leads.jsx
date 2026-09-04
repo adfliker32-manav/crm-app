@@ -41,6 +41,11 @@ const Leads = () => {
     const tagDropdownRef = useRef(null);
     const [sortOption, setSortOption] = useState("newest");
 
+    // Custom dropdown/multi-select field filters — { [fieldKey]: value }.
+    // Applied server-side because the leads list query excludes customData.
+    const [customFields, setCustomFields] = useState([]);
+    const [filterCustom, setFilterCustom] = useState({});
+
     // Pipeline-specific state
     const [columns, setColumns] = useState({});
 
@@ -72,6 +77,10 @@ const Leads = () => {
                 params.set('tags', filterTags.join(','));
                 params.set('tagMatch', filterTagMatch);
             }
+            // ?cf=<key>:<value>, repeatable — ANDed together by the server.
+            Object.entries(filterCustom).forEach(([key, value]) => {
+                if (value) params.append('cf', `${key}:${value}`);
+            });
             const [leadsRes, stagesRes, tagsRes] = await Promise.all([
                 api.get(`/leads?${params.toString()}`),
                 api.get('/stages'),
@@ -96,7 +105,15 @@ const Leads = () => {
         } finally {
             setLoading(false);
         }
-    }, [showError, filterTags, filterTagMatch]);
+    }, [showError, filterTags, filterTagMatch, filterCustom]);
+
+    // Definitions are needed for the filter bar; only option-based fields can be
+    // filtered on, since only they have a fixed set of values to offer.
+    useEffect(() => {
+        api.get('/custom-fields')
+            .then(res => setCustomFields((res.data || []).filter(f => f.type === 'dropdown' || f.type === 'multiselect')))
+            .catch(() => setCustomFields([]));
+    }, []);
 
     useEffect(() => {
         fetchData();
@@ -567,6 +584,27 @@ const Leads = () => {
                             <i className="fa-solid fa-filter text-xs"></i>
                         </div>
                     </div>
+
+                    {/* Custom field filters — one dropdown per option-based field.
+                        Server-side, since the list query strips customData. */}
+                    {customFields.map(field => (
+                        <div key={field.key} className="relative w-full sm:w-auto">
+                            <select
+                                value={filterCustom[field.key] || ''}
+                                onChange={(e) => setFilterCustom(prev => ({ ...prev, [field.key]: e.target.value }))}
+                                className={`w-full sm:w-auto appearance-none border rounded-xl py-2 pl-4 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer transition shadow-sm ${filterCustom[field.key] ? 'border-blue-400 text-blue-700 bg-blue-50/70' : 'bg-slate-100/50 border-slate-200 text-slate-700 hover:bg-slate-100'}`}
+                                title={`Filter by ${field.label}`}
+                            >
+                                <option value="">All {field.label}</option>
+                                {(field.options || []).map(opt => (
+                                    <option key={opt} value={opt}>{opt}</option>
+                                ))}
+                            </select>
+                            <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-400">
+                                <i className="fa-solid fa-filter text-xs"></i>
+                            </div>
+                        </div>
+                    ))}
 
                     {/* Tag Filter (multi-select, server-side) */}
                     {userTags && userTags.length > 0 && (

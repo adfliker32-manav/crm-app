@@ -23,8 +23,14 @@ export const normalizePhoneNumber = (phone) => {
     return isPlus ? `+${digitsOnly}` : digitsOnly;
 };
 
+// Custom field mappings live under a 'cf:' prefix in the same flat mappings
+// object, so a CSV column named "status" can never collide with a custom field
+// whose key is also "status".
+export const CUSTOM_PREFIX = 'cf:';
+export const customMappingKey = (fieldKey) => `${CUSTOM_PREFIX}${fieldKey}`;
+
 // Transforms and validates a raw CSV row into a format ready for the CRM API
-export const transformLeadRow = (row, mappings, stages = []) => {
+export const transformLeadRow = (row, mappings, stages = [], customFields = []) => {
     const lead = {
         name: row[mappings.name] ? row[mappings.name].trim() : 'Unknown',
         phone: row[mappings.phone] || '',
@@ -32,8 +38,22 @@ export const transformLeadRow = (row, mappings, stages = []) => {
         source: mappings.source && row[mappings.source] ? row[mappings.source].trim() : 'CSV Import',
         status: mappings.status && row[mappings.status] ? row[mappings.status].trim() : 'New',
         tags: [],
-        customData: {} // Future stub for custom field mapped extraction
+        customData: {}
     };
+
+    // Multi-select cells are split on commas; the server then snaps each value
+    // onto the closest defined option (or keeps it verbatim and flags it).
+    customFields.forEach(field => {
+        const column = mappings[customMappingKey(field.key)];
+        if (!column) return;
+        const raw = row[column];
+        if (raw === undefined || raw === null || String(raw).trim() === '') return;
+
+        const value = String(raw).trim();
+        lead.customData[field.key] = field.type === 'multiselect'
+            ? value.split(',').map(v => v.trim()).filter(Boolean)
+            : value;
+    });
 
     if (mappings.tags && row[mappings.tags]) {
         lead.tags = row[mappings.tags].split(',').map(t => t.trim()).filter(Boolean);

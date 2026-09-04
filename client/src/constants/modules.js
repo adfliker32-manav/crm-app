@@ -16,6 +16,7 @@ export const WORKSPACE_MODULES = [
     { id: 'email',       name: 'Email',       icon: 'fa-envelope' },
     { id: 'automations', name: 'Automations', icon: 'fa-bolt' },
     { id: 'team',        name: 'Team',        icon: 'fa-users' },
+    { id: 'tasks',       name: 'Tasks',       icon: 'fa-list-check' },
     { id: 'reports',     name: 'Reports',     icon: 'fa-chart-pie' },
     { id: 'settings',    name: 'Settings',    icon: 'fa-gear' }
 ];

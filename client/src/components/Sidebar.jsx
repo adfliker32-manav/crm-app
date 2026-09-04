@@ -157,6 +157,8 @@ const Sidebar = () => {
                   show: canManageTeam || user?.permissions?.viewLeads !== false },
                 { to: '/appointments', icon: 'fa-solid fa-calendar-check', label: 'Appointments', feature: 'appointments',
                   show: canManageTeam || user?.permissions?.viewLeads !== false },
+                { to: '/tasks', icon: 'fa-solid fa-list-check', label: 'Tasks', feature: 'tasks',
+                  show: canManageTeam || user?.permissions?.viewTasks !== false },
             ],
         },
         {

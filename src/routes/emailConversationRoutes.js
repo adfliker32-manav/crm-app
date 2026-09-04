@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const emailConversationController = require('../controllers/emailConversationController');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
 const checkPermission = require('../middleware/checkPermission');
@@ -20,7 +21,7 @@ router.get('/scheduled', emailConversationController.getScheduled);
 router.delete('/scheduled/:jobId', emailConversationController.cancelScheduled);
 
 router.get('/:conversationId', validateObjectId({ params: ['conversationId'] }), emailConversationController.getMessages);
-router.put('/:conversationId/read', validateObjectId({ params: ['conversationId'] }), emailConversationController.markRead);
+router.put('/:conversationId/read', validateObjectId({ params: ['conversationId'] }), validate(schemas.noBody), emailConversationController.markRead);
 router.put('/:conversationId/status', validateObjectId({ params: ['conversationId'] }), emailConversationController.updateStatus);
 
 module.exports = router;

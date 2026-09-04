@@ -31,7 +31,13 @@ const PRESETS = {
         accessSettings: false,
         viewActivityLogs: false,
         viewBilling: false,
-        manageTeam: false
+        manageTeam: false,
+        viewTasks: true,
+        viewAllTasks: false,
+        createTasks: false,
+        editTasks: false,
+        deleteTasks: false,
+        assignTasks: false
     },
     BASIC_AGENT: {
         viewDashboard: true,
@@ -61,7 +67,13 @@ const PRESETS = {
         accessSettings: false,
         viewActivityLogs: false,
         viewBilling: false,
-        manageTeam: false
+        manageTeam: false,
+        viewTasks: true,
+        viewAllTasks: false,
+        createTasks: true,
+        editTasks: true,
+        deleteTasks: false,
+        assignTasks: false
     },
     SENIOR_AGENT: {
         viewDashboard: true,
@@ -91,7 +103,13 @@ const PRESETS = {
         accessSettings: false,
         viewActivityLogs: false,
         viewBilling: false,
-        manageTeam: false
+        manageTeam: false,
+        viewTasks: true,
+        viewAllTasks: true,
+        createTasks: true,
+        editTasks: true,
+        deleteTasks: false,
+        assignTasks: true
     }
 };
 
@@ -231,6 +249,17 @@ const EditAgentModal = ({ isOpen, onClose, onSuccess, agent }) => {
                 { key: 'editNotes', label: 'Edit Notes' },
                 { key: 'deleteNotes', label: 'Delete Notes' },
                 { key: 'manageFollowUps', label: 'Manage Follow-ups' }
+            ]
+        },
+        {
+            title: '✅ Tasks',
+            permissions: [
+                { key: 'viewTasks', label: 'View Tasks' },
+                { key: 'viewAllTasks', label: 'View ALL Tasks (not just assigned)', highlight: true },
+                { key: 'createTasks', label: 'Create Tasks' },
+                { key: 'editTasks', label: 'Edit Tasks' },
+                { key: 'deleteTasks', label: 'Delete Tasks' },
+                { key: 'assignTasks', label: 'Assign Tasks to Team' }
             ]
         },
         {

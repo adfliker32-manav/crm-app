@@ -1,5 +1,6 @@
 import React from 'react';
 import { useCSVImport } from '../../hooks/useCSVImport';
+import { customMappingKey } from '../../utils/csvHelpers';
 
 const requiredFields = [
     { key: 'name', label: 'Lead Name *', required: true },
@@ -13,9 +14,13 @@ const requiredFields = [
 const ImportCSVModal = ({ isOpen, onClose, onSuccess, stages = [] }) => {
     // Consume the custom hook
     const { state, refs, actions } = useCSVImport(stages, onSuccess, onClose);
-    const { file, headers, csvData, mappings, isProcessing } = state;
+    const { file, headers, csvData, mappings, isProcessing, customFields, quietImport } = state;
     const { fileInputRef } = refs;
-    const { handleFileChange, updateMapping, resetState, submitImport, handleClose } = actions;
+    const { handleFileChange, updateMapping, resetState, submitImport, handleClose, setQuietImport } = actions;
+
+    // Rows that will actually be sent (blank/phone-less rows are dropped server-side
+    // too, but this is what the user is about to trigger automations for).
+    const importCount = csvData.length;
 
     if (!isOpen) return null;
 
@@ -126,9 +131,104 @@ const ImportCSVModal = ({ isOpen, onClose, onSuccess, stages = [] }) => {
                                     </div>
                                 ))}
                             </div>
+
+                            {/* Custom fields — same mapping UI, plus a reminder of
+                                what values a dropdown will accept. */}
+                            {customFields.length > 0 && (
+                                <div className="mt-6 pt-5 border-t border-slate-100">
+                                    <h4 className="font-bold text-slate-800 text-sm mb-1">Your Custom Fields</h4>
+                                    <p className="text-xs text-slate-500 mb-4">
+                                        Optional. Dropdown values are matched to your options automatically — anything that doesn't match still imports, as typed.
+                                    </p>
+                                    <div className="space-y-4">
+                                        {customFields.map(field => {
+                                            const mapKey = customMappingKey(field.key);
+                                            const isOption = field.type === 'dropdown' || field.type === 'multiselect';
+                                            return (
+                                                <div key={field.key} className="flex flex-col sm:flex-row sm:items-center p-3 hover:bg-slate-50 rounded-xl transition-colors border border-transparent hover:border-slate-100">
+                                                    <div className="w-1/2 mb-2 sm:mb-0 pr-3">
+                                                        <span className="text-sm font-semibold text-slate-600">{field.label}</span>
+                                                        {isOption && (
+                                                            <p className="text-[11px] text-slate-400 mt-0.5 truncate" title={(field.options || []).join(', ')}>
+                                                                {field.type === 'multiselect' ? 'Multi-select — separate values with commas. ' : ''}
+                                                                Options: {(field.options || []).join(', ')}
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                    <div className="w-1/2 relative">
+                                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                                            <i className="fa-solid fa-link text-slate-400 text-xs"></i>
+                                                        </div>
+                                                        <select
+                                                            value={mappings[mapKey] || ''}
+                                                            onChange={(e) => updateMapping(mapKey, e.target.value)}
+                                                            className="w-full appearance-none bg-white border border-slate-200 rounded-xl py-2 pl-9 pr-10 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                                                        >
+                                                            <option value="">-- Ignored / Not Mapped --</option>
+                                                            {headers.map(header => (
+                                                                <option key={header} value={header}>{header}</option>
+                                                            ))}
+                                                        </select>
+                                                        <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-400">
+                                                            <i className="fa-solid fa-chevron-down text-[10px]"></i>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
+
+                {/* Automation controls — only meaningful once a file is loaded */}
+                {file && (
+                    <div className="px-6 pt-4 pb-1 border-t border-slate-100 bg-white">
+                        <label className="flex items-start gap-3 cursor-pointer group">
+                            <input
+                                type="checkbox"
+                                checked={quietImport}
+                                onChange={(e) => setQuietImport(e.target.checked)}
+                                className="mt-0.5 w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500 shrink-0"
+                            />
+                            <span className="text-sm">
+                                <span className="font-semibold text-slate-700 group-hover:text-slate-900">
+                                    Import quietly — don’t send welcome messages
+                                </span>
+                                <span className="block text-xs text-slate-500 mt-0.5">
+                                    Turn this on when migrating existing contacts. The automatic welcome
+                                    email and WhatsApp are skipped. Sequences, automation rules, workflows
+                                    and lead alerts still run as normal.
+                                </span>
+                            </span>
+                        </label>
+
+                        {/* Mass-send warning — the risk is proportional to row count, so it
+                            escalates rather than nagging on every small import. */}
+                        {!quietImport && importCount > 25 && (
+                            <div className="mt-3 flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                                <i className="fa-solid fa-triangle-exclamation text-amber-500 text-xs mt-0.5 shrink-0"></i>
+                                <p className="text-xs text-amber-800">
+                                    <strong>{importCount} rows will trigger welcome messages.</strong> If these
+                                    are existing contacts rather than new leads, tick “Import quietly” above —
+                                    mass-messaging old contacts on WhatsApp can get your number blocked.
+                                </p>
+                            </div>
+                        )}
+
+                        {quietImport && (
+                            <div className="mt-3 flex items-start gap-2.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
+                                <i className="fa-solid fa-volume-xmark text-slate-400 text-xs mt-0.5 shrink-0"></i>
+                                <p className="text-xs text-slate-600">
+                                    Quiet import: no welcome email or WhatsApp will be sent to these
+                                    {importCount ? ` ${importCount}` : ''} leads.
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Footer */}
                 <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">

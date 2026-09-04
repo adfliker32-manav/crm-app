@@ -89,7 +89,10 @@ const resolveTemplate = (template, context, options = {}) => {
         
         // Return resolved value, or leave placeholder if undefined
         if (current !== undefined) {
-            return options.sanitize ? options.sanitize(current) : current;
+            // A multi-select custom field resolves to an array. String coercion
+            // would render "SEO,Ads" with no spacing, so join it readably first.
+            const value = Array.isArray(current) ? current.join(', ') : current;
+            return options.sanitize ? options.sanitize(value) : value;
         }
         return match;
     });

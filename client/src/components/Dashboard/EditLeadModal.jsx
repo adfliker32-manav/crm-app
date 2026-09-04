@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
+import CustomFieldInput from './CustomFieldInput';
+import { initCustomData, validateCustomFields } from '../../utils/customFieldHelpers';
 
 const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
     const [formData, setFormData] = useState({ name: '', phone: '', email: '', dealValue: '', nextFollowUpDate: '' });
@@ -64,9 +66,9 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
         try {
             const res = await api.get('/custom-fields');
             setCustomFields(res.data || []);
-            const init = {};
-            (res.data || []).forEach(f => { init[f.key] = existingData[f.key] || ''; });
-            setCustomData(init);
+            // Reads a stored value into the shape its type expects — a multi-select
+            // saved before the field was converted still loads as an array.
+            setCustomData(initCustomData(res.data || [], existingData));
         } catch (err) { console.error('Failed to fetch custom fields:', err); }
     };
 
@@ -77,12 +79,11 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
         e.preventDefault();
         setLoading(true);
         setError(null);
-        for (const field of customFields) {
-            if (field.required && !customData[field.key]) {
-                setError(`${field.label} is required`);
-                setLoading(false);
-                return;
-            }
+        const customError = validateCustomFields(customFields, customData);
+        if (customError) {
+            setError(customError);
+            setLoading(false);
+            return;
         }
         try {
             const payload = {
@@ -108,22 +109,14 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
     // ── Shared input style ───────────────────────────────────────────────────
     const INPUT = "w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition";
 
-    const renderCustomField = (field) => {
-        switch (field.type) {
-            case 'dropdown':
-                return (
-                    <select value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} required={field.required}>
-                        <option value="">Select {field.label}</option>
-                        {(field.options || []).map((opt, i) => <option key={i} value={opt}>{opt}</option>)}
-                    </select>
-                );
-            case 'date':    return <input type="date"   value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} required={field.required} />;
-            case 'number':  return <input type="number" value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
-            case 'email':   return <input type="email"  value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
-            case 'phone':   return <input type="tel"    value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
-            default:        return <input type="text"   value={customData[field.key] || ''} onChange={e => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
-        }
-    };
+    const renderCustomField = (field) => (
+        <CustomFieldInput
+            field={field}
+            value={customData[field.key]}
+            onChange={handleCustomFieldChange}
+            className={INPUT}
+        />
+    );
 
     const SectionDivider = ({ label }) => (
         <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">

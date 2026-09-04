@@ -35,6 +35,18 @@ const validate = (schema) => (req, res, next) => {
 
 const schemas = {
 
+    // ── Action routes that take NO request body ─────────────────────────────
+    // Everything these endpoints need comes from the URL and the authenticated
+    // session (toggle, duplicate, publish, mark-read, regenerate…). Mounting an
+    // empty schema makes that explicit AND enforced: validate() runs with
+    // stripUnknown, so any body a caller sends is discarded before the handler
+    // sees it. Verified against each controller — none reads req.body.
+    //
+    // Empty-schema validation strips, it never rejects, so this cannot 400 an
+    // existing caller. If a handler ever starts reading a field, give it its own
+    // schema — leaving it on noBody would silently delete that field.
+    noBody: Joi.object({}),
+
     // Auth — public self-registration (creates a manager + 14-day trial workspace)
     register: Joi.object({
         name:        Joi.string().trim().min(2).max(100).required(),
@@ -103,7 +115,18 @@ const schemas = {
     createAgent: Joi.object({
         name:     Joi.string().trim().min(2).max(100).required(),
         email:    Joi.string().email().lowercase().trim().required(),
-        password: Joi.string().min(8).max(128).required()
+        password: Joi.string().min(8).max(128).required(),
+        // The permission map the Team → Create Agent modal sends.
+        // It was MISSING here, so stripUnknown deleted it on every request and
+        // authController.createAgent always fell back to `BASIC_AGENT` — the
+        // checkboxes and presets in that modal had no effect at all.
+        // Declared as a generic boolean-valued map ON PURPOSE: an explicit key
+        // list would silently drop each newly-added permission the same way.
+        // User.permissions (Mongoose, strict) is the real gatekeeper on which
+        // keys persist. `null` is allowed for tri-state keys (aiVoiceAccess).
+        permissions: Joi.object()
+            .pattern(/^[a-zA-Z][a-zA-Z0-9_]*$/, Joi.boolean().allow(null))
+            .optional()
     }),
 
     // ── Appointments ────────────────────────────────────────────────────────
@@ -222,6 +245,13 @@ const schemas = {
         folder: Joi.string().trim().max(60).allow('', null)
     }),
 
+    // Multipart body for a lead attachment. The FILE is validated by multer +
+    // leadDocumentService (MIME allowlist, magic bytes, size); this covers only
+    // the text fields travelling alongside it.
+    uploadLeadDocument: Joi.object({
+        description: Joi.string().trim().max(500).allow('', null)
+    }),
+
     updateMediaAsset: Joi.object({
         label:  Joi.string().trim().max(120).allow('', null),
         folder: Joi.string().trim().max(60).allow('', null)
@@ -232,6 +262,84 @@ const schemas = {
             .messages({ 'string.pattern.base': 'name must be 2-64 characters of A-Z, 0-9 or underscore' }),
         value:       Joi.string().min(1).max(8192).required(),
         description: Joi.string().trim().max(200).optional().allow('')
+    }),
+
+    // ── Custom lead fields (Settings → Custom Fields) ───────────────────────
+    // Shape only. The option-list semantics — a dropdown/multi-select needs at
+    // least one option, options are deduped and capped — live in
+    // utils/customFieldValidation.js, which every write path shares.
+    // Limits mirror MAX_LABEL_LENGTH / MAX_OPTIONS_PER_FIELD / MAX_OPTION_LENGTH there.
+    addCustomField: Joi.object({
+        label:    Joi.string().trim().min(1).max(60).required(),
+        type:     Joi.string().valid('text', 'number', 'date', 'dropdown', 'email', 'phone', 'multiselect').optional(),
+        options:  Joi.array().items(Joi.string().trim().max(100)).max(100).optional(),
+        required: Joi.boolean().optional(),
+        metaKey:  Joi.string().trim().max(200).optional().allow('', null)
+    }),
+
+    updateCustomField: Joi.object({
+        label:    Joi.string().trim().min(1).max(60).optional(),
+        type:     Joi.string().valid('text', 'number', 'date', 'dropdown', 'email', 'phone', 'multiselect').optional(),
+        options:  Joi.array().items(Joi.string().trim().max(100)).max(100).optional(),
+        required: Joi.boolean().optional(),
+        metaKey:  Joi.string().trim().max(200).optional().allow('', null)
+    }).min(1),
+
+    saveCustomFields: Joi.object({
+        fields: Joi.array().max(100).items(Joi.object({
+            // Existing keys are sent back so the server preserves them rather
+            // than re-slugging a key out from under stored lead data.
+            key:      Joi.string().trim().max(200).optional(),
+            label:    Joi.string().trim().min(1).max(60).required(),
+            type:     Joi.string().valid('text', 'number', 'date', 'dropdown', 'email', 'phone', 'multiselect').optional(),
+            options:  Joi.array().items(Joi.string().trim().max(100)).max(100).optional(),
+            required: Joi.boolean().optional(),
+            order:    Joi.number().integer().min(0).optional(),
+            metaKey:  Joi.string().trim().max(200).optional().allow('', null)
+        })).required()
+    }),
+
+    reorderCustomFields: Joi.object({
+        keys: Joi.array().items(Joi.string().trim().max(200)).max(100).required()
+    }),
+
+    // ── Small, fully-enumerated bodies ──────────────────────────────────────
+    // Field lists read directly from the controllers, not guessed: an omitted
+    // field would be silently stripped rather than rejected.
+
+    // automationController.toggleRule — reads { isActive } only.
+    toggleAutomationRule: Joi.object({
+        isActive: Joi.boolean().required()
+    }),
+
+    // agencyController.toggleClientFreeze — reads { freeze } and req.body.reason.
+    toggleClientFreeze: Joi.object({
+        freeze: Joi.boolean().required(),
+        reason: Joi.string().trim().max(500).optional().allow('', null)
+    }),
+
+    // ── Team Tasks (admin/agent to-dos, assignable to an agent) ─────────────
+    createTeamTask: Joi.object({
+        title:       Joi.string().trim().min(1).max(200).required(),
+        description: Joi.string().trim().max(2000).optional().allow('', null),
+        assignedTo:  Joi.string().hex().length(24).required(),
+        relatedLead: Joi.string().hex().length(24).optional().allow(null),
+        dueDate:     Joi.date().iso().optional().allow(null),
+        priority:    Joi.string().valid('low', 'medium', 'high', 'urgent').optional()
+    }),
+
+    updateTeamTask: Joi.object({
+        title:       Joi.string().trim().min(1).max(200).optional(),
+        description: Joi.string().trim().max(2000).optional().allow('', null),
+        assignedTo:  Joi.string().hex().length(24).optional(),
+        relatedLead: Joi.string().hex().length(24).optional().allow(null),
+        dueDate:     Joi.date().iso().optional().allow(null),
+        priority:    Joi.string().valid('low', 'medium', 'high', 'urgent').optional(),
+        status:      Joi.string().valid('pending', 'in_progress', 'completed', 'cancelled').optional()
+    }).min(1),
+
+    updateTeamTaskStatus: Joi.object({
+        status: Joi.string().valid('pending', 'in_progress', 'completed', 'cancelled').required()
     })
 };
 

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const whatsappBroadcastController = require('../controllers/whatsappBroadcastController');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 
 // Get all broadcasts
@@ -14,10 +15,10 @@ router.get('/:id', validateObjectId({ params: ['id'] }), authMiddleware, whatsap
 router.post('/', authMiddleware, requireFeature('whatsapp.broadcast'), whatsappBroadcastController.createBroadcast);
 
 // Start/Schedule broadcast
-router.post('/:id/start', validateObjectId({ params: ['id'] }), authMiddleware, requireFeature('whatsapp.broadcast'), whatsappBroadcastController.startBroadcast);
+router.post('/:id/start', validateObjectId({ params: ['id'] }), authMiddleware, requireFeature('whatsapp.broadcast'), validate(schemas.noBody), whatsappBroadcastController.startBroadcast);
 
 // Cancel broadcast
-router.post('/:id/cancel', validateObjectId({ params: ['id'] }), authMiddleware, whatsappBroadcastController.cancelBroadcast);
+router.post('/:id/cancel', validateObjectId({ params: ['id'] }), authMiddleware, validate(schemas.noBody), whatsappBroadcastController.cancelBroadcast);
 
 // Delete broadcast
 router.delete('/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireFeature('whatsapp.broadcast'), whatsappBroadcastController.deleteBroadcast);
@@ -26,10 +27,10 @@ router.delete('/:id', validateObjectId({ params: ['id'] }), authMiddleware, requ
 router.get('/:id/export', validateObjectId({ params: ['id'] }), authMiddleware, whatsappBroadcastController.exportBroadcast);
 
 // Recalculate delivered/read/failed stats from message records (fixes webhook gaps)
-router.post('/:id/recalculate-stats', validateObjectId({ params: ['id'] }), authMiddleware, whatsappBroadcastController.recalculateStats);
+router.post('/:id/recalculate-stats', validateObjectId({ params: ['id'] }), authMiddleware, validate(schemas.noBody), whatsappBroadcastController.recalculateStats);
 
 // Create a retarget-failed draft broadcast
-router.post('/:id/retarget-failed', validateObjectId({ params: ['id'] }), authMiddleware, requireFeature('whatsapp.broadcast'), whatsappBroadcastController.retargetFailed);
+router.post('/:id/retarget-failed', validateObjectId({ params: ['id'] }), authMiddleware, requireFeature('whatsapp.broadcast'), validate(schemas.noBody), whatsappBroadcastController.retargetFailed);
 
 // H3: Get contact-level delivery details for a broadcast (with pagination + status filter)
 router.get('/:id/messages', validateObjectId({ params: ['id'] }), authMiddleware, whatsappBroadcastController.getBroadcastMessages);

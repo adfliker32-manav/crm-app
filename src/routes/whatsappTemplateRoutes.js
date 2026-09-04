@@ -4,6 +4,7 @@ const whatsappTemplateController = require('../controllers/whatsappTemplateContr
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 
 // Get all templates
 router.get('/', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), whatsappTemplateController.getTemplates);
@@ -24,14 +25,14 @@ router.delete('/:id', validateObjectId({ params: ['id'] }), authMiddleware, requ
 router.post('/send', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), whatsappTemplateController.sendTemplateMessage);
 
 // Submit template for review
-router.post('/:id/submit-review', validateObjectId({ params: ['id'] }), authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), whatsappTemplateController.submitTemplate);
-router.post('/:id/submit', validateObjectId({ params: ['id'] }), authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), whatsappTemplateController.submitTemplate); // alias
+router.post('/:id/submit-review', validateObjectId({ params: ['id'] }), authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), validate(schemas.noBody), whatsappTemplateController.submitTemplate);
+router.post('/:id/submit', validateObjectId({ params: ['id'] }), authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), validate(schemas.noBody), whatsappTemplateController.submitTemplate); // alias
 
 // Sync template status from Meta
-router.post('/:id/sync', validateObjectId({ params: ['id'] }), authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), whatsappTemplateController.syncTemplate);
+router.post('/:id/sync', validateObjectId({ params: ['id'] }), authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), validate(schemas.noBody), whatsappTemplateController.syncTemplate);
 
 // Duplicate template
-router.post('/:id/duplicate', validateObjectId({ params: ['id'] }), authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), whatsappTemplateController.duplicateTemplate);
+router.post('/:id/duplicate', validateObjectId({ params: ['id'] }), authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), validate(schemas.noBody), whatsappTemplateController.duplicateTemplate);
 
 // Get template analytics
 router.get('/:id/analytics', validateObjectId({ params: ['id'] }), authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.templates'), whatsappTemplateController.getTemplateAnalytics);

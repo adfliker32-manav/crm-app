@@ -69,6 +69,10 @@ const ActivityTimeline = ({ leadId }) => {
                 return { icon: 'fa-envelope', color: 'text-blue-600', bg: 'bg-blue-50' };
             case 'WHATSAPP_SENT':
                 return { icon: 'fa-brands fa-whatsapp', color: 'text-green-600', bg: 'bg-green-50' };
+            case 'DOCUMENT_UPLOADED':
+                return { icon: 'fa-paperclip', color: 'text-cyan-600', bg: 'bg-cyan-50' };
+            case 'DOCUMENT_DELETED':
+                return { icon: 'fa-file-circle-xmark', color: 'text-red-600', bg: 'bg-red-50' };
             default:
                 return { icon: 'fa-circle', color: 'text-gray-600', bg: 'bg-gray-50' };
         }
@@ -105,6 +109,10 @@ const ActivityTimeline = ({ leadId }) => {
                 return `sent an email`;
             case 'WHATSAPP_SENT':
                 return `sent a WhatsApp message`;
+            case 'DOCUMENT_UPLOADED':
+                return metadata?.fileName ? `uploaded "${metadata.fileName}"` : `uploaded a document`;
+            case 'DOCUMENT_DELETED':
+                return metadata?.fileName ? `deleted "${metadata.fileName}"` : `deleted a document`;
             default:
                 return `performed an action`;
         }

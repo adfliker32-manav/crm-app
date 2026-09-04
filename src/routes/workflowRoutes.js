@@ -126,6 +126,7 @@ router.delete('/:id',
 router.post('/:id/publish',
     validateObjectId({ params: ['id'] }),
     canManageWorkflows,
+    validate(schemas.noBody),
     workflowController.publishWorkflow
 );
 router.patch('/:id/status',
@@ -136,6 +137,7 @@ router.patch('/:id/status',
 router.post('/:id/duplicate',
     validateObjectId({ params: ['id'] }),
     canManageWorkflows,
+    validate(schemas.noBody),
     workflowController.duplicateWorkflow
 );
 

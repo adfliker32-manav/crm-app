@@ -84,7 +84,7 @@ const LeadSchema = new mongoose.Schema({
     history: [{
         type: {
             type: String,
-            enum: ['Note', 'Follow-up', 'Email', 'WhatsApp', 'System', 'Task'],
+            enum: ['Note', 'Follow-up', 'Email', 'WhatsApp', 'System', 'Task', 'Document'],
             required: true
         },
         subType: {

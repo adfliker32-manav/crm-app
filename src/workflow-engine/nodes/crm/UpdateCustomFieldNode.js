@@ -116,12 +116,19 @@ const UpdateCustomFieldNode = {
     schema: () => ({
         fields: [
             {
-                key: 'fieldKey', label: 'Field Key', type: 'text', required: true,
-                placeholder: 'e.g. customData.Product or dealValue',
+                // custom_field_select renders a picker of the workspace's defined
+                // custom fields (plus the built-in lead properties), with a
+                // free-text escape hatch — the allowlist below is still the
+                // authority, the picker just stops people guessing key names.
+                key: 'fieldKey', label: 'Field', type: 'custom_field_select', required: true,
+                placeholder: 'e.g. customData.product or dealValue',
                 description: `Allowed: customData.*, name, phone, email, dealValue, source, address, company, etc. System fields (userId, status, assignedTo) are blocked.`
             },
             {
-                key: 'value', label: 'Value', type: 'text', required: true,
+                // Renders as a dropdown of that field's options when the selected
+                // field is a dropdown/multi-select, otherwise a plain text box.
+                key: 'value', label: 'Value', type: 'custom_field_value', required: true,
+                dependsOn: 'fieldKey',
                 placeholder: 'e.g. Premium Plan or {{lead.name}}'
             }
         ]

@@ -4,6 +4,7 @@ const chatbotController = require('../controllers/chatbotController');
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 
 // All routes require authentication, the explicit chatbot module, and the flow builder flag
 router.use(authMiddleware, requireModule('chatbot'), requireFeature('whatsapp.chatbot.flow'));
@@ -24,10 +25,10 @@ router.put('/:id', validateObjectId({ params: ['id'] }), chatbotController.updat
 router.delete('/:id', validateObjectId({ params: ['id'] }), chatbotController.deleteFlow);
 
 // Toggle flow active status
-router.post('/:id/toggle', validateObjectId({ params: ['id'] }), chatbotController.toggleFlow);
+router.post('/:id/toggle', validateObjectId({ params: ['id'] }), validate(schemas.noBody), chatbotController.toggleFlow);
 
 // Duplicate flow
-router.post('/:id/duplicate', validateObjectId({ params: ['id'] }), chatbotController.duplicateFlow);
+router.post('/:id/duplicate', validateObjectId({ params: ['id'] }), validate(schemas.noBody), chatbotController.duplicateFlow);
 
 // Get flow analytics
 router.get('/:id/analytics', validateObjectId({ params: ['id'] }), chatbotController.getFlowAnalytics);

@@ -32,7 +32,13 @@ const VIEW_ONLY = {
     manageFollowUps: false,
     accessSettings: false,
     viewBilling: false,
-    manageTeam: false
+    manageTeam: false,
+    viewTasks: true,
+    viewAllTasks: false,
+    createTasks: false,
+    editTasks: false,
+    deleteTasks: false,
+    assignTasks: false
 };
 
 // Basic Agent - Standard permissions for regular agents
@@ -62,7 +68,13 @@ const BASIC_AGENT = {
     manageFollowUps: true,
     accessSettings: false,
     viewBilling: false,
-    manageTeam: false
+    manageTeam: false,
+    viewTasks: true,
+    viewAllTasks: false,
+    createTasks: true,
+    editTasks: true,
+    deleteTasks: false,
+    assignTasks: false
 };
 
 // Senior Agent - Advanced permissions for experienced agents
@@ -92,7 +104,13 @@ const SENIOR_AGENT = {
     manageFollowUps: true,
     accessSettings: false,
     viewBilling: false,
-    manageTeam: false
+    manageTeam: false,
+    viewTasks: true,
+    viewAllTasks: true,
+    createTasks: true,
+    editTasks: true,
+    deleteTasks: false,
+    assignTasks: true
 };
 
 // Manager - Full permissions (for reference, managers bypass checks anyway)
@@ -122,7 +140,13 @@ const MANAGER = {
     manageFollowUps: true,
     accessSettings: true,
     viewBilling: true,
-    manageTeam: true
+    manageTeam: true,
+    viewTasks: true,
+    viewAllTasks: true,
+    createTasks: true,
+    editTasks: true,
+    deleteTasks: true,
+    assignTasks: true
 };
 
 module.exports = {

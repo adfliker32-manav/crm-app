@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Papa from 'papaparse';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { displayCustomValue } from '../../utils/customFieldHelpers';
 
 const ExportCSVModal = ({ isOpen, onClose, leads = [], stages = [], userTags = [], selectedIds = null }) => {
     const { showError, showSuccess } = useNotification();
@@ -9,6 +10,16 @@ const ExportCSVModal = ({ isOpen, onClose, leads = [], stages = [], userTags = [
     const [selectedSource, setSelectedSource] = useState('All');
     const [selectedTag, setSelectedTag] = useState('All');
     const [exporting, setExporting] = useState(false);
+    const [customFields, setCustomFields] = useState([]);
+
+    // Each defined custom field becomes its own CSV column, so the file opens in
+    // Excel as real data instead of one unreadable JSON blob.
+    useEffect(() => {
+        if (!isOpen) return;
+        api.get('/custom-fields')
+            .then(res => setCustomFields(res.data || []))
+            .catch(() => setCustomFields([]));
+    }, [isOpen]);
 
     // Source options are just for the dropdown; the actual export data always
     // comes fresh from the server so it is owner-verified and audit-logged.
@@ -37,17 +48,43 @@ const ExportCSVModal = ({ isOpen, onClose, leads = [], stages = [], userTags = [
                 return showError("No leads match these filters.");
             }
 
-            const dataToExport = filtered.map(lead => ({
-                Name: lead.name || '',
-                Phone: lead.phone || '',
-                Email: lead.email || '',
-                Source: lead.source || 'Manual',
-                Status: lead.status || 'New',
-                Tags: lead.tags && lead.tags.length > 0 ? lead.tags.join(', ') : '',
-                CreatedAt: new Date(lead.createdAt || lead.date).toLocaleString(),
-                Notes: lead.notes?.length || 0,
-                CustomFields: Object.keys(lead.customData || {}).length > 0 ? JSON.stringify(lead.customData) : ''
-            }));
+            // Column labels must be unique or Papa.unparse silently drops the
+            // duplicates — a custom field labelled "Email" would otherwise wipe
+            // out the built-in Email column.
+            const baseColumns = ['Name', 'Phone', 'Email', 'Source', 'Status', 'Tags', 'CreatedAt', 'Notes'];
+            const usedLabels = new Set(baseColumns);
+            const customColumns = customFields.map(field => {
+                let label = field.label;
+                let n = 2;
+                while (usedLabels.has(label)) label = `${field.label} (${n++})`;
+                usedLabels.add(label);
+                return { key: field.key, label };
+            });
+
+            const dataToExport = filtered.map(lead => {
+                const row = {
+                    Name: lead.name || '',
+                    Phone: lead.phone || '',
+                    Email: lead.email || '',
+                    Source: lead.source || 'Manual',
+                    Status: lead.status || 'New',
+                    Tags: lead.tags && lead.tags.length > 0 ? lead.tags.join(', ') : '',
+                    CreatedAt: new Date(lead.createdAt || lead.date).toLocaleString(),
+                    Notes: lead.notes?.length || 0
+                };
+                // Multi-select values arrive as arrays — joined, not JSON-stringified.
+                customColumns.forEach(({ key, label }) => {
+                    row[label] = displayCustomValue(lead.customData?.[key]);
+                });
+                // Anything captured but not defined as a field (raw Meta answers,
+                // chatbot data) still ships, in one trailing column.
+                const definedKeys = new Set(customFields.map(f => f.key));
+                const extras = Object.entries(lead.customData || {}).filter(([k]) => !definedKeys.has(k));
+                row.OtherFields = extras.length > 0
+                    ? extras.map(([k, v]) => `${k}: ${displayCustomValue(v)}`).join(' | ')
+                    : '';
+                return row;
+            });
 
             const csv = Papa.unparse(dataToExport);
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

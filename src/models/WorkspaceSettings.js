@@ -198,9 +198,17 @@ const workspaceSettingsSchema = new mongoose.Schema({
         label: { type: String, required: true },
         type: {
             type: String,
-            enum: ['text', 'number', 'date', 'dropdown', 'email', 'phone'],
+            // 'dropdown'    — agent picks ONE option    → Lead.customData[key] is a String
+            // 'multiselect' — agent picks MANY options  → Lead.customData[key] is an Array
+            // Both are the only types for which `options` is meaningful; see
+            // utils/customFieldValidation.js, which owns every read/write of it.
+            enum: ['text', 'number', 'date', 'dropdown', 'email', 'phone', 'multiselect'],
             default: 'text'
         },
+        // Allowed values for dropdown / multiselect. Stored as plain strings: the
+        // string IS the value written to the lead, so renaming an option here does
+        // NOT rewrite leads that already hold the old spelling — those keep working
+        // because validateCustomData() lets an unchanged legacy value round-trip.
         options: [String],
         required: { type: Boolean, default: false },
         order: { type: Number, default: 0 },

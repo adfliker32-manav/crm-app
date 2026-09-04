@@ -2,10 +2,16 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { useAuth } from '../../context/AuthContext';
 import ActivityTimeline from './ActivityTimeline';
+import LeadDocuments from './LeadDocuments';
 
 const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) => {
     const { showSuccess, showError } = useNotification();
+    const { user } = useAuth();
+    // Attachments are lead data, so uploading/deleting them follows editLeads —
+    // the same gate the backend route uses.
+    const canEditDocuments = user?.role === 'superadmin' || user?.role === 'manager' || !!user?.permissions?.editLeads;
     const [nextFollowUpDate, setNextFollowUpDate] = useState('');
     const [loading, setLoading] = useState(false);
     const [customFields, setCustomFields] = useState([]);
@@ -212,11 +218,29 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
         }
     };
 
-    // Helper to get custom field value safely
+    // Helper to get custom field value safely.
+    // A multi-select stores an ARRAY — rendering that directly gives React a list
+    // of strings, which it concatenates with no separator ("SEOAdsEmail"), so
+    // arrays are rendered as pills instead.
     const getCustomValue = (key) => {
         const dataSource = fullLead?.customData || lead.customData;
-        if (!dataSource) return '-';
-        return dataSource[key] || '-';
+        const value = dataSource?.[key];
+
+        if (Array.isArray(value)) {
+            if (value.length === 0) return '-';
+            return (
+                <span className="flex flex-wrap gap-1">
+                    {value.map((v, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-[11px] font-medium">
+                            {v}
+                        </span>
+                    ))}
+                </span>
+            );
+        }
+
+        if (value === null || value === undefined || value === '') return '-';
+        return typeof value === 'object' ? JSON.stringify(value) : String(value);
     };
 
     const handleRunWorkflow = async (workflowId) => {
@@ -361,6 +385,14 @@ const LeadDetailsModal = ({ isOpen, onClose, lead, onSuccess, userTags = [] }) =
                             </div>
                         </div>
                     )}
+
+                    {/* Documents & Files Section */}
+                    <div>
+                        <h4 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
+                            <i className="fa-solid fa-paperclip text-cyan-500"></i> Documents & Files
+                        </h4>
+                        <LeadDocuments leadId={lead._id} canEdit={canEditDocuments} />
+                    </div>
 
                     {/* Tasks & Follow-ups Section */}
                     <div>

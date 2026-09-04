@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authMiddleware, requireSuperAdmin } = require('../middleware/authMiddleware');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 const { uploadSupportMedia } = require('../middleware/supportUploadMiddleware');
 const { createRateLimiter } = require('../middleware/emailRateLimiter');
 const {
@@ -59,6 +60,7 @@ router.patch('/tickets/:id/close',
     validateObjectId({ params: ['id'] }),
     authMiddleware,
     authorizeTicketAccess,
+    validate(schemas.noBody),
     closeTicket
 );
 

@@ -5,6 +5,7 @@ const whatsappConversationController = require('../controllers/whatsappConversat
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 const { meterUsage } = require('../middleware/usageMeter');
 const multer = require('multer');
 
@@ -61,7 +62,7 @@ router.delete('/conversations/:id/messages', authMiddleware, requireModule('what
 router.post('/conversations/:id/send', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.sendMessage);
 
 // Mark conversation as read
-router.put('/conversations/:id/read', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.markAsRead);
+router.put('/conversations/:id/read', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), validate(schemas.noBody), whatsappConversationController.markAsRead);
 
 // Link conversation to lead
 router.post('/conversations/:id/link', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId({ params: ['id'], body: ['leadId'] }), whatsappConversationController.linkToLead);
@@ -70,7 +71,7 @@ router.post('/conversations/:id/link', authMiddleware, requireModule('whatsapp')
 router.put('/conversations/:id/status', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.updateStatus);
 
 // Resume chatbot (manual unpause)
-router.put('/conversations/:id/resume-chatbot', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.resumeChatbot);
+router.put('/conversations/:id/resume-chatbot', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), validateObjectId('id'), validate(schemas.noBody), whatsappConversationController.resumeChatbot);
 
 // Send media in conversation (file upload via multer)
 router.post('/conversations/:id/send-media', authMiddleware, requireModule('whatsapp'), requireFeature('whatsapp.inbox'), upload.single('file'), validateObjectId('id'), whatsappConversationController.sendMediaMessage);

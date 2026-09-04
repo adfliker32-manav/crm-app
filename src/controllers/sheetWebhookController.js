@@ -10,6 +10,7 @@ const WorkspaceSettings = require('../models/WorkspaceSettings');
 const { normalizePhone } = require('../services/duplicateService');
 const { queueLeadCreatedEffects } = require('../utils/leadEffects');
 const { safeTokenEqual } = require('../utils/safeCompare');
+const { coerceCustomData } = require('../utils/customFieldValidation');
 
 // One push must not be able to ask the server to do unbounded work. Apps Script
 // batches are small; anything larger is a misconfiguration or an attack.
@@ -142,6 +143,10 @@ const receiveSheetPush = async (req, res) => {
 
         // 6. Process incoming rows
         const newLeadsToInsert = [];
+        // Dropdown/multi-select cells that matched no defined option. Imported
+        // verbatim regardless — reported so the admin can fix the option list.
+        let unmappedCount = 0;
+        const unmappedSamples = new Set();
 
         for (const row of rows) {
             // Use user-defined fieldMapping: { name: 'ColumnHeader', phone: 'ColumnHeader', email: 'ColumnHeader', source: 'ColumnHeader', status: 'ColumnHeader', cfKey: 'ColumnHeader' }
@@ -162,13 +167,22 @@ const receiveSheetPush = async (req, res) => {
             const finalStatus = statusCol && row[statusCol] ? row[statusCol].toString().trim() : 'New';
 
             // Build customData from CRM custom fields using fieldMapping
-            const customData = {};
+            const rawCustomData = {};
             customFieldDefs.forEach(field => {
                 const mappedCol = fieldMapping[field.key];
                 if (mappedCol && row[mappedCol] !== undefined && row[mappedCol] !== '') {
-                    customData[field.key] = row[mappedCol].toString().trim();
+                    rawCustomData[field.key] = row[mappedCol].toString().trim();
                 }
             });
+
+            // Snap dropdown / multi-select cells onto the admin's option list so a
+            // sheet reading "seo" groups with the option "SEO". A cell that matches
+            // nothing is kept verbatim and counted — never a reason to skip a row.
+            const { cleaned: customData, unmapped } = coerceCustomData(rawCustomData, customFieldDefs);
+            if (unmapped.length > 0) {
+                unmappedCount += unmapped.length;
+                for (const u of unmapped) unmappedSamples.add(`"${u.value}" (${u.label})`);
+            }
 
             const normPhone = normalizePhone(finalPhone);
             const normEmail = finalEmail ? finalEmail.trim().toLowerCase() : null;
@@ -271,13 +285,23 @@ const receiveSheetPush = async (req, res) => {
         );
 
         console.log(`✅ [Sheet Push] User ${userId}: ${insertedCount} new leads from ${rows.length} rows`);
+        if (unmappedCount > 0) {
+            console.warn(
+                `⚠️ [Sheet Push] User ${userId}: ${unmappedCount} cell(s) outside the defined option list ` +
+                `— imported as-is: ${[...unmappedSamples].slice(0, 5).join(', ')}`
+            );
+        }
 
         res.json({
             success: true,
             message: `${insertedCount} new lead(s) imported`,
             imported: insertedCount,
             skipped: rows.length - insertedCount,
-            total: rows.length
+            total: rows.length,
+            ...(unmappedCount > 0 ? {
+                unmappedCustomValues: unmappedCount,
+                unmappedSamples: [...unmappedSamples].slice(0, 10)
+            } : {})
         });
 
     } catch (err) {

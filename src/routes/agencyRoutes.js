@@ -1,5 +1,6 @@
 const express = require('express');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 const router = express.Router();
 const {
     getAgencyClients, getAgencyAnalytics, toggleClientFreeze, createClient, updateClient
@@ -14,7 +15,7 @@ router.get('/clients', authMiddleware, requireAgency, getAgencyClients);
 router.post('/clients', authMiddleware, requireAgency, createClient);
 
 // @route   PUT /api/agency/clients/:clientId/freeze
-router.put('/clients/:clientId/freeze', validateObjectId({ params: ['clientId'] }), authMiddleware, requireAgency, toggleClientFreeze);
+router.put('/clients/:clientId/freeze', validateObjectId({ params: ['clientId'] }), authMiddleware, requireAgency, validate(schemas.toggleClientFreeze), toggleClientFreeze);
 
 // @route   PUT /api/agency/clients/:clientId — Update client properties and modules
 router.put('/clients/:clientId', validateObjectId({ params: ['clientId'] }), authMiddleware, requireAgency, updateClient);

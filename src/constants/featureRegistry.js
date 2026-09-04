@@ -100,6 +100,10 @@ const FEATURE_REGISTRY = [
         storage: { type: 'module', id: 'team' }, enforced: true,
     },
     {
+        key: 'tasks', label: 'Tasks', icon: 'fa-list-check',
+        storage: { type: 'module', id: 'tasks' }, enforced: true,
+    },
+    {
         key: 'appointments', label: 'Appointments', icon: 'fa-calendar-check',
         storage: { type: 'flag', key: 'appointments' }, enforced: false,
     },
@@ -248,6 +252,7 @@ const FEATURE_META = {
     reports:                { tagline: 'See what’s working with pipeline & performance reports.', planHint: 'Included on all paid plans', benefits: ['Pipeline reports', 'Team metrics', 'Source insights'] },
     'reports.advanced':     { tagline: 'Deeper analytics, trends and custom breakdowns.', planHint: 'Available on Enterprise', benefits: ['Trend analysis', 'Custom breakdowns', 'Export-ready charts'] },
     team:                   { tagline: 'Invite agents and control exactly what they can do.', planHint: 'Available on Pro', benefits: ['Unlimited seats', 'Granular permissions', 'Activity tracking'] },
+    tasks:                  { tagline: 'Create tasks and assign them to your agents.', planHint: 'Available on Pro', benefits: ['Assign to any agent', 'Due dates & priority', 'Real-time + email alerts'] },
     appointments:           { tagline: 'Let leads self-book into your calendar.', planHint: 'Included on all paid plans', benefits: ['Booking pages', 'Availability rules', 'Auto reminders'] },
     settings:               { tagline: 'Configure tags, fields, integrations and more.', planHint: 'Included on all paid plans', benefits: ['Custom fields', 'Integrations', 'API access'] },
     'settings.apiAccess':   { tagline: 'Connect your CRM to any third-party system.', planHint: 'Available on Enterprise', benefits: ['REST API keys', 'Webhooks', 'Custom integrations'] },

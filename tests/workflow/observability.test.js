@@ -124,8 +124,20 @@ test("L-16: startedBy accepts 'api'", () => {
 test('L-17: an initial stage placement does not satisfy a fromStage filter', () => {
     const e = read('workflow-engine/WorkflowEngine.js');
     assert.match(e, /payload\.isInitialStage && hasFromFilter/);
+
+    // The flag used to be set inline in extApiController. Lead-creation side
+    // effects were since centralised into utils/leadEffects.js, which every
+    // creation path (CRM, external API, Meta, Sheet, CSV) now funnels through —
+    // so pinning the controller checked a copy that no longer exists. Assert on
+    // the shared helper, and assert the controller still routes through it, so
+    // the pin fails if either half regresses.
+    const fx = read('utils/leadEffects.js');
+    assert.match(fx, /isInitialStage: true/,
+        'the shared lead-created effects must mark the first stage placement as initial');
+
     const ext = read('controllers/extApiController.js');
-    assert.match(ext, /isInitialStage: true/);
+    assert.match(ext, /queueLeadCreatedEffects\(/,
+        'extApiController must fire lead-created effects through the shared helper');
 });
 
 // ─── L-19: fireTrigger's return type ─────────────────────────────────────────

@@ -186,7 +186,9 @@ exports.createLead = async (req, res) => {
 
         await lead.save();
 
-        queueLeadCreatedEffects(lead, req.tenantId.toString(), { source: 'External API' });
+        // startedBy: 'api' so these runs are attributable in the execution list
+        // rather than blending in with internal CRM events (L-16).
+        queueLeadCreatedEffects(lead, req.tenantId.toString(), { source: 'External API', startedBy: 'api' });
 
         res.status(201).json({
             success: true,
@@ -332,7 +334,7 @@ exports.updateLead = async (req, res) => {
 
         // Fire stage-change automations if stage changed
         if (status && status !== prevStatus) {
-            queueLeadStageChangeEffects(lead, prevStatus);
+            queueLeadStageChangeEffects(lead, prevStatus, { startedBy: 'api' });
         }
 
         res.json({

@@ -40,6 +40,7 @@ const Reports = lazy(() => import('./pages/Reports'));
 // which is the only route entry point for the merged "Automation" module.
 const AutomationHub = lazy(() => import('./pages/AutomationHub'));
 const Appointments = lazy(() => import('./pages/Appointments'));
+const Tasks = lazy(() => import('./pages/Tasks'));
 const BookingPage = lazy(() => import('./pages/BookingPage'));
 const TermsAndConditions = lazy(() => import('./pages/TermsAndConditions'));
 const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
@@ -114,6 +115,7 @@ function App() {
                             <Route path="/workflows" element={<FeatureGate feature="automation" featureLabel="Automation"><AutomationHub /></FeatureGate>} />
                             <Route path="/sequences" element={<FeatureGate feature="automation" featureLabel="Automation"><AutomationHub /></FeatureGate>} />
                             <Route path="/appointments" element={<FeatureGate feature="appointments" featureLabel="Appointments"><Appointments /></FeatureGate>} />
+                            <Route path="/tasks" element={<FeatureGate feature="tasks" featureLabel="Tasks"><Tasks /></FeatureGate>} />
                             {/* Settings is NOT gated as a whole — it holds universal Profile /
                                 password. Paid sub-tabs (Meta Sync, API Access) are gated inside
                                 the page individually; the rest stay reachable on every plan. */}

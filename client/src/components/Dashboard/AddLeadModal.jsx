@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import CustomFieldInput from './CustomFieldInput';
+import { initCustomData, validateCustomFields } from '../../utils/customFieldHelpers';
 
 const AddLeadModal = ({ isOpen, onClose, onSuccess, userTags = [] }) => {
     const [formData, setFormData] = useState({ name: '', phone: '', email: '', dealValue: '' });
@@ -32,9 +34,8 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess, userTags = [] }) => {
         try {
             const res = await api.get('/custom-fields');
             setCustomFields(res.data || []);
-            const initialCustomData = {};
-            (res.data || []).forEach(field => { initialCustomData[field.key] = ''; });
-            setCustomData(initialCustomData);
+            // Seeds '' for text-like fields and [] for multi-select.
+            setCustomData(initCustomData(res.data || []));
         } catch (err) {
             console.error('Failed to fetch custom fields:', err);
         }
@@ -61,12 +62,11 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess, userTags = [] }) => {
         e.preventDefault();
         setLoading(true);
         setError(null);
-        for (const field of customFields) {
-            if (field.required && !customData[field.key]) {
-                setError(`${field.label} is required`);
-                setLoading(false);
-                return;
-            }
+        const customError = validateCustomFields(customFields, customData);
+        if (customError) {
+            setError(customError);
+            setLoading(false);
+            return;
         }
         try {
             const payload = { ...formData, customData, tags: selectedTags };
@@ -109,27 +109,14 @@ const AddLeadModal = ({ isOpen, onClose, onSuccess, userTags = [] }) => {
 
     const INPUT = "w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition";
 
-    const renderCustomField = (field) => {
-        switch (field.type) {
-            case 'dropdown':
-                return (
-                    <select value={customData[field.key] || ''} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} required={field.required}>
-                        <option value="">Select {field.label}</option>
-                        {(field.options || []).map((opt, idx) => <option key={idx} value={opt}>{opt}</option>)}
-                    </select>
-                );
-            case 'date':
-                return <input type="date" value={customData[field.key] || ''} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} required={field.required} />;
-            case 'number':
-                return <input type="number" value={customData[field.key] || ''} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
-            case 'email':
-                return <input type="email" value={customData[field.key] || ''} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
-            case 'phone':
-                return <input type="tel" value={customData[field.key] || ''} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
-            default:
-                return <input type="text" value={customData[field.key] || ''} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} className={INPUT} placeholder={`Enter ${field.label}`} required={field.required} />;
-        }
-    };
+    const renderCustomField = (field) => (
+        <CustomFieldInput
+            field={field}
+            value={customData[field.key]}
+            onChange={handleCustomFieldChange}
+            className={INPUT}
+        />
+    );
 
     if (!isOpen) return null;
 

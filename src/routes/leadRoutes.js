@@ -1,6 +1,12 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const leadController = require('../controllers/leadController');
+const leadDocumentController = require('../controllers/leadDocumentController');
+const leadDocumentService = require('../services/leadDocumentService');
 const sheetSyncController = require('../controllers/sheetSyncController');
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
@@ -34,6 +40,54 @@ const exportLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 10,
     message: { success: false, error: 'rate_limit', message: 'Too many exports. Please wait 15 minutes.' }
+});
+
+// ── Lead document uploads ───────────────────────────────────────────────────
+// Uploads are staged on disk and streamed to object storage; buffering a 25 MB
+// file in memory per concurrent request would risk OOM. The temp name is
+// opaque — the stored extension is decided from the MIME allowlist in
+// leadDocumentService, never from the client's filename.
+const leadDocTempDir = path.join(process.cwd(), 'uploads', 'temp');
+if (!fs.existsSync(leadDocTempDir)) fs.mkdirSync(leadDocTempDir, { recursive: true });
+
+const leadDocUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, leadDocTempDir),
+        filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex') + '.upload')
+    }),
+    limits: { fileSize: leadDocumentService.MAX_FILE_BYTES, files: 1 }
+});
+
+// Multer throws inside middleware, so the controller's try/catch never sees a
+// too-large upload — translate those into clean JSON instead of a raw 500.
+const handleLeadDocUpload = (req, res, next) => {
+    leadDocUpload.single('file')(req, res, (err) => {
+        if (err) {
+            if (err instanceof multer.MulterError) {
+                const message = err.code === 'LIMIT_FILE_SIZE'
+                    ? `File is too large. Maximum size is ${leadDocumentService.MAX_FILE_MB} MB.`
+                    : `Upload rejected: ${err.message}`;
+                return res.status(413).json({ success: false, message });
+            }
+            return res.status(400).json({ success: false, message: err.message || 'Upload failed' });
+        }
+
+        // Guarantee the temp file is removed however the request ends. The
+        // controller's own finally block never runs when a later middleware
+        // (body validation) short-circuits with a 400. Unlinking twice is safe.
+        if (req.file?.path) {
+            res.on('finish', () => fs.unlink(req.file.path, () => {}));
+        }
+        next();
+    });
+};
+
+// Upload throttle, separate from writeLimiter: attachments are far heavier than
+// ordinary lead edits and should not consume (or be consumed by) that budget.
+const uploadLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    message: { success: false, error: 'rate_limit', message: 'Too many uploads. Please slow down.' }
 });
 
 // ==========================
@@ -125,5 +179,46 @@ router.post('/:id/notes', validateObjectId({ params: ['id'] }), authMiddleware, 
 
 // 14. Send Manual Email (PARAMETERIZED ROUTE)
 router.post('/:id/send-email', validateObjectId({ params: ['id'] }), authMiddleware, checkPermission('sendEmails'), leadController.sendManualEmail);
+
+// 15. Lead Documents (attachments stored in Cloudflare R2)
+//
+// ⚠️ MIDDLEWARE ORDER IS SECURITY-CRITICAL: validateObjectId → auth →
+// checkPermission → multer. multer writes the uploaded bytes to disk as a side
+// effect of parsing the request, so running it before authorisation would let
+// any authenticated caller stage files against a lead they cannot see.
+//
+// Documents are lead DATA, so creating and deleting them both sit under
+// `editLeads` — `deleteLeads` guards destruction of the lead record itself.
+router.get('/:id/documents',
+    validateObjectId({ params: ['id'] }),
+    authMiddleware,
+    checkPermission('viewLeads'),
+    leadDocumentController.listDocuments
+);
+
+router.post('/:id/documents',
+    validateObjectId({ params: ['id'] }),
+    authMiddleware,
+    uploadLimiter,
+    checkPermission('editLeads'),
+    handleLeadDocUpload,
+    validate(schemas.uploadLeadDocument),
+    leadDocumentController.uploadDocument
+);
+
+router.get('/:id/documents/:documentId/download',
+    validateObjectId({ params: ['id', 'documentId'] }),
+    authMiddleware,
+    checkPermission('viewLeads'),
+    leadDocumentController.downloadDocument
+);
+
+router.delete('/:id/documents/:documentId',
+    validateObjectId({ params: ['id', 'documentId'] }),
+    authMiddleware,
+    deleteLimiter,
+    checkPermission('editLeads'),
+    leadDocumentController.deleteDocument
+);
 
 module.exports = router;

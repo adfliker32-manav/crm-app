@@ -4,6 +4,7 @@ const automationController = require('../controllers/automationController');
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 
 // Protect all automation routes and resolve the tenant ID
 router.use(authMiddleware);
@@ -20,6 +21,6 @@ router.get('/', automationController.getRules);
 router.post('/', automationController.createRule);
 router.put('/:id', validateObjectId({ params: ['id'] }), automationController.updateRule);
 router.delete('/:id', validateObjectId({ params: ['id'] }), automationController.deleteRule);
-router.patch('/:id/toggle', validateObjectId({ params: ['id'] }), automationController.toggleRule);
+router.patch('/:id/toggle', validateObjectId({ params: ['id'] }), validate(schemas.toggleAutomationRule), automationController.toggleRule);
 
 module.exports = router;

@@ -191,6 +191,14 @@ const userSchema = new mongoose.Schema({
         // Team
         manageTeam: { type: Boolean, default: false },
 
+        // Tasks (team to-dos, assignable to an agent)
+        viewTasks: { type: Boolean, default: true },
+        viewAllTasks: { type: Boolean, default: false }, // false = only own (assigned/created)
+        createTasks: { type: Boolean, default: true },
+        editTasks: { type: Boolean, default: true },
+        deleteTasks: { type: Boolean, default: false },
+        assignTasks: { type: Boolean, default: false }, // required to assign a task to someone other than self
+
         // Voice Engine
         aiVoiceAccess: { type: Boolean, default: null } // null = use plan limit, true = override enable, false = override disable
     },

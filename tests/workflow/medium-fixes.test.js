@@ -88,7 +88,14 @@ test('79: payload.variables cannot overwrite built-ins', () => {
 // ─── 80: replayed nodes are marked skipped ──────────────────────────────────
 test('80: a ledger replay is recorded as skipped, not completed', () => {
     const e = read('workflow-engine/WorkflowEngine.js');
-    assert.match(e, /replayedFromLedger \? 'skipped' : 'completed'/);
+    // The status expression later grew a 'failed' arm, so the original exact pin
+    // (`replayedFromLedger ? 'skipped' : 'completed'`) stopped matching even
+    // though the property it guards was never broken. Pin the property instead:
+    // a ledger replay must short-circuit to 'skipped' ahead of any other outcome.
+    assert.match(
+        e, /replayedFromLedger \s*\?\s*'skipped'\s*:/,
+        "a replayed node must record as 'skipped' before any other status is considered"
+    );
 });
 
 // ─── 42: in-flight cancellation ─────────────────────────────────────────────

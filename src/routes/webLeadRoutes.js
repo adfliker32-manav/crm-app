@@ -3,6 +3,7 @@ const router = express.Router();
 const webLeadController = require('../controllers/webLeadController');
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
 const checkPermission = require('../middleware/checkPermission');
+const { validate, schemas } = require('../middleware/validateRequest');
 const rateLimit = require('express-rate-limit');
 
 // ── Public capture endpoint — accessed from any landing page ─────────────────
@@ -34,6 +35,6 @@ router.post('/capture', captureRateLimit, webLeadController.captureLead);
 // false for agents, matching tagRoutes/emailRoutes.
 router.get('/config', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.webLead'), webLeadController.getConfig);
 router.put('/config', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.webLead'), webLeadController.updateConfig);
-router.post('/regenerate', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.webLead'), webLeadController.regenerateKey);
+router.post('/regenerate', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.webLead'), validate(schemas.noBody), webLeadController.regenerateKey);
 
 module.exports = router;

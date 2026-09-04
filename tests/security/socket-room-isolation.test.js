@@ -90,8 +90,11 @@ test('C-1: an undefined parent can never reach the filter', () => {
 // ─── Source-level pins ───────────────────────────────────────────────────────
 test('C-1: socketService resolves parentId from the database during the handshake', () => {
     const s = read('services', 'socketService.js');
+    // Pinned to the exact 3-field select string, so adding a 4th ('role') broke it
+    // while the security property was untouched. What matters is that the handshake
+    // lookup selects parentId — extra fields are irrelevant to this guarantee.
     assert.match(
-        s, /\.select\(['"]tokenVersion is_active parentId['"]\)/,
+        s, /\.select\(['"][^'"]*\bparentId\b[^'"]*['"]\)/,
         'the handshake lookup must select parentId so the guard has server-resolved state'
     );
     assert.match(

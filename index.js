@@ -32,6 +32,7 @@ const metaRoutes = require('./src/routes/metaRoutes'); // Meta Lead Sync
 const customFieldRoutes = require('./src/routes/customFieldRoutes'); // Custom Lead Fields
 const reportRoutes = require('./src/routes/reportRoutes'); // Reports & Analytics
 const taskRoutes = require('./src/routes/taskRoutes'); // Tasks & Reminders
+const teamTaskRoutes = require('./src/routes/teamTaskRoutes'); // Team Tasks (admin assigns to agent)
 const analyticsRoutes = require('./src/routes/analyticsRoutes'); // Advanced Analytics
 const automationRoutes = require('./src/routes/automationRoutes'); // Visual Automation Engine
 const appointmentRoutes = require('./src/routes/appointmentRoutes'); // Appointment Booking
@@ -616,6 +617,10 @@ app.use('/api/stages', authMiddleware, requireModule('leads'), stageRoutes);
 app.use('/api/custom-fields', authMiddleware, requireModule('leads'), customFieldRoutes);
 app.use('/api/tags', authMiddleware, requireModule('leads'), require('./src/routes/tagRoutes'));
 app.use('/api/tasks', authMiddleware, taskRoutes);
+// Team Tasks — separate module from the legacy per-lead follow-up reminder
+// above: general to-dos an admin (or an agent, for themselves) can assign to
+// a team member. Plan-gated by the 'tasks' module, same tier as leads/team.
+app.use('/api/team-tasks', authMiddleware, requireModule('tasks'), teamTaskRoutes);
 // Feature registry metadata + upgrade-prompt analytics (auth applied per-route).
 app.use('/api/features', require('./src/routes/featureRoutes'));
 // Plan-gated by the 'automations' module (drip Sequences are part of Automations,

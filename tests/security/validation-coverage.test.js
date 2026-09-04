@@ -20,7 +20,18 @@ const path = require('node:path');
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'src', 'routes');
 
 // Ratchet. Only ever edit this DOWNWARD.
-const BASELINE_UNVALIDATED = 193;
+//
+// 193 → 190: the custom-field write routes gained real schemas, and 19 action
+// routes that read NOTHING from req.body (toggle / duplicate / publish /
+// mark-read / regenerate / close) were pinned to `schemas.noBody`, plus two
+// small enumerated bodies (automation toggle, agency client freeze).
+//
+// The remaining 190 are the ones whose bodies still have to be read out of their
+// controllers first. Do NOT clear them by guessing field names: validate() runs
+// with stripUnknown, so a field missing from a schema is SILENTLY DELETED before
+// the handler sees it — a wrong schema breaks a feature invisibly rather than
+// loudly. Verify each controller's real field list, as the entries above were.
+const BASELINE_UNVALIDATED = 190;
 
 const scanRoutes = () => {
     const perFile = [];

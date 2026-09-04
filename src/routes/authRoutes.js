@@ -76,7 +76,7 @@ router.put('/profile', authMiddleware, authController.updateProfile);
 // Billing removed
 
 // 5. Accept Terms & Conditions
-router.post('/accept-terms', authMiddleware, authController.acceptTerms);
+router.post('/accept-terms', authMiddleware, validate(schemas.noBody), authController.acceptTerms);
 
 // 5b. Payment status (for banner UI — 5-day warning / 7-day grace)
 router.get('/payment-status', authMiddleware, authController.getPaymentStatus);
@@ -86,7 +86,7 @@ router.get('/app-name', authController.getAppName);
 
 // 7. Claude AI / MCP key management (workspace owners only — enforced in controller)
 router.get('/mcp-key',    authMiddleware, mcpKeyController.getMcpKey);
-router.post('/mcp-key',   authMiddleware, mcpKeyController.generateMcpKey);
+router.post('/mcp-key',   authMiddleware, validate(schemas.noBody), mcpKeyController.generateMcpKey);
 router.delete('/mcp-key', authMiddleware, mcpKeyController.revokeMcpKey);
 
 module.exports = router;

@@ -36,7 +36,15 @@ const activityLogSchema = new mongoose.Schema({
             'AGENT_CREATED',
             'AGENT_DELETED',
             'BULK_ACTION',
-            'LEADS_EXPORTED'
+            'LEADS_EXPORTED',
+            'DOCUMENT_UPLOADED',
+            'DOCUMENT_DELETED',
+            'TASK_CREATED',
+            'TASK_EDITED',
+            'TASK_ASSIGNED',
+            'TASK_STATUS_CHANGED',
+            'TASK_COMPLETED',
+            'TASK_DELETED'
         ],
         index: true
     },
@@ -45,7 +53,7 @@ const activityLogSchema = new mongoose.Schema({
     entityType: {
         type: String,
         required: true,
-        enum: ['Lead', 'Note', 'Stage', 'User', 'Email', 'WhatsApp']
+        enum: ['Lead', 'Note', 'Stage', 'User', 'Email', 'WhatsApp', 'Task']
     },
     entityId: {
         type: mongoose.Schema.Types.ObjectId,

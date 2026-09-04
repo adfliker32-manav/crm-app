@@ -12,6 +12,7 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
     const [stages, setStages] = useState([]);
     const [users, setUsers] = useState([]);
     const [whatsappTemplates, setWhatsappTemplates] = useState([]);
+    const [customFields, setCustomFields] = useState([]);
 
     const defaultRule = {
         name: '',
@@ -54,6 +55,12 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
                 const userRes = await api.get('/auth/my-team?includeManager=true');
                 setUsers(userRes.data || []);
             } catch (err) { console.error('Failed to load users', err); }
+
+            // Custom field definitions — drive the condition field + value pickers
+            try {
+                const cfRes = await api.get('/custom-fields');
+                setCustomFields(cfRes.data || []);
+            } catch (err) { console.error('Failed to load custom fields', err); }
 
             // Fetch WA templates
             try {
@@ -258,7 +265,11 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
                                             <option value="source">Lead Source</option>
                                             <option value="status">Lead Stage</option>
                                             <option value="dealValue">Deal Value</option>
-                                            <option value="customData.Product">Custom: Product</option>
+                                            {/* Was a single hardcoded "customData.Product" entry, which only
+                                                worked for workspaces that happened to have that exact field. */}
+                                            {customFields.map(cf => (
+                                                <option key={cf.key} value={`customData.${cf.key}`}>Custom: {cf.label}</option>
+                                            ))}
                                         </select>
                                         <select className="w-full md:w-1/3 px-3 py-2 border border-slate-200 rounded-md text-sm" value={cond.operator} onChange={(e) => updateCondition(idx, 'operator', e.target.value)}>
                                             <option value="equals">Equals</option>
@@ -267,14 +278,35 @@ const RuleBuilderModal = ({ isOpen, onClose, onSave, editingRule = null }) => {
                                             <option value="greater_than">Greater Than</option>
                                             <option value="less_than">Less Than</option>
                                         </select>
-                                        {cond.field === 'status' ? (
-                                            <select className="w-full md:w-1/3 px-3 py-2 border border-slate-200 rounded-md text-sm bg-white" value={cond.value} onChange={(e) => updateCondition(idx, 'value', e.target.value)}>
-                                                <option value="">-- Select Stage --</option>
-                                                {stages.map(s => <option key={s._id} value={s.name}>{s.name}</option>)}
-                                            </select>
-                                        ) : (
-                                            <input type="text" className="w-full md:w-1/3 px-3 py-2 border border-slate-200 rounded-md text-sm" placeholder="Value..." value={cond.value} onChange={(e) => updateCondition(idx, 'value', e.target.value)} />
-                                        )}
+                                        {(() => {
+                                            if (cond.field === 'status') {
+                                                return (
+                                                    <select className="w-full md:w-1/3 px-3 py-2 border border-slate-200 rounded-md text-sm bg-white" value={cond.value} onChange={(e) => updateCondition(idx, 'value', e.target.value)}>
+                                                        <option value="">-- Select Stage --</option>
+                                                        {stages.map(s => <option key={s._id} value={s.name}>{s.name}</option>)}
+                                                    </select>
+                                                );
+                                            }
+
+                                            // A dropdown/multi-select custom field offers its own options.
+                                            // 'contains' stays free-text — it's for partial matching.
+                                            const cfKey = cond.field?.startsWith('customData.') ? cond.field.slice('customData.'.length) : null;
+                                            const cfDef = cfKey ? customFields.find(f => f.key === cfKey) : null;
+                                            const cfOptions = (cfDef?.type === 'dropdown' || cfDef?.type === 'multiselect') ? (cfDef.options || []) : [];
+
+                                            if (cfOptions.length > 0 && ['equals', 'not_equals'].includes(cond.operator)) {
+                                                return (
+                                                    <select className="w-full md:w-1/3 px-3 py-2 border border-slate-200 rounded-md text-sm bg-white" value={cond.value} onChange={(e) => updateCondition(idx, 'value', e.target.value)}>
+                                                        <option value="">-- Select Value --</option>
+                                                        {cfOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                                                    </select>
+                                                );
+                                            }
+
+                                            return (
+                                                <input type="text" className="w-full md:w-1/3 px-3 py-2 border border-slate-200 rounded-md text-sm" placeholder="Value..." value={cond.value} onChange={(e) => updateCondition(idx, 'value', e.target.value)} />
+                                            );
+                                        })()}
                                         <button onClick={() => removeCondition(idx)} className="text-red-400 hover:text-red-600 transition shrink-0">
                                             <i className="fa-solid fa-xmark"></i>
                                         </button>

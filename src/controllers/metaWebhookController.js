@@ -9,6 +9,7 @@ const { normalizePhoneForWhatsApp } = require('../utils/phoneUtils');
 const { queueLeadCreatedEffects } = require('../utils/leadEffects');
 const { checkAndRefreshToken } = require('./metaController');
 const telemetryService = require('../services/telemetryService');
+const { coerceCustomData } = require('../utils/customFieldValidation');
 
 const META_GRAPH_URL = 'https://graph.facebook.com/v26.0';
 const META_API_TIMEOUT = 8000; // 8s — prevents hung threads on slow Meta API
@@ -535,12 +536,27 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             });
         }
 
+        // Step 3: Snap dropdown / multi-select answers onto the admin's option list.
+        // A Meta form answer of "50,000 - 1 lakh" becomes the exact option
+        // "50,000-1 Lakh" so filters and reports group it with the rest.
+        // NOTE: a value with no matching option is kept VERBATIM and only flagged —
+        // dropping it (or the lead) would silently lose a paid-for lead.
+        const { cleaned: coercedCustomData, unmapped } = coerceCustomData(customData, customFieldDefs);
+
         const resolvedName = leadDetails.name || 'Unknown';
 
         // Use form-specific source so automation conditions can distinguish forms.
         const metaSource = formId ? `Meta (Form: ${formId})` : 'Meta';
 
         const notes = [{ text: `Lead captured from Meta Lead Ads (Form: ${formId})`, date: new Date() }];
+        if (unmapped.length > 0) {
+            const detail = unmapped.map(u => `"${u.value}" (${u.label})`).join(', ');
+            notes.push({
+                text: `⚠️ Answer not in your option list — saved as-is: ${detail}. Add it in Settings → Custom Fields to keep values consistent.`,
+                date: new Date()
+            });
+            console.warn(`[Meta Sync] User ${userId}: ${unmapped.length} custom field answer(s) outside the defined options.`);
+        }
         if (!leadDetails.name) {
             notes.push({ text: '⚠️ Name not captured — the Meta lead form may not include a name field.', date: new Date() });
         }
@@ -565,7 +581,7 @@ async function createLeadFromMeta(userId, leadDetails, formId, leadgenId = null)
             dateOfBirth: leadDetails.dateOfBirth || null,
             // Assign to Meta's default agent if configured
             assignedTo: leadDetails._defaultAssignedAgent || null,
-            customData,
+            customData: coercedCustomData,
             notes,
             history: [{
                 type: 'System',
