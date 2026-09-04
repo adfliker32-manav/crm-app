@@ -16,6 +16,9 @@ const TENANT = '507f1f77bcf86cd799439011';
 
 let Lead, EmailMessage, EmailConversation, EmailSuppression, EmailLog, imapService, emitted;
 
+// Every call the inbound path makes to the shared lead-created effects hub.
+let leadEffects;
+
 /** Rebuilds every stub + a fresh copy of the services under test. */
 function freshModules() {
     Lead = makeModel();
@@ -24,6 +27,7 @@ function freshModules() {
     EmailSuppression = makeModel();
     EmailLog = makeModel();
     emitted = [];
+    leadEffects = [];
 
     stub('models/Lead', Lead);
     stub('models/EmailMessage', EmailMessage);
@@ -39,6 +43,21 @@ function freshModules() {
         emitToConversation: () => {}
     });
     stub('utils/whatsappUtils', { getCompanyUserIds: async (id) => [String(id)] });
+
+    // The real guard reads WorkspaceSettings, which is a live mongoose model —
+    // unstubbed it buffered against a database that isn't running here and every
+    // test that reached lead creation timed out after 10s. Allow by default.
+    stub('utils/leadLimitGuard', { checkLeadLimit: async () => ({ allowed: true }) });
+
+    // The lead-created effects hub. Stubbed both because the real one pulls in
+    // the whole automation stack (SMTP, BullMQ, Meta) and because *whether it is
+    // called* is the behaviour under test.
+    stub('utils/leadEffects', {
+        queueLeadCreatedEffects: (lead, ownerId, options = {}) =>
+            leadEffects.push({ lead, ownerId, options }),
+        queueLeadStageChangeEffects: () => {},
+        appendLeadHistory: async () => {}
+    });
 
     // bounceService is the real implementation — that's what we're testing.
     unstub('services/bounceService');
@@ -174,5 +193,311 @@ describe('inbound email — threading and counters (L6, F11)', () => {
         await imapService.processIncomingEmail(user, { uid: 50 }, mail('sales@ourcompany.com', 'Note to self', 'x'));
         assert.equal(EmailMessage.__store.length, 0);
         assert.equal(Lead.__store.length, 0);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lead-created effects on inbound mail.
+//
+// The defect: imapService called Lead.create() directly and never called the
+// shared effects hub, so a lead that arrived by email got no sequence
+// enrolment, no automation-rule evaluation, no workflow trigger, no welcome
+// message, no CAPI event and no arrival alert. It was one of only two paths in
+// the codebase to skip the hub — the other being the outbound path in
+// emailSyncService. Every test here fails against the pre-fix source.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('inbound email — lead-created effects', () => {
+    beforeEach(freshModules);
+
+    test('a first-time sender fires the lead-created effects hub exactly once', async () => {
+        await imapService.processIncomingEmail(
+            user, { uid: 60 },
+            mail('brandnew@acme.com', 'Do you ship to India?', 'Asking about pricing.')
+        );
+
+        assert.equal(Lead.__store.length, 1, 'the sender should become a lead');
+        assert.equal(leadEffects.length, 1,
+            'an email-born lead must enter sequences/automations/workflows like every other source');
+
+        const [call] = leadEffects;
+        assert.equal(String(call.lead.email), 'brandnew@acme.com');
+        assert.equal(String(call.ownerId), TENANT, 'effects must be scoped to the owning tenant');
+        assert.equal(call.options.source, 'Email Inbound');
+    });
+
+    test('inbound mail does NOT suppress the welcome — a cold arrival is a real new lead', async () => {
+        await imapService.processIncomingEmail(
+            user, { uid: 61 },
+            mail('cold@acme.com', 'Enquiry', 'hello')
+        );
+
+        assert.notEqual(leadEffects[0].options.skipWelcome, true,
+            'inbound is the WhatsApp-inbound case: the welcome message should fire');
+    });
+
+    test('effects fire only AFTER the message is persisted', async () => {
+        // A LEAD_CREATED workflow must be able to read the email that caused it.
+        let messagesAtFireTime = null;
+        const { stub: restub } = require('./helpers/stub');
+        restub('utils/leadEffects', {
+            queueLeadCreatedEffects: () => { messagesAtFireTime = EmailMessage.__store.length; },
+            queueLeadStageChangeEffects: () => {},
+            appendLeadHistory: async () => {}
+        });
+
+        await imapService.processIncomingEmail(
+            user, { uid: 62 },
+            mail('ordering@acme.com', 'Quote please', 'body')
+        );
+
+        assert.equal(messagesAtFireTime, 1,
+            'the inbound message must already be stored when automations run');
+    });
+
+    test('a reply from an EXISTING lead does not re-fire lead-created effects', async () => {
+        await imapService.processIncomingEmail(
+            user, { uid: 70 },
+            mail('repeat@acme.com', 'First', 'one', {}, { messageId: '<r1@x>' })
+        );
+        await imapService.processIncomingEmail(
+            user, { uid: 71 },
+            mail('repeat@acme.com', 'Second', 'two', {}, { messageId: '<r2@x>' })
+        );
+
+        assert.equal(Lead.__store.length, 1);
+        assert.equal(leadEffects.length, 1,
+            're-running welcome messages and sequences on every reply would spam the contact');
+    });
+
+    test('a duplicate delivery does not re-fire lead-created effects', async () => {
+        const dup = mail('once@acme.com', 'Hello', 'hi', {}, { messageId: '<dupe@x>' });
+
+        await imapService.processIncomingEmail(user, { uid: 80 }, dup);
+        await imapService.processIncomingEmail(user, { uid: 80 }, dup);
+
+        assert.equal(leadEffects.length, 1, 'dedupe must short-circuit before any effects');
+    });
+
+    test('a bounce notice fires no effects', async () => {
+        await imapService.processIncomingEmail(user, { uid: 90 }, mail(
+            'mailer-daemon@googlemail.com',
+            'Delivery Status Notification (Failure)',
+            'Final-Recipient: rfc822; dead@example.com\nStatus: 5.1.1 user unknown'
+        ));
+
+        assert.equal(leadEffects.length, 0, 'a bounce is not a new lead');
+    });
+
+    test('mail the user sent to themselves fires no effects', async () => {
+        await imapService.processIncomingEmail(
+            user, { uid: 91 },
+            mail('sales@ourcompany.com', 'Note to self', 'x')
+        );
+
+        assert.equal(leadEffects.length, 0);
+    });
+
+    test('an email-born lead records how it arrived', async () => {
+        await imapService.processIncomingEmail(
+            user, { uid: 100 },
+            mail('trace@acme.com', 'Pricing question', 'body')
+        );
+
+        const history = Lead.__store[0].history || [];
+        assert.equal(history.length, 1, 'the lead should not arrive with an empty timeline');
+        assert.match(history[0].content, /inbound email/i);
+        assert.match(history[0].content, /Pricing question/,
+            'the subject is what makes the entry useful');
+    });
+
+    test('the lead limit still blocks auto-creation — and then fires no effects', async () => {
+        const { stub: restub } = require('./helpers/stub');
+        restub('utils/leadLimitGuard', {
+            checkLeadLimit: async () => ({ allowed: false, currentCount: 500, limit: 500 })
+        });
+
+        await imapService.processIncomingEmail(
+            user, { uid: 110 },
+            mail('overflow@acme.com', 'Hi', 'x')
+        );
+
+        assert.equal(Lead.__store.length, 0, 'the plan cap must still hold');
+        assert.equal(leadEffects.length, 0);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reply effects — the email mirror of the WhatsApp "score + pause drips" step.
+//
+// `Sequence.stopOnReply` was effectively WhatsApp-only: pauseLeadSequences was
+// called from exactly one place, whatsappWebhookController. An email drip kept
+// firing at a lead who had already written back, and an inbound email scored
+// nothing at all.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('inbound email — reply effects', () => {
+    let scored, paused;
+
+    beforeEach(() => {
+        freshModules();
+        scored = [];
+        paused = [];
+        stub('services/leadScoringService', {
+            updateLeadScore: async (leadId, event) => { scored.push({ leadId: String(leadId), event }); },
+            SCORE_EVENTS: {}
+        });
+        stub('services/sequenceService', {
+            pauseLeadSequences: async (leadId) => { paused.push(String(leadId)); },
+            enrollLeadInSequences: async () => {},
+            defineSequenceJobs: () => {}
+        });
+        unstub('services/imapService');
+        imapService = require('../../src/services/imapService');
+    });
+
+    test('a reply from an existing lead scores EMAIL_REPLIED and pauses drips', async () => {
+        await imapService.processIncomingEmail(user, { uid: 200 },
+            mail('regular@acme.com', 'First', 'one', {}, { messageId: '<e1@x>' }));
+        // The first mail created the lead — no reply effects yet.
+        assert.equal(scored.length, 0, 'a lead arriving is not a reply to anything');
+        assert.equal(paused.length, 0);
+
+        await imapService.processIncomingEmail(user, { uid: 201 },
+            mail('regular@acme.com', 'Second', 'two', {}, { messageId: '<e2@x>' }));
+
+        assert.equal(scored.length, 1);
+        assert.equal(scored[0].event, 'EMAIL_REPLIED');
+        assert.equal(paused.length, 1, 'stopOnReply must work for email, not only WhatsApp');
+        assert.equal(paused[0], scored[0].leadId);
+    });
+
+    test('a brand-new lead does not pause the sequence it was just enrolled in', async () => {
+        await imapService.processIncomingEmail(user, { uid: 210 },
+            mail('fresh@acme.com', 'Hello', 'x'));
+
+        assert.equal(paused.length, 0,
+            'pausing here would race queueLeadCreatedEffects and kill the drip before step 1');
+    });
+
+    test('a bounce notice triggers no reply effects', async () => {
+        await imapService.processIncomingEmail(user, { uid: 220 }, mail(
+            'mailer-daemon@googlemail.com',
+            'Delivery Status Notification (Failure)',
+            'Final-Recipient: rfc822; dead@example.com\nStatus: 5.1.1 user unknown'
+        ));
+
+        assert.equal(scored.length, 0);
+        assert.equal(paused.length, 0);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inbound attachments.
+//
+// processIncomingEmail never read parsedMail.attachments, so every file a
+// contact emailed in was parsed and discarded. Same data-loss class the
+// WhatsApp inbound media mirror exists to prevent.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('inbound email — attachments are kept', () => {
+    let puts;
+
+    const storageStub = (putObject) => stub('services/storageService', {
+        putObject,
+        getStream: async () => { throw new Error('not used in this test'); },
+        getBuffer: async () => { throw new Error('not used in this test'); },
+        deleteObject: async () => {},
+        getPublicUrl: (k) => `https://cdn/${k}`
+    });
+
+    beforeEach(() => {
+        freshModules();
+        puts = [];
+        storageStub(async (key, body, contentType) => {
+            puts.push({ key, size: body.length, contentType });
+            return { key, url: `https://cdn/${key}` };
+        });
+        unstub('services/imapService');
+        imapService = require('../../src/services/imapService');
+    });
+
+    const withFiles = (files, messageId) =>
+        mail('sender@acme.com', 'Signed quote', 'see attached', {}, {
+            messageId: messageId || `<att-${Math.random()}@x>`,
+            attachments: files
+        });
+
+    test('an attached file is stored and recorded on the message', async () => {
+        await imapService.processIncomingEmail(user, { uid: 300 }, withFiles([
+            { filename: 'quote.pdf', contentType: 'application/pdf', content: Buffer.from('%PDF-1.4 fake') }
+        ]));
+
+        assert.equal(puts.length, 1, 'the bytes must reach object storage');
+        assert.ok(puts[0].key.startsWith(`email-inbound/${TENANT}/`),
+            `key must be tenant-scoped, got ${puts[0].key}`);
+
+        const [msg] = EmailMessage.__store;
+        assert.equal(msg.attachments.length, 1);
+        assert.equal(msg.attachments[0].originalName, 'quote.pdf');
+        assert.equal(msg.attachments[0].contentType, 'application/pdf');
+        assert.ok(msg.attachments[0].storageKey, 'the key is the only way back to the bytes');
+        assert.equal(msg.attachments[0].size, 13);
+    });
+
+    test('inline images referenced from the HTML body are not listed as files', async () => {
+        await imapService.processIncomingEmail(user, { uid: 310 }, withFiles([
+            { filename: 'logo.png', contentType: 'image/png', content: Buffer.from('png'), related: true },
+            { filename: 'real.pdf', contentType: 'application/pdf', content: Buffer.from('pdf') }
+        ]));
+
+        assert.equal(puts.length, 1, 'a signature logo is part of the body, not an attachment');
+        assert.equal(EmailMessage.__store[0].attachments[0].originalName, 'real.pdf');
+    });
+
+    test('a traversal filename cannot escape the tenant prefix', async () => {
+        await imapService.processIncomingEmail(user, { uid: 320 }, withFiles([
+            { filename: '../../../etc/passwd', contentType: 'text/plain', content: Buffer.from('x') }
+        ]));
+
+        const key = puts[0].key;
+        assert.ok(key.startsWith(`email-inbound/${TENANT}/`), `got ${key}`);
+        assert.ok(!key.includes('..'), `key must not contain traversal segments: ${key}`);
+    });
+
+    test('a hostile Message-ID cannot escape the tenant prefix either', async () => {
+        await imapService.processIncomingEmail(user, { uid: 325 }, withFiles([
+            { filename: 'a.txt', contentType: 'text/plain', content: Buffer.from('x') }
+        ], '<../../../../evil@x>'));
+
+        const key = puts[0].key;
+        assert.ok(key.startsWith(`email-inbound/${TENANT}/`), `got ${key}`);
+        assert.ok(!key.includes('..'), `key must not contain traversal segments: ${key}`);
+    });
+
+    test('an oversized attachment is skipped without losing the email', async () => {
+        await imapService.processIncomingEmail(user, { uid: 330 }, withFiles([
+            { filename: 'huge.bin', contentType: 'application/octet-stream',
+              content: Buffer.alloc(26 * 1024 * 1024) }
+        ]));
+
+        assert.equal(puts.length, 0, 'the file is skipped');
+        assert.equal(EmailMessage.__store.length, 1, 'but the message itself is still ingested');
+        assert.equal(EmailMessage.__store[0].attachments.length, 0);
+    });
+
+    test('a storage failure never costs us the email', async () => {
+        storageStub(async () => { throw new Error('R2 down'); });
+        unstub('services/imapService');
+        const svc = require('../../src/services/imapService');
+
+        await svc.processIncomingEmail(user, { uid: 340 }, withFiles([
+            { filename: 'q.pdf', contentType: 'application/pdf', content: Buffer.from('pdf') }
+        ]));
+
+        assert.equal(EmailMessage.__store.length, 1, 'the message must still be stored');
+        assert.equal(EmailMessage.__store[0].attachments.length, 0);
+    });
+
+    test('a message with no attachments touches storage not at all', async () => {
+        await imapService.processIncomingEmail(user, { uid: 350 }, mail('plain@acme.com', 'Hi', 'no files'));
+        assert.equal(puts.length, 0);
     });
 });

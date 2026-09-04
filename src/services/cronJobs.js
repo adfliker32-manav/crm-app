@@ -339,7 +339,13 @@ const runAppointmentReminders = async () => {
                         subject: label === '24h' ? '⏰ Reminder: your appointment is tomorrow' : '⏰ Reminder: your appointment is in 1 hour',
                         html:    buildReminderEmail(appt, label),
                         userId:  appt.userId,
-                        transactional: true
+                        // Same reasoning as the booking confirmation: an
+                        // appointment reminder is correspondence with the
+                        // customer, so it must appear in their Inbox thread —
+                        // `transactional: true` used to hide it.
+                        bypassSuppression: true,
+                        omitUnsubscribe:   true,
+                        skipDailyCap:      true
                     });
                     console.log(`📅 [AppointmentReminder] ${label} email sent to ${appt.customerEmail} (appt ${appt._id})`);
                 } catch (err) {

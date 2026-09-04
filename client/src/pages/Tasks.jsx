@@ -45,6 +45,9 @@ export default function Tasks() {
     const [statusFilter, setStatusFilter] = useState('all');
     const [priorityFilter, setPriorityFilter] = useState('all');
     const [search, setSearch] = useState('');
+    // fetchTasks depends on the search term, so binding it straight to the input
+    // fired one API request per keystroke. Debounced like the Email Logs search.
+    const [debouncedSearch, setDebouncedSearch] = useState('');
     const [showForm, setShowForm] = useState(false);
     const [editingTask, setEditingTask] = useState(null);
     const [loadError, setLoadError] = useState(null);
@@ -55,7 +58,7 @@ export default function Tasks() {
             const params = new URLSearchParams();
             if (statusFilter !== 'all') params.set('status', statusFilter);
             if (priorityFilter !== 'all') params.set('priority', priorityFilter);
-            if (search) params.set('q', search);
+            if (debouncedSearch) params.set('q', debouncedSearch);
             const res = await api.get(`/team-tasks?${params.toString()}`);
             setTasks(res.data?.tasks || []);
             setLoadError(null);
@@ -74,7 +77,12 @@ export default function Tasks() {
         } finally {
             setLoading(false);
         }
-    }, [statusFilter, priorityFilter, search]);
+    }, [statusFilter, priorityFilter, debouncedSearch]);
+
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
+        return () => clearTimeout(t);
+    }, [search]);
 
     useEffect(() => { fetchTasks(); }, [fetchTasks]);
 

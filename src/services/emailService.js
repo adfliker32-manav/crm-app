@@ -157,17 +157,91 @@ const isRetryableError = (error) =>
 const sendEmailWithRetry = async (options, maxRetries = 2) =>
     sendEmail({ ...options, maxRetries });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Send policy
+//
+// `transactional` used to be ONE flag doing FIVE unrelated jobs: bypass the
+// suppression list, drop the unsubscribe footer, skip the daily cap, skip the
+// analytics log AND skip the Inbox thread. That bundling was wrong for real
+// mail. An appointment confirmation must reach someone who unsubscribed from
+// marketing *and* carries no unsubscribe link — but it is genuine
+// correspondence with a customer and belongs in their thread. There was no way
+// to express that, so those emails were simply invisible in the CRM.
+//
+// The two presets are kept, because 17 call sites use them and their meaning is
+// well understood. Each behaviour can now also be set on its own, and an
+// explicit flag always beats the preset.
+// ═══════════════════════════════════════════════════════════════════════════
+const POLICY_FLAGS = [
+    'bypassSuppression', // ignore the unsubscribe / bounce blocklist
+    'omitUnsubscribe',   // no unsubscribe footer or List-Unsubscribe headers
+    'skipDailyCap',      // exempt from the per-tenant daily send cap
+    'skipRecording',     // write no EmailLog row (also disables open tracking,
+                         //   whose pixel id IS the EmailLog id)
+    'skipInbox'          // log it, but do not thread it into the Inbox
+];
+
+const resolveSendPolicy = (options = {}) => {
+    const transactional  = options.transactional === true;
+    const conversational = options.conversational === true;
+
+    const policy = {
+        bypassSuppression: transactional,
+        omitUnsubscribe:   transactional || conversational,
+        skipDailyCap:      transactional || conversational,
+        skipRecording:     transactional,
+        skipInbox:         transactional
+    };
+
+    for (const flag of POLICY_FLAGS) {
+        if (options[flag] !== undefined) policy[flag] = options[flag] === true;
+    }
+    return policy;
+};
+
 // Send Email Function
 const sendEmail = async (options) => {
-    if (await isFeatureDisabled('DISABLE_EMAILS')) {
-        console.log(`🛑 EMAIL KILL SWITCH ACTIVE. Blocked email to ${options.to}`);
-        throw new Error("Emergency: Email sending is temporarily disabled platform-wide.");
-    }
-
-    const { to, subject, text, html, from, attachments, userId, cc, bcc, transactional, conversational } = options;
+    const { to, subject, text, html, from, attachments, userId, cc, bcc, conversational } = options;
 
     if (!to || !subject || (!text && !html)) {
         throw new Error('Missing required email fields: to, subject, and text/html are required');
+    }
+
+    const policy = resolveSendPolicy(options);
+
+    // Every refusal below is recorded before it throws. Previously all of them
+    // threw straight into a caller's console.error, leaving no EmailLog row, no
+    // Inbox entry and no lead history — so a customer who never received a
+    // welcome email looked exactly like a customer we had never emailed.
+    const recordBlocked = async (blockReason, message) => {
+        if (!userId || policy.skipRecording) return;
+        try {
+            await recordOutboundEmail({
+                userId,
+                to,
+                subject,
+                text,
+                html: html || text || '',
+                status: 'blocked',
+                blockReason,
+                error: message,
+                isAutomated: options.isAutomated === true,
+                triggerType: options.triggerType || 'manual',
+                templateId: options.templateId || null,
+                leadId: options.leadId || null,
+                bodyForInbox: options.bodyForInbox
+            });
+        } catch (logErr) {
+            // Bookkeeping must never mask the real reason the send was refused.
+            console.error('⚠️ [EmailService] Could not record blocked send:', logErr.message);
+        }
+    };
+
+    if (await isFeatureDisabled('DISABLE_EMAILS')) {
+        console.log(`🛑 EMAIL KILL SWITCH ACTIVE. Blocked email to ${to}`);
+        const msg = 'Emergency: Email sending is temporarily disabled platform-wide.';
+        await recordBlocked('kill_switch', msg);
+        throw new Error(msg);
     }
 
     // Agents send with their manager's mailbox, so every downstream lookup —
@@ -176,13 +250,15 @@ const sendEmail = async (options) => {
     const tenantId = userId ? await resolveTenantId(userId) : null;
 
     // FIX B3: Check suppression list before sending.
-    // Transactional emails (payment receipts, failure alerts, security) bypass
-    // the marketing suppression list — a customer who unsubscribed from marketing
-    // must still receive billing/account-critical notices. Direct 1:1 replies
-    // typed by a human in the Inbox are also flagged transactional by the caller.
-    if (!transactional && await isEmailSuppressed(to, tenantId, { conversational })) {
+    // Mail that bypasses suppression (payment receipts, security notices,
+    // appointment confirmations) still reaches a contact who opted out of
+    // marketing. Direct 1:1 replies typed by a human are narrowed by
+    // `conversational` to hard blocks only — bounced or complained addresses.
+    if (!policy.bypassSuppression && await isEmailSuppressed(to, tenantId, { conversational })) {
         console.log(`🚫 Email to ${to} blocked — address is on suppression list (unsubscribed/bounced).`);
-        throw new Error(`Email to ${to} is blocked: address has been unsubscribed or bounced.`);
+        const msg = `Email to ${to} is blocked: address has been unsubscribed or bounced.`;
+        await recordBlocked('suppressed', msg);
+        throw new Error(msg);
     }
 
     // FIX D4: enforce the per-tenant daily cap for ALL machine-generated mail.
@@ -191,12 +267,14 @@ const sendEmail = async (options) => {
     // external API sent without any limit — the fastest route to having the
     // tenant's Gmail account suspended for exceeding ~500 sends/day.
     // Human-typed and transactional mail is exempt.
-    if (tenantId && options.isAutomated && !transactional && !conversational) {
+    if (tenantId && options.isAutomated && !policy.skipDailyCap) {
         const { checkEmailDailyLimit } = require('../utils/workflowRateLimiter');
         const daily = await checkEmailDailyLimit(String(tenantId));
         if (!daily.allowed) {
             console.warn(`🚫 Tenant ${tenantId} hit the daily email cap (${daily.count}/${daily.limit}). Blocked send to ${to}.`);
-            throw new Error(`Daily email limit reached (${daily.limit}/day). This email was not sent.`);
+            const msg = `Daily email limit reached (${daily.limit}/day). This email was not sent.`;
+            await recordBlocked('daily_cap', msg);
+            throw new Error(msg);
         }
     }
 
@@ -220,6 +298,10 @@ const sendEmail = async (options) => {
         const errorMsg = userId
             ? 'Email configuration not found. Please configure your email settings in Email Management.'
             : 'Email service not configured. Please configure email settings.';
+        // The most common "why is nothing sending?" cause, and the one that was
+        // hardest to see: an unconfigured mailbox produced a console warning and
+        // nothing else, on every send, forever.
+        await recordBlocked('no_credentials', errorMsg);
         throw new Error(errorMsg);
     }
 
@@ -239,7 +321,7 @@ const sendEmail = async (options) => {
     let unsubscribeHtml = '';
     let unsubscribeText = '';
     let unsubscribeHeaders = {};
-    if (!transactional && !conversational) {
+    if (!policy.omitUnsubscribe) {
         const backendUrl = process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
         const { buildUnsubscribeToken } = require('../controllers/emailUnsubscribeController');
         const unsubscribeToken = buildUnsubscribeToken(to);
@@ -270,9 +352,11 @@ const sendEmail = async (options) => {
     // so its _id is generated up-front and reused when the row is written —
     // that's what lets the pixel URL exist before the log does.
     //
-    // All non-transactional mail is tracked for opens, including human-typed 
-    // 1:1 replies, so that the EMAIL_OPENED trigger functions universally.
-    const trackingEnabled = !!userId && !transactional;
+    // Everything we keep an EmailLog row for is tracked for opens, including
+    // human-typed 1:1 replies, so the EMAIL_OPENED trigger works universally.
+    // Tied to skipRecording rather than a flag of its own: the pixel's id IS the
+    // EmailLog id, so tracking mail we do not log would point at nothing.
+    const trackingEnabled = !!userId && !policy.skipRecording;
     const trackingLogId = trackingEnabled ? new mongoose.Types.ObjectId() : null;
     const trackedHtml = trackingEnabled
         ? injectTracking(baseHtml, trackingLogId.toString(), process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`)
@@ -333,9 +417,11 @@ const sendEmail = async (options) => {
 
         // Record centrally so EVERY sender (workflow node, sequences, cron,
         // chatbot, external API, …) lands in the Inbox and the analytics log.
-        // Transactional mail (receipts, password resets, system alerts) is
-        // deliberately excluded — it isn't part of a contact conversation.
-        if (userId && !transactional) {
+        // Mail the caller marked skipRecording (receipts, password resets,
+        // system alerts) is excluded — it isn't contact correspondence.
+        // skipInbox is handled one level down, in recordOutboundEmail, so bulk
+        // campaigns still get their analytics row without flooding the Inbox.
+        if (userId && !policy.skipRecording) {
             await recordOutboundEmail({
                 userId,
                 to,
@@ -351,7 +437,8 @@ const sendEmail = async (options) => {
                 attachments: options.attachments || [],
                 bodyForInbox: options.bodyForInbox,
                 senderEmail: fromEmail,
-                logId: trackingLogId // pre-allocated so the tracking pixel resolves
+                logId: trackingLogId, // pre-allocated so the tracking pixel resolves
+                skipInbox: policy.skipInbox
             });
         }
 
@@ -366,7 +453,7 @@ const sendEmail = async (options) => {
         // FIX D7: a failed send used to vanish from the thread entirely — the
         // user's typed message disappeared behind a toast. Record it so the
         // Inbox can show the failed state it already knows how to render.
-        if (userId && !transactional) {
+        if (userId && !policy.skipRecording) {
             await recordOutboundEmail({
                 userId,
                 to,
@@ -382,7 +469,8 @@ const sendEmail = async (options) => {
                 attachments: options.attachments || [],
                 bodyForInbox: options.bodyForInbox,
                 senderEmail: fromEmail,
-                logId: trackingLogId // pre-allocated so the tracking pixel resolves
+                logId: trackingLogId, // pre-allocated so the tracking pixel resolves
+                skipInbox: policy.skipInbox
             });
         }
 
@@ -405,5 +493,8 @@ module.exports = {
     sendEmail,
     sendEmailWithRetry,
     createTransporter,
-    clearTransporterCache
+    clearTransporterCache,
+    // Exported so the preset→flag expansion can be asserted directly, without
+    // standing up SMTP. Callers should pass flags to sendEmail, not call this.
+    resolveSendPolicy
 };

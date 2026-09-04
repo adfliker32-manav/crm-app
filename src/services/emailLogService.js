@@ -9,7 +9,8 @@ const logEmail = async (logData) => {
             to,
             subject,
             body,
-            status, // 'sent' or 'failed'
+            status, // 'sent' | 'failed' | 'blocked'
+            blockReason = null,
             messageId,
             error,
             isAutomated = false,
@@ -32,8 +33,11 @@ const logEmail = async (logData) => {
             body: truncatedBody,
             bodyTruncated: wasTruncated,
             status,
+            blockReason: status === 'blocked' ? blockReason : null,
             messageId: status === 'sent' ? messageId : null,
-            error: status === 'failed' ? error : null,
+            // Was `status === 'failed'`, which would have discarded the reason
+            // text on a blocked row — the one thing that makes it actionable.
+            error: status === 'sent' ? null : error,
             isAutomated,
             triggerType,
             templateId,

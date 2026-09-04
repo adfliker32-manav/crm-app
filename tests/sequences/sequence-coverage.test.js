@@ -194,3 +194,67 @@ test('queueLeadCreatedEffects still wires the full effect set', () => {
         assert.ok(src.includes(effect), `${effect} must stay wired into the lead-created hub`);
     }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4 — the EMAIL lead-creation paths must go through the hub
+//
+// imapService (inbound) and emailSyncService (outbound to an unknown address)
+// were the last two paths in the codebase calling Lead.create() without the
+// shared effects hub. A lead that arrived by email therefore entered the
+// pipeline with no sequence enrolment, no automation-rule evaluation, no
+// workflow trigger, no welcome message and no CAPI event — the exact defect
+// class this file exists to prevent, in the one channel it hadn't covered.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('inbound email (imapService) fires the lead-created effects hub', () => {
+    const src = read('services', 'imapService.js');
+
+    assert.ok(
+        /Lead\.create\(/.test(src),
+        'imapService should still auto-create a lead from a first-time sender'
+    );
+    assert.ok(
+        /queueLeadCreatedEffects\(/.test(src),
+        'an email-born lead must enter sequences/automations/workflows like every other source'
+    );
+    assert.ok(
+        /isNewLead/.test(src),
+        'effects must be gated on the lead actually being new — a reply from an ' +
+        'existing contact must not re-run welcome messages or re-enrol sequences'
+    );
+});
+
+test('outbound-to-unknown-address (emailSyncService) fires the hub, not just the alert', () => {
+    const src = read('services', 'emailSyncService.js');
+
+    assert.ok(
+        /queueLeadCreatedEffects\(/.test(src),
+        'emailing a brand-new address creates a lead, which must run the full effect set'
+    );
+    assert.ok(
+        /skipWelcome:\s*true/.test(src),
+        'a human is already writing to this person — the automated welcome template ' +
+        'would land seconds after a real email'
+    );
+    // Matches a call or a destructured require, not the prose explaining why the
+    // direct call was removed.
+    assert.ok(
+        !/sendLeadArrivalAlert\s*\(|\{\s*sendLeadArrivalAlert\s*\}/.test(src),
+        'the hub already sends the arrival alert; keeping the direct call would double-fire it'
+    );
+});
+
+test('both email paths require the hub lazily (leadEffects → emailService is a cycle)', () => {
+    for (const file of ['imapService.js', 'emailSyncService.js']) {
+        const src = read('services', file);
+        assert.ok(
+            /require\('\.\.\/utils\/leadEffects'\)/.test(src),
+            `${file} must require leadEffects`
+        );
+        assert.ok(
+            !/^const .*require\('\.\.\/utils\/leadEffects'\)/m.test(src),
+            `${file} must not require leadEffects at module scope — leadEffects pulls in ` +
+            'emailAutomationService → emailService → emailSyncService, which is circular'
+        );
+    }
+});

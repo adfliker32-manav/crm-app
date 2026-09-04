@@ -1071,7 +1071,9 @@ const getDashboardStats = async (req, res) => {
             Lead.countDocuments({ createdAt: { $gte: todayStart } }),
             Lead.countDocuments({ createdAt: { $gte: weekStart } }),
             WhatsAppLog.countDocuments({ createdAt: { $gte: todayStart } }).catch(() => 0),
-            EmailLog.countDocuments({ createdAt: { $gte: todayStart } }).catch(() => 0),
+            // Excludes status 'blocked' — those never reached an SMTP server, so
+            // counting them would overstate platform volume.
+            EmailLog.countDocuments({ createdAt: { $gte: todayStart }, status: { $ne: 'blocked' } }).catch(() => 0),
             SupportTicket.countDocuments({ status: { $in: ['open', 'user_replied'] } }).catch(() => 0),
             // Orphans: managers whose parentId points to a User row that no longer exists.
             // Single-aggregation approach via $lookup so we don't N+1 the DB.
@@ -1396,7 +1398,10 @@ const getCloudUsage = async (req, res) => {
         // + aggregate plan limit totals — all in parallel
         const [whatsappSent, emailsSent, limitAgg] = await Promise.all([
             WhatsAppLog.countDocuments({ createdAt: { $gte: cycleStart } }).catch(() => 0),
-            EmailLog.countDocuments({ createdAt: { $gte: cycleStart } }).catch(() => 0),
+            // This figure is billed against the tenant's plan limit, so a send we
+            // REFUSED (unsubscribed address, daily cap, kill switch, no SMTP
+            // credentials) must not consume quota — it never left the building.
+            EmailLog.countDocuments({ createdAt: { $gte: cycleStart }, status: { $ne: 'blocked' } }).catch(() => 0),
             // ── FIX: replaced AgencySettings.find() full scan with a server-side $group ──
             // Previously: fetched every AgencySettings doc → summed in JS (O(n) docs).
             // Now: single aggregate round-trip regardless of agency count.

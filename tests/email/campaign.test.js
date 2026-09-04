@@ -16,13 +16,14 @@ const { stub, unstub, makeModel } = require('./helpers/stub');
 
 const TENANT = '507f1f77bcf86cd799439011';
 
-let EmailCampaign, Lead, campaignService, sent, dailyState, scheduled, sendBehaviour;
+let EmailCampaign, Lead, campaignService, sent, dailyState, scheduled, sendBehaviour, tenantExpired;
 
 function freshModules() {
     sent = [];
     scheduled = [];
     dailyState = { allowed: true, count: 0, remaining: 300, limit: 300 };
     sendBehaviour = () => {};
+    tenantExpired = false;
 
     EmailCampaign = makeModel();
     Lead = makeModel();
@@ -45,12 +46,29 @@ function freshModules() {
     });
     stub('utils/systemConfig', { isFeatureDisabled: async () => false });
 
+    // processBatch's first real call is isTenantExpired, which reads the live
+    // WorkspaceSettings model. Unstubbed it buffered against a database that
+    // isn't running here, so EVERY test in this file timed out after 10s before
+    // reaching a single assertion — the whole suite was dark, not "needs Mongo".
+    // Mutable so the expired-tenant pause branch can be exercised too.
+    stub('utils/tenantStatus', {
+        isTenantExpired: async () => tenantExpired,
+        getExpiredTenantIds: async () => new Set()
+    });
+
+    // Only reached when a campaign carries a templateId, but it is a real model
+    // at module scope — stub it so adding such a test can't silently re-hang.
+    stub('models/EmailTemplate', makeModel());
+
     unstub('services/campaignService');
     campaignService = require('../../src/services/campaignService');
     campaignService.__setAgendaForTest({
         schedule: async (when, name, data) => { scheduled.push({ when, name, data }); },
         cancel: async () => 1
     });
+    // Production spaces sends 250ms apart to stay under SMTP burst limits; a
+    // 60-lead drain would therefore really sleep 15 seconds here.
+    campaignService.__setSendSpacingForTest(0);
 }
 
 /** Seeds N leads and a campaign in 'sending' state. */
@@ -249,5 +267,50 @@ describe('bulk campaigns — control and safety (W7, D4)', () => {
 
         assert.equal(sent.length, 4);
         assert.ok(!sent.some(s => !s.to));
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Expired-tenant pause (BUG-1).
+//
+// This branch is the first thing processBatch does, and until the tenantStatus
+// stub landed it was also the thing that hung every test in this file — so the
+// guard itself had never once been exercised. An expired plan must PAUSE the
+// campaign (re-subscribing resumes it), never cancel or complete it, and never
+// send.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('bulk campaigns — expired tenant (BUG-1)', () => {
+    beforeEach(freshModules);
+
+    test('an expired plan pauses the campaign and sends nothing', async () => {
+        seed(10);
+        tenantExpired = true;
+
+        const more = await campaignService.processBatch('camp00000000000000000001');
+
+        assert.equal(more, false, 'the drain must stop');
+        assert.equal(sent.length, 0, 'not one email may go out on an expired plan');
+
+        const campaign = EmailCampaign.__store[0];
+        assert.equal(campaign.status, 'paused',
+            'paused, not cancelled — re-subscribing must resume the campaign');
+        assert.match(campaign.error, /expired/i, 'the reason must be visible to the user');
+    });
+
+    test('the campaign resumes from its cursor once the plan is active again', async () => {
+        seed(10);
+
+        // Send one batch, then let the plan lapse mid-campaign.
+        tenantExpired = true;
+        await campaignService.processBatch('camp00000000000000000001');
+        assert.equal(EmailCampaign.__store[0].status, 'paused');
+
+        // Re-subscribe: the operator sets it back to sending.
+        tenantExpired = false;
+        EmailCampaign.__store[0].status = 'sending';
+        await drain('camp00000000000000000001');
+
+        assert.equal(sent.length, 10, 'every recipient should still receive exactly one email');
+        assert.equal(EmailCampaign.__store[0].status, 'completed');
     });
 });

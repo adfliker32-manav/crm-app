@@ -236,7 +236,13 @@ async function sendBookingConfirmation(page, appt, customerData, frontendUrl) {
                 subject: `✅ Appointment Confirmed — ${serviceType} on ${formattedDate}`,
                 html:    emailHtml,
                 userId:  page.userId,
-                transactional: true,
+                // Was `transactional: true`, which also hid it from the Inbox —
+                // yet a booking confirmation is real correspondence with a
+                // customer and belongs in their thread. The three behaviours it
+                // actually needs, stated explicitly:
+                bypassSuppression: true, // must reach someone who opted out of marketing
+                omitUnsubscribe:   true, // there is nothing here to unsubscribe from
+                skipDailyCap:      true, // must never queue behind a campaign
                 attachments: [{
                     filename:    'appointment.ics',
                     content:     icsContent,

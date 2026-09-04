@@ -131,3 +131,136 @@ test('presets follow least privilege: only MANAGER may delete, only senior+ may 
     assert.strictEqual(PRESETS.SENIOR_AGENT.deleteTasks, false);
     assert.strictEqual(PRESETS.MANAGER.deleteTasks, true);
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Audit fixes (2026-09-05). Each test below fails against the pre-fix source.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const fs = require('node:fs');
+const path = require('node:path');
+// Full-line comments are stripped so an assertion matches code, not the prose
+// explaining what the code replaced.
+const readSrc = (...p) =>
+    fs.readFileSync(path.join(__dirname, '..', '..', 'src', ...p), 'utf8')
+        .replace(/^\s*\/\/.*$/gm, '');
+
+// ── 1. Tenant deletion must not orphan team tasks ────────────────────────────
+
+test('TeamTask is cleaned up when an account is deleted', () => {
+    const src = readSrc('services', 'accountCleanupService.js');
+    assert.match(src, /require\('\.\.\/models\/TeamTask'\)/,
+        'accountCleanupService must know about TeamTask');
+    const list = src.slice(src.indexOf('USER_OWNED_MODELS'), src.indexOf('DESTRUCTIVE-QUERY GUARD'));
+    assert.match(list, /\bTeamTask\b/,
+        'the Tasks module shipped after this list was written — a deleted tenant left every team task behind');
+});
+
+// ── 2. Legacy per-lead follow-ups respect agent row-level security ────────────
+
+test('legacy taskController narrows follow-ups to leads the agent can see', () => {
+    const src = readSrc('controllers', 'taskController.js');
+
+    assert.match(src, /visibleLeadFilter/,
+        'every query was tenant-scoped only, so a restricted agent read follow-ups for every lead');
+    assert.match(src, /req\.dataScope\?\.assignedTo/,
+        'restriction is detected from dataScope, which carries assignedTo for a limited agent');
+    // Task has no assignedTo field, so spreading dataScope into a Task query
+    // would match zero rows and silently empty the module for every agent.
+    assert.doesNotMatch(src, /Task\.find\(\{[^}]*\.\.\.req\.dataScope/,
+        'dataScope must never be spread into a Task query — assignedTo is a Lead field');
+});
+
+test('every legacy task path is scoped, not just the list', () => {
+    const src = readSrc('controllers', 'taskController.js');
+
+    for (const fn of ['getTasksByLead', 'createTask']) {
+        const start = src.indexOf(`const ${fn} = async`);
+        assert.notStrictEqual(start, -1, `${fn} not found — was it renamed?`);
+        const body = src.slice(start, src.indexOf('\n};', start));
+        assert.match(body, /Lead\.findOne\(\{[\s\S]{0,80}\.\.\.req\.dataScope/,
+            `${fn} must resolve the parent lead through dataScope before touching follow-ups`);
+    }
+
+    for (const fn of ['updateTaskStatus', 'deleteTask']) {
+        const start = src.indexOf(`const ${fn} = async`);
+        const body = src.slice(start, src.indexOf('\n};', start));
+        assert.match(body, /visibleLeadFilter\(req\)/,
+            `${fn} must not let an agent act on another agent's follow-up`);
+    }
+});
+
+// ── 3. The legacy status enum is actually enforced ───────────────────────────
+
+test('legacy updateTaskStatus rejects a status outside the enum', () => {
+    const src = readSrc('controllers', 'taskController.js');
+    const start = src.indexOf('const updateTaskStatus = async');
+    const body = src.slice(start, src.indexOf('\n};', start));
+
+    assert.match(body, /ALLOWED_STATUS/,
+        'findOneAndUpdate does not run validators by default, so any string was written straight in');
+    assert.match(body, /runValidators:\s*true/,
+        'and the schema validator must run as a second line of defence');
+    assert.match(body, /status:\s*Joi|400/,
+        'an invalid status must be a 400, not a silently corrupted row');
+});
+
+// ── 4. Team task list filters reject junk instead of 500ing ──────────────────
+
+const teamTasks = require('../../src/services/teamTaskService');
+
+// A request shaped like the ones authMiddleware builds, for a privileged user
+// so taskScope() adds no $or and the filter under test is the only variable.
+const managerReq = () => ({
+    tenantId: '507f1f77bcf86cd799439011',
+    user: { role: 'manager', userId: '507f1f77bcf86cd799439011', name: 'M', permissions: {} },
+    dataScope: { userId: '507f1f77bcf86cd799439011' }
+});
+
+const expectStatus = async (fn, status, label) => {
+    try {
+        await fn();
+    } catch (err) {
+        assert.strictEqual(err.status, status, `${label}: expected ${status}, got ${err.status} (${err.message})`);
+        return err;
+    }
+    throw new Error(`${label}: expected a ${status}, but nothing was thrown`);
+};
+
+test('an unparseable assignedTo filter is a 400, not a CastError 500', async () => {
+    await expectStatus(
+        () => teamTasks.listTasks(managerReq(), { assignedTo: 'not-an-id' }),
+        400, 'assignedTo'
+    );
+});
+
+test('an unparseable date filter is a 400, not a CastError 500', async () => {
+    await expectStatus(
+        () => teamTasks.listTasks(managerReq(), { dueBefore: 'whenever' }),
+        400, 'dueBefore'
+    );
+    await expectStatus(
+        () => teamTasks.listTasks(managerReq(), { dueAfter: 'whenever' }),
+        400, 'dueAfter'
+    );
+});
+
+// ── 5. Module + permission gating stays wired ────────────────────────────────
+
+test('the team-tasks API is behind the tasks module gate', () => {
+    const index = fs.readFileSync(path.join(__dirname, '..', '..', 'index.js'), 'utf8');
+    assert.match(index, /app\.use\('\/api\/team-tasks',[^\n]*requireModule\('tasks'\)/,
+        'a workspace without the Tasks module must not be able to call the API directly');
+});
+
+test('each team-task route carries its own permission check', () => {
+    const routes = readSrc('routes', 'teamTaskRoutes.js');
+    for (const [verb, perm] of [
+        ["get\\('/'", 'viewTasks'],
+        ["post\\('/'", 'createTasks'],
+        ["put\\('/:id'", 'editTasks'],
+        ["delete\\('/:id'", 'deleteTasks']
+    ]) {
+        const line = new RegExp(`router\\.${verb}[^\\n]*checkPermission\\('${perm}'\\)`);
+        assert.match(routes, line, `the ${perm} route lost its permission check`);
+    }
+});

@@ -28,7 +28,9 @@ const { resolveAttachments } = require('../utils/emailAttachments');
 // failing tenant cannot monopolise the worker.
 const BATCH_SIZE = 25;
 // Spacing between individual sends — SMTP providers throttle aggressive bursts.
-const SEND_SPACING_MS = 250;
+// `let` only so tests can zero it (see __setSendSpacingForTest); never reassigned
+// in production, where a burst is a genuine deliverability risk.
+let SEND_SPACING_MS = 250;
 // Gap between batches.
 const BATCH_GAP_SECONDS = 5;
 // When the daily cap is hit, retry after this long rather than failing.
@@ -176,6 +178,14 @@ const processBatch = async (campaignId) => {
                 triggerType: 'campaign',
                 templateId: campaign.templateId || null,
                 leadId: lead._id,
+                // Bulk marketing is not correspondence. Without this a 10,000
+                // recipient campaign wrote 10,000 EmailMessage documents (each
+                // carrying the full body, retained 180 days by the TTL) and
+                // bumped all 10,000 threads to the top of the Inbox, burying
+                // every real conversation behind the last send. The EmailLog row
+                // is still written, so campaign analytics, open tracking and
+                // "did we email this lead?" are unaffected.
+                skipInbox: true,
                 attachments: batchAttachments.length > 0 ? batchAttachments : undefined
             });
             sent++;
@@ -287,5 +297,8 @@ module.exports = {
     // Exported for tests — verifies multi-batch draining, cursor advance and
     // mid-batch cancellation without a live Agenda/Mongo/SMTP stack.
     processBatch,
-    __setAgendaForTest: (a) => { sharedAgenda = a; }
+    __setAgendaForTest: (a) => { sharedAgenda = a; },
+    // A 60-lead drain really does sleep 15s at the production spacing, which
+    // would make the suite unusable. Tests zero it; nothing else may call this.
+    __setSendSpacingForTest: (ms) => { SEND_SPACING_MS = ms; }
 };

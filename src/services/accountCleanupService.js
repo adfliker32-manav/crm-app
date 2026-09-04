@@ -17,6 +17,9 @@ const AutomationRule = require('../models/AutomationRule');
 const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
 const Goal = require('../models/Goal');
 const Task = require('../models/Task');
+// The Tasks module shipped after this list was written and was never added to
+// it, so every deleted tenant left their whole team-task history behind.
+const TeamTask = require('../models/TeamTask');
 const UsageLog = require('../models/UsageLog');
 // 🔴 DATA LOSS FIX: These models were NOT cleaned up on account deletion,
 // leaving sensitive API tokens, subscription data, and billing info orphaned forever.
@@ -42,6 +45,7 @@ const USER_OWNED_MODELS = [
     LeadAutomationWatcher,
     Goal,
     Task,
+    TeamTask,
     UsageLog,
     // 🔴 FIX: Previously missing — credentials and settings were orphaned on delete
     WorkspaceSettings,

@@ -164,6 +164,34 @@ const EmailInbox = () => {
         }
     }, [selectedChat, olderCursor, loadingOlder, showError]);
 
+    // Inbound attachment bytes are private — the route requires the auth header,
+    // so a plain <a href> cannot fetch them. Pull the blob through the API client
+    // and hand it to the browser via a temporary object URL (same approach as
+    // LeadDocuments).
+    const [downloadingAtt, setDownloadingAtt] = useState(null);
+    const downloadAttachment = useCallback(async (msg, index, label) => {
+        const token = `${msg._id}:${index}`;
+        setDownloadingAtt(token);
+        try {
+            const res = await api.get(
+                `/email-conversations/${msg.conversationId}/messages/${msg._id}/attachments/${index}/download`,
+                { responseType: 'blob', timeout: 120000 }
+            );
+            const url = URL.createObjectURL(res.data);
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', label || 'attachment');
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            showError(error.response?.data?.message || 'Could not download this attachment');
+        } finally {
+            setDownloadingAtt(null);
+        }
+    }, [showError]);
+
     useEffect(() => {
         setPage(1);
         fetchConversations();
@@ -773,16 +801,40 @@ const EmailInbox = () => {
                                                             </div>
                                                         )}
 
-                                                        {/* Attachments */}
+                                                        {/* Attachments. Inbound files carry a storageKey and are
+                                                            downloadable; outbound rows record names only, since the
+                                                            bytes were the caller's and are not stored. */}
                                                         {msg.attachments?.length > 0 && (
                                                             <div className="px-5 pb-2 flex flex-wrap gap-1.5">
-                                                                {msg.attachments.map((att, i) => (
-                                                                    <span key={i} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 bg-slate-50 border border-slate-200/60 px-2 py-1 rounded-lg">
-                                                                        <i className="fa-solid fa-paperclip text-[9px]"></i>
-                                                                        <span className="truncate max-w-[140px]">{att.originalName || att.filename}</span>
-                                                                        {att.size > 0 && <span className="text-slate-300">{formatBytes(att.size)}</span>}
-                                                                    </span>
-                                                                ))}
+                                                                {msg.attachments.map((att, i) => {
+                                                                    const label = att.originalName || att.filename;
+                                                                    const chip = (
+                                                                        <>
+                                                                            <i className={`fa-solid ${att.storageKey ? 'fa-download' : 'fa-paperclip'} text-[9px]`}></i>
+                                                                            <span className="truncate max-w-[140px]">{label}</span>
+                                                                            {att.size > 0 && <span className="text-slate-300">{formatBytes(att.size)}</span>}
+                                                                        </>
+                                                                    );
+                                                                    if (!att.storageKey) {
+                                                                        return (
+                                                                            <span key={i} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 bg-slate-50 border border-slate-200/60 px-2 py-1 rounded-lg">
+                                                                                {chip}
+                                                                            </span>
+                                                                        );
+                                                                    }
+                                                                    return (
+                                                                        <button
+                                                                            key={i}
+                                                                            type="button"
+                                                                            disabled={downloadingAtt === `${msg._id}:${i}`}
+                                                                            onClick={() => downloadAttachment(msg, i, label)}
+                                                                            title={`Download ${label}`}
+                                                                            className="flex items-center gap-1.5 text-[10px] font-semibold text-blue-600 bg-blue-50 border border-blue-200/60 px-2 py-1 rounded-lg hover:bg-blue-100 transition disabled:opacity-50"
+                                                                        >
+                                                                            {chip}
+                                                                        </button>
+                                                                    );
+                                                                })}
                                                             </div>
                                                         )}
 

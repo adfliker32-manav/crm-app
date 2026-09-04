@@ -52,7 +52,12 @@ const emailMessageSchema = new mongoose.Schema({
         size: Number,
         contentType: String,
         contentId: String,
-        url: String // For externally hosted/local path
+        url: String, // For externally hosted/local path
+        // Object-storage key for INBOUND attachments, mirrored on ingest and
+        // scoped `email-inbound/<tenantId>/…` so a tampered row can never
+        // address another tenant's bytes. Outbound rows record filenames only —
+        // the bytes were supplied by the caller and are not ours to keep.
+        storageKey: String
     }],
     timestamp: {
         type: Date,

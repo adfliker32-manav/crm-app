@@ -24,6 +24,15 @@ const TRIGGER_LABELS = {
     campaign:        'Campaign'
 };
 
+// Why a send was refused. Phrased as the answer to "why didn't this go out?",
+// since that is the question someone opening this screen is actually asking.
+const BLOCK_REASON_LABELS = {
+    suppressed:     'Unsubscribed / bounced',
+    daily_cap:      'Daily limit reached',
+    kill_switch:    'Sending disabled',
+    no_credentials: 'Email not configured'
+};
+
 const PAGE_SIZE = 25;
 
 const EmailLogs = () => {
@@ -115,6 +124,7 @@ const EmailLogs = () => {
                         <button onClick={() => setStatus('')} className={filterBtn(status === '')}>All</button>
                         <button onClick={() => setStatus('sent')} className={filterBtn(status === 'sent')}>Sent</button>
                         <button onClick={() => setStatus('failed')} className={filterBtn(status === 'failed')}>Failed</button>
+                        <button onClick={() => setStatus('blocked')} className={filterBtn(status === 'blocked')}>Blocked</button>
                     </div>
                     <div className="flex items-center gap-1.5">
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mr-1">Source</span>
@@ -161,20 +171,40 @@ const EmailLogs = () => {
                                 <tbody className="divide-y divide-slate-50">
                                     {logs.map(log => {
                                         const failed = log.status === 'failed';
+                                        // 'blocked' = we refused to send (unsubscribed, daily cap,
+                                        // kill switch, no SMTP credentials). Amber, not red: nothing
+                                        // went wrong technically, we chose not to send. Rendering it
+                                        // with the old failed/sent binary would have labelled every
+                                        // blocked email "Sent" — worse than not logging it at all.
+                                        const blocked = log.status === 'blocked';
                                         const isOpen = expanded === log._id;
                                         return (
                                             <React.Fragment key={log._id}>
                                                 <tr
                                                     onClick={() => toggleRow(log._id)}
-                                                    className={`cursor-pointer transition ${failed ? 'hover:bg-rose-50/40' : 'hover:bg-slate-50'}`}
+                                                    className={`cursor-pointer transition ${
+                                                        failed ? 'hover:bg-rose-50/40' : blocked ? 'hover:bg-amber-50/40' : 'hover:bg-slate-50'
+                                                    }`}
                                                 >
                                                     <td className="px-5 py-3">
-                                                        <span className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full ${
-                                                            failed ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'
-                                                        }`}>
-                                                            <i className={`fa-solid ${failed ? 'fa-xmark' : 'fa-check'} text-[9px]`}></i>
-                                                            {failed ? 'Failed' : 'Sent'}
+                                                        <span
+                                                            title={blocked ? (BLOCK_REASON_LABELS[log.blockReason] || log.error || '') : (log.error || '')}
+                                                            className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full ${
+                                                                failed ? 'bg-rose-50 text-rose-600'
+                                                                    : blocked ? 'bg-amber-50 text-amber-700'
+                                                                    : 'bg-emerald-50 text-emerald-600'
+                                                            }`}
+                                                        >
+                                                            <i className={`fa-solid ${
+                                                                failed ? 'fa-xmark' : blocked ? 'fa-ban' : 'fa-check'
+                                                            } text-[9px]`}></i>
+                                                            {failed ? 'Failed' : blocked ? 'Blocked' : 'Sent'}
                                                         </span>
+                                                        {blocked && (
+                                                            <p className="text-[10px] text-amber-600/80 mt-1 whitespace-nowrap">
+                                                                {BLOCK_REASON_LABELS[log.blockReason] || 'Not sent'}
+                                                            </p>
+                                                        )}
                                                     </td>
                                                     <td className="px-5 py-3">
                                                         <p className="font-semibold text-slate-700 text-[13px] truncate max-w-[200px]">

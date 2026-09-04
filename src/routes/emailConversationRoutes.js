@@ -20,6 +20,14 @@ router.get('/', emailConversationController.getConversations);
 router.get('/scheduled', emailConversationController.getScheduled);
 router.delete('/scheduled/:jobId', emailConversationController.cancelScheduled);
 
+// Inbound attachment bytes. Declared before the /:conversationId catch-all so
+// the literal path isn't swallowed by it.
+router.get(
+    '/:conversationId/messages/:messageId/attachments/:index/download',
+    validateObjectId({ params: ['conversationId', 'messageId'] }),
+    emailConversationController.downloadAttachment
+);
+
 router.get('/:conversationId', validateObjectId({ params: ['conversationId'] }), emailConversationController.getMessages);
 router.put('/:conversationId/read', validateObjectId({ params: ['conversationId'] }), validate(schemas.noBody), emailConversationController.markRead);
 router.put('/:conversationId/status', validateObjectId({ params: ['conversationId'] }), emailConversationController.updateStatus);

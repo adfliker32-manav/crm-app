@@ -3,6 +3,10 @@ const Lead = require('../models/Lead');
 const SCORE_EVENTS = {
     WHATSAPP_REPLIED: 20,
     WHATSAPP_SENT: 5,
+    // An inbound email is the same buying signal as an inbound WhatsApp, and was
+    // the only channel with no reply event at all — a lead who emailed back ten
+    // times scored exactly zero for it.
+    EMAIL_REPLIED: 20,
     EMAIL_SENT: 5,
     STAGE_FORWARD: 15,
     STAGE_LOST: -50,

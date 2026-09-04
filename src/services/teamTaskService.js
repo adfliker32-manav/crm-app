@@ -188,16 +188,33 @@ async function sendTaskAssignedEmail(assignee, task, assignerName) {
     }
 }
 
+// Query-string filters are raw user input and go straight into a Mongo query.
+// An unparseable id or date reached the driver as a CastError, which the
+// controller could only turn into a 500 — `?assignedTo=abc` or
+// `?dueBefore=nonsense` crashed the whole listing instead of being rejected.
+const OBJECT_ID_RE = /^[a-f\d]{24}$/i;
+
+const parseDateFilter = (value, label) => {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) throw new TeamTaskError(400, `Invalid ${label} date`);
+    return d;
+};
+
 /** Tasks visible to this requester, newest-due first. */
 async function listTasks(req, filters = {}) {
     const query = { ...taskScope(req) };
     if (filters.status) query.status = filters.status;
     if (filters.priority) query.priority = filters.priority;
-    if (filters.assignedTo) query.assignedTo = filters.assignedTo;
+    if (filters.assignedTo) {
+        if (!OBJECT_ID_RE.test(String(filters.assignedTo))) {
+            throw new TeamTaskError(400, 'Invalid assignedTo filter');
+        }
+        query.assignedTo = filters.assignedTo;
+    }
     if (filters.dueBefore || filters.dueAfter) {
         query.dueDate = {};
-        if (filters.dueAfter) query.dueDate.$gte = new Date(filters.dueAfter);
-        if (filters.dueBefore) query.dueDate.$lte = new Date(filters.dueBefore);
+        if (filters.dueAfter) query.dueDate.$gte = parseDateFilter(filters.dueAfter, 'dueAfter');
+        if (filters.dueBefore) query.dueDate.$lte = parseDateFilter(filters.dueBefore, 'dueBefore');
     }
     if (filters.q) {
         query.title = { $regex: escapeRegex(String(filters.q)), $options: 'i' };

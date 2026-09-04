@@ -52,6 +52,14 @@ async function processIncomingEmail(user, messageData, parsedMail) {
 
     // Check if a Lead exists
     let lead = await Lead.findOne({ email: normalizedFrom, userId: user._id });
+
+    // Only a lead this message actually brought into existence may fire the
+    // lead-created effects — a reply on an existing contact must not re-run
+    // welcome messages, sequences or CAPI. Set solely on the create branch;
+    // the 11000 re-read below is a lost race, meaning another path created it
+    // and already owns the effects.
+    let isNewLead = false;
+
     if (!lead) {
         // 🔒 BUG-5 FIX: Enforce lead limit before auto-creating from email.
         const { checkLeadLimit } = require('../utils/leadLimitGuard');
@@ -62,14 +70,25 @@ async function processIncomingEmail(user, messageData, parsedMail) {
         }
 
         const name = parsedMail.from.value[0].name || normalizedFrom.split('@')[0];
+        const subjectForHistory = (parsedMail.subject || '(No Subject)').slice(0, 120);
         try {
             lead = await Lead.create({
                 userId: user._id,
                 email: normalizedFrom,
                 name: name,
                 source: 'Email',
-                status: 'New'
+                status: 'New',
+                // Every other creation path records how the lead arrived; the
+                // email path recorded nothing, so an email-born lead appeared
+                // in the pipeline with a completely empty timeline.
+                history: [{
+                    type: 'System',
+                    subType: 'Created',
+                    content: `Lead created from inbound email: "${subjectForHistory}"`,
+                    date: new Date()
+                }]
             });
+            isNewLead = true;
             console.log(`✅ Created automatic lead from Email: ${normalizedFrom}`);
         } catch (err) {
             if (err.code !== 11000) throw err;
@@ -107,6 +126,10 @@ async function processIncomingEmail(user, messageData, parsedMail) {
         { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
     );
 
+    // Mirror any attached files into object storage before writing the message,
+    // so the stored row and the stored bytes land together.
+    const storedAttachments = await storeInboundAttachments(parsedMail, user._id, messageId);
+
     // Now safe to reference conversation._id
     const messageRecord = new EmailMessage({
         conversationId: conversation._id,
@@ -120,6 +143,7 @@ async function processIncomingEmail(user, messageData, parsedMail) {
         text: parsedMail.text,
         html: parsedMail.html || parsedMail.textAsHtml,
         status: 'received',
+        attachments: storedAttachments,
         timestamp: messageDate
     });
 
@@ -147,6 +171,141 @@ async function processIncomingEmail(user, messageData, parsedMail) {
         // Real-time is a convenience — polling still covers it.
         console.error('⚠️ [Email] Socket emit failed:', socketErr.message);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Lead-created effects. This service was one of only two lead-creation
+    // paths in the codebase that never called the shared hub — every other one
+    // (manual, CSV, external API, MCP, Meta, Sheets, web form, booking page and
+    // WhatsApp inbound) does. The result: a lead that arrived by email got NO
+    // sequence enrolment, NO automation-rule evaluation, NO workflow trigger,
+    // NO welcome message, NO Meta CAPI event and NO arrival alert. It simply
+    // appeared in the pipeline, silently, and nothing ever ran on it.
+    //
+    // Deliberately fired AFTER the conversation and message are persisted, so a
+    // workflow or automation reacting to LEAD_CREATED can already read the
+    // inbound email that caused it. Effects themselves are queued in the
+    // background by the hub, so this does not delay ingestion.
+    //
+    // Required lazily: leadEffects → emailAutomationService → emailService is a
+    // cycle at module scope.
+    // ─────────────────────────────────────────────────────────────────────────
+    if (isNewLead) {
+        try {
+            const { queueLeadCreatedEffects } = require('../utils/leadEffects');
+            queueLeadCreatedEffects(lead, String(user._id), { source: 'Email Inbound' });
+        } catch (effectsErr) {
+            // Never let automation wiring lose an email that is already stored.
+            console.error('⚠️ [Email] Lead-created effects failed:', effectsErr.message);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Reply effects — the email mirror of whatsappWebhookController's "score the
+    // reply and pause any active drip sequences" step, which email never had.
+    //
+    // Consequences of the omission: `Sequence.stopOnReply` was effectively
+    // WhatsApp-only, so an email drip kept firing at a lead who had already
+    // written back; and an inbound email scored nothing at all.
+    //
+    // Only for an EXISTING lead. A brand-new lead's first email is what just
+    // enrolled it (queueLeadCreatedEffects above) — pausing here would race that
+    // enrolment and stop the sequence before its first step ever ran. "Stop on
+    // reply" means stop when they answer something we sent.
+    // ─────────────────────────────────────────────────────────────────────────
+    if (!isNewLead) {
+        try {
+            const { updateLeadScore } = require('./leadScoringService');
+            const { pauseLeadSequences } = require('./sequenceService');
+            await Promise.all([
+                updateLeadScore(lead._id, 'EMAIL_REPLIED'),
+                pauseLeadSequences(lead._id)
+            ]);
+        } catch (replyErr) {
+            console.error('⚠️ [Email] Scoring/sequence pause failed:', replyErr.message);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inbound attachments.
+//
+// processIncomingEmail never read parsedMail.attachments, so every file a
+// contact emailed in — a signed quote, an ID, a purchase order — was parsed,
+// discarded, and gone. Outbound attachments were at least recorded by name.
+// For a CRM this is the same class of data loss the WhatsApp inbound mirror
+// (inboundMediaService) exists to prevent, so it is solved the same way: copy
+// the bytes into object storage on ingest and keep only the key on the message.
+//
+// Keys are `email-inbound/<tenantId>/…`, matching the tenant-scoped layout of
+// `email-attachments/<tenantId>/…`, so the download route can prove ownership
+// from the key alone.
+// ─────────────────────────────────────────────────────────────────────────────
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;  // a typical provider ceiling
+const MAX_ATTACHMENTS_PER_MESSAGE = 20;
+
+// Never trust a sender-supplied filename — or Message-ID — as a path component.
+// Traversal is already impossible once separators are gone, and storageService's
+// localPathFor() re-checks containment, but collapsing dot runs as well means the
+// invariant is simply "no key ever contains '..'", which is auditable at a glance.
+const safeFileName = (name, index) => {
+    const cleaned = String(name || '')
+        .replace(/[\\/]/g, '_')          // no path separators
+        .replace(/[^\w.\- ]/g, '_')      // no control chars or shell metachars
+        .replace(/\.{2,}/g, '_')         // no ".." anywhere
+        .replace(/^\.+/, '_')            // no leading dot (dotfiles)
+        .slice(0, 120)
+        .trim();
+    return cleaned || `attachment-${index}`;
+};
+
+async function storeInboundAttachments(parsedMail, tenantId, messageId) {
+    const all = Array.isArray(parsedMail.attachments) ? parsedMail.attachments : [];
+    if (all.length === 0) return [];
+
+    const storage = require('./storageService');
+    // `related: true` marks a part referenced from the HTML by cid (signature
+    // logos, embedded images). Those belong to the body, not to the file list.
+    const files = all.filter(a => !a.related).slice(0, MAX_ATTACHMENTS_PER_MESSAGE);
+    const stored = [];
+
+    for (let i = 0; i < files.length; i++) {
+        const att = files[i];
+        const content = att.content;
+        if (!Buffer.isBuffer(content) || content.length === 0) continue;
+        if (content.length > MAX_ATTACHMENT_BYTES) {
+            console.warn(`⚠️ [Email] Skipping oversized attachment (${content.length} bytes) on ${messageId}`);
+            continue;
+        }
+
+        const originalName = att.filename || `attachment-${i + 1}`;
+        const name = safeFileName(originalName, i + 1);
+        // The Message-ID is sender-supplied, so it is sanitised the same way
+        // before being used as a key segment.
+        const idSegment = safeFileName(messageId, 0);
+        const key = `email-inbound/${tenantId}/${idSegment}/${i}-${name}`;
+
+        try {
+            await storage.putObject(key, content, att.contentType || 'application/octet-stream', {
+                contentLength: content.length
+            });
+            stored.push({
+                filename: name,
+                originalName,
+                size: content.length,
+                contentType: att.contentType || 'application/octet-stream',
+                contentId: att.cid || undefined,
+                storageKey: key
+            });
+        } catch (err) {
+            // One unstorable file must not cost us the whole email.
+            console.error(`❌ [Email] Could not store inbound attachment "${originalName}":`, err.message);
+        }
+    }
+
+    if (stored.length > 0) {
+        console.log(`📎 [Email] Stored ${stored.length} inbound attachment(s) for ${messageId}`);
+    }
+    return stored;
 }
 
 // ⚠️ PRODUCTION NOTE:

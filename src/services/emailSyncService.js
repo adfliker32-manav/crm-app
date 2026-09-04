@@ -45,16 +45,47 @@ const resolveLead = async (tenantId, to, { allowCreate }) => {
             email,
             name: email.split('@')[0],
             source: 'Email',
-            status: 'New'
+            status: 'New',
+            history: [{
+                type: 'System',
+                subType: 'Created',
+                content: 'Lead created from an outgoing email to a new address',
+                date: new Date()
+            }]
         });
 
-        // Fire lead-arrival alerts exactly as the manual-compose path used to.
+        // ─────────────────────────────────────────────────────────────────────
+        // Full lead-created effects, not just the arrival alert.
+        //
+        // This path used to fire sendLeadArrivalAlert on its own, which meant a
+        // lead created by emailing a new address got a toast and nothing else:
+        // no sequence enrolment, no automation rules, no workflow trigger, no
+        // CAPI. The hub covers all of it — including the arrival alert, so the
+        // direct call it replaces would now be a duplicate.
+        //
+        // skipWelcome: a human is, by definition, already writing to this
+        // person. Firing the "on_lead_create" welcome template here would land
+        // an automated greeting in their mailbox seconds after a real one. The
+        // flag suppresses ONLY the two welcome sends; sequences, automation
+        // rules, workflows, alerts and scoring all still run. (Inbound mail is
+        // the opposite case — a genuine cold arrival — so imapService fires the
+        // full set, matching WhatsApp inbound.)
+        //
+        // No recursion: every automated sender passes an explicit leadId, so
+        // recordOutboundEmail short-circuits resolveLead and cannot re-enter
+        // this branch.
+        //
+        // Required lazily — leadEffects → emailAutomationService → emailService
+        // → emailSyncService is a cycle at module scope.
+        // ─────────────────────────────────────────────────────────────────────
         try {
-            const { sendLeadArrivalAlert } = require('./leadAlertService');
-            sendLeadArrivalAlert(lead).catch(err =>
-                console.error('❌ Email lead arrival alert failed:', err.message));
-        } catch (alertErr) {
-            console.error('❌ Could not trigger email lead arrival alert:', alertErr.message);
+            const { queueLeadCreatedEffects } = require('../utils/leadEffects');
+            queueLeadCreatedEffects(lead, String(tenantId), {
+                source: 'Email Outbound',
+                skipWelcome: true
+            });
+        } catch (effectsErr) {
+            console.error('❌ Could not trigger lead-created effects for email lead:', effectsErr.message);
         }
 
         return lead;
@@ -90,6 +121,7 @@ const recordOutboundEmail = async (opts = {}) => {
         html,
         messageId = null,
         status = 'sent',
+        blockReason = null,
         error = null,
         isAutomated = false,
         triggerType = 'manual',
@@ -122,6 +154,7 @@ const recordOutboundEmail = async (opts = {}) => {
             subject,
             body: inboxBody || text || '',
             status,
+            blockReason,
             messageId,
             error,
             isAutomated,
@@ -131,7 +164,11 @@ const recordOutboundEmail = async (opts = {}) => {
             attachments
         });
 
-        if (skipInbox) return;
+        // A blocked send never reached the recipient, so it is a log entry, not
+        // part of the conversation. (Showing it in the thread as a "not
+        // delivered" bubble is worthwhile, but needs an EmailMessage status and
+        // Inbox rendering to match — deliberately left as a follow-up.)
+        if (skipInbox || status === 'blocked') return;
 
         // ── 2. Inbox thread ─────────────────────────────────────────────────
         // A send that failed should not manufacture a brand-new lead from what

@@ -132,6 +132,63 @@ exports.getMessages = async (req, res) => {
     }
 };
 
+/**
+ * GET /:conversationId/messages/:messageId/attachments/:index/download
+ *
+ * Inbound attachment bytes are private: they live in object storage under
+ * `email-inbound/<tenantId>/…` and this route is the only way out. Ownership is
+ * proven twice — the message must belong to the caller's tenant, AND the stored
+ * key must sit inside that tenant's namespace, so a tampered row cannot reach
+ * another tenant's files (the same containment rule as utils/emailAttachments).
+ */
+exports.downloadAttachment = async (req, res) => {
+    try {
+        const userId = tenantOf(req);
+        const { conversationId, messageId, index } = req.params;
+
+        const message = await EmailMessage.findOne({ _id: messageId, conversationId, userId })
+            .select('attachments')
+            .lean();
+        if (!message) {
+            return res.status(404).json({ success: false, message: 'Message not found' });
+        }
+
+        const idx = Number(index);
+        const att = Number.isInteger(idx) ? (message.attachments || [])[idx] : null;
+        if (!att || !att.storageKey) {
+            return res.status(404).json({ success: false, message: 'Attachment not found' });
+        }
+
+        const expectedPrefix = `email-inbound/${userId}/`;
+        if (!String(att.storageKey).startsWith(expectedPrefix)) {
+            console.warn(`[EmailAttachments] Refusing cross-tenant key ${att.storageKey} for tenant ${userId}`);
+            return res.status(404).json({ success: false, message: 'Attachment not found' });
+        }
+
+        const storage = require('../services/storageService');
+        const stream = await storage.getStream(att.storageKey);
+
+        res.setHeader('Content-Type', att.contentType || 'application/octet-stream');
+        if (att.size) res.setHeader('Content-Length', att.size);
+        // Stored bytes must never be sniffed into something executable, and a
+        // sender-supplied file is never rendered inline.
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Disposition',
+            `attachment; filename="${String(att.originalName || att.filename || 'attachment').replace(/"/g, '')}"`);
+        res.setHeader('Cache-Control', 'private, max-age=300');
+
+        stream.on('error', (streamErr) => {
+            console.error('[EmailAttachments] stream error:', streamErr.message);
+            if (!res.headersSent) res.status(500).end();
+            else res.destroy();
+        });
+        stream.pipe(res);
+    } catch (error) {
+        console.error('Error downloading email attachment:', error);
+        if (!res.headersSent) res.status(500).json({ success: false, message: 'Could not load attachment' });
+    }
+};
+
 exports.markRead = async (req, res) => {
     try {
         const { conversationId } = req.params;

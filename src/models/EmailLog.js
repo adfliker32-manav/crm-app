@@ -21,8 +21,21 @@ const emailLogSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['sent', 'failed'],
+        // 'blocked' = we refused to send it (suppression, daily cap, kill switch,
+        // missing credentials). Previously these threw before any record was
+        // written, so "did we email this customer?" was indistinguishable from
+        // "we never tried" — the single biggest hole in email observability.
+        enum: ['sent', 'failed', 'blocked'],
         required: true
+    },
+
+    // Machine-readable cause for status === 'blocked'. Mirrors the reason enum
+    // on WorkflowDropLog, which solved exactly this problem for the workflow
+    // engine: a refusal has to say WHY, or it is just another silence.
+    blockReason: {
+        type: String,
+        enum: ['suppressed', 'daily_cap', 'kill_switch', 'no_credentials', null],
+        default: null
     },
     messageId: {
         type: String // SMTP message ID if successful
