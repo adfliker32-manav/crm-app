@@ -23,16 +23,53 @@ const PartnerDetailView = ({ partnerId, onBack }) => {
 
     useEffect(() => { fetchPartner(); }, [partnerId]);
 
-    const fetchPartner = async () => {
-        setLoading(true);
+    /**
+     * `silent` refreshes keep the current view mounted.
+     *
+     * The loading gate below swaps the entire tab tree for a spinner, which
+     * UNMOUNTS the active tab and destroys its local state. Every child called
+     * onRefresh() after a write, so a one-time secret held in tab state — the
+     * regenerated API key, the rotated webhook secret — was wiped before the
+     * admin could copy it. Those values exist nowhere else (keys are stored
+     * hashed), so that was a permanent loss requiring another rotation.
+     *
+     * Only the initial load blanks the view; refreshes now swap the data
+     * underneath a mounted tab. This also removes a full-page spinner flash
+     * after every freeze / save / mark-paid action.
+     */
+    const fetchPartner = async ({ silent = false } = {}) => {
+        if (!silent) setLoading(true);
         try {
             const res = await api.get(`/superadmin/partner-apps/${partnerId}`);
             setPartner(res.data.data);
         } catch (err) {
             showError('Failed to load partner details');
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
+    };
+
+    // What children receive as `onRefresh`. Always silent — a child refreshing
+    // after its own write must never unmount itself mid-flow.
+    const refreshPartner = () => fetchPartner({ silent: true });
+
+    // Only the active tab is rendered, so switching tabs unmounts the current
+    // one and destroys its state — the same loss the silent refresh above
+    // fixes, by a different route. The API Key tab reports when it is holding a
+    // freshly generated key or webhook secret that has not been copied yet;
+    // those exist nowhere else, so navigating away forces another rotation and
+    // breaks the partner's live integration a second time.
+    const [unsavedSecret, setUnsavedSecret] = useState(false);
+
+    const leaveGuard = (proceed) => {
+        if (unsavedSecret && !window.confirm(
+            'The newly generated key or secret has not been copied yet.\n\n' +
+            'It is stored hashed and cannot be retrieved later — leaving now means ' +
+            'generating another one, which breaks the partner\'s integration again.\n\n' +
+            'Leave without copying?'
+        )) return;
+        setUnsavedSecret(false);
+        proceed();
     };
 
     if (loading || !partner) {
@@ -52,7 +89,7 @@ const PartnerDetailView = ({ partnerId, onBack }) => {
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                     <button
-                        onClick={onBack}
+                        onClick={() => leaveGuard(onBack)}
                         className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 transition"
                     >
                         <i className="fa-solid fa-arrow-left text-lg" />
@@ -112,7 +149,7 @@ const PartnerDetailView = ({ partnerId, onBack }) => {
                     {TABS.map(tab => (
                         <button
                             key={tab.key}
-                            onClick={() => setActiveTab(tab.key)}
+                            onClick={() => leaveGuard(() => setActiveTab(tab.key))}
                             className={`px-5 py-3 text-sm font-medium rounded-t-lg transition flex items-center gap-2 ${
                                 activeTab === tab.key
                                     ? 'bg-white border border-b-0 border-slate-200 text-cyan-600 -mb-px'
@@ -129,16 +166,16 @@ const PartnerDetailView = ({ partnerId, onBack }) => {
             {/* Tab Content */}
             <div className="bg-white rounded-2xl border border-slate-200 p-6">
                 {activeTab === 'accounts' && (
-                    <PartnerAccountsTab partner={partner} onRefresh={fetchPartner} />
+                    <PartnerAccountsTab partner={partner} onRefresh={refreshPartner} />
                 )}
                 {activeTab === 'billing' && (
-                    <PartnerBillingTab partner={partner} onRefresh={fetchPartner} />
+                    <PartnerBillingTab partner={partner} onRefresh={refreshPartner} />
                 )}
                 {activeTab === 'settings' && (
-                    <PartnerSettingsTab partner={partner} onRefresh={fetchPartner} />
+                    <PartnerSettingsTab partner={partner} onRefresh={refreshPartner} />
                 )}
                 {activeTab === 'api-key' && (
-                    <PartnerApiKeyTab partner={partner} onRefresh={fetchPartner} />
+                    <PartnerApiKeyTab partner={partner} onRefresh={refreshPartner} onHoldsUnsavedSecret={setUnsavedSecret} />
                 )}
             </div>
         </div>

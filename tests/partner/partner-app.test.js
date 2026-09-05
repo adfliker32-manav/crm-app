@@ -512,6 +512,51 @@ test('PA-M5: formatMoney maps codes to symbols', () => {
     assert.ok(!formatMoney(500, 'INR').includes('INR'));
 });
 
+test('a regenerated key survives the post-write refresh', () => {
+    // The one-time key lives only in PartnerApiKeyTab state. onRefresh() used to
+    // call a fetch that set loading=true, and the parent's `if (loading)` gate
+    // swaps the whole tab tree for a spinner — unmounting the tab and destroying
+    // the key before it could be copied. Keys are stored hashed, so that loss is
+    // permanent and forces another rotation.
+    const detail = fs.readFileSync(
+        path.join(ROOT, 'client/src/components/SuperAdmin/PartnerDetailView.jsx'), 'utf8');
+    const code = stripComments(detail);
+
+    assert.match(code, /silent = false/, 'the fetch must support a non-blanking refresh');
+    assert.match(code, /if \(!silent\) setLoading\(true\)/);
+    assert.match(code, /const refreshPartner = \(\) => fetchPartner\(\{ silent: true \}\)/);
+
+    // Every child must get the silent refresher, never the blanking fetch.
+    assert.doesNotMatch(code, /onRefresh=\{fetchPartner\}/,
+        'a child refreshing after its own write must not unmount itself');
+    assert.strictEqual(
+        (code.match(/onRefresh=\{refreshPartner\}/g) || []).length, 4,
+        'all four tabs must use the silent refresher'
+    );
+});
+
+test('navigating away from an uncopied one-time secret is guarded', () => {
+    const detail = stripComments(fs.readFileSync(
+        path.join(ROOT, 'client/src/components/SuperAdmin/PartnerDetailView.jsx'), 'utf8'));
+
+    // Only the active tab renders, so a tab switch or Back destroys the key the
+    // same way the refresh did.
+    assert.match(detail, /leaveGuard/);
+    assert.match(detail, /onClick=\{\(\) => leaveGuard\(\(\) => setActiveTab\(tab\.key\)\)\}/);
+    assert.match(detail, /onClick=\{\(\) => leaveGuard\(onBack\)\}/);
+
+    const tab = stripComments(fs.readFileSync(
+        path.join(ROOT, 'client/src/components/SuperAdmin/PartnerApiKeyTab.jsx'), 'utf8'));
+
+    // The "saved" flags must LATCH — `copied` resets after 3s to restore the
+    // button label, so reusing it would re-arm the warning on its own.
+    assert.match(tab, /keySavedOnce/);
+    assert.match(tab, /secretSavedOnce/);
+    assert.match(tab, /holdsUnsaved = \(!!newlyGeneratedKey && !keySavedOnce\)/);
+    assert.doesNotMatch(tab, /holdsUnsaved = \(!!newlyGeneratedKey && !copied\)/);
+    assert.match(tab, /beforeunload/, 'a browser reload must warn too');
+});
+
 test('PA-M6: the copy button cannot copy a masked key', () => {
     const tab = fs.readFileSync(
         path.join(ROOT, 'client/src/components/SuperAdmin/PartnerApiKeyTab.jsx'), 'utf8');

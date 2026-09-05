@@ -4,7 +4,7 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 
-const PartnerApiKeyTab = ({ partner, onRefresh }) => {
+const PartnerApiKeyTab = ({ partner, onRefresh, onHoldsUnsavedSecret }) => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
     const [usage, setUsage] = useState([]);
@@ -15,7 +15,33 @@ const PartnerApiKeyTab = ({ partner, onRefresh }) => {
     const [newWebhookSecret, setNewWebhookSecret] = useState(null);   // holds full secret after rotate
     const [secretCopied, setSecretCopied] = useState(false);
 
+    // `copied` / `secretCopied` drive the transient "Copied!" button label and
+    // reset after 3s. These latch instead, so the navigation guard below knows
+    // the value has been saved at least once and stops warning.
+    const [keySavedOnce, setKeySavedOnce] = useState(false);
+    const [secretSavedOnce, setSecretSavedOnce] = useState(false);
+
     useEffect(() => { fetchUsage(); }, [partner._id]);
+
+    // A generated key/secret exists ONLY in this component's state — it is
+    // stored hashed server-side and can never be read back. Tell the parent
+    // while one is held-but-uncopied so it can guard navigation; losing it
+    // means another rotation, which breaks the partner's live integration
+    // a second time.
+    const holdsUnsaved = (!!newlyGeneratedKey && !keySavedOnce) || (!!newWebhookSecret && !secretSavedOnce);
+    useEffect(() => {
+        onHoldsUnsavedSecret?.(holdsUnsaved);
+        // Clear the flag if this tab unmounts for any reason.
+        return () => onHoldsUnsavedSecret?.(false);
+    }, [holdsUnsaved]);
+
+    // Also catch a browser tab close / reload while a secret is uncopied.
+    useEffect(() => {
+        if (!holdsUnsaved) return;
+        const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+        window.addEventListener('beforeunload', warn);
+        return () => window.removeEventListener('beforeunload', warn);
+    }, [holdsUnsaved]);
 
     const fetchUsage = async () => {
         setLoadingUsage(true);
@@ -68,6 +94,7 @@ const PartnerApiKeyTab = ({ partner, onRefresh }) => {
         if (!newlyGeneratedKey) return;
         navigator.clipboard.writeText(newlyGeneratedKey);
         setCopied(true);
+        setKeySavedOnce(true);
         setTimeout(() => setCopied(false), 3000);
     };
 
@@ -167,6 +194,7 @@ const PartnerApiKeyTab = ({ partner, onRefresh }) => {
                                 onClick={() => {
                                     navigator.clipboard.writeText(newWebhookSecret);
                                     setSecretCopied(true);
+                                    setSecretSavedOnce(true);
                                     setTimeout(() => setSecretCopied(false), 3000);
                                 }}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex-shrink-0 transition ${
