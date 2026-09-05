@@ -978,6 +978,24 @@ const startCronJobs = () => {
     cron.schedule('0 1 * * *', runAgencyClientBillingSweep);
     console.log('[CronJobs] Agency client billing sweep scheduled (daily 01:00 AM)');
 
+    // ── Knowledge base stuck-document recovery — every 15 minutes ──────────
+    // Indexing runs in-process after upload, so a restart mid-embed leaves the
+    // document in `processing` forever and the UI spinning. This fails those so
+    // the tenant sees a real error and can retry.
+    try {
+        const { recoverStuckDocuments } = require('./knowledgeBaseService');
+        cron.schedule('*/15 * * * *', async () => {
+            try {
+                await recoverStuckDocuments();
+            } catch (err) {
+                console.error('⚠️ [CronJobs] Knowledge base recovery error:', err.message);
+            }
+        });
+        console.log('[CronJobs] Knowledge base stuck-document recovery scheduled (every 15 min)');
+    } catch (e) {
+        console.error('⚠️ [CronJobs] Failed to schedule knowledge base recovery:', e.message);
+    }
+
     // ── Meta Lead Drop Recovery — every 15 minutes ─────────────────────────
     // Retries Facebook leads that failed to arrive (token errors, API errors, DB saves).
     // Uses MongoDB as the queue so retries survive server restarts (unlike setTimeout).

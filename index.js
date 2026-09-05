@@ -731,6 +731,16 @@ app.use('/api/media-library', mediaLibraryAuth, requireModule('whatsapp'), media
 const chatbotRoutes = require('./src/routes/chatbotRoutes');
 app.use('/api/chatbot/flows', chatbotRoutes);
 
+// AI Knowledge Base (RAG). Gated on the registry node rather than a bare
+// planFeatures key so SuperAdmin per-client overrides apply, and behind the
+// WhatsApp module because the only consumer of these documents is the chatbot.
+const knowledgeBaseRoutes = require('./src/routes/knowledgeBaseRoutes');
+app.use('/api/knowledge-base',
+    authMiddleware,
+    requireModule('whatsapp'),
+    requireFeature('whatsapp.chatbot.knowledgeBase'),
+    knowledgeBaseRoutes);
+
 // 4. Meta Lead Sync
 app.use('/api/meta', metaRoutes);
 app.use('/api/meta', metaDropLogRoutes);

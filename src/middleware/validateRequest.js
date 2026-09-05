@@ -47,6 +47,14 @@ const schemas = {
     // schema — leaving it on noBody would silently delete that field.
     noBody: Joi.object({}),
 
+    // Settings -> Lead Assignment -> WhatsApp Conversation Assignment.
+    // Required (not optional): the handler rejects a non-boolean anyway, and an
+    // optional key would let stripUnknown turn a typo'd field name into a silent
+    // no-op that reports success.
+    whatsappAssignmentConfig: Joi.object({
+        whatsappFollowsLeadAssignment: Joi.boolean().required()
+    }),
+
     // Auth — public self-registration (creates a manager + 14-day trial workspace)
     register: Joi.object({
         name:        Joi.string().trim().min(2).max(100).required(),
@@ -256,6 +264,26 @@ const schemas = {
         label:  Joi.string().trim().max(120).allow('', null),
         folder: Joi.string().trim().max(60).allow('', null)
     }).min(1),
+
+    // ── Knowledge base (RAG) ────────────────────────────────────────────────
+    // Multipart body for a knowledge base upload. The FILE itself is validated by
+    // multer + knowledgeBaseService (MIME allowlist, magic bytes, size, quotas);
+    // this covers only the text field travelling alongside it.
+    uploadKnowledgeDocument: Joi.object({
+        description: Joi.string().trim().max(500).allow('', null)
+    }),
+
+    toggleKnowledgeDocument: Joi.object({
+        isActive: Joi.boolean().required()
+    }),
+
+    // The tenant's "try a question" box. topK/minScore are exposed so they can
+    // tune retrieval in the UI before trusting it on live conversations.
+    testKnowledgeQuery: Joi.object({
+        query:    Joi.string().trim().min(2).max(1000).required(),
+        topK:     Joi.number().integer().min(1).max(20).optional(),
+        minScore: Joi.number().min(0).max(1).optional()
+    }),
 
     upsertWorkflowSecret: Joi.object({
         name:        Joi.string().trim().uppercase().pattern(/^[A-Z0-9_]{2,64}$/).required()

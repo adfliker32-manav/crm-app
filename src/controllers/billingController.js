@@ -668,6 +668,11 @@ const upsertPlan = async (req, res) => {
                 ...applied.planFeatures,
                 leadLimit:  planFeatures?.leadLimit  ?? 100,
                 agentLimit: planFeatures?.agentLimit ?? 3,
+                // Knowledge base allowances — numeric, so like the two above they
+                // are NOT registry toggles and must be carried across explicitly
+                // or applyValues' output would wipe them back to schema defaults.
+                knowledgeBaseDocLimit:   planFeatures?.knowledgeBaseDocLimit   ?? 5,
+                knowledgeBaseChunkLimit: planFeatures?.knowledgeBaseChunkLimit ?? 1000,
             };
             resolvedFlags = applied.featureFlags;
         }

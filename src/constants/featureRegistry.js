@@ -53,6 +53,11 @@ const FEATURE_REGISTRY = [
                       storage: { type: 'flag', key: 'whatsapp.chatbot.flow' }, enforced: false },
                     { key: 'whatsapp.chatbot.ai', label: 'AI Chatbot', icon: 'fa-wand-magic-sparkles',
                       storage: { type: 'feature', key: 'aiChatbot' }, enforced: true },
+                    // RAG knowledge base. Nested under the AI chatbot because it is
+                    // useless without it: uploaded documents are only ever read to
+                    // build context for an AI reply.
+                    { key: 'whatsapp.chatbot.knowledgeBase', label: 'Knowledge Base (AI training)', icon: 'fa-book',
+                      storage: { type: 'feature', key: 'knowledgeBase' }, enforced: true },
                 ],
             },
             { key: 'whatsapp.templates', label: 'Template Manager', icon: 'fa-file-lines',
@@ -243,6 +248,7 @@ const FEATURE_META = {
     'leads.metaSync':       { tagline: 'Auto-import Facebook & Instagram Lead Ads in real time.', planHint: 'Available on Pro', benefits: ['Instant lead sync', 'No CSV uploads', 'Per-form routing'] },
     whatsapp:               { tagline: 'Run your whole WhatsApp presence from one inbox.', planHint: 'Available on Pro', benefits: ['Shared team inbox', 'Chatbot flows', 'Broadcasts & templates'] },
     'whatsapp.chatbot.ai':  { tagline: 'Let AI reply, qualify leads and book appointments 24/7.', planHint: 'Available on Enterprise', benefits: ['Automate replies instantly', 'Qualify leads automatically', 'Book appointments hands-free'] },
+    'whatsapp.chatbot.knowledgeBase': { tagline: 'Train the AI on your own price lists, catalogues and FAQs.', planHint: 'Available on Enterprise', benefits: ['Upload Excel, PDF, Word or CSV', 'Answers quote your real prices', 'No more made-up information'] },
     'whatsapp.broadcast':   { tagline: 'Reach thousands of contacts with one approved template.', planHint: 'Available on Pro', benefits: ['Bulk campaigns', 'Audience targeting', 'Delivery analytics'] },
     'whatsapp.templates':   { tagline: 'Create and manage approved WhatsApp templates.', planHint: 'Included with WhatsApp', benefits: ['Template builder', 'Meta submission', 'Variable mapping'] },
     email:                  { tagline: 'Send, receive and automate email beside your leads.', planHint: 'Available on Pro', benefits: ['Unified email inbox', 'Templates', 'Follow-up automation'] },

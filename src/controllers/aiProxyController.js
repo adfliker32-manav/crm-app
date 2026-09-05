@@ -77,7 +77,13 @@ exports.updateSettings = async (req, res) => {
         } = req.body;
 
         const config = await getOrCreateConfig(req.tenantId);
-        
+
+        // Remembered BEFORE the write: switching provider changes which embedding
+        // model the knowledge base runs on, and vectors are not comparable across
+        // models. Without the hook below, a provider change would silently stop
+        // every knowledge base document being retrieved with no visible cause.
+        const previousProvider = config.ai.provider;
+
         // Update fields
         if (provider) config.ai.provider = provider;
         if (model) config.ai.model = model;
@@ -116,6 +122,24 @@ exports.updateSettings = async (req, res) => {
         }
 
         await config.save();
+
+        // Provider changed → the knowledge base's stored vectors were produced by
+        // the OTHER provider's embedding model and can no longer be compared
+        // against new queries. Flag those documents as needing a re-index so the
+        // tenant sees a "Needs re-index" badge and a retry button, instead of a bot
+        // that quietly stops using data they uploaded. Best-effort: a failure here
+        // must not fail the settings save the user actually asked for.
+        if (provider && provider !== previousProvider) {
+            try {
+                const { markStaleForProviderChange } = require('../services/knowledgeBaseService');
+                const affected = await markStaleForProviderChange(req.tenantId);
+                if (affected > 0) {
+                    console.log(`[AI Settings] Provider ${previousProvider} → ${provider}: marked ${affected} knowledge base document(s) for re-indexing (tenant ${req.tenantId}).`);
+                }
+            } catch (kbErr) {
+                console.error('[AI Settings] Could not flag knowledge base documents after provider change:', kbErr.message);
+            }
+        }
 
         return res.status(200).json({
             message: 'AI settings updated successfully',

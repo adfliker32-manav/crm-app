@@ -123,6 +123,20 @@ const workspaceSettingsSchema = new mongoose.Schema({
         default: ''
     },
 
+    // 💬 LEAD-BASED WHATSAPP CONVERSATION ASSIGNMENT
+    // When ON, Lead.assignedTo becomes the source of truth for WhatsApp
+    // conversation assignment AND visibility:
+    //   • a conversation's assignedTo mirrors its linked Lead's assignedTo
+    //   • an agent without permissions.viewAllWhatsApp sees only their own
+    // When OFF (the default, and the pre-existing behaviour) the inbox stays
+    // fully shared across the whole company and `assignedTo` is neither
+    // written nor read. Defaults to false so upgrading changes nothing.
+    // See src/services/whatsappAssignmentService.js — the ONLY writer.
+    whatsappFollowsLeadAssignment: {
+        type: Boolean,
+        default: false
+    },
+
     // 🎛️ WORKSPACE-LEVEL FEATURE FLAGS
     planFeatures: {
         whatsappAutomation:  { type: Boolean, default: true },
@@ -140,7 +154,19 @@ const workspaceSettingsSchema = new mongoose.Schema({
         // Media Library storage cap in MB (0 or negative = unlimited).
         // Enforced on upload in mediaLibraryController against the sum of
         // MediaAsset.size for the tenant.
-        storageLimitMb:      { type: Number, default: 1024 }
+        storageLimitMb:      { type: Number, default: 1024 },
+
+        // 📚 RAG KNOWLEDGE BASE (registry node 'whatsapp.chatbot.knowledgeBase')
+        // OFF by default: unlike the flags above, this is a new paid capability,
+        // so existing tenants must be granted it deliberately rather than having
+        // it appear — and start burning AI credits — on deploy.
+        knowledgeBase:           { type: Boolean, default: false },
+        // Max uploaded documents. Cheap to raise; mostly a UI-clutter guard.
+        knowledgeBaseDocLimit:   { type: Number, default: 5 },
+        // Max indexed chunks across ALL of a tenant's documents. This is the one
+        // that matters: chunks drive both embedding spend and the per-message
+        // similarity scan, so it is the real cost lever.
+        knowledgeBaseChunkLimit: { type: Number, default: 1000 }
     },
 
     activeModules: {

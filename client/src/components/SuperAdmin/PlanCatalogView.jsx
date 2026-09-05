@@ -342,6 +342,30 @@ const PlanCatalogView = () => {
                                 </div>
                             </div>
 
+                            {/* Knowledge base allowances. Only meaningful once the
+                                Knowledge Base toggle is on in the tree above, so they
+                                are shown together and labelled as a pair. The chunk
+                                limit is the one that governs cost: chunks drive both
+                                embedding spend and the per-message similarity scan. */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Knowledge base documents</label>
+                                    <input type="number" min="0"
+                                        value={editing.planFeatures?.knowledgeBaseDocLimit ?? 5}
+                                        onChange={(e) => setEditing({ ...editing, planFeatures: { ...editing.planFeatures, knowledgeBaseDocLimit: Number(e.target.value) } })}
+                                        className="w-full border border-slate-300 rounded-lg px-3 py-2 mt-1" />
+                                    <p className="text-[11px] text-slate-400 mt-1">Files a tenant may upload.</p>
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Knowledge base sections</label>
+                                    <input type="number" min="0"
+                                        value={editing.planFeatures?.knowledgeBaseChunkLimit ?? 1000}
+                                        onChange={(e) => setEditing({ ...editing, planFeatures: { ...editing.planFeatures, knowledgeBaseChunkLimit: Number(e.target.value) } })}
+                                        className="w-full border border-slate-300 rounded-lg px-3 py-2 mt-1" />
+                                    <p className="text-[11px] text-slate-400 mt-1">Indexed rows/passages across all files. Drives AI credit spend.</p>
+                                </div>
+                            </div>
+
                             <div className="flex gap-4 pt-2">
                                 <label className="flex items-center gap-2 text-sm font-semibold">
                                     <input type="checkbox" checked={editing.isActive}

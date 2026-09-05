@@ -9,6 +9,7 @@ import WhatsAppAnalytics from '../components/WhatsApp/WhatsAppAnalytics';
 import ChatbotFlows from '../components/WhatsApp/ChatbotFlows';
 import ChatbotFlowBuilder from '../components/WhatsApp/ChatbotFlowBuilder';
 import MediaLibrary from '../components/WhatsApp/MediaLibrary';
+import KnowledgeBase from '../components/WhatsApp/KnowledgeBase';
 import AISettings from '../components/Settings/AISettings';
 import FeatureGate from '../components/FeatureGate';
 import { hasEntitlement } from '../utils/entitlements';
@@ -46,6 +47,9 @@ const WhatsAppManagement = ({ embedded = false, embedUser = null }) => {
     // Plan entitlement for the AI layer (sub-feature). The flow builder is free
     // with WhatsApp; only the AI Chatbot draws a plan feature → gate it separately.
     const aiChatbotEntitled = hasEntitlement(user, 'whatsapp.chatbot.ai');
+    // The RAG knowledge base is its own paid sub-feature (it spends AI credits on
+    // every upload and every retrieval), so it carries a separate entitlement.
+    const knowledgeBaseEntitled = hasEntitlement(user, 'whatsapp.chatbot.knowledgeBase');
     // An embed user must still hold the base WhatsApp module — `embedded` alone
     // is no longer a blanket "yes".
     const canViewWhatsApp = embedded
@@ -129,17 +133,24 @@ const WhatsAppManagement = ({ embedded = false, embedUser = null }) => {
                 const chatbotSubTabs = [
                     { id: 'flows', label: 'Flows',       icon: 'fa-diagram-project' },
                     canManageTeam && { id: 'ai', label: 'AI Settings', icon: 'fa-wand-magic-sparkles' },
+                    // Knowledge base is workspace-level AI config like AI Settings —
+                    // it decides what the bot tells every customer, so it stays
+                    // manager-only rather than being editable by a line agent.
+                    canManageTeam && { id: 'knowledge', label: 'Knowledge Base', icon: 'fa-book' },
                 ].filter(Boolean);
                 // Defensive: never render AI settings for a non-manager, even if state drifts.
                 const showAi = canManageTeam && chatbotView === 'ai';
+                const showKnowledge = canManageTeam && chatbotView === 'knowledge';
                 return (
                     <div className="h-full flex flex-col">
                         {/* Chatbot sub-navigation: Flows | AI Settings */}
                         <div className="flex items-center gap-2 px-6 py-3 bg-white border-b border-slate-200">
                             {chatbotSubTabs.map(st => {
-                                // Show the AI Settings tab even when the plan doesn't include
-                                // it (soft paywall) — a lock hints the upsell; the wall sells it.
-                                const locked = st.id === 'ai' && !aiChatbotEntitled;
+                                // Show the AI Settings / Knowledge Base tabs even when the plan
+                                // doesn't include them (soft paywall) — a lock hints the upsell;
+                                // the wall sells it.
+                                const locked = (st.id === 'ai' && !aiChatbotEntitled)
+                                    || (st.id === 'knowledge' && !knowledgeBaseEntitled);
                                 return (
                                     <button
                                         key={st.id}
@@ -158,7 +169,12 @@ const WhatsAppManagement = ({ embedded = false, embedUser = null }) => {
                             })}
                         </div>
                         <div className="flex-1 overflow-hidden">
-                            {!showAi
+                            {showKnowledge ? (
+                                // Sub-feature gate: unlocked → knowledge base; locked → upgrade wall.
+                                <FeatureGate feature="whatsapp.chatbot.knowledgeBase" featureLabel="Knowledge Base" source="sub-feature">
+                                    <KnowledgeBase />
+                                </FeatureGate>
+                            ) : !showAi
                                 ? <ChatbotFlows onEditFlow={(id) => setEditingFlowId(id)} />
                                 : (
                                     // Sub-feature gate: unlocked → AI settings; locked → upgrade wall.

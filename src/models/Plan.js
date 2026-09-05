@@ -67,7 +67,21 @@ const planSchema = new mongoose.Schema({
         aiChatbot:          { type: Boolean, default: false },
         webhooks:           { type: Boolean, default: false },
         leadLimit:          { type: Number,  default: 100   },
-        agentLimit:         { type: Number,  default: 3     }
+        agentLimit:         { type: Number,  default: 3     },
+
+        // 📚 RAG knowledge base (registry node 'whatsapp.chatbot.knowledgeBase').
+        //
+        // ⚠️ THIS SUBDOCUMENT IS STRICT. A registry toggle whose storage key is
+        // missing here is SILENTLY DROPPED by Mongoose when the Plan Catalog
+        // saves — the admin sees "saved", the flag never persists, and nobody on
+        // that plan ever gets the feature. Any new `{ type: 'feature' }` node in
+        // featureRegistry.js MUST be mirrored here as well as on
+        // WorkspaceSettings.planFeatures.
+        knowledgeBase:           { type: Boolean, default: false },
+        // Numeric limits are not tree toggles — they are set explicitly in the
+        // Plan Catalog UI and carried onto the tenant on subscribe.
+        knowledgeBaseDocLimit:   { type: Number,  default: 5    },
+        knowledgeBaseChunkLimit: { type: Number,  default: 1000 }
     },
 
     // Granular sub-feature overrides (registry featureFlags) selected in the

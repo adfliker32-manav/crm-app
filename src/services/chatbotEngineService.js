@@ -20,6 +20,40 @@ const { decryptToken } = require('../utils/encryptionUtils');
 const { resolveTemplate } = require('../utils/templateResolver');
 const { checkAvailability, sendBookingConfirmation } = require('./bookingAvailabilityService');
 
+// ── RAG knowledge base context ───────────────────────────────────────────────
+// Retrieves the tenant's own documents (price lists, catalogues, FAQs) that best
+// match what the customer just asked, and renders them as a prompt block.
+//
+// Used at BOTH points where the AI speaks to a customer — runAiReply (fallback /
+// rescue) and the 'ai' flow node. It is deliberately NOT used by tryAiButtonMap:
+// that call only maps a free-text answer onto an existing button and never
+// produces customer-facing prose, so knowledge context would be paid-for tokens
+// with nothing to say.
+//
+// ALWAYS degrades to '' rather than throwing. A knowledge base problem — no
+// documents, no credits, a slow embedding API — must never cost the customer
+// their reply; they simply get the same answer the bot gave before this feature
+// existed. knowledgeBaseService applies its own timeout, so a hung provider
+// cannot hold the WhatsApp webhook open.
+const buildRagContext = async (tenantId, history) => {
+    try {
+        // Last thing the CUSTOMER said — matching against our own bot's previous
+        // message would retrieve whatever the bot just talked about, not what was
+        // asked. Field access mirrors aiService.normalizeHistory().
+        const lastInbound = [...(history || [])].reverse()
+            .find(m => m.direction === 'inbound' && (m.text || m.content?.text));
+        const query = lastInbound?.text || lastInbound?.content?.text || '';
+        if (!query.trim()) return '';
+
+        const knowledgeBaseService = require('./knowledgeBaseService');
+        const results = await knowledgeBaseService.retrieveKnowledge(tenantId, query);
+        return knowledgeBaseService.buildKnowledgeContext(results);
+    } catch (err) {
+        console.warn('[Chatbot] Knowledge base lookup skipped:', err.message);
+        return '';
+    }
+};
+
 const normalizeBaseUrl = (value) => {
     const v = String(value || '').trim();
     if (!v) return '';
@@ -286,24 +320,34 @@ const saveBotMessage = async (conversationId, userId, text, type = 'text', waRes
             }
         });
 
-        // Push to the whole team via Socket.IO (shared inbox — all company users)
+        // Push to everyone allowed to see this conversation. NOT a raw
+        // emitToUsers loop: `user:<id>` rooms are reachable via join:company,
+        // so that would leak the thread to any agent joined to their manager.
         const savedMsg = messageDoc.toObject();
         const companyUserIds = await getCompanyUserIds(userId);
-        emitToUsers(companyUserIds, 'whatsapp:newMessage', {
+        const convForAudience = await WhatsAppConversation.findById(conversationId)
+            .select('assignedTo').lean();
+
+        const { broadcastConversationEvent } = require('./whatsappAssignmentService');
+        await broadcastConversationEvent({
+            tenantId: userId,
+            companyUserIds,
             conversationId,
-            message: savedMsg
-        });
-        emitToConversation(String(conversationId), 'whatsapp:newMessage', {
-            conversationId,
-            message: savedMsg
-        });
-        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
-            conversationId,
-            updates: {
-                lastMessage: lastMsgPreview,
-                lastMessageAt: new Date(),
-                lastMessageDirection: 'outbound'
-            }
+            assignedTo: convForAudience?.assignedTo || null,
+            events: [
+                { event: 'whatsapp:newMessage', data: { conversationId, message: savedMsg } },
+                {
+                    event: 'whatsapp:conversationUpdate',
+                    data: {
+                        conversationId,
+                        updates: {
+                            lastMessage: lastMsgPreview,
+                            lastMessageAt: new Date(),
+                            lastMessageDirection: 'outbound'
+                        }
+                    }
+                }
+            ]
         });
 
         return savedMsg;
@@ -810,9 +854,13 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
         console.warn('[Chatbot] Could not load booking page for AI context:', bpErr.message);
     }
 
-    const effectiveSystemPrompt = bookingContextText
-        ? `${systemPrompt}\n${bookingContextText}`
-        : systemPrompt;
+    // Knowledge base context — the tenant's own documents, filtered to what this
+    // customer just asked about. Empty string when they have no knowledge base.
+    const knowledgeContextText = await buildRagContext(tenantId, history);
+
+    const effectiveSystemPrompt = [systemPrompt, bookingContextText, knowledgeContextText]
+        .filter(Boolean)
+        .join('\n');
 
     const WhatsAppTemplate = require('../models/WhatsAppTemplate');
     const availableTemplates = await WhatsAppTemplate.find({ userId: tenantId, status: 'APPROVED' }).select('name category').lean();
@@ -2691,13 +2739,20 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
                 const availableTemplates = await WhatsAppTemplate.find({ userId: session.userId, status: 'APPROVED' }).select('name category').lean();
 
+                // 2b. Knowledge base context — same retrieval the fallback path
+                // uses, so an AI node answers from the tenant's documents too.
+                const knowledgeContextText = await buildRagContext(session.userId, history);
+                const effectiveSystemPrompt = knowledgeContextText
+                    ? `${systemPrompt}\n${knowledgeContextText}`
+                    : systemPrompt;
+
                 // 3. Make HTTP request to AI Service
                 try {
                     const { reply, action, extracted_variables, usage } = await generateReply({
                         provider: aiConfig.ai.provider,
                         apiKey: apiKey,
                         modelName: aiConfig.ai.model,
-                        systemPrompt,
+                        systemPrompt: effectiveSystemPrompt,
                         conversationHistory: history,
                         leadContext: leadDetails,
                         availableTemplates
