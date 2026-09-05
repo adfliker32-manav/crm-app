@@ -75,16 +75,28 @@ const LeadAssignmentSettings = () => {
     });
     const [leadAlertSaving, setLeadAlertSaving] = useState(false);
 
+    // WhatsApp conversation assignment (follows the Lead owner)
+    const [waFollowsLead, setWaFollowsLead] = useState(false);
+    const [waSavedValue, setWaSavedValue] = useState(false);
+    const [waSaving, setWaSaving] = useState(false);
+    const [waLocked, setWaLocked] = useState(false); // 403 module_locked -> no WhatsApp module
+
     // ── Load all data ─────────────────────────────────────────────────────
     const loadAll = useCallback(async () => {
         setLoadingData(true);
         try {
-            const [teamRes, webRes, sheetRes, metaRes, alertRes] = await Promise.all([
+            const [teamRes, webRes, sheetRes, metaRes, alertRes, waRes] = await Promise.all([
                 api.get('/auth/my-team?includeManager=true').catch(() => ({ data: [] })),
                 api.get('/web-leads/config').catch(() => ({ data: {} })),
                 api.get('/leads/sheet-sync-config').catch(() => ({ data: {} })),
                 api.get('/meta/field-mapping').catch(() => ({ data: {} })),
-                api.get('/meta/lead-alert-config').catch(() => ({ data: {} }))
+                api.get('/meta/lead-alert-config').catch(() => ({ data: {} })),
+                // A tenant without the WhatsApp module gets 403 module_locked —
+                // an expected entitlement state, not an error.
+                api.get('/leads/whatsapp-assignment-config').catch((e) => ({
+                    data: {},
+                    __locked: e.response?.data?.error === 'module_locked'
+                }))
             ]);
 
             setTeamUsers(Array.isArray(teamRes.data) ? teamRes.data : []);
@@ -98,6 +110,14 @@ const LeadAssignmentSettings = () => {
                 sheet:   { value: sheetAgent, saving: false, savedValue: sheetAgent },
                 meta:    { value: metaAgent,  saving: false, savedValue: metaAgent },
             });
+
+            if (waRes.__locked) {
+                setWaLocked(true);
+            } else {
+                const on = waRes.data?.whatsappFollowsLeadAssignment === true;
+                setWaFollowsLead(on);
+                setWaSavedValue(on);
+            }
 
             if (alertRes.data) {
                 setLeadAlert({
@@ -184,6 +204,27 @@ const LeadAssignmentSettings = () => {
             showError('Failed to save agent alert settings');
         } finally {
             setLeadAlertSaving(false);
+        }
+    };
+
+    // ── Save WhatsApp conversation assignment ──────────────────────────────
+    const handleSaveWaFollowsLead = async (next) => {
+        setWaSaving(true);
+        // Optimistic, so the switch does not feel laggy; rolled back on failure.
+        setWaFollowsLead(next);
+        try {
+            await api.put('/leads/whatsapp-assignment-config', {
+                whatsappFollowsLeadAssignment: next
+            });
+            setWaSavedValue(next);
+            showSuccess(next
+                ? 'WhatsApp conversations now follow Lead assignment'
+                : 'WhatsApp conversations no longer follow Lead assignment');
+        } catch (err) {
+            setWaFollowsLead(waSavedValue);
+            showError(err.response?.data?.message || 'Failed to save WhatsApp assignment setting');
+        } finally {
+            setWaSaving(false);
         }
     };
 
@@ -490,7 +531,84 @@ const LeadAssignmentSettings = () => {
                 )}
             </section>
 
-            {/* ══ SECTION 3: Agent Notifications ═══════════════════════════ */}
+            {/* ══ SECTION 3: WhatsApp Conversation Assignment ═════════ */}
+            <section>
+                <div className="flex items-center gap-2 mb-4">
+                    <div className="w-6 h-6 rounded-lg bg-green-100 flex items-center justify-center">
+                        <i className="fa-brands fa-whatsapp text-green-600 text-xs"></i>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-700 uppercase tracking-widest">WhatsApp Conversation Assignment</h3>
+                </div>
+                <p className="text-xs text-slate-500 mb-5 -mt-2">
+                    Make the Lead owner the source of truth for the WhatsApp inbox, so a conversation always
+                    belongs to whoever the contact&rsquo;s Lead is assigned to.
+                </p>
+
+                {waLocked ? (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-200 flex items-center justify-center mx-auto mb-3">
+                            <i className="fa-solid fa-lock text-slate-400 text-lg"></i>
+                        </div>
+                        <h4 className="font-semibold text-slate-600 mb-1">WhatsApp isn&rsquo;t included in your plan</h4>
+                        <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                            Add the WhatsApp module to route conversations by Lead assignment.
+                        </p>
+                    </div>
+                ) : (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                        <div className="flex items-start justify-between gap-6">
+                            <div className="min-w-0">
+                                <h4 className="font-semibold text-slate-800">Follow Lead Assignment</h4>
+                                <p className="text-xs text-slate-500 mt-1 max-w-xl">
+                                    When ON, assigning or reassigning a Lead moves its WhatsApp conversation to the
+                                    same agent, and a new conversation is automatically owned by the Lead&rsquo;s agent.
+                                </p>
+                            </div>
+                            <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                                <input
+                                    type="checkbox"
+                                    checked={waFollowsLead}
+                                    disabled={waSaving}
+                                    onChange={e => handleSaveWaFollowsLead(e.target.checked)}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-500 peer-disabled:opacity-50"></div>
+                            </label>
+                        </div>
+
+                        {waFollowsLead && (
+                            <div className="mt-5 pt-5 border-t border-slate-100 space-y-3">
+                                <div className="flex items-start gap-2.5 text-xs text-slate-600">
+                                    <i className="fa-solid fa-user-check text-green-500 mt-0.5"></i>
+                                    <span>
+                                        Agents with <span className="font-semibold">View ALL WhatsApp Conversations</span> still see the
+                                        entire inbox. Turn that off for an agent (Team &rarr; edit agent) to restrict them to
+                                        conversations for their own Leads. Managers and admins always see everything.
+                                    </span>
+                                </div>
+                                <div className="flex items-start gap-2.5 text-xs text-slate-600">
+                                    <i className="fa-solid fa-inbox text-slate-400 mt-0.5"></i>
+                                    <span>
+                                        Conversations with no matching Lead, or whose Lead has no agent, stay visible to
+                                        managers only &mdash; the same rule unassigned Leads already follow.
+                                    </span>
+                                </div>
+                                <div className="flex items-start gap-2.5 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl p-3">
+                                    <i className="fa-solid fa-triangle-exclamation text-amber-500 mt-0.5"></i>
+                                    <span>
+                                        <span className="font-semibold">Existing conversations</span> need a one-time sync before they
+                                        follow their Lead. Ask your administrator to run
+                                        <code className="mx-1 px-1.5 py-0.5 bg-white border border-amber-200 rounded text-[11px]">scripts/backfillWhatsAppAssignment.js</code>
+                                        &mdash; until then, restricted agents may see an empty inbox.
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </section>
+
+            {/* ══ SECTION 4: Agent Notifications ═══════════════════════════ */}
             <section>
                 <div className="flex items-center gap-2 mb-4">
                     <div className="w-6 h-6 rounded-lg bg-green-100 flex items-center justify-center">

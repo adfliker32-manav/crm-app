@@ -421,12 +421,21 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
         // For CSV contacts (_isCsv: true), leadId is null — no real Lead document
         const leadId = lead._isCsv ? null : lead._id;
 
+        // Derived owner — mirrors the lead's assignedTo. CSV contacts have no
+        // Lead at all (leadId null), so they stay unassigned and therefore
+        // manager-visible only, which is the documented behaviour.
+        const { resolveAssigneeForConversation } = require('./whatsappAssignmentService');
+        const assignedTo = leadId
+            ? await resolveAssigneeForConversation({ tenantId: userId, lead })
+            : null;
+
         const conversation = await WhatsAppConversation.findOneAndUpdate(
             { userId, waContactId: normalizedPhone },
             {
                 $setOnInsert: {
                     userId,
                     leadId,
+                    assignedTo,
                     waContactId: normalizedPhone,
                     phone:       normalizedPhone,
                     displayName: lead.name,

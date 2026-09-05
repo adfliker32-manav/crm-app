@@ -105,6 +105,16 @@ const queueLeadCreatedEffects = (lead, ownerId, options = {}) => {
     } catch (alertErr) {
         console.error('❌ Failed to trigger lead arrival alerts:', alertErr.message);
     }
+
+    // A lead can arrive ALREADY assigned (per-source default agent, a Meta form
+    // mapping, an API payload, an assignment rule). If a conversation is already
+    // linked to it — the chatbot creates leads from a live thread, and the inbox
+    // can link one manually — that thread must pick the owner up immediately
+    // rather than waiting for the next inbound message.
+    // No-op when nothing is linked yet, which is the common case.
+    if (lead.assignedTo) {
+        queueLeadAssignmentEffects(lead, ownerId);
+    }
 };
 
 const queueLeadStageChangeEffects = (lead, fromStage = undefined, options = {}) => {
@@ -129,8 +139,92 @@ const queueLeadStageChangeEffects = (lead, fromStage = undefined, options = {}) 
     });
 };
 
+/**
+ * Lead ownership changed → the WhatsApp conversation follows.
+ *
+ * The Lead is the single source of truth for who owns a conversation, so EVERY
+ * path that writes Lead.assignedTo must call this. It is a no-op unless the
+ * workspace has WorkspaceSettings.whatsappFollowsLeadAssignment enabled.
+ *
+ * Deliberately an explicit call rather than a Mongoose hook: the bulk paths use
+ * updateMany, which fires no document middleware, so a hook would silently miss
+ * exactly the case that matters most.
+ *
+ * @param {object} lead     needs at least { _id, assignedTo }
+ * @param {string} tenantId the workspace owner (req.tenantId / lead.userId)
+ */
+const queueLeadAssignmentEffects = (lead, tenantId) => {
+    if (!lead?._id || !tenantId) return;
+
+    runInBackground('WhatsApp assignment sync error (non-blocking):', async () => {
+        const svc = require('../services/whatsappAssignmentService');
+        const { getCompanyUserIds } = require('./whatsappUtils');
+
+        const result = await svc.syncConversationsForLead({
+            leadId: lead._id,
+            tenantId,
+            assignedTo: lead.assignedTo || null
+        });
+
+        if (result.conversations.length === 0) return;
+
+        // Tell the gaining side to pick the thread up and the losing side to
+        // drop it — an agent with the inbox open must not keep a conversation
+        // the API will now 404 on.
+        await svc.broadcastAssignmentChanges({
+            tenantId,
+            companyUserIds: await getCompanyUserIds(tenantId),
+            changes: result.conversations
+        });
+    });
+};
+
+/**
+ * Same, for a batch of leads moving to the SAME assignee (bulk assign).
+ * One updateMany instead of N.
+ */
+const queueBulkLeadAssignmentEffects = (leadIds, assignedTo, tenantId) => {
+    if (!Array.isArray(leadIds) || leadIds.length === 0 || !tenantId) return;
+
+    runInBackground('WhatsApp bulk assignment sync error (non-blocking):', async () => {
+        const svc = require('../services/whatsappAssignmentService');
+        const { getCompanyUserIds } = require('./whatsappUtils');
+
+        const result = await svc.syncConversationsForLeads({
+            leadIds,
+            tenantId,
+            assignedTo: assignedTo || null
+        });
+
+        if (result.conversations.length === 0) return;
+
+        await svc.broadcastAssignmentChanges({
+            tenantId,
+            companyUserIds: await getCompanyUserIds(tenantId),
+            changes: result.conversations
+        });
+    });
+};
+
+/**
+ * Leads were deleted → their conversations lose the link AND the derived owner.
+ * The message history itself is preserved; the thread falls back to
+ * manager-only visibility, because the assignment's justification is gone.
+ */
+const queueLeadDeletionEffects = (leadIds, tenantId) => {
+    if (!Array.isArray(leadIds) || leadIds.length === 0 || !tenantId) return;
+
+    runInBackground('WhatsApp lead-deletion detach error (non-blocking):', () =>
+        require('../services/whatsappAssignmentService')
+            .detachDeletedLeads({ leadIds, tenantId })
+    );
+};
+
 module.exports = {
     appendLeadHistory,
     queueLeadCreatedEffects,
-    queueLeadStageChangeEffects
+    queueLeadStageChangeEffects,
+    queueLeadAssignmentEffects,
+    queueBulkLeadAssignmentEffects,
+    queueLeadDeletionEffects
 };

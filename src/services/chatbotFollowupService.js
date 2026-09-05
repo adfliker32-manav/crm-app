@@ -61,7 +61,7 @@ const initializeFollowupService = () => {
                     const idleTimeHours = (now - new Date(session.lastInteractionAt)) / (1000 * 60 * 60);
                     if (idleTimeHours < currentFollowUp.delayHours) continue;
 
-                    const conversation = await WhatsAppConversation.findById(session.conversationId).select('phone _id').lean();
+                    const conversation = await WhatsAppConversation.findById(session.conversationId).select('phone _id assignedTo').lean();
                     if (!conversation?.phone) continue;
 
                     // SAFETY: Validate content before sending
@@ -122,11 +122,17 @@ const initializeFollowupService = () => {
                             }
                         });
 
-                        // Push to the whole team via Socket.IO (shared inbox)
+                        // Push to everyone allowed to see this conversation
                         const followupCompanyUserIds = await getCompanyUserIds(session.userId);
                         const followupPayload = { conversationId: conversation._id, message: messageDoc.toObject() };
-                        emitToUsers(followupCompanyUserIds, 'whatsapp:newMessage', followupPayload);
-                        emitToConversation(String(conversation._id), 'whatsapp:newMessage', followupPayload);
+                        const { broadcastConversationEvent } = require('./whatsappAssignmentService');
+                        await broadcastConversationEvent({
+                            tenantId: session.userId,
+                            companyUserIds: followupCompanyUserIds,
+                            conversationId: conversation._id,
+                            assignedTo: conversation.assignedTo,
+                            events: [{ event: 'whatsapp:newMessage', data: followupPayload }]
+                        });
                     } catch (saveErr) {
                         console.error(`⚠️  Follow-up message sent but failed to save to DB:`, saveErr.message);
                     }

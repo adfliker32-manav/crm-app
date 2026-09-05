@@ -35,9 +35,15 @@ const syncAutomatedSendToConversation = async (lead, userId, templateName, waMes
         }
 
         if (!conversation) {
+            // Derived owner — mirrors the lead's assignedTo, null unless
+            // lead-based assignment is enabled for this workspace.
+            const { resolveAssigneeForConversation } = require('./whatsappAssignmentService');
+            const assignedTo = await resolveAssigneeForConversation({ tenantId: userId, lead });
+
             conversation = new WhatsAppConversation({
                 userId: userId,
                 leadId: lead._id,
+                assignedTo,
                 waContactId: normalizedPhone,
                 phone: normalizedPhone,
                 displayName: lead.name,
@@ -90,21 +96,29 @@ const syncAutomatedSendToConversation = async (lead, userId, templateName, waMes
             const companyUserIds = await getCompanyUserIds(userId);
             const savedMsg = messageRecord.toObject();
             
-            emitToUsers(companyUserIds, 'whatsapp:newMessage', {
+            const { broadcastConversationEvent } = require('./whatsappAssignmentService');
+            await broadcastConversationEvent({
+                tenantId: userId,
+                companyUserIds,
                 conversationId: conversation._id,
-                message: savedMsg
-            });
-            emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
-                conversationId: conversation._id,
-                message: savedMsg
-            });
-            emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
-                conversationId: conversation._id.toString(),
-                updates: {
-                    lastMessage: `[Auto] ${templateName}`,
-                    lastMessageAt: messageRecord.timestamp,
-                    lastMessageDirection: 'outbound'
-                }
+                assignedTo: conversation.assignedTo,
+                events: [
+                    {
+                        event: 'whatsapp:newMessage',
+                        data: { conversationId: conversation._id, message: savedMsg }
+                    },
+                    {
+                        event: 'whatsapp:conversationUpdate',
+                        data: {
+                            conversationId: conversation._id.toString(),
+                            updates: {
+                                lastMessage: `[Auto] ${templateName}`,
+                                lastMessageAt: messageRecord.timestamp,
+                                lastMessageDirection: 'outbound'
+                            }
+                        }
+                    }
+                ]
             });
         } catch (socketErr) {
             console.error(`❌ [Automation] Socket emit failed for ${lead.phone}:`, socketErr.message);

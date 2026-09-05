@@ -111,6 +111,17 @@ router.post('/sheet-sync-config/regenerate-secret', authMiddleware, checkPermiss
 // Used by LeadAssignmentSettings to patch defaultAssignedAgent without changing the full sync config
 router.post('/update-sheet-sync-config', authMiddleware, checkPermission('accessSettings'), requireFeature('settings.sheetSync'), sheetSyncController.updateSheetSyncConfig);
 
+// 0b. Lead-based WhatsApp conversation assignment (MUST BE BEFORE /:id routes!)
+// Rendered by Settings -> Lead Assignment, which is why it lives on this router
+// rather than metaRoutes: every setting there is gated by
+// requireFeature('leads.metaSync'), the wrong gate for a WhatsApp-wide toggle.
+// requireModule('whatsapp') is applied per-route (this router is mounted behind
+// requireModule('leads'), so it cannot come from the mount point).
+const requireModule = require('../middleware/moduleMiddleware');
+const whatsappConversationController = require('../controllers/whatsappConversationController');
+router.get('/whatsapp-assignment-config', authMiddleware, checkPermission('accessSettings'), requireModule('whatsapp'), whatsappConversationController.getAssignmentConfig);
+router.put('/whatsapp-assignment-config', authMiddleware, checkPermission('accessSettings'), requireModule('whatsapp'), validate(schemas.whatsappAssignmentConfig), whatsappConversationController.updateAssignmentConfig);
+
 // 1. Sync Google Sheet (Manual — MUST BE BEFORE /:id routes!)
 router.post('/sync-sheet', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.syncLeads);
 

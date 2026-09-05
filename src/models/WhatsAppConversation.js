@@ -75,6 +75,14 @@ const whatsAppConversationSchema = new mongoose.Schema({
         enum: ['active', 'archived', 'spam'],
         default: 'active'
     },
+    // ⚠️ DERIVED FIELD — a mirror of the linked Lead's `assignedTo`, never an
+    // independent owner. There is deliberately NO API, request body or UI
+    // control that sets this: the Lead is the single source of truth and
+    // src/services/whatsappAssignmentService.js is the ONLY writer. If the two
+    // ever disagree the Lead wins (scripts/backfillWhatsAppAssignment.js
+    // re-derives the whole collection and is safe to re-run).
+    // Written and read for filtering ONLY while the owning workspace has
+    // WorkspaceSettings.whatsappFollowsLeadAssignment enabled.
     assignedTo: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -103,6 +111,13 @@ whatsAppConversationSchema.index(
     { userId: 1, waBsuid: 1 },
     { unique: true, partialFilterExpression: { waBsuid: { $type: 'string' } } }
 );
+// Assignment-based inbox: serves both the scoped conversation list (equality on
+// userId + assignedTo, sorted by lastMessageAt) and the scoped unread aggregate.
+// Without it every restricted agent's inbox page is a collection scan.
+whatsAppConversationSchema.index({ userId: 1, assignedTo: 1, lastMessageAt: -1 });
+// Lead → conversation propagation and the assignment backfill both look up by
+// leadId within a tenant.
+whatsAppConversationSchema.index({ userId: 1, leadId: 1 });
 
 whatsAppConversationSchema.plugin(saasPlugin);
 

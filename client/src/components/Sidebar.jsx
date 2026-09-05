@@ -88,16 +88,34 @@ const Sidebar = () => {
             .catch(() => { });
     }, [user, isWhatsAppPage, hasWhatsApp]);
 
-    // Real-time increment via socket when a new inbound message arrives and inbox is not open
+    // Real-time badge refresh when a new inbound message arrives and the inbox
+    // is not open.
+    //
+    // Re-reads the count from the server rather than incrementing blind. The
+    // endpoint is assignment-scoped, so the number always matches the
+    // conversations this user can actually open — a local ++ would drift from it
+    // (several messages in one thread bump the badge once server-side, but N
+    // times here) and would have to re-implement the visibility rules client-side.
+    // Debounced so a burst of messages costs one request.
     useEffect(() => {
         if (!socket || !hasWhatsApp || isWhatsAppPage) return;
+
+        let timer = null;
         const handler = ({ message }) => {
-            if (message?.direction === 'inbound') {
-                setWaUnreadCount(prev => prev + 1);
-            }
+            if (message?.direction !== 'inbound') return;
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+                api.get('/whatsapp/conversations/unread')
+                    .then(res => setWaUnreadCount(res.data.unreadCount || 0))
+                    .catch(() => { });
+            }, 1200);
         };
+
         socket.on('whatsapp:newMessage', handler);
-        return () => socket.off('whatsapp:newMessage', handler);
+        return () => {
+            clearTimeout(timer);
+            socket.off('whatsapp:newMessage', handler);
+        };
     }, [socket, hasWhatsApp, isWhatsAppPage]);
 
     useEffect(() => {

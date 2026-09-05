@@ -164,6 +164,15 @@ const userSchema = new mongoose.Schema({
 
         // WhatsApp
         viewWhatsApp: { type: Boolean, default: false },
+        // false = only conversations whose Lead is assigned to this agent.
+        // Unlike viewAllLeads/viewAllTasks this defaults to TRUE: the WhatsApp
+        // inbox has always been fully shared, so every EXISTING agent row must
+        // keep reading as "full inbox" or enabling
+        // WorkspaceSettings.whatsappFollowsLeadAssignment would silently empty
+        // their inbox. NEW agents are restricted via the VIEW_ONLY/BASIC_AGENT
+        // presets instead (src/constants/permissionPresets.js).
+        // Only consulted when that workspace toggle is ON.
+        viewAllWhatsApp: { type: Boolean, default: true },
         sendWhatsApp: { type: Boolean, default: true },
         sendBulkWhatsApp: { type: Boolean, default: false },
         manageWhatsAppTemplates: { type: Boolean, default: false },

@@ -69,6 +69,9 @@ const executeRuleActions = async (rule, lead) => {
     try {
         console.log(`🤖 [Automation] Executing Rule: "${rule.name}" for Lead: "${lead.name}"`);
         let changesMade = false;
+        // Set by ASSIGN_USER so the WhatsApp conversation can follow once the
+        // batched write below actually lands. `undefined` = no change.
+        let assignedToChanged;
         const updates = {};
         const historyEntries = []; // Collect all history entries to push at once
 
@@ -131,6 +134,9 @@ const executeRuleActions = async (rule, lead) => {
                 if (lead.assignedTo?.toString() !== action.userId?.toString()) {
                     updates.$set = updates.$set || {};
                     updates.$set.assignedTo = action.userId;
+                    // The Lead owns its WhatsApp conversation — propagate after
+                    // the batched write lands (see below).
+                    assignedToChanged = action.userId || null;
                     historyEntries.push({ type: 'System', subType: 'Auto', content: `Lead assigned automatically (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
 
@@ -246,6 +252,15 @@ const executeRuleActions = async (rule, lead) => {
                 updates.$push = { history: { $each: historyEntries, $slice: -100 } };
             }
             await Lead.findByIdAndUpdate(lead._id, updates);
+
+            // Lead ownership changed → its WhatsApp conversation follows.
+            // Fired only after the write succeeds, and with the NEW assignee.
+            if (assignedToChanged !== undefined) {
+                require('../utils/leadEffects').queueLeadAssignmentEffects(
+                    { _id: lead._id, assignedTo: assignedToChanged },
+                    lead.userId
+                );
+            }
 
             // CAPI: automation-driven stage change (was missing — the old automation
             // engine never reported stage transitions to Meta). `lead` in memory still
@@ -605,8 +620,9 @@ const continueWorkflowAfterVoice = async (callLog) => {
         }
 
         console.log(`[Automation] Continuing workflow for lead ${lead._id} on outcome: ${callLog.outcome}`);
-        
+
         let changesMade = false;
+        let voiceAssignedToChanged = false;
         let historyEntries = [];
         const statusBeforeVoiceActions = lead.status; // for CAPI oldStatus (loop mutates lead.status)
 
@@ -623,6 +639,7 @@ const continueWorkflowAfterVoice = async (callLog) => {
                     lead.assignedTo = action.userId;
                     historyEntries.push({ type: 'System', subType: 'Auto', content: `Assigned user due to Voice Outcome: ${callLog.outcome} (Rule: ${rule.name})`, date: new Date() });
                     changesMade = true;
+                    voiceAssignedToChanged = true;
                 }
             }
         }
@@ -630,6 +647,12 @@ const continueWorkflowAfterVoice = async (callLog) => {
         if (changesMade) {
             if (historyEntries.length > 0) lead.history.push(...historyEntries);
             await lead.save();
+
+            // Lead ownership changed → its WhatsApp conversation follows.
+            if (voiceAssignedToChanged) {
+                require('../utils/leadEffects').queueLeadAssignmentEffects(lead, lead.userId);
+            }
+
             await ActivityLog.create({
                 userId: lead.userId,
                 leadId: lead._id,

@@ -1144,6 +1144,12 @@ const toolHandlers = {
 
         await Lead.findByIdAndUpdate(leadId, { $set: { assignedTo: resolvedAgentId } });
 
+        // The Lead owns its WhatsApp conversation — propagate the new owner.
+        require('../utils/leadEffects').queueLeadAssignmentEffects(
+            { _id: leadId, assignedTo: resolvedAgentId },
+            lead.userId
+        );
+
         return {
             success: true,
             message: resolvedAgentId

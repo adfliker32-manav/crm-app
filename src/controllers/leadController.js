@@ -50,7 +50,10 @@ const isValidLeadId = (value) => typeof value === 'string' && /^[a-f\d]{24}$/i.t
 const {
     appendLeadHistory,
     queueLeadCreatedEffects,
-    queueLeadStageChangeEffects
+    queueLeadStageChangeEffects,
+    queueLeadAssignmentEffects,
+    queueBulkLeadAssignmentEffects,
+    queueLeadDeletionEffects
 } = require('../utils/leadEffects');
 
 const resolveActorName = async (user) => {
@@ -602,6 +605,11 @@ const deleteLead = async (req, res) => {
         // object storage here — nothing else references those bytes afterwards
         // and they would be billed forever. Never throws.
         await deleteDocumentsForLeads(ownerId, [deletedLead._id]);
+
+        // The conversation survives (its message history is still wanted) but
+        // loses the lead link and the derived owner — the assignment's
+        // justification is gone, so it falls back to manager-only visibility.
+        queueLeadDeletionEffects([deletedLead._id], ownerId);
 
         // Log deletion
         logActivity({
@@ -1368,6 +1376,9 @@ const assignLead = async (req, res) => {
         lead.assignedTo = agentId || null;
         await lead.save();
 
+        // The Lead owns the WhatsApp conversation: push the new owner onto it.
+        queueLeadAssignmentEffects(lead, ownerId);
+
         // Log assignment
         logActivity({
             userId: getRequestUserId(req.user),
@@ -1394,9 +1405,14 @@ const assignLead = async (req, res) => {
 // ==========================================
 const bulkAssignLeads = async (req, res) => {
     try {
-        const { leadIds, agentId } = req.body;
+        // The Leads page posts `ids`; the other bulk endpoints on this
+        // controller post `leadIds`. Only `leadIds` was read, so bulk assign
+        // from the UI always 400'd. Accept both rather than breaking whichever
+        // caller we do not currently see.
+        const { leadIds, ids, agentId } = req.body;
+        const targetIds = Array.isArray(leadIds) ? leadIds : ids;
 
-        if (!leadIds || !Array.isArray(leadIds) || leadIds.length === 0) {
+        if (!targetIds || !Array.isArray(targetIds) || targetIds.length === 0) {
             return res.status(400).json({ message: "Lead IDs array required" });
         }
 
@@ -1409,11 +1425,21 @@ const bulkAssignLeads = async (req, res) => {
             }
         }
 
-        // Use req.dataScope to ensure we only affect allowed leads
+        // Resolve which ids are actually in scope BEFORE writing, so the
+        // conversation sync below only ever follows leads we really touched.
+        const scopedLeads = await Lead.find({ _id: { $in: targetIds }, ...req.dataScope })
+            .select('_id')
+            .lean();
+        const scopedIds = scopedLeads.map(l => l._id);
+
         const result = await Lead.updateMany(
-            { _id: { $in: leadIds }, ...req.dataScope },
+            { _id: { $in: scopedIds }, ...req.dataScope },
             { $set: { assignedTo: agentId || null } }
         );
+
+        // updateMany fires no document middleware — the propagation has to be
+        // an explicit call. One batched updateMany, not one per lead.
+        queueBulkLeadAssignmentEffects(scopedIds, agentId || null, ownerId);
 
         res.json({ success: true, message: `${result.modifiedCount} leads updated`, modifiedCount: result.modifiedCount });
     } catch (err) {
@@ -1775,6 +1801,9 @@ const bulkDeleteLeads = async (req, res) => {
         if (scopedIds.length > 0) {
             runInBackground('[LeadDocuments] bulk-delete cleanup',
                 () => deleteDocumentsForLeads(req.tenantId, scopedIds));
+
+            // Conversations survive but lose the link and the derived owner.
+            queueLeadDeletionEffects(scopedIds, req.tenantId);
         }
 
         logActivity({

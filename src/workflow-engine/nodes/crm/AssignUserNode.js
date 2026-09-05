@@ -90,6 +90,12 @@ const AssignUserNode = {
                 }
             });
 
+            // The Lead owns its WhatsApp conversation — propagate the new owner.
+            require('../../../utils/leadEffects').queueLeadAssignmentEffects(
+                { _id: lead._id, assignedTo: data.userId },
+                lead.userId
+            );
+
             setImmediate(() => {
                 emitToUser(data.userId.toString(), 'notification:agent', {
                     leadId: lead._id, leadName: lead.name,

@@ -27,7 +27,24 @@ exports.getDashboardStats = async (req, res) => {
         const { getCompanyUserIds } = require('../utils/whatsappUtils');
         const companyUserIds = await getCompanyUserIds(userId);
         const userScope = { $in: companyUserIds };
-        
+
+        // 🔐 An assignment-restricted agent must not see company-wide totals —
+        // counts leak the existence and volume of other agents' conversations.
+        const { conversationScope, isAssignmentRestricted } =
+            require('../services/whatsappAssignmentService');
+        const restricted = isAssignmentRestricted(req);
+        const convMatch = await conversationScope(req, { forAggregate: true });
+
+        // WhatsAppMessage carries no owner of its own (deliberately — messages
+        // inherit access from their conversation), so a restricted agent's
+        // message metrics are bounded by the conversations they can see.
+        // Bounded in practice by their assigned leads; only computed when the
+        // restriction is actually active, so the shared-inbox path is untouched.
+        let visibleConversationIds = null;
+        if (restricted) {
+            visibleConversationIds = await WhatsAppConversation.distinct('_id', convMatch);
+        }
+
         const { days } = req.query;
         if (days && days !== 'all' && isNaN(parseInt(days))) {
             return res.status(400).json({ success: false, message: 'Invalid days parameter' });
@@ -36,7 +53,7 @@ exports.getDashboardStats = async (req, res) => {
 
         // 1. Conversation snapshot (current state — active/unread are point-in-time, not period)
         const [convStats = { activeChats: 0, unreadChats: 0 }] = await WhatsAppConversation.aggregate([
-            { $match: { userId: userScope } },
+            { $match: convMatch },
             {
                 $group: {
                     _id: null,
@@ -54,6 +71,7 @@ exports.getDashboardStats = async (req, res) => {
         //   • Unique senders = distinct customers who sent ≥ 1 message in the period
         const messageMatch = { userId: userScope };
         if (dateFrom) messageMatch.timestamp = { $gte: dateFrom };
+        if (visibleConversationIds) messageMatch.conversationId = { $in: visibleConversationIds };
 
         const [msgAgg = { counts: [], uniqueSenders: [] }] = await WhatsAppMessage.aggregate([
             { $match: messageMatch },
@@ -133,6 +151,7 @@ exports.getDashboardStats = async (req, res) => {
         // Groups broadcast messages by day to power line/bar charts.
         const timeSeriesMatch = { userId: userScope, automationSource: 'broadcast' };
         if (dateFrom) timeSeriesMatch.timestamp = { $gte: dateFrom };
+        if (visibleConversationIds) timeSeriesMatch.conversationId = { $in: visibleConversationIds };
 
         const broadcastTimeSeries = await WhatsAppMessage.aggregate([
             { $match: timeSeriesMatch },
@@ -159,6 +178,8 @@ exports.getDashboardStats = async (req, res) => {
         // Build session aggregates for date range
         const sessionMatchStage = { userId: userScope };
         if (dateFrom) sessionMatchStage.createdAt = { $gte: dateFrom };
+        // Chatbot sessions belong to a conversation, so they inherit its visibility.
+        if (visibleConversationIds) sessionMatchStage.conversationId = { $in: visibleConversationIds };
 
         const sessionStats = await ChatbotSession.aggregate([
             { $match: sessionMatchStage },

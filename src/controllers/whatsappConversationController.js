@@ -6,7 +6,10 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const { sendWhatsAppTextMessage } = require('../services/whatsappService');
 const { cancelActiveChatbots } = require('../services/chatbotEngineService');
-const { emitToUser, emitToUsers, emitToConversation } = require('../services/socketService');
+// NOTE: conversation events go out through broadcastConversationEvent (below),
+// never through emitToUser/emitToUsers directly — `user:<id>` rooms are
+// reachable via join:company, so a per-user loop leaks to any agent who joined
+// their manager's room. See whatsappAssignmentService + socketService.
 const mongoose = require('mongoose');
 
 const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
@@ -15,17 +18,31 @@ const { escapeRegex } = require('../utils/controllerHelpers');
 const { getUserWhatsAppCredentials, getCompanyUserIds } = require('../utils/whatsappUtils');
 const { parseMetaError } = require('../utils/metaErrorUtils');
 
+// 🔐 Visibility scope. Every handler below resolves its row through this BEFORE
+// touching it, so a conversation outside the caller's scope 404s rather than
+// leaking a 403 (same convention as teamTaskService/leadDocumentService).
+// With WorkspaceSettings.whatsappFollowsLeadAssignment off it returns exactly
+// the company-wide filter this controller always used.
+const {
+    conversationScope,
+    withPredicate,
+    resolveAssigneeForConversation,
+    isAssignmentRestricted,
+    broadcastConversationEvent
+} = require('../services/whatsappAssignmentService');
 
-// Get all conversations for the user (shared across same WhatsApp phone number within same company)
+
+// Get all conversations visible to the caller. Shared across the company by
+// default; narrowed to the caller's own leads when lead-based assignment is on
+// and they lack `viewAllWhatsApp`.
 exports.getConversations = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
         const { status = 'active', search, page = 1, limit = 50 } = req.query;
 
-        const userIds = await getCompanyUserIds(userId);
+        const scope = await conversationScope(req);
 
-        // Build query — include conversations from all shared users
-        const query = { userId: { $in: userIds } };
+        // Build query — starts from the authorization scope, never widens it
+        let query = { ...scope };
 
         if (status && status !== 'all') {
             query.status = status;
@@ -33,10 +50,15 @@ exports.getConversations = async (req, res) => {
 
         if (search) {
             const safe = escapeRegex(search);
-            query.$or = [
-                { displayName: { $regex: safe, $options: 'i' } },
-                { phone: { $regex: safe, $options: 'i' } }
-            ];
+            // ⚠️ Must be ANDed in, NOT assigned as `query.$or`. A bare
+            // assignment would overwrite any $or the scope itself needs and
+            // reads as an OR *against* the scope instead of a filter within it.
+            query = withPredicate(query, {
+                $or: [
+                    { displayName: { $regex: safe, $options: 'i' } },
+                    { phone: { $regex: safe, $options: 'i' } }
+                ]
+            });
         }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -72,16 +94,12 @@ exports.getConversations = async (req, res) => {
 // Get single conversation with messages
 exports.getConversation = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
         const { id } = req.params;
         const { page = 1, limit = 50 } = req.query;
 
-        const companyUserIds = await getCompanyUserIds(userId);
+        const scope = await conversationScope(req);
 
-        const conversation = await WhatsAppConversation.findOne({
-            _id: id,
-            userId: { $in: companyUserIds }
-        })
+        const conversation = await WhatsAppConversation.findOne({ _id: id, ...scope })
             .populate('leadId', 'name email phone status source dealValue')
             .populate('assignedTo', 'name email')
             .lean();
@@ -133,13 +151,12 @@ exports.sendMessage = async (req, res) => {
             return res.status(400).json({ message: 'Message text is required' });
         }
 
+        const scope = await conversationScope(req);
         const companyUserIds = await getCompanyUserIds(userId);
 
-        // Find conversation
-        const conversation = await WhatsAppConversation.findOne({
-            _id: id,
-            userId: { $in: companyUserIds }
-        });
+        // Find conversation — scoped, so an agent cannot send into a thread
+        // they are not allowed to see just by knowing its id.
+        const conversation = await WhatsAppConversation.findOne({ _id: id, ...scope });
 
         if (!conversation) {
             return res.status(404).json({ message: 'Conversation not found' });
@@ -192,23 +209,27 @@ exports.sendMessage = async (req, res) => {
             waMessageId
         });
 
-        // 🔌 Push to the whole team via Socket.IO (shared inbox — all company users)
+        // 🔌 Push to everyone allowed to see this conversation
         const savedMsg = message.toObject();
-        emitToUsers(companyUserIds, 'whatsapp:newMessage', {
+        broadcastConversationEvent({
+            tenantId: req.tenantId,
+            companyUserIds,
             conversationId: conversation._id,
-            message: savedMsg
-        });
-        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
-            conversationId: conversation._id,
-            message: savedMsg
-        });
-        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
-            conversationId: conversation._id,
-            updates: {
-                lastMessage: text.trim().substring(0, 100),
-                lastMessageAt: new Date(),
-                lastMessageDirection: 'outbound'
-            }
+            assignedTo: conversation.assignedTo,
+            events: [
+                { event: 'whatsapp:newMessage', data: { conversationId: conversation._id, message: savedMsg } },
+                {
+                    event: 'whatsapp:conversationUpdate',
+                    data: {
+                        conversationId: conversation._id,
+                        updates: {
+                            lastMessage: text.trim().substring(0, 100),
+                            lastMessageAt: new Date(),
+                            lastMessageDirection: 'outbound'
+                        }
+                    }
+                }
+            ]
         });
     } catch (error) {
         let errorMsg = error.message;
@@ -240,13 +261,12 @@ exports.sendMessage = async (req, res) => {
 // Mark conversation as read
 exports.markAsRead = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
         const { id } = req.params;
 
-        const companyUserIds = await getCompanyUserIds(userId);
+        const scope = await conversationScope(req);
 
         const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { _id: id, userId: { $in: companyUserIds } },
+            { _id: id, ...scope },
             { $set: { unreadCount: 0 } },
             { returnDocument: 'after' }
         );
@@ -265,23 +285,31 @@ exports.markAsRead = async (req, res) => {
 // Link conversation to a lead
 exports.linkToLead = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
         const { id } = req.params;
         const { leadId } = req.body;
 
         // Verify lead belongs to user
+        let lead = null;
         if (leadId) {
-            const lead = await Lead.findOne({ _id: leadId, ...req.dataScope });
+            lead = await Lead.findOne({ _id: leadId, ...req.dataScope });
             if (!lead) {
                 return res.status(404).json({ message: 'Lead not found' });
             }
         }
 
-        const companyUserIds = await getCompanyUserIds(userId);
+        const scope = await conversationScope(req);
+
+        // Re-derive the owner from the newly linked Lead in the SAME write —
+        // the Lead is the source of truth, so a conversation must never keep an
+        // assignment justified by a lead it is no longer linked to.
+        const assignedTo = await resolveAssigneeForConversation({
+            tenantId: req.tenantId,
+            lead: lead ? { _id: lead._id, assignedTo: lead.assignedTo } : null
+        });
 
         const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { _id: id, userId: { $in: companyUserIds } },
-            { $set: { leadId: leadId || null } },
+            { _id: id, ...scope },
+            { $set: { leadId: leadId || null, assignedTo } },
             { returnDocument: 'after' }
         ).populate('leadId', 'name email phone status source dealValue');
 
@@ -299,7 +327,6 @@ exports.linkToLead = async (req, res) => {
 // Archive/unarchive conversation
 exports.updateStatus = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
         const { id } = req.params;
         const { status } = req.body;
 
@@ -307,10 +334,10 @@ exports.updateStatus = async (req, res) => {
             return res.status(400).json({ message: 'Invalid status' });
         }
 
-        const companyUserIds = await getCompanyUserIds(userId);
+        const scope = await conversationScope(req);
 
         const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { _id: id, userId: { $in: companyUserIds } },
+            { _id: id, ...scope },
             { $set: { status } },
             { returnDocument: 'after' }
         );
@@ -332,12 +359,10 @@ exports.clearConversationMessages = async (req, res) => {
         const userId = req.user.userId || req.user.id;
         const { id } = req.params;
 
+        const scope = await conversationScope(req);
         const companyUserIds = await getCompanyUserIds(userId);
 
-        const conversation = await WhatsAppConversation.findOne({
-            _id: id,
-            userId: { $in: companyUserIds }
-        });
+        const conversation = await WhatsAppConversation.findOne({ _id: id, ...scope });
 
         if (!conversation) {
             return res.status(404).json({ message: 'Conversation not found' });
@@ -370,12 +395,16 @@ exports.clearConversationMessages = async (req, res) => {
             updates
         };
 
-        companyUserIds.forEach((companyUserId) => {
-            emitToUser(companyUserId, 'whatsapp:conversationUpdate', payload);
-            emitToUser(companyUserId, 'whatsapp:conversationCleared', payload);
+        broadcastConversationEvent({
+            tenantId: req.tenantId,
+            companyUserIds,
+            conversationId: conversation._id,
+            assignedTo: conversation.assignedTo,
+            events: [
+                { event: 'whatsapp:conversationUpdate', data: payload },
+                { event: 'whatsapp:conversationCleared', data: payload }
+            ]
         });
-
-        emitToConversation(conversation._id.toString(), 'whatsapp:conversationCleared', payload);
 
         res.json({
             success: true,
@@ -391,11 +420,12 @@ exports.clearConversationMessages = async (req, res) => {
 // Get unread count for badge
 exports.getUnreadCount = async (req, res) => {
     try {
-        const userId = req.user.userId || req.user.id;
-        const companyUserIds = await getCompanyUserIds(userId);
+        // forAggregate: a $match stage does NOT coerce a string to an ObjectId,
+        // so without the cast a restricted agent's badge would always read 0.
+        const scope = await conversationScope(req, { forAggregate: true });
 
         const result = await WhatsAppConversation.aggregate([
-            { $match: { userId: { $in: companyUserIds }, status: 'active' } },
+            { $match: { ...scope, status: 'active' } },
             { $group: { _id: null, totalUnread: { $sum: '$unreadCount' } } }
         ]);
 
@@ -430,27 +460,74 @@ exports.startConversation = async (req, res) => {
         const companyUserIds = await getCompanyUserIds(userId);
         const phoneLast10 = normalizedPhone.slice(-10);
 
-        // Check if conversation already exists (flexible phone match to avoid duplicates)
+        // Company-wide lookup so we never create a duplicate thread for a
+        // contact that already exists somewhere in the workspace — but the
+        // access check below decides whether this caller may USE it.
+        const companyFilter = { userId: { $in: companyUserIds } };
+
         let conversation = await WhatsAppConversation.findOne({
-            userId: { $in: companyUserIds },
+            ...companyFilter,
             waContactId: normalizedPhone
         });
 
         if (!conversation) {
             // Fallback: try matching by last 10 digits
             conversation = await WhatsAppConversation.findOne({
-                userId: { $in: companyUserIds },
+                ...companyFilter,
                 waContactId: { $regex: phoneLast10 + '$' }
             });
         }
 
+        // 🔐 An assignment-restricted agent may only open a thread they would be
+        // allowed to see. Without this, "start a conversation" is a trivial
+        // bypass: message anyone, then read the replies in the new thread.
+        if (isAssignmentRestricted(req)) {
+            if (conversation) {
+                // Existing thread — it must already be theirs.
+                if (String(conversation.assignedTo || '') !== String(userId)) {
+                    return res.status(403).json({
+                        message: 'This conversation belongs to another agent.'
+                    });
+                }
+            } else {
+                // New thread — the contact's lead must be theirs. An unknown
+                // number has no lead, and therefore no owner, so it is refused.
+                const targetLead = leadId
+                    ? await Lead.findOne({ _id: leadId, ...req.dataScope }).select('assignedTo').lean()
+                    : await Lead.findOne({
+                        userId: { $in: companyUserIds },
+                        phone: { $regex: phoneLast10 + '$' }
+                    }).sort({ updatedAt: -1 }).select('assignedTo').lean();
+
+                if (!targetLead || String(targetLead.assignedTo || '') !== String(userId)) {
+                    return res.status(403).json({
+                        message: 'You can only start conversations with leads assigned to you.'
+                    });
+                }
+            }
+        }
+
         if (!conversation) {
+            // Resolve the derived owner from the lead this thread belongs to.
+            const resolvedLead = leadId
+                ? await Lead.findById(leadId).select('assignedTo').lean()
+                : await Lead.findOne({
+                    userId: { $in: companyUserIds },
+                    phone: { $regex: phoneLast10 + '$' }
+                }).sort({ updatedAt: -1 }).select('assignedTo').lean();
+
+            const assignedTo = await resolveAssigneeForConversation({
+                tenantId: req.tenantId,
+                lead: resolvedLead || null
+            });
+
             // Create new conversation
             conversation = new WhatsAppConversation({
                 userId: userId,
                 waContactId: normalizedPhone,
                 phone: normalizedPhone,
-                leadId: leadId || null,
+                leadId: leadId || resolvedLead?._id || null,
+                assignedTo,
                 initiatedBy: 'user',
                 metadata: {
                     firstMessageAt: new Date()
@@ -528,23 +605,26 @@ exports.startConversation = async (req, res) => {
             message: savedMsg
         });
 
-        // 🔌 Push to the whole team via Socket.IO (shared inbox — all company users)
-        const convCompanyUserIds = await getCompanyUserIds(userId);
-        emitToUsers(convCompanyUserIds, 'whatsapp:newMessage', {
+        // 🔌 Push to everyone allowed to see this conversation
+        broadcastConversationEvent({
+            tenantId: req.tenantId,
+            companyUserIds,
             conversationId: conversation._id,
-            message: savedMsg
-        });
-        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
-            conversationId: conversation._id,
-            message: savedMsg
-        });
-        emitToUsers(convCompanyUserIds, 'whatsapp:conversationUpdate', {
-            conversationId: conversation._id,
-            updates: {
-                lastMessage: conversation.lastMessage,
-                lastMessageAt: conversation.lastMessageAt,
-                lastMessageDirection: 'outbound'
-            }
+            assignedTo: conversation.assignedTo,
+            events: [
+                { event: 'whatsapp:newMessage', data: { conversationId: conversation._id, message: savedMsg } },
+                {
+                    event: 'whatsapp:conversationUpdate',
+                    data: {
+                        conversationId: conversation._id,
+                        updates: {
+                            lastMessage: conversation.lastMessage,
+                            lastMessageAt: conversation.lastMessageAt,
+                            lastMessageDirection: 'outbound'
+                        }
+                    }
+                }
+            ]
         });
     } catch (error) {
         const { msg: errorMsg, code: errorCode, category } = parseMetaError(error);
@@ -571,9 +651,10 @@ exports.sendMediaMessage = async (req, res) => {
         const { id } = req.params;
         const caption = req.body.caption || '';
 
+        const scope = await conversationScope(req);
         const companyUserIds = await getCompanyUserIds(userId);
 
-        const conversation = await WhatsAppConversation.findOne({ _id: id, userId: { $in: companyUserIds } });
+        const conversation = await WhatsAppConversation.findOne({ _id: id, ...scope });
         if (!conversation) {
             return res.status(404).json({ message: 'Conversation not found' });
         }
@@ -714,21 +795,25 @@ exports.sendMediaMessage = async (req, res) => {
         res.json({ success: true, message: savedMsg });
 
         // 🔌 Push to the whole team via Socket.IO (shared inbox — all company users)
-        emitToUsers(companyUserIds, 'whatsapp:newMessage', {
+        broadcastConversationEvent({
+            tenantId: req.tenantId,
+            companyUserIds,
             conversationId: conversation._id,
-            message: savedMsg
-        });
-        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
-            conversationId: conversation._id,
-            message: savedMsg
-        });
-        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
-            conversationId: conversation._id,
-            updates: {
-                lastMessage: conversation.lastMessage,
-                lastMessageAt: conversation.lastMessageAt,
-                lastMessageDirection: 'outbound'
-            }
+            assignedTo: conversation.assignedTo,
+            events: [
+                { event: 'whatsapp:newMessage', data: { conversationId: conversation._id, message: savedMsg } },
+                {
+                    event: 'whatsapp:conversationUpdate',
+                    data: {
+                        conversationId: conversation._id,
+                        updates: {
+                            lastMessage: conversation.lastMessage,
+                            lastMessageAt: conversation.lastMessageAt,
+                            lastMessageDirection: 'outbound'
+                        }
+                    }
+                }
+            ]
         });
     } catch (error) {
         console.error('Error sending media:', error.response?.data || error.message);
@@ -753,9 +838,10 @@ exports.sendMediaFromLibrary = async (req, res) => {
             return res.status(400).json({ message: 'mediaAssetId is required' });
         }
 
+        const scope = await conversationScope(req);
         const companyUserIds = await getCompanyUserIds(userId);
 
-        const conversation = await WhatsAppConversation.findOne({ _id: id, userId: { $in: companyUserIds } });
+        const conversation = await WhatsAppConversation.findOne({ _id: id, ...scope });
         if (!conversation) {
             return res.status(404).json({ message: 'Conversation not found' });
         }
@@ -892,21 +978,25 @@ exports.sendMediaFromLibrary = async (req, res) => {
         res.json({ success: true, message: savedMsg });
 
         // Push to the whole team via Socket.IO
-        emitToUsers(companyUserIds, 'whatsapp:newMessage', {
+        broadcastConversationEvent({
+            tenantId: req.tenantId,
+            companyUserIds,
             conversationId: conversation._id,
-            message: savedMsg
-        });
-        emitToConversation(conversation._id.toString(), 'whatsapp:newMessage', {
-            conversationId: conversation._id,
-            message: savedMsg
-        });
-        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
-            conversationId: conversation._id,
-            updates: {
-                lastMessage: conversation.lastMessage,
-                lastMessageAt: conversation.lastMessageAt,
-                lastMessageDirection: 'outbound'
-            }
+            assignedTo: conversation.assignedTo,
+            events: [
+                { event: 'whatsapp:newMessage', data: { conversationId: conversation._id, message: savedMsg } },
+                {
+                    event: 'whatsapp:conversationUpdate',
+                    data: {
+                        conversationId: conversation._id,
+                        updates: {
+                            lastMessage: conversation.lastMessage,
+                            lastMessageAt: conversation.lastMessageAt,
+                            lastMessageDirection: 'outbound'
+                        }
+                    }
+                }
+            ]
         });
     } catch (error) {
         console.error('[MediaLibrary] Error sending media from library:', error.response?.data || error.message);
@@ -942,10 +1032,21 @@ exports.downloadMediaProxy = async (req, res) => {
         // gate stays exactly where it was, before any bytes are fetched.
         const owningMsg = await WhatsAppMessage.findOne(
             { 'content.mediaId': String(mediaId), userId: { $in: companyUserIds } },
-            { 'content.storageKey': 1, 'content.mimeType': 1 }
+            { 'content.storageKey': 1, 'content.mimeType': 1, conversationId: 1 }
         ).lean();
         if (!owningMsg) {
             console.warn(`🛑 [Media] Denied: user ${userId} -> mediaId ${mediaId}`);
+            return res.status(404).json({ message: 'Media not found' });
+        }
+
+        // Company ownership alone is not enough once the inbox is assignment-
+        // based: a restricted agent could otherwise pull attachments out of a
+        // thread they cannot open, just by guessing a media id. Prove the
+        // OWNING CONVERSATION is in scope too.
+        const scope = await conversationScope(req);
+        const visible = await WhatsAppConversation.exists({ _id: owningMsg.conversationId, ...scope });
+        if (!visible) {
+            console.warn(`🛑 [Media] Denied (conversation out of scope): user ${userId} -> mediaId ${mediaId}`);
             return res.status(404).json({ message: 'Media not found' });
         }
 
@@ -1028,11 +1129,12 @@ exports.resumeChatbot = async (req, res) => {
         const userId = req.user.userId || req.user.id;
         const { id } = req.params;
 
+        const scope = await conversationScope(req);
         const companyUserIds = await getCompanyUserIds(userId);
 
         // Find conversation and reset chatbotPausedUntil
         const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { _id: id, userId: { $in: companyUserIds } },
+            { _id: id, ...scope },
             { $set: { chatbotPausedUntil: new Date(0) } },
             { returnDocument: 'after' }
         );
@@ -1041,10 +1143,19 @@ exports.resumeChatbot = async (req, res) => {
             return res.status(404).json({ message: 'Conversation not found' });
         }
 
-        // Emit update to the whole team (shared inbox)
-        emitToUsers(companyUserIds, 'whatsapp:conversationUpdate', {
+        // Emit update to everyone allowed to see this conversation
+        broadcastConversationEvent({
+            tenantId: req.tenantId,
+            companyUserIds,
             conversationId: conversation._id,
-            updates: { chatbotPausedUntil: conversation.chatbotPausedUntil }
+            assignedTo: conversation.assignedTo,
+            events: [{
+                event: 'whatsapp:conversationUpdate',
+                data: {
+                    conversationId: conversation._id,
+                    updates: { chatbotPausedUntil: conversation.chatbotPausedUntil }
+                }
+            }]
         });
 
         res.json({ success: true, message: 'Chatbot resumed successfully', conversation });
@@ -1054,3 +1165,64 @@ exports.resumeChatbot = async (req, res) => {
     }
 };
 
+
+// ============================================================
+// SETTINGS: Lead-based WhatsApp conversation assignment
+// ============================================================
+// Lives here (rather than in metaController alongside the other lead-assignment
+// settings) because those endpoints are each gated by
+// requireFeature('leads.metaSync'), which is the wrong gate for a setting that
+// governs the WhatsApp inbox regardless of whether Meta sync is in the plan.
+
+// GET /api/leads/whatsapp-assignment-config
+exports.getAssignmentConfig = async (req, res) => {
+    try {
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
+        const ws = await WorkspaceSettings.findOne({ userId: req.tenantId })
+            .select('whatsappFollowsLeadAssignment')
+            .lean();
+
+        res.json({
+            success: true,
+            whatsappFollowsLeadAssignment: ws?.whatsappFollowsLeadAssignment === true
+        });
+    } catch (error) {
+        console.error('Error reading WhatsApp assignment config:', error);
+        res.status(500).json({ message: 'Error reading configuration', error: 'Server error' });
+    }
+};
+
+// PUT /api/leads/whatsapp-assignment-config
+exports.updateAssignmentConfig = async (req, res) => {
+    try {
+        const { whatsappFollowsLeadAssignment } = req.body;
+
+        if (typeof whatsappFollowsLeadAssignment !== 'boolean') {
+            return res.status(400).json({
+                message: 'whatsappFollowsLeadAssignment must be true or false'
+            });
+        }
+
+        const WorkspaceSettings = require('../models/WorkspaceSettings');
+        // upsert: a workspace row should always exist, but a missing one must
+        // not silently swallow the setting.
+        await WorkspaceSettings.findOneAndUpdate(
+            { userId: req.tenantId },
+            { $set: { whatsappFollowsLeadAssignment } },
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+        );
+
+        // WorkspaceSettings' post-findOneAndUpdate hook clears req.workspace's
+        // tenantCache entry. The assignment service keeps its OWN 5-minute cache
+        // for the contexts that have no req (webhook, cron, broadcasts), so that
+        // one has to be invalidated explicitly or the toggle would appear to do
+        // nothing to inbound traffic for up to five minutes.
+        const { invalidateFollowLeadCache } = require('../services/whatsappAssignmentService');
+        invalidateFollowLeadCache(req.tenantId);
+
+        res.json({ success: true, whatsappFollowsLeadAssignment });
+    } catch (error) {
+        console.error('Error saving WhatsApp assignment config:', error);
+        res.status(500).json({ message: 'Error saving configuration', error: 'Server error' });
+    }
+};

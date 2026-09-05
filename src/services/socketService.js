@@ -82,7 +82,9 @@ const initSocket = (httpServer) => {
             // reading it off the socket (or the token) leaves it undefined, and an
             // undefined value in a query filter is dropped by BSON rather than
             // matching nothing — which silently turns the guard into a no-op.
-            const userDoc = await User.findById(userId).select('tokenVersion is_active parentId role').lean();
+            const userDoc = await User.findById(userId)
+                .select('tokenVersion is_active parentId role permissions.viewAllWhatsApp')
+                .lean();
             if (!userDoc) {
                 console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: user no longer exists`);
                 return next(new Error('Account no longer exists'));
@@ -114,10 +116,21 @@ const initSocket = (httpServer) => {
             }
 
             socket.userId = userId;
-            socket.userRole = decoded.role;
+            // From the DB, not the token: a role changed after the token was
+            // issued must not keep granting the old visibility for up to 30 days.
+            socket.userRole = userDoc.role || decoded.role;
             // Normalized to a string id or null — never undefined. The join guard
             // relies on this distinction.
             socket.parentId = userDoc.parentId ? String(userDoc.parentId) : null;
+            // Server-resolved, for the WhatsApp conversation-visibility check in
+            // watch:conversation. Must NOT be read off the token — a client
+            // controls nothing here.
+            // Pass the raw value through, NOT `=== true`: for agent documents
+            // written before viewAllWhatsApp existed, .lean() yields undefined,
+            // and coercing that to false would restrict every legacy agent.
+            // hasFullInbox() owns that decision.
+            socket.waPermissions = { viewAllWhatsApp: userDoc.permissions?.viewAllWhatsApp };
+            socket.tenantId = String(tenantId);
             console.log(`✅ [Socket.IO] Authentication successful for user: ${socket.userId}`);
             next();
         } catch (err) {
@@ -133,6 +146,17 @@ const initSocket = (httpServer) => {
 
         // Join user to their private room (tenant isolation)
         socket.join(`user:${userId}`);
+
+        // ⚠️ SEPARATE ROOM FOR WHATSAPP CONVERSATION EVENTS.
+        // `join:company` below deliberately lets an agent join their manager's
+        // `user:<id>` room. That is fine for most modules, but it means
+        // filtering the WhatsApp fan-out by assignee is NOT enough on its own:
+        // a restricted agent sitting in the manager's room would still receive
+        // every conversation event emitted to the manager.
+        // `wa:<userId>` is joined ONLY for the socket's own id and is never
+        // grantable through join:company, so emitToWhatsAppUsers() can address
+        // an exact audience. See whatsappAssignmentService.conversationAudience.
+        socket.join(`wa:${userId}`);
 
         // If the user is an agent, also join their parent's room
         // so managers can see agent activity and vice versa
@@ -207,14 +231,22 @@ const initSocket = (httpServer) => {
             try {
                 if (!conversationId) return;
                 const WhatsAppConversation = require('../models/WhatsAppConversation');
-                const { getCompanyUserIds } = require('../utils/whatsappUtils');
-                const companyUserIds = await getCompanyUserIds(userId);
-                const owns = await WhatsAppConversation.exists({
-                    _id: conversationId,
-                    userId: { $in: companyUserIds }
+                // Company ownership is the floor, not the ceiling: once the
+                // workspace runs a lead-based inbox this must also honour the
+                // per-agent assignment filter, or an agent could watch a
+                // conversation the REST layer refuses to show them.
+                const { conversationScopeForUser } = require('./whatsappAssignmentService');
+                const scope = await conversationScopeForUser({
+                    userId,
+                    role: socket.userRole,
+                    permissions: socket.waPermissions,
+                    tenantId: socket.tenantId
                 });
+                const owns = await WhatsAppConversation.exists({ _id: conversationId, ...scope });
                 if (owns) {
                     socket.join(`conversation:${conversationId}`);
+                } else {
+                    console.warn(`🛑 [Socket.IO] Denied conversation watch: user ${userId} -> ${conversationId}`);
                 }
             } catch (err) {
                 console.error('watch:conversation auth error:', err.message);
@@ -272,8 +304,26 @@ const emitToUsers = (userIds, event, data) => {
 };
 
 /**
+ * Emit a WhatsApp conversation event to an EXACT audience.
+ *
+ * Uses the `wa:<userId>` rooms rather than `user:<userId>`, because
+ * `join:company` lets an agent into their manager's `user:` room — so emitting
+ * a filtered list into `user:` rooms would still leak every conversation to any
+ * agent who joined their manager. Pair this with
+ * whatsappAssignmentService.conversationAudience() to compute the id list.
+ *
+ * @param {Array<string|ObjectId>} userIds - the resolved audience
+ * @param {string} event
+ * @param {object} data
+ */
+const emitToWhatsAppUsers = (userIds, event, data) => {
+    if (!io || !Array.isArray(userIds)) return;
+    for (const uid of userIds) io.to(`wa:${String(uid)}`).emit(event, data);
+};
+
+/**
  * Emit an event to all sockets watching a specific conversation.
- * 
+ *
  * @param {string} conversationId - The conversation's MongoDB _id
  * @param {string} event - Event name
  * @param {object} data - The payload
@@ -283,4 +333,26 @@ const emitToConversation = (conversationId, event, data) => {
     io.to(`conversation:${conversationId}`).emit(event, data);
 };
 
-module.exports = { initSocket, getIO, emitToUser, emitToUsers, emitToConversation };
+/**
+ * Force every socket belonging to `userId` out of a conversation room.
+ * Called when a reassignment takes a conversation away from an agent who may
+ * still have it open — otherwise they would keep receiving its live messages
+ * from the `conversation:<id>` room even though the REST layer now 404s.
+ */
+const removeUserFromConversation = (userId, conversationId) => {
+    if (!io || !userId || !conversationId) return;
+    const room = `conversation:${conversationId}`;
+    for (const socket of io.sockets.sockets.values()) {
+        if (String(socket.userId) === String(userId)) socket.leave(room);
+    }
+};
+
+module.exports = {
+    initSocket,
+    getIO,
+    emitToUser,
+    emitToUsers,
+    emitToWhatsAppUsers,
+    emitToConversation,
+    removeUserFromConversation
+};

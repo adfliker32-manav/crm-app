@@ -1,6 +1,6 @@
 /**
  * Permission Presets for Agent Creation
- * 
+ *
  * These presets provide quick templates for common agent roles.
  * Managers can select a preset or customize permissions individually.
  */
@@ -22,6 +22,7 @@ const VIEW_ONLY = {
     sendBulkEmails: false,
     manageEmailTemplates: false,
     viewWhatsApp: false,
+    viewAllWhatsApp: false, // Only conversations for their assigned leads
     sendWhatsApp: false,
     sendBulkWhatsApp: false,
     manageWhatsAppTemplates: false,
@@ -58,6 +59,7 @@ const BASIC_AGENT = {
     sendBulkEmails: false,
     manageEmailTemplates: false,
     viewWhatsApp: false,
+    viewAllWhatsApp: false, // Only conversations for their assigned leads
     sendWhatsApp: true,
     sendBulkWhatsApp: false,
     manageWhatsAppTemplates: false,
@@ -94,6 +96,7 @@ const SENIOR_AGENT = {
     sendBulkEmails: true,
     manageEmailTemplates: true,
     viewWhatsApp: true,
+    viewAllWhatsApp: true, // Can see the entire WhatsApp inbox
     sendWhatsApp: true,
     sendBulkWhatsApp: true,
     manageWhatsAppTemplates: true,
@@ -130,6 +133,7 @@ const MANAGER = {
     sendBulkEmails: true,
     manageEmailTemplates: true,
     viewWhatsApp: true,
+    viewAllWhatsApp: true,
     sendWhatsApp: true,
     sendBulkWhatsApp: true,
     manageWhatsAppTemplates: true,

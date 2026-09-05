@@ -295,7 +295,11 @@ const getWhatsAppLeads = async (req, res) => {
         const currentUserId = req.user.userId || req.user._id || req.user.id;
         if (!currentUserId) return res.status(401).json({ message: "Invalid Token" });
 
-        const leads = await Lead.find({ userId: currentUserId, source: 'WhatsApp' }).sort({ updatedAt: -1 });
+        // req.dataScope is the canonical lead row-level filter: tenant isolation
+        // plus `assignedTo: self` for an agent without viewAllLeads. The previous
+        // `{ userId: currentUserId }` was both wrong (an agent's leads carry the
+        // MANAGER's userId, so agents saw nothing) and unscoped by assignment.
+        const leads = await Lead.find({ ...req.dataScope, source: 'WhatsApp' }).sort({ updatedAt: -1 });
         res.status(200).json(leads);
     } catch (error) {
         res.status(500).json({ message: "Server Error" });
@@ -319,14 +323,45 @@ const sendReply = async (req, res) => {
 
         const userCredentials = await getUserWhatsAppCredentials(userId);
         if (!userCredentials || !userCredentials.phoneNumberId || !userCredentials.accessToken) {
-            return res.status(400).json({ 
-                success: false, 
+            return res.status(400).json({
+                success: false,
                 message: 'WhatsApp not configured. Go to Settings → WhatsApp Config to set up your credentials.'
             });
         }
 
+        // 🔐 Resolve the target lead FIRST, inside the caller's data scope.
+        // This endpoint takes a raw `phone`, so without an ownership check it is
+        // a way to message anyone in (or outside) the workspace and, for an
+        // assignment-restricted agent, a clean bypass of the inbox filtering.
+        //
+        // The old code did `Lead.findById(leadId)` with no tenant filter AFTER
+        // sending — a cross-tenant write, and with `leadId` undefined Mongoose
+        // matches the FIRST document in the collection, appending the message to
+        // an unrelated lead.
+        let lead = null;
+        if (leadId) {
+            lead = await Lead.findOne({ _id: leadId, ...req.dataScope });
+            if (!lead) {
+                return res.status(404).json({ success: false, message: 'Lead not found or access denied' });
+            }
+        } else {
+            // leadId has always been optional here (without one the send happened
+            // and the DB save was skipped), so it stays optional for callers who
+            // are allowed to message anyone. But an assignment-restricted agent
+            // MUST go through a lead — otherwise this endpoint is a clean bypass
+            // of the inbox filtering: message any number, read the reply in the
+            // thread the webhook creates.
+            const { isAssignmentRestricted } = require('../services/whatsappAssignmentService');
+            if (isAssignmentRestricted(req)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'leadId is required: you can only message leads assigned to you.'
+                });
+            }
+        }
+
         const { phoneNumberId, accessToken } = userCredentials;
-        
+
         const url = `https://graph.facebook.com/v26.0/${phoneNumberId}/messages`;
         
         await axios.post(url, {
@@ -340,9 +375,9 @@ const sendReply = async (req, res) => {
             }
         });
 
-        // B. Database mein Save karo (from: 'admin')
-        const lead = await Lead.findById(leadId);
-        if(lead) {
+        // B. Database mein Save karo (from: 'admin') — `lead` was already
+        // resolved and authorized above, before anything was sent.
+        if (lead) {
             lead.messages.push({
                 text: message,
                 from: 'admin',

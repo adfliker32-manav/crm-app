@@ -466,16 +466,52 @@ const WhatsAppInbox = () => {
             }
         };
 
+        // --- Lead reassignment moved this conversation ---
+        // Emitted by the server when a Lead's owner changes and lead-based
+        // WhatsApp assignment is enabled. `revoked` means THIS user just lost
+        // access; anyone else receiving it either gained it or already had it.
+        const handleConversationAssigned = ({ conversationId, assignedTo, revoked }) => {
+            const convId = typeof conversationId === 'string' ? conversationId : String(conversationId);
+
+            if (revoked) {
+                setConversations(prev => prev.filter(c => c._id !== convId));
+                // Close it if the agent is sitting in it right now. The server
+                // already 404s every call for it, so leaving it open would only
+                // produce confusing errors.
+                if (selectedChatRef.current?._id === convId) {
+                    setSelectedChat(null);
+                    setMessages([]);
+                }
+                return;
+            }
+
+            setConversations(prev => {
+                const exists = prev.some(c => c._id === convId);
+                if (!exists) {
+                    // Newly visible to this user — pull it in.
+                    setTimeout(() => fetchConversationsRef.current?.(), 0);
+                    return prev;
+                }
+                return prev.map(c => (c._id === convId ? { ...c, assignedTo } : c));
+            });
+
+            if (selectedChatRef.current?._id === convId) {
+                setSelectedChat(prev => (prev ? { ...prev, assignedTo } : prev));
+            }
+        };
+
         socket.on('whatsapp:newMessage', handleNewMessage);
         socket.on('whatsapp:conversationUpdate', handleConversationUpdate);
         socket.on('whatsapp:statusUpdate', handleStatusUpdate);
         socket.on('whatsapp:conversationCleared', handleConversationCleared);
+        socket.on('whatsapp:conversationAssigned', handleConversationAssigned);
 
         return () => {
             socket.off('whatsapp:newMessage', handleNewMessage);
             socket.off('whatsapp:conversationUpdate', handleConversationUpdate);
             socket.off('whatsapp:statusUpdate', handleStatusUpdate);
             socket.off('whatsapp:conversationCleared', handleConversationCleared);
+            socket.off('whatsapp:conversationAssigned', handleConversationAssigned);
         };
     }, [socket]); // fetchConversations accessed via ref (fetchConversationsRef) to avoid stale closure
 
@@ -1211,6 +1247,19 @@ const WhatsAppInbox = () => {
                                             </span>
                                         )}
                                     </div>
+                                    {/* Owning agent, mirrored from the linked Lead. Only present
+                                        once lead-based assignment is enabled for the workspace. */}
+                                    {chat.assignedTo?.name && (
+                                        <div className="flex items-center gap-1 mt-1">
+                                            <span
+                                                className="inline-flex items-center gap-1 text-[11px] text-[#667781] bg-[#f0f2f5] px-1.5 py-0.5 rounded-full max-w-full"
+                                                title={`Assigned to ${chat.assignedTo.name} (follows the Lead owner)`}
+                                            >
+                                                <i className="fa-solid fa-user-check text-[9px] text-[#00a884]"></i>
+                                                <span className="truncate">{chat.assignedTo.name}</span>
+                                            </span>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>

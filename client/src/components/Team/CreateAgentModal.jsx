@@ -20,6 +20,7 @@ const PRESETS = {
         sendBulkEmails: false,
         manageEmailTemplates: false,
         viewWhatsApp: false,
+        viewAllWhatsApp: false,
         sendWhatsApp: false,
         sendBulkWhatsApp: false,
         manageWhatsAppTemplates: false,
@@ -56,6 +57,7 @@ const PRESETS = {
         sendBulkEmails: false,
         manageEmailTemplates: false,
         viewWhatsApp: false,
+        viewAllWhatsApp: false,
         sendWhatsApp: true,
         sendBulkWhatsApp: false,
         manageWhatsAppTemplates: false,
@@ -92,6 +94,7 @@ const PRESETS = {
         sendBulkEmails: true,
         manageEmailTemplates: true,
         viewWhatsApp: true,
+        viewAllWhatsApp: true,
         sendWhatsApp: true,
         sendBulkWhatsApp: true,
         manageWhatsAppTemplates: true,
@@ -204,6 +207,7 @@ const CreateAgentModal = ({ isOpen, onClose, onSuccess }) => {
             title: '💬 WhatsApp',
             permissions: [
                 { key: 'viewWhatsApp', label: 'View WhatsApp Messages' },
+                { key: 'viewAllWhatsApp', label: 'View ALL WhatsApp Conversations (not just assigned)', highlight: true },
                 { key: 'sendWhatsApp', label: 'Send Individual Messages' },
                 { key: 'sendBulkWhatsApp', label: 'Send Bulk Messages' },
                 { key: 'manageWhatsAppTemplates', label: 'Manage Templates' }

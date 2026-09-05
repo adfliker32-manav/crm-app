@@ -7,6 +7,10 @@ const User = require('../models/User');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const telemetryService = require('../services/telemetryService');
 const { emitToUser, emitToConversation } = require('../services/socketService');
+const {
+    broadcastConversationEvent,
+    resolveAssigneeForConversation
+} = require('../services/whatsappAssignmentService');
 const { forwardIfPartnerAccount } = require('../services/partnerWebhookService');
 
 // ============================================================
@@ -445,6 +449,10 @@ const processEchoMessage = async (message, userId, phoneNumberId) => {
                 waContactId: upsertContactId,
                 phone: customerPhone,
                 leadId: lead?._id || null,
+                assignedTo: await resolveAssigneeForConversation({
+                    tenantId: targetUserId,
+                    lead: lead || null
+                }),
                 initiatedBy: 'user',
                 'metadata.firstMessageAt': timestamp
             },
@@ -528,12 +536,19 @@ const processEchoMessage = async (message, userId, phoneNumberId) => {
             }
         };
 
-        for (const uid of validUserIds) {
-            emitToUser(String(uid), 'whatsapp:newMessage', socketPayload);
-            emitToUser(String(uid), 'whatsapp:conversationUpdate', echoSocketUpdate);
-        }
-        emitToConversation(conversationIdStr, 'whatsapp:newMessage', socketPayload);
-        emitToConversation(conversationIdStr, 'whatsapp:conversationUpdate', echoSocketUpdate);
+        // Only the users allowed to see this conversation. See
+        // whatsappAssignmentService.broadcastConversationEvent — a per-user loop
+        // over `user:<id>` rooms would leak to any agent joined to their manager.
+        await broadcastConversationEvent({
+            tenantId: targetUserId,
+            companyUserIds: validUserIds,
+            conversationId: conversation._id,
+            assignedTo: conversation.assignedTo,
+            events: [
+                { event: 'whatsapp:newMessage', data: socketPayload },
+                { event: 'whatsapp:conversationUpdate', data: echoSocketUpdate }
+            ]
+        });
 
         // NOTE: We DO pause the chatbot (agent took over), but we deliberately do NOT
         // run the inbound pipeline — no bot replies, no lead scoring, no drip-sequence
@@ -859,6 +874,13 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // Guaranteed to never throw duplicate key exceptions on concurrent inserts
         debug(`🔎 Upserting conversation: targetUserId=${targetUserId}, waContactId=${upsertContactId} (incoming from: ${from || bsuid})`);
 
+        // Derived owner: mirrors the matched Lead's assignedTo. Returns null
+        // whenever lead-based assignment is off, so this is inert by default.
+        const derivedAssignee = await resolveAssigneeForConversation({
+            tenantId: targetUserId,
+            lead: lead || null
+        });
+
         const updatePayload = {
             $setOnInsert: {
                 userId: targetUserId,
@@ -866,6 +888,7 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                 phone: from || null,
                 waBsuid: bsuid,
                 leadId: lead?._id || null,
+                assignedTo: derivedAssignee,
                 initiatedBy: 'customer',
                 'metadata.firstMessageAt': timestamp
             },
@@ -894,6 +917,25 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // Backfill phone on existing conversations that don't have it yet
         if (from && existingConversation && !existingConversation.phone) {
             updatePayload.$set.phone = from;
+        }
+
+        // Backfill the LEAD LINK on an existing conversation.
+        // leadId lives in $setOnInsert, so a thread created before its Lead
+        // existed stayed leadId:null forever — the common case for Meta Lead Ads,
+        // where the customer often messages first. Without this, lead-based
+        // assignment silently never applies to those threads.
+        // Strictly additive: only ever null -> a real link, never a re-link.
+        if (existingConversation && !existingConversation.leadId && lead?._id) {
+            updatePayload.$set.leadId = lead._id;
+            debug(`   Backfilled leadId ${lead._id} on conversation ${existingConversation._id}`);
+        }
+
+        // Keep the derived owner in step with the Lead on every inbound message.
+        // Cheap (the Lead is already loaded) and self-healing: a conversation
+        // that missed a reassignment catches up the next time the customer writes.
+        if (existingConversation && derivedAssignee !== null &&
+            String(existingConversation.assignedTo || '') !== String(derivedAssignee)) {
+            updatePayload.$set.assignedTo = derivedAssignee;
         }
 
         let conversation;
@@ -976,14 +1018,19 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
             }
         };
 
-        // Emit newMessage + conversationUpdate to ALL company users (shared inbox)
-        for (const uid of validUserIds) {
-            emitToUser(String(uid), 'whatsapp:newMessage', socketPayload);
-            emitToUser(String(uid), 'whatsapp:conversationUpdate', updatePayloadSocket);
-        }
-        // Also emit directly to anyone watching this specific conversation room
-        emitToConversation(conversationIdStr, 'whatsapp:newMessage', socketPayload);
-        emitToConversation(conversationIdStr, 'whatsapp:conversationUpdate', updatePayloadSocket);
+        // Emit to exactly the users allowed to see this conversation (plus
+        // anyone already watching its room). With lead-based assignment off this
+        // resolves to the whole company, i.e. the previous behaviour.
+        await broadcastConversationEvent({
+            tenantId: targetUserId,
+            companyUserIds: validUserIds,
+            conversationId: conversation._id,
+            assignedTo: conversation.assignedTo,
+            events: [
+                { event: 'whatsapp:newMessage', data: socketPayload },
+                { event: 'whatsapp:conversationUpdate', data: updatePayloadSocket }
+            ]
+        });
 
         console.log(`✅ Received message from ${from}: ${messagePreview.substring(0, 50)}...`);
 
@@ -1174,7 +1221,32 @@ const processStatusUpdate = async (status, userId) => {
             statusTimestamp: timestamp,
             ...(statusType === 'failed' && updatePayload.$set.error && { error: updatePayload.$set.error })
         };
-        emitToUser(String(oldMsg.userId), 'whatsapp:statusUpdate', statusPayload);
+        // Status ticks are high volume (sent/delivered/read per message), so the
+        // extra conversation lookup is only paid when lead-based assignment is
+        // actually on. When it is off this stays exactly as it was.
+        const { isFollowLeadEnabled, broadcastConversationEvent } =
+            require('../services/whatsappAssignmentService');
+
+        if (await isFollowLeadEnabled(userId)) {
+            const conv = await WhatsAppConversation.findById(oldMsg.conversationId)
+                .select('assignedTo').lean();
+            const { getCompanyUserIds } = require('../utils/whatsappUtils');
+
+            // Also fixes a pre-existing gap: this used to go ONLY to the user
+            // who sent the message, so an agent never saw delivery ticks for a
+            // message a teammate (or an automation) sent into their thread.
+            await broadcastConversationEvent({
+                tenantId: userId,
+                companyUserIds: await getCompanyUserIds(userId),
+                conversationId: oldMsg.conversationId,
+                assignedTo: conv?.assignedTo || null,
+                events: [{ event: 'whatsapp:statusUpdate', data: statusPayload }],
+                includeConversationRoom: false
+            });
+        } else {
+            emitToUser(String(oldMsg.userId), 'whatsapp:statusUpdate', statusPayload);
+        }
+
         emitToConversation(oldMsg.conversationId.toString(), 'whatsapp:statusUpdate', {
             waMessageId,
             status: statusType
