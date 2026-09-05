@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
-import { useConfirm } from '../../context/ConfirmContext';
+import { formatMoney } from '../../utils/currency';
 import PartnerAccountsTab from './PartnerAccountsTab';
 import PartnerBillingTab from './PartnerBillingTab';
 import PartnerSettingsTab from './PartnerSettingsTab';
@@ -16,8 +16,7 @@ const TABS = [
 ];
 
 const PartnerDetailView = ({ partnerId, onBack }) => {
-    const { showSuccess, showError } = useNotification();
-    const { showDanger } = useConfirm();
+    const { showError } = useNotification();
     const [partner, setPartner] = useState(null);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('accounts');
@@ -87,7 +86,7 @@ const PartnerDetailView = ({ partnerId, onBack }) => {
             {/* Stats Row */}
             <div className="grid grid-cols-4 gap-4">
                 {[
-                    { label: 'Revenue', value: `₹${(partner.monthlyRevenue || 0).toLocaleString('en-IN')}/mo`, sub: `₹${partner.pricePerAccount || 0} × ${activeCount}`, icon: 'fa-indian-rupee-sign', bg: 'bg-amber-100 text-amber-600' },
+                    { label: 'Revenue', value: `${formatMoney(partner.monthlyRevenue || 0, partner.currency)}/mo`, sub: `${formatMoney(partner.pricePerAccount || 0, partner.currency)} × ${activeCount} active`, icon: 'fa-indian-rupee-sign', bg: 'bg-amber-100 text-amber-600' },
                     { label: 'Accounts', value: `${activeCount} Active`, sub: `${totalCount} Total`, icon: 'fa-users', bg: 'bg-violet-100 text-violet-600' },
                     { label: 'Messages', value: (partner.messagesThisMonth || 0).toLocaleString(), sub: 'This Month', icon: 'fa-comment-dots', bg: 'bg-green-100 text-green-600' },
                     { label: 'API Calls', value: (partner.apiUsage?.find(u => u.date === new Date().toISOString().slice(0, 10))?.count || 0).toLocaleString(), sub: 'Today', icon: 'fa-code', bg: 'bg-blue-100 text-blue-600' },

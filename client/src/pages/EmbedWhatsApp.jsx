@@ -9,8 +9,19 @@
  * Auth Flow:
  *   1. Page loads with ?token=emb_xxx in the URL
  *   2. Exchanges the embed token for a JWT via /api/partner/v1/embed/auth
- *   3. Sets the JWT in memory (NOT localStorage — iframe security)
+ *   3. Stores it under the EMBED-ONLY session keys (see below)
  *   4. Renders WhatsAppManagement with the embedded flag
+ *
+ * ⚠️ SESSION ISOLATION (PA-H1)
+ * This page is served from the same origin as the main CRM, so it shares one
+ * localStorage with it. Writing the plain `token` / `user` keys — as this
+ * component used to, directly contradicting its own comment about "memory only"
+ * — silently replaced the session of anyone with the CRM open in another tab,
+ * and the unmount cleanup then logged them out of the real app.
+ *
+ * Credentials now go through setAuthSession/clearAuthSession, which put embed
+ * sessions in sessionStorage under `embed_token` / `embed_user`: a different
+ * key (no collision) in a tab-scoped store (no leak to the user's other tabs).
  *
  * Route: /embed/whatsapp?token=emb_xxx
  */
@@ -18,7 +29,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import WhatsAppManagement from './WhatsAppManagement';
-import api from '../services/api';
+import api, { setAuthSession, clearAuthSession } from '../services/api';
 
 const EmbedWhatsApp = () => {
     const [searchParams] = useSearchParams();
@@ -49,30 +60,30 @@ const EmbedWhatsApp = () => {
                     return;
                 }
 
-                // Store JWT in memory only (not localStorage — iframe security)
+                // Persist under the embed-only keys BEFORE rendering the app, so
+                // the first request WhatsAppManagement fires already carries the
+                // Authorization header.
+                setAuthSession(data.token, data.user);
+
                 setJwt(data.token);
                 setUser(data.user);
                 setState('authenticated');
 
-                // Set the JWT in localStorage temporarily so the existing api.js
-                // interceptor picks it up. This is safe because the embed page
-                // runs in the iframe's origin.
-                localStorage.setItem('token', data.token);
-                localStorage.setItem('user', JSON.stringify(data.user));
-
             } catch (err) {
                 setState('error');
-                setError('Failed to connect. Please try again.');
+                const serverMessage = err?.response?.data?.message;
+                // A deactivated partner / revoked account gets a real
+                // explanation rather than a generic network error.
+                setError(serverMessage || 'Failed to connect. Please try again.');
                 console.error('[Embed] Token exchange failed:', err);
             }
         };
 
         exchangeToken();
 
-        // Cleanup on unmount — remove credentials from storage
+        // Cleanup on unmount — clears only the embed keys, never the main app's.
         return () => {
-            localStorage.removeItem('token');
-            localStorage.removeItem('user');
+            clearAuthSession();
         };
     }, [searchParams]);
 
@@ -122,9 +133,11 @@ const EmbedWhatsApp = () => {
                 </div>
             )}
 
-            {/* Full WhatsApp UI — render the same component used in the main app */}
+            {/* Full WhatsApp UI — render the same component used in the main app.
+                `embedUser` carries the partner's allowedModules grant; AuthContext
+                is empty here because the embed session is stored separately. */}
             <div className={`${user?.showPoweredBy ? 'h-[calc(100vh-33px)]' : 'h-screen'}`}>
-                <WhatsAppManagement embedded={true} />
+                <WhatsAppManagement embedded={true} embedUser={user} />
             </div>
         </div>
     );

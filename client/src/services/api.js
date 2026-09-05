@@ -8,10 +8,65 @@ const api = axios.create({
     timeout: 30000, // 30s timeout — prevents infinite hang on Render cold starts
 });
 
+// ─── Auth storage (PA-H1) ────────────────────────────────────────────────────
+// The partner embed is served from the SAME ORIGIN as the main CRM, so it
+// shares one localStorage. The embed page used to write the plain `token` and
+// `user` keys, which silently replaced the session of anyone who had the CRM
+// open in another tab — and its unmount cleanup then logged them out of the
+// real app entirely.
+//
+// Embed sessions therefore live under their own keys in sessionStorage:
+//   - different key   → cannot collide with the main app's session
+//   - sessionStorage  → scoped to the one tab holding the iframe, so it never
+//                       leaks to the user's other tabs and dies with the tab
+// Everything below routes through these helpers so the two never mix again.
+export const isEmbedContext = () =>
+    typeof window !== 'undefined' && window.location.pathname.startsWith('/embed/');
+
+export const AUTH_KEYS = {
+    embed:  { token: 'embed_token', user: 'embed_user', store: () => sessionStorage },
+    normal: { token: 'token',       user: 'user',       store: () => localStorage }
+};
+
+const authKeys = () => (isEmbedContext() ? AUTH_KEYS.embed : AUTH_KEYS.normal);
+
+export const getAuthToken = () => {
+    try {
+        const { token, store } = authKeys();
+        return store().getItem(token);
+    } catch { return null; }
+};
+
+export const getAuthUser = () => {
+    try {
+        const { user, store } = authKeys();
+        const raw = store().getItem(user);
+        return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+};
+
+export const setAuthSession = (token, user) => {
+    try {
+        const keys = authKeys();
+        const store = keys.store();
+        store.setItem(keys.token, token);
+        store.setItem(keys.user, JSON.stringify(user));
+    } catch { /* storage may be unavailable (private mode) */ }
+};
+
+export const clearAuthSession = () => {
+    try {
+        const keys = authKeys();
+        const store = keys.store();
+        store.removeItem(keys.token);
+        store.removeItem(keys.user);
+    } catch { /* ignore */ }
+};
+
 // Request interceptor to add token
 api.interceptors.request.use(
     (config) => {
-        const token = localStorage.getItem('token');
+        const token = getAuthToken();
         if (token) {
             config.headers['Authorization'] = `Bearer ${token}`;
         }
@@ -45,7 +100,7 @@ api.interceptors.response.use(
 
         // ── 401 Unauthorized — Session expired or invalid token ──
         if (status === 401) {
-            const token = localStorage.getItem('token');
+            const token = getAuthToken();
             const requestUrl = error.config?.url || '';
 
             // Skip logout for login/register endpoints (expected 401 for wrong credentials)
@@ -89,13 +144,24 @@ api.interceptors.response.use(
 
                 if (shouldLogout) {
                     console.warn('Session ended, logging out:', errorCode || errorMessage);
+                    clearAuthSession();
+
+                    // An embed session has no /login to go to — the user is
+                    // inside a partner's iframe and has no credentials for this
+                    // platform. Reloading re-runs the token exchange, and if
+                    // that fails the embed page shows its own error state.
+                    // Redirecting here would render this platform's login form
+                    // inside the partner's product, which is exactly wrong.
+                    if (isEmbedContext()) {
+                        window.location.reload();
+                        return Promise.reject(error);
+                    }
+
                     // Surface the reason on the login page so a forced logout
                     // doesn't look like a random glitch.
                     try {
                         sessionStorage.setItem('logout_reason', errorMessage || 'Your session has ended.');
                     } catch { /* sessionStorage may be unavailable */ }
-                    localStorage.removeItem('token');
-                    localStorage.removeItem('user');
                     window.location.replace('/login');
                 }
             }
@@ -109,14 +175,14 @@ api.interceptors.response.use(
         // now natively render the <UpgradeWall> instead of attempting API calls.
         if (status === 403 && (error.response?.data?.error === 'module_locked' || error.response?.data?.error === 'feature_locked')) {
             try {
-                const userStr = localStorage.getItem('user');
-                if (userStr) {
-                    const userObj = JSON.parse(userStr);
+                const userObj = getAuthUser();
+                if (userObj) {
                     if (!userObj.entitlements) userObj.entitlements = {};
                     const key = error.response.data.feature || error.response.data.module;
                     if (key) {
                         userObj.entitlements[key] = false;
-                        localStorage.setItem('user', JSON.stringify(userObj));
+                        const keys = authKeys();
+                        keys.store().setItem(keys.user, JSON.stringify(userObj));
                         // Delay slightly so the UI doesn't visually flicker abruptly
                         setTimeout(() => window.location.reload(), 100);
                         return Promise.reject(error);

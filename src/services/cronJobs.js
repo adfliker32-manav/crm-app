@@ -1003,6 +1003,18 @@ const startCronJobs = () => {
     } catch (e) {
         console.error('⚠️ [CronJobs] Failed to schedule Meta CAPI outbox drain:', e.message);
     }
+
+    // ── Partner webhook outbox drain — every minute ────────────────────────
+    // Retries partner webhook deliveries whose inline attempt failed
+    // transiently. Runs more often than the CAPI drain because partners expect
+    // near-real-time message events, and the backoff schedule starts at 1 min.
+    try {
+        const { drainPartnerWebhooks } = require('./partnerWebhookOutboxService');
+        cron.schedule('* * * * *', drainPartnerWebhooks);
+        console.log('[CronJobs] Partner webhook outbox drain scheduled (every 1 min)');
+    } catch (e) {
+        console.error('⚠️ [CronJobs] Failed to schedule partner webhook outbox drain:', e.message);
+    }
 };
 
 // ──────────────────────────────────────────────────────────────────────────────

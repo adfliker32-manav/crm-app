@@ -31,7 +31,9 @@ const ROUTES_DIR = path.join(__dirname, '..', '..', 'src', 'routes');
 // with stripUnknown, so a field missing from a schema is SILENTLY DELETED before
 // the handler sees it — a wrong schema breaks a feature invisibly rather than
 // loudly. Verify each controller's real field list, as the entries above were.
-const BASELINE_UNVALIDATED = 190;
+// 190 → 185 on 2026-09-05: the partner-app audit added 5 write routes and
+// validated 10 (the 5 new ones plus every pre-existing partner-app write route).
+const BASELINE_UNVALIDATED = 185;
 
 const scanRoutes = () => {
     const perFile = [];

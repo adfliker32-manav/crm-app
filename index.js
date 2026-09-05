@@ -90,6 +90,40 @@ app.use(helmet({
   contentSecurityPolicy: false // Disable CSP to avoid breaking inline scripts in React
 }));
 
+// ⚠️ PARTNER EMBED FRAMING (PA-C2)
+// ─────────────────────────────────────────────────────────────────────────────
+// helmet sets X-Frame-Options: SAMEORIGIN on every response, and this same app
+// serves the React build (client/dist) below — so /embed/whatsapp was
+// unframeable from ANY partner domain. The entire partner-embed product could
+// not work anywhere but localhost.
+//
+// X-Frame-Options has no allowlist form, so it is replaced (for the embed route
+// only) with a CSP frame-ancestors listing exactly the origins registered on
+// the PartnerApp that owns the embed token. Everything else on the app keeps
+// the strict SAMEORIGIN default.
+//
+// The token in the query string identifies the partner. An unknown/expired
+// token yields NO frame-ancestors grant, so a stranger cannot probe for a
+// framable page — and an origin is only ever honoured if a superadmin
+// registered it against that partner. Wildcards are never emitted: this page is
+// a fully authenticated WhatsApp inbox, and `frame-ancestors *` would hand it
+// straight to clickjacking.
+const { resolveEmbedFrameAncestors } = require('./src/services/embedFramingService');
+app.use('/embed', async (req, res, next) => {
+  try {
+    const origins = await resolveEmbedFrameAncestors(req.query.token);
+    res.removeHeader('X-Frame-Options');
+    res.setHeader(
+      'Content-Security-Policy',
+      `frame-ancestors ${origins.length ? origins.join(' ') : "'none'"}`
+    );
+  } catch (err) {
+    // Fail closed — leave the SAMEORIGIN default in place.
+    console.error('[EmbedFraming] Failed to resolve frame-ancestors:', err.message);
+  }
+  next();
+});
+
 // ⚠️ SECURITY: CORS must be restricted to known frontend origins.
 // Wide-open CORS allows any website to make authenticated API calls using stolen tokens.
 // The allowlist lives in src/config/allowedOrigins.js so the Express and

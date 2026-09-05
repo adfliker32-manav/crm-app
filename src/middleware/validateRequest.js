@@ -340,7 +340,33 @@ const schemas = {
 
     updateTeamTaskStatus: Joi.object({
         status: Joi.string().valid('pending', 'in_progress', 'completed', 'cancelled').required()
-    })
+    }),
+
+    // ── Partner Apps (SuperAdmin) ───────────────────────────────────────────
+
+    // Marking a partner bill paid — free-text note only; the amount, the period
+    // and who recorded it all come from the server, never the request.
+    markPartnerBillPaid: Joi.object({
+        notes: Joi.string().trim().max(500).optional().allow('', null)
+    }),
+
+    generatePartnerBill: Joi.object({
+        // YYYY-MM. The controller additionally rejects future months and months
+        // outside 01-12 — this only pins the shape.
+        month: Joi.string().trim().pattern(/^\d{4}-\d{2}$/).required()
+            .messages({ 'string.pattern.base': 'month must be in YYYY-MM format' })
+    }),
+
+    // ── Partner API (partner-key auth) ──────────────────────────────────────
+
+    // Profile fields on a provisioned account. Email is deliberately absent: it
+    // is the login identity and is uniqueness-constrained platform-wide, so
+    // changing it belongs behind the normal verification flow.
+    partnerUpdateAccount: Joi.object({
+        name:        Joi.string().trim().min(1).max(100).optional(),
+        phone:       Joi.string().trim().max(20).optional().allow('', null),
+        companyName: Joi.string().trim().max(150).optional().allow('', null)
+    }).min(1)
 };
 
 module.exports = { validate, schemas };

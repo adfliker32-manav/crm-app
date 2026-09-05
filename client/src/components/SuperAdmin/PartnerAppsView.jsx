@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import CreatePartnerModal from './CreatePartnerModal';
+import { formatMoney } from '../../utils/currency';
 import PartnerDetailView from './PartnerDetailView';
 
 const PartnerAppsView = () => {
@@ -84,8 +85,10 @@ const PartnerAppsView = () => {
                 {[
                     { label: 'Total Partners', value: stats.totalPartners || 0, icon: 'fa-puzzle-piece', color: 'from-cyan-500 to-cyan-600', iconBg: 'bg-cyan-100 text-cyan-600' },
                     { label: 'Active Partners', value: stats.activePartners || 0, icon: 'fa-check-circle', color: 'from-emerald-500 to-emerald-600', iconBg: 'bg-emerald-100 text-emerald-600' },
-                    { label: 'Total Accounts', value: stats.totalAccounts || 0, icon: 'fa-users', color: 'from-violet-500 to-violet-600', iconBg: 'bg-violet-100 text-violet-600' },
-                    { label: 'Monthly Revenue', value: `₹${(stats.monthlyRevenue || 0).toLocaleString('en-IN')}`, icon: 'fa-indian-rupee-sign', color: 'from-amber-500 to-amber-600', iconBg: 'bg-amber-100 text-amber-600' },
+                    { label: 'Active Accounts', value: `${stats.activeAccounts ?? stats.totalAccounts ?? 0} / ${stats.totalAccounts || 0}`, icon: 'fa-users', color: 'from-violet-500 to-violet-600', iconBg: 'bg-violet-100 text-violet-600' },
+                    // Aggregated across partners who may bill in different
+                    // currencies, so this stays symbol-less by design.
+                    { label: 'Monthly Revenue', value: (stats.monthlyRevenue || 0).toLocaleString('en-IN'), icon: 'fa-indian-rupee-sign', color: 'from-amber-500 to-amber-600', iconBg: 'bg-amber-100 text-amber-600' },
                 ].map((stat, i) => (
                     <div key={i} className="bg-white rounded-2xl border border-slate-200 p-5 hover:shadow-lg transition-shadow">
                         <div className="flex items-center justify-between">
@@ -135,7 +138,7 @@ const PartnerAppsView = () => {
                         <thead>
                             <tr className="bg-slate-50 border-b border-slate-200">
                                 <th className="text-left px-5 py-3.5 font-semibold text-slate-600">App Name</th>
-                                <th className="text-center px-5 py-3.5 font-semibold text-slate-600">Accounts</th>
+                                <th className="text-center px-5 py-3.5 font-semibold text-slate-600">Active / Total</th>
                                 <th className="text-center px-5 py-3.5 font-semibold text-slate-600">Price/Acct</th>
                                 <th className="text-center px-5 py-3.5 font-semibold text-slate-600">Monthly Revenue</th>
                                 <th className="text-center px-5 py-3.5 font-semibold text-slate-600">API Today</th>
@@ -162,13 +165,19 @@ const PartnerAppsView = () => {
                                         </div>
                                     </td>
                                     <td className="text-center px-5 py-4">
-                                        <span className="font-bold text-slate-900">{p.totalAccounts}</span>
+                                        {/* Active is the number that gets billed; total is
+                                            context. Showing only the total was how this
+                                            screen came to disagree with the detail view. */}
+                                        <span className="font-bold text-slate-900">{p.activeAccounts ?? p.totalAccounts}</span>
+                                        {p.totalAccounts !== (p.activeAccounts ?? p.totalAccounts) && (
+                                            <span className="text-xs text-slate-400"> / {p.totalAccounts}</span>
+                                        )}
                                     </td>
                                     <td className="text-center px-5 py-4">
-                                        <span className="text-slate-700">₹{p.pricePerAccount || 0}</span>
+                                        <span className="text-slate-700">{formatMoney(p.pricePerAccount || 0, p.currency)}</span>
                                     </td>
                                     <td className="text-center px-5 py-4">
-                                        <span className="font-bold text-emerald-600">₹{(p.monthlyRevenue || 0).toLocaleString('en-IN')}</span>
+                                        <span className="font-bold text-emerald-600">{formatMoney(p.monthlyRevenue || 0, p.currency)}</span>
                                     </td>
                                     <td className="text-center px-5 py-4">
                                         <span className="text-slate-500">{p.apiCallsToday || 0}</span>

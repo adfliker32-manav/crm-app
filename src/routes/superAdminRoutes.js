@@ -1,5 +1,6 @@
 const express = require('express');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validate, schemas } = require('../middleware/validateRequest');
 const router = express.Router();
 const { authMiddleware, requireSuperAdmin } = require('../middleware/authMiddleware');
 const {
@@ -275,26 +276,37 @@ const {
     updatePartner,
     deactivatePartner,
     regenerateKey,
+    rotateWebhookSecret,
     generateBill,
     markBillPaid,
+    markBillDue,
     getApiUsage,
+    getWebhookDeliveries,
+    retryWebhookDelivery,
     freezePartnerAccount,
     unfreezePartnerAccount,
     deletePartnerAccount
 } = require('../controllers/partnerAppAdminController');
 
+// NOTE: authMiddleware runs BEFORE validateObjectId on every route below, so an
+// unauthenticated caller gets 401 rather than a 400 that confirms the route
+// exists and reveals its parameter shape.
 router.get('/partner-apps', authMiddleware, requireSuperAdmin, listPartners);
 router.post('/partner-apps', authMiddleware, requireSuperAdmin, createPartner);
-router.get('/partner-apps/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getPartner);
-router.put('/partner-apps/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, updatePartner);
-router.delete('/partner-apps/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, deactivatePartner);
-router.post('/partner-apps/:id/regenerate-key', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, regenerateKey);
-router.post('/partner-apps/:id/generate-bill', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, generateBill);
-router.put('/partner-apps/:id/billing/:billId/mark-paid', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, markBillPaid);
-router.get('/partner-apps/:id/api-usage', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getApiUsage);
-router.put('/partner-apps/:id/accounts/:accountId/freeze', validateObjectId({ params: ['id', 'accountId'] }), authMiddleware, requireSuperAdmin, freezePartnerAccount);
-router.put('/partner-apps/:id/accounts/:accountId/unfreeze', validateObjectId({ params: ['id', 'accountId'] }), authMiddleware, requireSuperAdmin, unfreezePartnerAccount);
-router.delete('/partner-apps/:id/accounts/:accountId', validateObjectId({ params: ['id', 'accountId'] }), authMiddleware, requireSuperAdmin, deletePartnerAccount);
+router.get('/partner-apps/:id', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), getPartner);
+router.put('/partner-apps/:id', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), updatePartner);
+router.delete('/partner-apps/:id', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), deactivatePartner);
+router.post('/partner-apps/:id/regenerate-key', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), validate(schemas.noBody), regenerateKey);
+router.post('/partner-apps/:id/rotate-webhook-secret', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), validate(schemas.noBody), rotateWebhookSecret);
+router.post('/partner-apps/:id/generate-bill', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), validate(schemas.generatePartnerBill), generateBill);
+router.put('/partner-apps/:id/billing/:billId/mark-paid', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), validate(schemas.markPartnerBillPaid), markBillPaid);
+router.put('/partner-apps/:id/billing/:billId/mark-due', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), validate(schemas.noBody), markBillDue);
+router.get('/partner-apps/:id/api-usage', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), getApiUsage);
+router.get('/partner-apps/:id/webhook-deliveries', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id'] }), getWebhookDeliveries);
+router.post('/partner-apps/:id/webhook-deliveries/:deliveryId/retry', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id', 'deliveryId'] }), validate(schemas.noBody), retryWebhookDelivery);
+router.put('/partner-apps/:id/accounts/:accountId/freeze', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id', 'accountId'] }), validate(schemas.noBody), freezePartnerAccount);
+router.put('/partner-apps/:id/accounts/:accountId/unfreeze', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id', 'accountId'] }), validate(schemas.noBody), unfreezePartnerAccount);
+router.delete('/partner-apps/:id/accounts/:accountId', authMiddleware, requireSuperAdmin, validateObjectId({ params: ['id', 'accountId'] }), deletePartnerAccount);
 
 module.exports = router;
 

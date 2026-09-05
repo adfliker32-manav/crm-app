@@ -2,24 +2,38 @@
 import React, { useState } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { CURRENCY_CODES, currencySymbol } from '../../utils/currency';
 
+// Modules surfaceable in the EMBED. Only WhatsApp submodules belong here — the
+// embed renders WhatsAppManagement and nothing else, so listing Leads/Email/
+// Reports here only ever promised something the embed could not deliver.
 const ALL_MODULES = [
     { key: 'whatsapp', label: 'WhatsApp (Inbox, Send, Receive)', group: 'whatsapp' },
     { key: 'whatsapp_templates', label: 'WhatsApp Templates', group: 'whatsapp' },
     { key: 'whatsapp_broadcasts', label: 'WhatsApp Broadcasts', group: 'whatsapp' },
     { key: 'whatsapp_chatbot', label: 'WhatsApp Chatbot (Flows + AI)', group: 'whatsapp' },
     { key: 'whatsapp_analytics', label: 'WhatsApp Analytics', group: 'whatsapp' },
-    { key: 'leads', label: 'Leads Module', group: 'other' },
-    { key: 'email', label: 'Email Module', group: 'other' },
-    { key: 'automations', label: 'Automations / Workflows', group: 'other' },
-    { key: 'reports', label: 'Reports', group: 'other' },
+];
+
+// Modules a newly provisioned account's WORKSPACE receives — was hardcoded and
+// unreachable from the UI.
+const PROVISION_MODULES = [
+    { key: 'leads', label: 'Leads' },
+    { key: 'whatsapp', label: 'WhatsApp' },
+    { key: 'email', label: 'Email' },
+    { key: 'automations', label: 'Automations' },
+    { key: 'reports', label: 'Reports' },
+    { key: 'team', label: 'Team' },
 ];
 
 const CreatePartnerModal = ({ onClose, onCreated }) => {
     const { showSuccess, showError } = useNotification();
     const [loading, setLoading] = useState(false);
     const [createdKey, setCreatedKey] = useState(null);
+    const [createdSecret, setCreatedSecret] = useState(null);
     const [copied, setCopied] = useState(false);
+    const [secretCopied, setSecretCopied] = useState(false);
+    const [originInput, setOriginInput] = useState('');
 
     const [form, setForm] = useState({
         appName: '',
@@ -27,7 +41,10 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
         contactEmail: '',
         contactPhone: '',
         pricePerAccount: '',
+        currency: 'INR',
         allowedModules: ['whatsapp', 'whatsapp_templates', 'whatsapp_broadcasts', 'whatsapp_chatbot', 'whatsapp_analytics'],
+        provisionModules: ['leads', 'whatsapp'],
+        allowedOrigins: [],
         maxAccounts: '100',
         leadLimit: '500',
         agentLimit: '3',
@@ -39,6 +56,23 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
     });
 
     const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+
+    const addOrigin = () => {
+        const raw = originInput.trim();
+        if (!raw) return;
+        let normalised;
+        try {
+            const u = new URL(raw);
+            if (!['http:', 'https:'].includes(u.protocol) || raw.includes('*')) throw new Error();
+            normalised = u.origin;
+        } catch {
+            return showError('Enter an exact origin like https://crm.partner.com — no paths, no wildcards.');
+        }
+        if (!form.allowedOrigins.includes(normalised)) {
+            setForm(prev => ({ ...prev, allowedOrigins: [...prev.allowedOrigins, normalised] }));
+        }
+        setOriginInput('');
+    };
 
     const toggleModule = (key) => {
         setForm(prev => ({
@@ -61,12 +95,15 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
                 contactEmail: form.contactEmail || null,
                 contactPhone: form.contactPhone || null,
                 pricePerAccount: Number(form.pricePerAccount) || 0,
+                currency: form.currency,
                 allowedModules: form.allowedModules,
+                allowedOrigins: form.allowedOrigins,
                 maxAccounts: Number(form.maxAccounts) || 100,
                 accountDefaults: {
                     leadLimit: Number(form.leadLimit) || 500,
                     agentLimit: Number(form.agentLimit) || 3,
-                    activeModules: ['leads', 'whatsapp'],
+                    // Was hardcoded — now whatever the admin picked.
+                    activeModules: form.provisionModules,
                 },
                 rateLimit: {
                     perAccountPerMinute: Number(form.rateLimitPerMinute) || 30,
@@ -78,6 +115,9 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
             });
 
             setCreatedKey(res.data.data.apiKey);
+            // The webhook signing secret used to be returned here and thrown
+            // away, leaving no way for anyone to give it to the partner.
+            setCreatedSecret(res.data.data.webhookSecret || null);
             showSuccess('Partner app created!');
         } catch (err) {
             showError(err.response?.data?.message || 'Failed to create partner');
@@ -128,6 +168,36 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
                             )}
                         </button>
                     </div>
+
+                    {createdSecret && (
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6">
+                            <div className="flex items-center gap-2 mb-2">
+                                <i className="fa-solid fa-signature text-slate-500" />
+                                <span className="font-semibold text-slate-700 text-sm">Webhook signing secret</span>
+                            </div>
+                            <p className="text-xs text-slate-500 mb-2">
+                                The partner needs this to verify the <code className="font-mono">X-Partner-Signature</code> header
+                                on every delivery. It cannot be retrieved later — only rotated.
+                            </p>
+                            <div className="bg-white border border-slate-200 rounded-lg p-3 font-mono text-xs break-all text-slate-700">
+                                {createdSecret}
+                            </div>
+                            <button
+                                onClick={() => {
+                                    navigator.clipboard.writeText(createdSecret);
+                                    setSecretCopied(true);
+                                    setTimeout(() => setSecretCopied(false), 3000);
+                                }}
+                                className={`mt-3 w-full py-2 rounded-lg font-semibold text-sm transition ${
+                                    secretCopied ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                                }`}
+                            >
+                                {secretCopied
+                                    ? <><i className="fa-solid fa-check mr-2" />Copied!</>
+                                    : <><i className="fa-solid fa-clipboard mr-2" />Copy Signing Secret</>}
+                            </button>
+                        </div>
+                    )}
 
                     <button
                         onClick={onCreated}
@@ -203,23 +273,77 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
                     {/* Pricing */}
                     <div>
                         <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">Pricing</h3>
-                        <div>
-                            <label className="text-sm font-medium text-slate-700">Price Per Account (₹/month) *</label>
-                            <input
-                                value={form.pricePerAccount}
-                                onChange={e => handleChange('pricePerAccount', e.target.value)}
-                                type="number"
-                                min="0"
-                                placeholder="299"
-                                className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
-                            />
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="text-sm font-medium text-slate-700">
+                                    Price Per Active Account ({currencySymbol(form.currency)}/month) *
+                                </label>
+                                <input
+                                    value={form.pricePerAccount}
+                                    onChange={e => handleChange('pricePerAccount', e.target.value)}
+                                    type="number"
+                                    min="0"
+                                    placeholder="299"
+                                    className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-700">Currency</label>
+                                <select
+                                    value={form.currency}
+                                    onChange={e => handleChange('currency', e.target.value)}
+                                    className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
+                                >
+                                    {CURRENCY_CODES.map(c => (
+                                        <option key={c} value={c}>{c} ({currencySymbol(c)})</option>
+                                    ))}
+                                </select>
+                            </div>
                         </div>
+                    </div>
+
+                    {/* Embed Origins — without these the iframe cannot render */}
+                    <div>
+                        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">Embed Origins</h3>
+                        <p className="text-xs text-slate-400 mb-3">
+                            Domains allowed to load the embed in an iframe. The browser blocks framing from
+                            anywhere not listed, so leave this empty only if the partner isn't using the embed yet.
+                        </p>
+                        <div className="flex gap-2">
+                            <input
+                                value={originInput}
+                                onChange={e => setOriginInput(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addOrigin(); } }}
+                                placeholder="https://crm.partner.com"
+                                className="flex-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                            />
+                            <button type="button" onClick={addOrigin}
+                                className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-lg text-sm font-semibold hover:bg-slate-200 transition">
+                                Add
+                            </button>
+                        </div>
+                        {form.allowedOrigins.length > 0 && (
+                            <div className="flex flex-wrap gap-2 mt-3">
+                                {form.allowedOrigins.map(origin => (
+                                    <span key={origin} className="inline-flex items-center gap-2 px-3 py-1.5 bg-cyan-50 border border-cyan-200 rounded-lg text-xs font-mono text-cyan-800">
+                                        {origin}
+                                        <button type="button"
+                                            onClick={() => handleChange('allowedOrigins', form.allowedOrigins.filter(o => o !== origin))}
+                                            className="text-cyan-400 hover:text-red-500">
+                                            <i className="fa-solid fa-xmark" />
+                                        </button>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
                     {/* Module Access */}
                     <div>
-                        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">Module Access</h3>
-                        <p className="text-xs text-slate-400 mb-3">Select which modules partner's customers can use</p>
+                        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">Embed Module Access</h3>
+                        <p className="text-xs text-slate-400 mb-3">
+                            What the partner's customers see inside the embedded UI. Enforced server-side.
+                        </p>
                         <div className="space-y-2">
                             {ALL_MODULES.map(mod => (
                                 <label key={mod.key} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-slate-50 cursor-pointer transition">
@@ -233,6 +357,32 @@ const CreatePartnerModal = ({ onClose, onCreated }) => {
                                     {mod.group === 'whatsapp' && (
                                         <span className="text-[10px] px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-semibold">WhatsApp</span>
                                     )}
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Provisioning modules */}
+                    <div>
+                        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">New Account Modules</h3>
+                        <p className="text-xs text-slate-400 mb-3">
+                            Modules each provisioned account's workspace gets. The embed grant above can only
+                            ever be a subset of these.
+                        </p>
+                        <div className="grid grid-cols-3 gap-2">
+                            {PROVISION_MODULES.map(mod => (
+                                <label key={mod.key} className="flex items-center gap-2.5 p-2.5 rounded-lg hover:bg-slate-50 cursor-pointer transition">
+                                    <input
+                                        type="checkbox"
+                                        checked={form.provisionModules.includes(mod.key)}
+                                        onChange={() => handleChange('provisionModules',
+                                            form.provisionModules.includes(mod.key)
+                                                ? form.provisionModules.filter(m => m !== mod.key)
+                                                : [...form.provisionModules, mod.key]
+                                        )}
+                                        className="w-4 h-4 text-cyan-600 rounded focus:ring-cyan-500"
+                                    />
+                                    <span className="text-sm text-slate-700">{mod.label}</span>
                                 </label>
                             ))}
                         </div>

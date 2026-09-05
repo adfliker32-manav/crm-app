@@ -9,6 +9,7 @@
  */
 
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const IntegrationConfig = require('../models/IntegrationConfig');
@@ -18,11 +19,46 @@ const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage: sendTemplateMessage } = require('../services/whatsappService');
+const { forwardIfPartnerAccount, clearCacheForTenant, clearCacheForPartner } = require('../services/partnerWebhookService');
+const { validateOutboundUrl } = require('../utils/ssrfGuard');
+const { clearTokenVersionCache } = require('../middleware/authMiddleware');
+const { PARTNER_WEBHOOK_EVENTS: WEBHOOK_EVENTS } = require('../constants/partnerWebhookEvents');
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const generatePassword = () => crypto.randomBytes(16).toString('hex');
 const generateEmbedToken = () => `emb_${crypto.randomBytes(24).toString('hex')}`;
+
+/**
+ * Freezing or deleting an account must kill its live sessions, not just block
+ * the next login (PA-M10). Bumping tokenVersion invalidates every JWT already
+ * issued to the account; clearing the auth cache makes that take effect now
+ * rather than after the 60s tokenVersionCache TTL.
+ */
+const revokeAccountSessions = async (accountId) => {
+    await User.updateOne({ _id: accountId }, { $inc: { tokenVersion: 1 } });
+    clearTokenVersionCache(accountId.toString());
+};
+
+/**
+ * Validate a partner-supplied webhook URL before we ever POST to it (PA-H5).
+ * Returns an error string, or null when the URL is acceptable.
+ * An empty string is treated as "disable webhooks" and is allowed through.
+ */
+const checkWebhookUrl = async (url) => {
+    if (url === null || url === undefined || url === '') return null;
+    if (typeof url !== 'string') return 'webhookUrl must be a string.';
+    if (!/^https:\/\//i.test(url.trim())) {
+        return 'webhookUrl must be an absolute https:// URL.';
+    }
+    try {
+        await validateOutboundUrl(url.trim());
+        return null;
+    } catch (err) {
+        // Strip the internal "[SSRF Guard] " prefix from the partner-facing message.
+        return err.message.replace(/^\[SSRF Guard\]\s*/, '');
+    }
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ACCOUNT MANAGEMENT
@@ -44,12 +80,14 @@ exports.createAccount = async (req, res) => {
             });
         }
 
-        // Check account limit
-        if (partner.accountIds.length >= partner.maxAccounts) {
+        // Fast-path limit check (the authoritative one is the conditional $push
+        // below — this only avoids doing work we know will be rejected).
+        const maxAccounts = Number(partner.maxAccounts) || 0;
+        if (maxAccounts < 1 || partner.accountIds.length >= maxAccounts) {
             return res.status(403).json({
                 success: false,
                 error: 'account_limit_reached',
-                message: `Maximum ${partner.maxAccounts} accounts allowed for this partner.`
+                message: `Maximum ${maxAccounts} accounts allowed for this partner.`
             });
         }
 
@@ -67,41 +105,114 @@ exports.createAccount = async (req, res) => {
         // Generate password (random — customer never sees it unless allowDirectLogin)
         const rawPassword = generatePassword();
 
-        // Create User
-        const newUser = await User.create({
-            name: name.trim(),
-            companyName: companyName || name.trim(),
-            email: normalizedEmail,
-            password: rawPassword, // hashed by User model pre('save') hook
-            phone: phone || null,
-            role: 'manager',
-            isOnboarded: true,
-            accountStatus: 'Active',
-            is_active: true,
-            approved_by_admin: true,
-            status: 'approved'
-        });
-
-        // Create WorkspaceSettings — NO planExpiryDate = bypasses all billing checks
-        const defaults = partner.accountDefaults || {};
-        await WorkspaceSettings.create({
-            userId: newUser._id,
-            agentLimit: defaults.agentLimit || 3,
-            activeModules: defaults.activeModules || ['leads', 'whatsapp'],
-            subscriptionPlan: 'Partner',
-            subscriptionStatus: 'active',
-            billingType: 'paid_by_agency',
-            planExpiryDate: null  // ← KEY: no expiry = bypasses all billing
-        });
-
-        // Create IntegrationConfig (empty, ready for WhatsApp setup)
-        await IntegrationConfig.create({ userId: newUser._id });
-
-        // Add account to partner's list
-        await PartnerApp.updateOne(
-            { _id: partner._id },
-            { $push: { accountIds: newUser._id } }
+        // ── Reserve the slot FIRST, atomically (PA-H6) ─────────────────────────
+        // The length check above reads a document loaded back in the auth
+        // middleware, so two concurrent provisioning calls both saw the old
+        // count and both passed. This $push is conditional on the CURRENT array
+        // size in the database, so exactly one of them can win the last slot.
+        //
+        // A placeholder id is pushed and swapped for the real one once the user
+        // exists — reserving with the real id is impossible before User.create.
+        const reservationId = new mongoose.Types.ObjectId();
+        const reserved = await PartnerApp.updateOne(
+            {
+                _id: partner._id,
+                // "the slot at index maxAccounts-1 is still empty" — i.e. the
+                // array currently holds fewer than maxAccounts entries.
+                [`accountIds.${maxAccounts - 1}`]: { $exists: false }
+            },
+            { $push: { accountIds: reservationId } }
         );
+
+        if (reserved.modifiedCount === 0) {
+            return res.status(403).json({
+                success: false,
+                error: 'account_limit_reached',
+                message: `Maximum ${partner.maxAccounts} accounts allowed for this partner.`
+            });
+        }
+
+        // ── Provision (PA-H6) ──────────────────────────────────────────────────
+        // Four writes with no transaction previously left an orphaned User on
+        // any mid-sequence failure: invisible to the partner (listAccounts reads
+        // accountIds) AND to SuperAdmin, but holding the email hostage so every
+        // retry returned email_exists with no recovery path in the UI.
+        //
+        // Compensating rollback rather than a Mongo transaction, because this
+        // must also work on a standalone mongod (dev) where transactions are
+        // unavailable — see aiCreditService for the same constraint.
+        let newUser = null;
+        try {
+            newUser = await User.create({
+                name: name.trim(),
+                companyName: companyName || name.trim(),
+                email: normalizedEmail,
+                password: rawPassword, // hashed by User model pre('save') hook
+                phone: phone || null,
+                role: 'manager',
+                isOnboarded: true,
+                accountStatus: 'Active',
+                is_active: true,
+                approved_by_admin: true,
+                status: 'approved'
+            });
+
+            // Create WorkspaceSettings — NO planExpiryDate = bypasses all billing checks
+            const defaults = partner.accountDefaults || {};
+            await WorkspaceSettings.create({
+                userId: newUser._id,
+                // Hard-cap instance…
+                agentLimit: defaults.agentLimit ?? 3,
+                activeModules: defaults.activeModules?.length ? defaults.activeModules : ['leads', 'whatsapp'],
+                // …and the planFeatures mirror, which is what the enforcement
+                // paths actually read (PA-M1). leadController checks
+                // planFeatures.leadLimit; writing only accountDefaults.leadLimit
+                // meant every partner account silently kept the schema default
+                // of 100 leads no matter what the admin configured.
+                planFeatures: {
+                    leadLimit:  defaults.leadLimit  ?? 500,
+                    agentLimit: defaults.agentLimit ?? 3
+                },
+                subscriptionPlan: 'Partner',
+                subscriptionStatus: 'active',
+                billingType: 'paid_by_agency',
+                planExpiryDate: null  // ← KEY: no expiry = bypasses all billing
+            });
+
+            // Create IntegrationConfig (empty, ready for WhatsApp setup)
+            await IntegrationConfig.create({ userId: newUser._id });
+
+            // Swap the reservation placeholder for the real account id.
+            const claimed = await PartnerApp.updateOne(
+                { _id: partner._id, accountIds: reservationId },
+                { $set: { 'accountIds.$': newUser._id } }
+            );
+            if (claimed.modifiedCount === 0) {
+                throw new Error('Reservation slot vanished before it could be claimed.');
+            }
+        } catch (err) {
+            // Roll everything back so a retry with the same email succeeds.
+            await Promise.allSettled([
+                PartnerApp.updateOne({ _id: partner._id }, { $pull: { accountIds: reservationId } }),
+                newUser ? User.deleteOne({ _id: newUser._id }) : Promise.resolve(),
+                newUser ? WorkspaceSettings.deleteOne({ userId: newUser._id }) : Promise.resolve(),
+                newUser ? IntegrationConfig.deleteOne({ userId: newUser._id }) : Promise.resolve()
+            ]);
+            throw err;
+        }
+
+        // The tenant→partner webhook resolver caches misses, and this tenant was
+        // a miss until a moment ago. Without this, the partner's own webhook
+        // would silently drop this account's events for up to 5 minutes.
+        clearCacheForTenant(newUser._id);
+
+        // PA-M7: account.created is advertised in the Settings tab; emit it.
+        forwardIfPartnerAccount(newUser._id, 'account.created', {
+            accountId: newUser._id.toString(),
+            name: newUser.name,
+            email: newUser.email,
+            companyName: newUser.companyName
+        }).catch(() => {});
 
         const response = {
             success: true,
@@ -134,18 +245,32 @@ exports.listAccounts = async (req, res) => {
     try {
         const partner = req.partner;
 
-        if (!partner.accountIds.length) {
-            return res.json({ success: true, data: [], total: 0 });
+        // Paginated (PA-L): a partner at maxAccounts=100 was tolerable, but the
+        // cap is admin-configurable and this endpoint returned every account
+        // plus an IntegrationConfig lookup for each one in a single response.
+        const page  = Math.max(1, parseInt(req.query.page)  || 1);
+        const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
+        const total = partner.accountIds.length;
+
+        if (!total) {
+            return res.json({ success: true, data: [], total: 0, page, pages: 0 });
+        }
+
+        // Slice the id list before querying so both lookups stay page-sized.
+        const pageIds = partner.accountIds.slice((page - 1) * limit, page * limit);
+
+        if (!pageIds.length) {
+            return res.json({ success: true, data: [], total, page, pages: Math.ceil(total / limit) });
         }
 
         const users = await User.find(
-            { _id: { $in: partner.accountIds } },
+            { _id: { $in: pageIds } },
             'name email companyName phone is_active accountStatus createdAt'
         ).lean();
 
         // Enrich with WhatsApp connection status
         const configs = await IntegrationConfig.find(
-            { userId: { $in: partner.accountIds } },
+            { userId: { $in: pageIds } },
             'userId whatsapp.waPhoneNumberId whatsapp.embeddedSignupConnected'
         ).lean();
 
@@ -168,7 +293,7 @@ exports.listAccounts = async (req, res) => {
             createdAt: u.createdAt
         }));
 
-        res.json({ success: true, data, total: data.length });
+        res.json({ success: true, data, total, page, pages: Math.ceil(total / limit) });
     } catch (err) {
         console.error('[PartnerAPI] listAccounts error:', err.message);
         res.status(500).json({ success: false, message: 'Failed to list accounts.' });
@@ -181,12 +306,10 @@ exports.listAccounts = async (req, res) => {
  */
 exports.getAccount = async (req, res) => {
     try {
-        const { accountId } = req.params;
-        
-        // Verify account belongs to this partner
-        if (!req.partner.accountIds.some(id => id.toString() === accountId)) {
-            return res.status(403).json({ success: false, message: 'Account does not belong to this partner.' });
-        }
+        // req.tenantId is set by requireAccountScope, which is the ONLY place
+        // ownership is decided. Re-deriving it from params here is what created
+        // the PA-C1 divergence on the embed-token route — don't reintroduce it.
+        const accountId = req.tenantId;
 
         const user = await User.findById(accountId)
             .select('name email companyName phone is_active accountStatus createdAt')
@@ -235,19 +358,24 @@ exports.getAccount = async (req, res) => {
  */
 exports.freezeAccount = async (req, res) => {
     try {
-        const { accountId } = req.params;
-
-        // Verify account belongs to this partner
-        if (!req.partner.accountIds.some(id => id.toString() === accountId)) {
-            return res.status(403).json({ success: false, message: 'Account does not belong to this partner.' });
-        }
+        const accountId = req.tenantId;   // authorised by requireAccountScope
 
         await User.updateOne(
             { _id: accountId },
             { $set: { accountStatus: 'Frozen', is_active: false } }
         );
+        // Setting is_active:false only blocks the NEXT auth cache miss — the
+        // frozen account kept working for up to 60s. Kill live sessions now.
+        await revokeAccountSessions(accountId);
+
+        forwardIfPartnerAccount(accountId, 'account.frozen', {
+            accountId: accountId.toString(),
+            status: 'Frozen'
+        }).catch(() => {});
+
         res.json({ success: true, message: 'Account frozen.' });
     } catch (err) {
+        console.error('[PartnerAPI] freezeAccount error:', err.message);
         res.status(500).json({ success: false, message: 'Failed to freeze account.' });
     }
 };
@@ -257,20 +385,81 @@ exports.freezeAccount = async (req, res) => {
  */
 exports.unfreezeAccount = async (req, res) => {
     try {
-        const { accountId } = req.params;
-
-        // Verify account belongs to this partner
-        if (!req.partner.accountIds.some(id => id.toString() === accountId)) {
-            return res.status(403).json({ success: false, message: 'Account does not belong to this partner.' });
-        }
+        const accountId = req.tenantId;   // authorised by requireAccountScope
 
         await User.updateOne(
             { _id: accountId },
             { $set: { accountStatus: 'Active', is_active: true } }
         );
+        // Drop the cached is_active:false so access is restored immediately
+        // instead of after the auth cache TTL.
+        clearTokenVersionCache(accountId.toString());
+
+        forwardIfPartnerAccount(accountId, 'account.frozen', {
+            accountId: accountId.toString(),
+            status: 'Active'
+        }).catch(() => {});
+
         res.json({ success: true, message: 'Account unfrozen.' });
     } catch (err) {
+        console.error('[PartnerAPI] unfreezeAccount error:', err.message);
         res.status(500).json({ success: false, message: 'Failed to unfreeze account.' });
+    }
+};
+
+/**
+ * PATCH /api/partner/v1/accounts/:accountId
+ * Update a provisioned account's profile fields.
+ *
+ * Previously there was no way at all to correct a name, phone or company on a
+ * provisioned account — the only remedy was delete-and-recreate. Email is
+ * deliberately NOT editable here: it is the login identity and is uniqueness-
+ * constrained platform-wide, so changing it belongs behind the same
+ * verification flow a normal user goes through.
+ */
+exports.updateAccount = async (req, res) => {
+    try {
+        const accountId = req.tenantId;   // authorised by requireAccountScope
+        const { name, phone, companyName } = req.body;
+
+        const update = {};
+        if (name !== undefined) {
+            if (!String(name).trim()) {
+                return res.status(400).json({ success: false, message: 'name cannot be empty.' });
+            }
+            update.name = String(name).trim();
+        }
+        if (phone !== undefined)       update.phone = phone || null;
+        if (companyName !== undefined) update.companyName = companyName || null;
+
+        if (!Object.keys(update).length) {
+            return res.status(400).json({
+                success: false,
+                message: 'Provide at least one of: name, phone, companyName.'
+            });
+        }
+
+        const user = await User.findByIdAndUpdate(accountId, { $set: update }, { new: true })
+            .select('name email companyName phone accountStatus')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'Account not found.' });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                accountId: user._id,
+                name: user.name,
+                email: user.email,
+                companyName: user.companyName,
+                phone: user.phone
+            }
+        });
+    } catch (err) {
+        console.error('[PartnerAPI] updateAccount error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to update account.' });
     }
 };
 
@@ -284,8 +473,20 @@ exports.unfreezeAccount = async (req, res) => {
  */
 exports.generateEmbedToken = async (req, res) => {
     try {
-        const { accountId } = req.params;
         const partner = req.partner;
+
+        // ⚠️ PA-C1 — read the id requireAccountScope AUTHORISED, never req.params.
+        //
+        // This line used to be `const { accountId } = req.params` while the
+        // guard validated `headers['x-account-id'] || params.accountId`. Sending
+        // a header you own alongside any victim userId in the path passed the
+        // ownership check and then minted an embed token for the victim, which
+        // exchanges into a full JWT carrying THEIR role and permissions. Aimed
+        // at a superadmin that was total platform compromise.
+        //
+        // The guard now treats the route param as authoritative and rejects a
+        // conflicting header, and this reads its verdict rather than re-deriving.
+        const accountId = req.tenantId;
 
         const token = generateEmbedToken();
 
@@ -449,11 +650,18 @@ exports.sendTemplate = async (req, res) => {
 
 /**
  * GET /api/partner/v1/whatsapp/templates
- * List approved WhatsApp templates for the scoped account.
+ * List WhatsApp templates for the scoped account.
+ *
+ * Returns EVERY status (APPROVED / PENDING / REJECTED) so a partner can show
+ * their customer why a template isn't sendable yet. Pass ?status=APPROVED to
+ * get only the ones that can actually be sent.
  */
 exports.listTemplates = async (req, res) => {
     try {
-        const templates = await WhatsAppTemplate.find({ userId: req.tenantId })
+        const query = { userId: req.tenantId };
+        if (req.query.status) query.status = String(req.query.status).toUpperCase();
+
+        const templates = await WhatsAppTemplate.find(query)
             .select('name language status category components')
             .sort({ createdAt: -1 })
             .lean();
@@ -571,30 +779,100 @@ exports.updateWebhookConfig = async (req, res) => {
     try {
         const { url, events } = req.body;
         const update = {};
-        if (url !== undefined) update.webhookUrl = url;
-        if (events !== undefined) update.webhookEvents = events;
+
+        if (url !== undefined) {
+            // PA-H5: the server will POST signed JSON to whatever lands here on
+            // every inbound message. Unvalidated, that is an SSRF primitive
+            // pointed at cloud metadata and internal services.
+            const urlError = await checkWebhookUrl(url);
+            if (urlError) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'invalid_webhook_url',
+                    message: urlError
+                });
+            }
+            // PA-M8: the resolver filters on `webhookUrl: { $ne: null }`, which
+            // an empty string satisfies — clearing the URL in the UI used to
+            // leave webhooks "configured" and log an axios failure on every
+            // single inbound message forever. Normalise blank to null.
+            update.webhookUrl = url ? url.trim() : null;
+        }
+
+        if (events !== undefined) {
+            if (!Array.isArray(events)) {
+                return res.status(400).json({ success: false, message: 'events must be an array.' });
+            }
+            const unknown = events.filter(e => !WEBHOOK_EVENTS.includes(e));
+            if (unknown.length) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'unknown_webhook_event',
+                    message: `Unknown event(s): ${unknown.join(', ')}. Supported: ${WEBHOOK_EVENTS.join(', ')}.`
+                });
+            }
+            update.webhookEvents = events;
+        }
 
         // Generate webhook secret if setting URL for the first time
-        if (url && !req.partner.webhookSecret) {
+        const isFirstSecret = update.webhookUrl && !req.partner.webhookSecret;
+        if (isFirstSecret) {
             update.webhookSecret = `whsec_${crypto.randomBytes(24).toString('hex')}`;
         }
 
         await PartnerApp.updateOne({ _id: req.partner._id }, { $set: update });
 
+        // PA-M9: the tenant→partner cache holds webhookEvents and webhookSecret,
+        // so an events change without this stayed stale for up to 5 minutes.
+        await clearCacheForPartner(req.partner._id);
+
         const updated = await PartnerApp.findById(req.partner._id)
             .select('webhookUrl webhookEvents webhookSecret')
             .lean();
 
+        const data = {
+            url: updated.webhookUrl,
+            events: updated.webhookEvents,
+            hasSecret: !!updated.webhookSecret
+        };
+
+        // The secret is returned ONLY on the call that created it. It used to be
+        // echoed in full on every update, which turned a routine "change my
+        // subscribed events" request into a credential disclosure. Rotation is
+        // an explicit action (POST /webhook/rotate-secret).
+        if (isFirstSecret) {
+            data.secret = updated.webhookSecret;
+            data.message = 'Store this signing secret now — it is not returned again.';
+        }
+
+        res.json({ success: true, data });
+    } catch (err) {
+        console.error('[PartnerAPI] updateWebhookConfig error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to update webhook.' });
+    }
+};
+
+/**
+ * POST /api/partner/v1/webhook/rotate-secret
+ * Issue a new signing secret. Returned once; the previous secret stops
+ * validating immediately.
+ */
+exports.rotateWebhookSecret = async (req, res) => {
+    try {
+        const secret = `whsec_${crypto.randomBytes(24).toString('hex')}`;
+        await PartnerApp.updateOne({ _id: req.partner._id }, { $set: { webhookSecret: secret } });
+        await clearCacheForPartner(req.partner._id);
+
         res.json({
             success: true,
             data: {
-                url: updated.webhookUrl,
-                events: updated.webhookEvents,
-                secret: updated.webhookSecret // shown once after setting
+                secret,
+                message: 'Store this signing secret now — it is not returned again. The previous secret is no longer used to sign deliveries.'
             }
         });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Failed to update webhook.' });
+        console.error('[PartnerAPI] rotateWebhookSecret error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to rotate webhook secret.' });
     }
 };
 

@@ -16,11 +16,23 @@ const partnerBillingEntrySchema = new mongoose.Schema({
     month:          { type: String, required: true },    // "2026-09"
     activeAccounts: { type: Number, default: 0 },
     rate:           { type: Number, default: 0 },        // pricePerAccount at snapshot time
+    currency:       { type: String, default: 'INR' },    // frozen at snapshot — a later
+                                                         // currency change must not restate
+                                                         // historical invoices.
     amount:         { type: Number, default: 0 },        // activeAccounts × rate
     status:         { type: String, enum: ['due', 'paid'], default: 'due' },
     paidAt:         { type: Date, default: null },
     notes:          { type: String, default: '' },
-    generatedAt:    { type: Date, default: Date.now }
+    generatedAt:    { type: Date, default: Date.now },
+
+    // Sequential per-partner invoice number, e.g. "INV-2026-09-0003". Assigned
+    // at generation and never reused, so a bill can be referenced offline.
+    invoiceNumber:  { type: String, default: null },
+
+    // Audit trail — who generated it and who recorded the payment (PA-M4).
+    generatedBy:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    paidBy:         { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    paidByName:     { type: String, default: null }
 }, { _id: true });
 
 const partnerAppSchema = new mongoose.Schema({
@@ -35,18 +47,35 @@ const partnerAppSchema = new mongoose.Schema({
     contactPhone:  { type: String, default: null, trim: true },
 
     // ── Authentication ──────────────────────────────────────────────────────
-    // Format: partner_<48 hex chars>. The full key is returned exactly once at
-    // creation; subsequent reads return a masked version.
+    // Format: partner_<48 hex chars>. The full key is shown exactly once at
+    // creation/rotation and is NEVER recoverable afterwards — only its SHA-256
+    // hash is persisted (PA-M11). A stolen DB dump therefore yields no usable
+    // partner credentials.
+    //
+    // `apiKey` is the LEGACY plaintext column. It is read-only now: partnerAuth
+    // falls back to it for rows created before hashing landed and transparently
+    // migrates them to apiKeyHash on first use. Never write it for new partners.
     apiKey: {
         type: String,
         unique: true,
         sparse: true,
         index: true
     },
+    apiKeyHash: {
+        type: String,
+        default: null,
+        unique: true,
+        sparse: true,
+        index: true
+    },
+    // First 12 chars ("partner_1a2b") — safe to display, used to build the mask
+    // in the admin UI without ever holding the secret half.
+    apiKeyPrefix: { type: String, default: null },
+    apiKeyRotatedAt: { type: Date, default: null },
 
     // ── Pricing ─────────────────────────────────────────────────────────────
-    pricePerAccount: { type: Number, default: 0 },       // ₹/month per active account
-    currency:        { type: String, default: 'INR' },
+    pricePerAccount: { type: Number, default: 0 },       // per active account / month
+    currency:        { type: String, default: 'INR', enum: ['INR', 'USD', 'EUR', 'GBP', 'AED'] },
 
     // ── Module Access ───────────────────────────────────────────────────────
     // Controls which modules appear in the embed UI for this partner's
@@ -81,6 +110,21 @@ const partnerAppSchema = new mongoose.Schema({
     // ── Access Control ──────────────────────────────────────────────────────
     allowDirectLogin: { type: Boolean, default: false },
     showPoweredBy:    { type: Boolean, default: true },
+
+    // ── Embed Origins (PA-C2) ───────────────────────────────────────────────
+    // Exact scheme+host(+port) origins allowed to frame /embed/*. Used to build
+    // a per-request `Content-Security-Policy: frame-ancestors` header — the
+    // platform-wide X-Frame-Options: SAMEORIGIN that helmet sets would otherwise
+    // make the iframe unrenderable from any partner domain.
+    //
+    // EMPTY = the embed is framable by nobody. That is the deliberate default:
+    // a partner must declare their origins before their iframe works, and a
+    // wildcard is never accepted (it would reintroduce clickjacking on a fully
+    // authenticated WhatsApp inbox).
+    allowedOrigins: {
+        type: [String],
+        default: []
+    },
 
     // ── Webhook ─────────────────────────────────────────────────────────────
     webhookUrl:    { type: String, default: null },
@@ -121,5 +165,10 @@ const partnerAppSchema = new mongoose.Schema({
 // Compound indexes
 partnerAppSchema.index({ createdBy: 1 });
 partnerAppSchema.index({ isActive: 1 });
+// Reverse lookup: "which account belongs to which partner?" — used by the embed
+// auth membership check and by the webhook tenant→partner resolver.
+partnerAppSchema.index({ accountIds: 1 });
+// frame-ancestors resolution for /embed/* requests.
+partnerAppSchema.index({ allowedOrigins: 1 });
 
 module.exports = mongoose.model('PartnerApp', partnerAppSchema);

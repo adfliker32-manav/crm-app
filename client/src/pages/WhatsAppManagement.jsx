@@ -13,13 +13,44 @@ import AISettings from '../components/Settings/AISettings';
 import FeatureGate from '../components/FeatureGate';
 import { hasEntitlement } from '../utils/entitlements';
 
-const WhatsAppManagement = ({ embedded = false }) => {
-    const { user } = useAuth();
+// Which partner module each tab requires (PA-H2). The SuperAdmin "Module
+// Access" grid writes these keys onto PartnerApp.allowedModules; without this
+// mapping they were never read by anything and every embed user reached the
+// full surface regardless of what the partner had been sold.
+//
+// Server-side the same grant is enforced by the embed clamp in authMiddleware —
+// this only decides what to draw.
+const EMBED_TAB_MODULE = {
+    inbox:      'whatsapp',
+    chatbot:    'whatsapp_chatbot',
+    templates:  'whatsapp_templates',
+    media:      'whatsapp',
+    broadcasts: 'whatsapp_broadcasts',
+    analytics:  'whatsapp_analytics',
+    settings:   'whatsapp'
+};
+
+const WhatsAppManagement = ({ embedded = false, embedUser = null }) => {
+    const { user: contextUser } = useAuth();
+    // In embed mode AuthContext is empty by design — the embed session lives
+    // under its own storage keys (see api.js) and is handed down as a prop.
+    const user = embedded ? embedUser : contextUser;
+
+    // The partner's grant. Absent (older embed token) → fall back to the
+    // WhatsApp core only, rather than silently granting everything.
+    const embedModules = embedded
+        ? (Array.isArray(user?.allowedModules) ? user.allowedModules : ['whatsapp'])
+        : null;
+
     const canManageTeam = embedded || ['superadmin', 'manager'].includes(user?.role) || user?.permissions?.manageTeam === true;
     // Plan entitlement for the AI layer (sub-feature). The flow builder is free
     // with WhatsApp; only the AI Chatbot draws a plan feature → gate it separately.
     const aiChatbotEntitled = hasEntitlement(user, 'whatsapp.chatbot.ai');
-    const canViewWhatsApp = embedded || canManageTeam || user?.permissions?.viewWhatsApp === true;
+    // An embed user must still hold the base WhatsApp module — `embedded` alone
+    // is no longer a blanket "yes".
+    const canViewWhatsApp = embedded
+        ? embedModules.includes('whatsapp')
+        : (canManageTeam || user?.permissions?.viewWhatsApp === true);
 
     const [activeTab, setActiveTab] = useState('inbox');
     const [editingFlowId, setEditingFlowId] = useState(null);
@@ -29,7 +60,12 @@ const WhatsAppManagement = ({ embedded = false }) => {
     const [chatbotView, setChatbotView] = useState('flows');
 
     const hasModule = (moduleName) => {
-        if (embedded) return true; // embedded mode has full access
+        if (embedded) {
+            // Was `return true` — the line that made the partner's entire module
+            // configuration decorative.
+            if (moduleName === 'chatbot') return embedModules.includes('whatsapp_chatbot');
+            return embedModules.includes(moduleName);
+        }
         if (['superadmin', 'agency'].includes(user?.role)) return true;
         if (moduleName === 'chatbot') {
             // The WhatsApp chatbot / visual flow builder is FREE and available to anyone
@@ -50,12 +86,36 @@ const WhatsAppManagement = ({ embedded = false }) => {
         { id: 'broadcasts', label: 'Broadcasts', icon: 'fa-solid fa-tower-broadcast' },
         { id: 'analytics', label: 'Analytics', icon: 'fa-solid fa-chart-line' },
         { id: 'settings', label: 'Settings', icon: 'fa-solid fa-cog' }
-    ].filter(Boolean);
+    ]
+        // In embed mode, drop every tab the partner wasn't granted. Outside
+        // embed mode this is a no-op — normal sessions keep their existing tabs.
+        .filter(t => t && (!embedded || embedModules.includes(EMBED_TAB_MODULE[t.id])));
 
-    if (!canViewWhatsApp) return <Navigate to="/dashboard" replace />;
+    if (!canViewWhatsApp) {
+        // An embed session has nowhere to navigate to — it is a standalone page
+        // inside someone else's product, and /dashboard would 404 the iframe.
+        if (embedded) {
+            return (
+                <div className="h-full w-full flex items-center justify-center bg-slate-50">
+                    <div className="text-center max-w-sm px-6">
+                        <i className="fa-solid fa-lock text-3xl text-slate-300 mb-3" />
+                        <p className="text-slate-500 text-sm">
+                            WhatsApp is not enabled for this account. Contact your CRM provider.
+                        </p>
+                    </div>
+                </div>
+            );
+        }
+        return <Navigate to="/dashboard" replace />;
+    }
+
+    // State can hold a tab that the grant no longer includes (e.g. the partner's
+    // modules changed between sessions) — fall back to the first allowed tab
+    // rather than rendering a panel the API will refuse to serve.
+    const effectiveTab = tabs.some(t => t.id === activeTab) ? activeTab : tabs[0]?.id;
 
     const renderContent = () => {
-        switch (activeTab) {
+        switch (effectiveTab) {
             case 'inbox': return <WhatsAppInbox />;
             case 'media': return <div className="h-full overflow-y-auto"><MediaLibrary /></div>;
             case 'chatbot': {
@@ -135,14 +195,14 @@ const WhatsAppManagement = ({ embedded = false }) => {
     return (
         <div className="-mx-4 md:-mx-6 -my-4 md:-my-6 h-screen flex flex-col bg-[#f0f2f5] overflow-hidden">
             {/* Premium Vibrant Header */}
-            {!(activeTab === 'chatbot' && editingFlowId) && (
+            {!(effectiveTab === 'chatbot' && editingFlowId) && (
                 <div className="bg-gradient-to-r from-[#008069] via-[#00a884] to-[#05cd99] text-white shadow-xl z-20 relative overflow-hidden">
                     {/* Subtle pattern overlay */}
                     <div className="absolute inset-0 opacity-10 pointer-events-none" 
                         style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")` }}>
                     </div>
                     
-                    <div className={`px-6 ${activeTab === 'inbox' ? 'py-2' : 'py-4'} flex items-center justify-between relative z-10`}>
+                    <div className={`px-6 ${effectiveTab === 'inbox' ? 'py-2' : 'py-4'} flex items-center justify-between relative z-10`}>
                         <div className="flex items-center gap-4">
                             <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-md shadow-inner border border-white/20">
                                 <i className="fa-brands fa-whatsapp text-3xl drop-shadow-md"></i>
@@ -162,14 +222,14 @@ const WhatsAppManagement = ({ embedded = false }) => {
                                 <button
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
-                                    className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all duration-300 flex items-center gap-2.5 relative group ${activeTab === tab.id
+                                    className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all duration-300 flex items-center gap-2.5 relative group ${effectiveTab === tab.id
                                         ? 'bg-white text-[#008069] shadow-lg shadow-black/25 ring-2 ring-white scale-110'
                                         : 'text-white/80 hover:bg-white/15 hover:text-white hover:scale-102'
                                     }`}
                                 >
-                                    <i className={`${tab.icon} ${activeTab === tab.id ? 'text-[#008069]' : 'text-white/70 group-hover:text-white'} text-sm`}></i>
+                                    <i className={`${tab.icon} ${effectiveTab === tab.id ? 'text-[#008069]' : 'text-white/70 group-hover:text-white'} text-sm`}></i>
                                     <span className="hidden lg:inline">{tab.label}</span>
-                                    {activeTab === tab.id && (
+                                    {effectiveTab === tab.id && (
                                         <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-[#008069] rounded-full"></span>
                                     )}
                                 </button>

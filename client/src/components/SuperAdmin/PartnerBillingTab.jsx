@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { formatMoney } from '../../utils/currency';
 
 const PartnerBillingTab = ({ partner, onRefresh }) => {
     const { showSuccess, showError } = useNotification();
@@ -37,6 +38,17 @@ const PartnerBillingTab = ({ partner, onRefresh }) => {
 
     const totalRevenue = bills.filter(b => b.status === 'paid').reduce((sum, b) => sum + b.amount, 0);
     const pendingAmount = bills.filter(b => b.status === 'due').reduce((sum, b) => sum + b.amount, 0);
+    // The partner's CURRENT currency, for live figures. Historical rows carry
+    // their own frozen `currency` and are formatted with that instead.
+    const cur = partner.currency || 'INR';
+
+    const handleMarkDue = async (billId) => {
+        try {
+            await api.put(`/superadmin/partner-apps/${partner._id}/billing/${billId}/mark-due`);
+            showSuccess('Bill reopened as due');
+            onRefresh();
+        } catch { showError('Failed to reopen bill'); }
+    };
 
     return (
         <div className="space-y-6">
@@ -44,13 +56,13 @@ const PartnerBillingTab = ({ partner, onRefresh }) => {
             <div className="flex items-center justify-between">
                 <div>
                     <p className="text-sm text-slate-500">
-                        Pricing: <span className="font-bold text-slate-900">{partner.currency || '₹'}{partner.pricePerAccount || 0}</span> per active account / month
+                        Pricing: <span className="font-bold text-slate-900">{formatMoney(partner.pricePerAccount || 0, cur)}</span> per active account / month
                     </p>
                 </div>
                 <div className="flex items-center gap-4 text-sm">
-                    <span className="text-slate-500">Total Paid: <span className="font-bold text-emerald-600">₹{totalRevenue.toLocaleString('en-IN')}</span></span>
+                    <span className="text-slate-500">Total Paid: <span className="font-bold text-emerald-600">{formatMoney(totalRevenue, cur)}</span></span>
                     {pendingAmount > 0 && (
-                        <span className="text-slate-500">Pending: <span className="font-bold text-amber-600">₹{pendingAmount.toLocaleString('en-IN')}</span></span>
+                        <span className="text-slate-500">Pending: <span className="font-bold text-amber-600">{formatMoney(pendingAmount, cur)}</span></span>
                     )}
                 </div>
             </div>
@@ -88,6 +100,7 @@ const PartnerBillingTab = ({ partner, onRefresh }) => {
                     <thead>
                         <tr className="border-b border-slate-200">
                             <th className="text-left py-3 px-3 font-semibold text-slate-600">Month</th>
+                            <th className="text-left py-3 px-3 font-semibold text-slate-600">Invoice</th>
                             <th className="text-center py-3 px-3 font-semibold text-slate-600">Active Accounts</th>
                             <th className="text-center py-3 px-3 font-semibold text-slate-600">Rate</th>
                             <th className="text-center py-3 px-3 font-semibold text-slate-600">Amount</th>
@@ -101,9 +114,13 @@ const PartnerBillingTab = ({ partner, onRefresh }) => {
                                 <td className="py-3 px-3 font-medium text-slate-900">
                                     {new Date(bill.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
                                 </td>
+                                <td className="py-3 px-3 text-xs font-mono text-slate-500">{bill.invoiceNumber || '—'}</td>
                                 <td className="py-3 px-3 text-center text-slate-700">{bill.activeAccounts}</td>
-                                <td className="py-3 px-3 text-center text-slate-700">{partner.currency || '₹'}{bill.rate}</td>
-                                <td className="py-3 px-3 text-center font-bold text-slate-900">{partner.currency || '₹'}{bill.amount.toLocaleString('en-IN')}</td>
+                                {/* Historical rows format with the currency frozen at
+                                    generation, so switching the partner's currency
+                                    later cannot silently restate old invoices. */}
+                                <td className="py-3 px-3 text-center text-slate-700">{formatMoney(bill.rate, bill.currency || cur)}</td>
+                                <td className="py-3 px-3 text-center font-bold text-slate-900">{formatMoney(bill.amount, bill.currency || cur)}</td>
                                 <td className="py-3 px-3 text-center">
                                     {bill.status === 'paid' ? (
                                         <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-semibold">
@@ -124,10 +141,21 @@ const PartnerBillingTab = ({ partner, onRefresh }) => {
                                             Mark Paid
                                         </button>
                                     )}
-                                    {bill.status === 'paid' && bill.paidAt && (
-                                        <span className="text-xs text-slate-400">
-                                            {new Date(bill.paidAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                                        </span>
+                                    {bill.status === 'paid' && (
+                                        <div className="flex flex-col items-center gap-1">
+                                            <span className="text-xs text-slate-400">
+                                                {bill.paidAt && new Date(bill.paidAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                                {bill.paidByName && ` · ${bill.paidByName}`}
+                                            </span>
+                                            {/* Marking paid used to be a one-way door — a
+                                                mis-click could only be undone in the DB. */}
+                                            <button
+                                                onClick={() => handleMarkDue(bill._id)}
+                                                className="text-[11px] text-slate-400 hover:text-amber-600 underline"
+                                            >
+                                                Reopen
+                                            </button>
+                                        </div>
                                     )}
                                 </td>
                             </tr>

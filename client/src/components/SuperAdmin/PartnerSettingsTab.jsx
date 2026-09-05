@@ -3,24 +3,40 @@ import React, { useState } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import { CURRENCY_CODES, currencySymbol } from '../../utils/currency';
 
+// Modules the partner may surface in the EMBED. Enforced for real now (the
+// embed clamp in authMiddleware + the tab filter in WhatsAppManagement) — this
+// grid used to write a field nothing ever read.
 const ALL_MODULES = [
     { key: 'whatsapp', label: 'WhatsApp Inbox' },
     { key: 'whatsapp_templates', label: 'Templates' },
     { key: 'whatsapp_broadcasts', label: 'Broadcasts' },
     { key: 'whatsapp_chatbot', label: 'Chatbot (Flows + AI)' },
     { key: 'whatsapp_analytics', label: 'WhatsApp Analytics' },
-    { key: 'leads', label: 'Leads Module' },
-    { key: 'email', label: 'Email Module' },
-    { key: 'automations', label: 'Automations' },
-    { key: 'reports', label: 'Reports' },
 ];
 
+// Modules a NEWLY PROVISIONED account's workspace receives. Distinct from the
+// embed grant above: this is what the tenant owns, that is what the partner may
+// show. Previously hardcoded to ['leads','whatsapp'] in the create modal with no
+// control here at all, so it could never be changed after creation.
+const PROVISION_MODULES = [
+    { key: 'leads', label: 'Leads' },
+    { key: 'whatsapp', label: 'WhatsApp' },
+    { key: 'email', label: 'Email' },
+    { key: 'automations', label: 'Automations' },
+    { key: 'reports', label: 'Reports' },
+    { key: 'team', label: 'Team' },
+];
+
+// Must stay in sync with src/constants/partnerWebhookEvents.js — every entry
+// here has a real emitter behind it.
 const WEBHOOK_EVENTS = [
     { key: 'message.received',      label: 'Message Received',        desc: 'When a WhatsApp message is received' },
     { key: 'message.status_update', label: 'Message Status Update',   desc: 'Sent / delivered / read / failed' },
     { key: 'account.created',       label: 'Account Created',         desc: 'When a sub-account is provisioned' },
     { key: 'account.frozen',        label: 'Account Frozen/Unfrozen', desc: 'Account status changes' },
+    { key: 'account.deleted',       label: 'Account Deleted',         desc: 'When a sub-account is permanently removed' },
 ];
 
 const PartnerSettingsTab = ({ partner, onRefresh }) => {
@@ -34,15 +50,44 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
         contactEmail: partner.contactEmail || '',
         contactPhone: partner.contactPhone || '',
         pricePerAccount: partner.pricePerAccount || 0,
+        currency: partner.currency || 'INR',
         allowedModules: partner.allowedModules || [],
         maxAccounts: partner.maxAccounts || 100,
-        accountDefaults: partner.accountDefaults || { leadLimit: 500, agentLimit: 3 },
+        accountDefaults: {
+            leadLimit:     partner.accountDefaults?.leadLimit ?? 500,
+            agentLimit:    partner.accountDefaults?.agentLimit ?? 3,
+            activeModules: partner.accountDefaults?.activeModules || ['leads', 'whatsapp'],
+        },
         rateLimit: partner.rateLimit || { perAccountPerMinute: 30, perAccountPerDay: 500, floor: 30 },
         allowDirectLogin: partner.allowDirectLogin || false,
         showPoweredBy: partner.showPoweredBy !== false,
+        allowedOrigins: partner.allowedOrigins || [],
         webhookUrl: partner.webhookUrl || '',
         webhookEvents: partner.webhookEvents || [],
     });
+
+    const [originInput, setOriginInput] = useState('');
+
+    const addOrigin = () => {
+        const raw = originInput.trim();
+        if (!raw) return;
+        // Normalise here too so the admin sees immediately what will be stored,
+        // rather than having the server quietly rewrite it.
+        let normalised;
+        try {
+            const u = new URL(raw);
+            if (!['http:', 'https:'].includes(u.protocol) || raw.includes('*')) throw new Error();
+            normalised = u.origin;
+        } catch {
+            return showError('Enter an exact origin like https://crm.partner.com — no paths, no wildcards.');
+        }
+        if (form.allowedOrigins.includes(normalised)) return setOriginInput('');
+        setForm(prev => ({ ...prev, allowedOrigins: [...prev.allowedOrigins, normalised] }));
+        setOriginInput('');
+    };
+
+    const removeOrigin = (origin) =>
+        setForm(prev => ({ ...prev, allowedOrigins: prev.allowedOrigins.filter(o => o !== origin) }));
 
     const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
     const handleNested = (parent, field, value) => setForm(prev => ({
@@ -119,9 +164,41 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
                 </div>
             </section>
 
+            {/* Pricing */}
+            <section>
+                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">Pricing</h3>
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="text-sm font-medium text-slate-700">Price / Active Account / Month</label>
+                        <div className="flex items-center gap-2 mt-1">
+                            <span className="text-slate-500 text-sm w-6 text-center">{currencySymbol(form.currency)}</span>
+                            <input type="number" min="0" value={form.pricePerAccount}
+                                onChange={e => handleChange('pricePerAccount', Number(e.target.value))}
+                                className="flex-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                        </div>
+                    </div>
+                    <div>
+                        {/* Currency was stored but not editable anywhere, so it was
+                            stuck on INR while being rendered as a literal "INR". */}
+                        <label className="text-sm font-medium text-slate-700">Currency</label>
+                        <select value={form.currency} onChange={e => handleChange('currency', e.target.value)}
+                            className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                            {CURRENCY_CODES.map(c => (
+                                <option key={c} value={c}>{c} ({currencySymbol(c)})</option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-slate-400 mt-1">Applies to new bills only — existing invoices keep their original currency.</p>
+                    </div>
+                </div>
+            </section>
+
             {/* Module Access */}
             <section>
-                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">Module Access</h3>
+                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">Embed Module Access</h3>
+                <p className="text-xs text-slate-400 mb-3">
+                    What this partner's customers can see and use inside the embedded UI. Enforced
+                    server-side — unchecked modules are removed from the session, not just hidden.
+                </p>
                 <div className="grid grid-cols-2 gap-2">
                     {ALL_MODULES.map(mod => (
                         <label key={mod.key} className="flex items-center gap-2.5 p-2.5 rounded-lg hover:bg-slate-50 cursor-pointer transition">
@@ -132,6 +209,77 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
                         </label>
                     ))}
                 </div>
+                {!form.allowedModules.includes('whatsapp') && (
+                    <p className="mt-2 text-xs text-amber-600">
+                        <i className="fa-solid fa-triangle-exclamation mr-1" />
+                        Without <strong>WhatsApp Inbox</strong> the embed renders nothing — it is the base module every tab hangs off.
+                    </p>
+                )}
+            </section>
+
+            {/* Embed Origins */}
+            <section>
+                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">Embed Origins</h3>
+                <p className="text-xs text-slate-400 mb-3">
+                    Domains allowed to load the embed in an iframe. <strong>Required</strong> — the browser
+                    blocks framing from anywhere not listed here, so an empty list means the partner's
+                    iframe stays blank.
+                </p>
+                <div className="flex gap-2">
+                    <input
+                        value={originInput}
+                        onChange={e => setOriginInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addOrigin(); } }}
+                        placeholder="https://crm.partner.com"
+                        className="flex-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    />
+                    <button type="button" onClick={addOrigin}
+                        className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-lg text-sm font-semibold hover:bg-slate-200 transition">
+                        Add
+                    </button>
+                </div>
+                {form.allowedOrigins.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 mt-3">
+                        {form.allowedOrigins.map(origin => (
+                            <span key={origin} className="inline-flex items-center gap-2 px-3 py-1.5 bg-cyan-50 border border-cyan-200 rounded-lg text-xs font-mono text-cyan-800">
+                                {origin}
+                                <button type="button" onClick={() => removeOrigin(origin)} className="text-cyan-400 hover:text-red-500">
+                                    <i className="fa-solid fa-xmark" />
+                                </button>
+                            </span>
+                        ))}
+                    </div>
+                ) : (
+                    <p className="mt-3 text-xs text-amber-600">
+                        <i className="fa-solid fa-triangle-exclamation mr-1" />
+                        No origins registered — this partner's embed will not render anywhere.
+                    </p>
+                )}
+            </section>
+
+            {/* Provisioning Defaults */}
+            <section>
+                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">New Account Modules</h3>
+                <p className="text-xs text-slate-400 mb-3">
+                    Modules a newly provisioned account's workspace receives. The embed grant above can
+                    only ever be a subset of what the account actually owns.
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                    {PROVISION_MODULES.map(mod => (
+                        <label key={mod.key} className="flex items-center gap-2.5 p-2.5 rounded-lg hover:bg-slate-50 cursor-pointer transition">
+                            <input type="checkbox"
+                                checked={form.accountDefaults.activeModules.includes(mod.key)}
+                                onChange={() => handleNested('accountDefaults', 'activeModules',
+                                    form.accountDefaults.activeModules.includes(mod.key)
+                                        ? form.accountDefaults.activeModules.filter(m => m !== mod.key)
+                                        : [...form.accountDefaults.activeModules, mod.key]
+                                )}
+                                className="w-4 h-4 text-cyan-600 rounded focus:ring-cyan-500" />
+                            <span className="text-sm text-slate-700">{mod.label}</span>
+                        </label>
+                    ))}
+                </div>
+                <p className="text-xs text-slate-400 mt-2">Applies to accounts created from now on — existing accounts are unchanged.</p>
             </section>
 
             {/* Account Limits */}
@@ -184,11 +332,17 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
                             className="w-full mt-1 px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
                     </div>
                 </div>
-                {/* Live preview */}
+                {/* Live preview — mirrors partnerApiAuthMiddleware exactly.
+                    It previously used a raw account count (0 for a fresh partner)
+                    and 200/5000 fallbacks, so it showed a limit the server would
+                    never actually apply. */}
                 {(() => {
-                    const n = partner.accounts?.length || 0;
-                    const effMin = Math.max(form.rateLimit.floor || 200, n * (form.rateLimit.perAccountPerMinute || 200));
-                    const effDay = Math.max((form.rateLimit.floor || 200) * 48, n * (form.rateLimit.perAccountPerDay || 5000));
+                    const n = Math.max(1, partner.accounts?.length || 0);
+                    const perMin = form.rateLimit.perAccountPerMinute || 30;
+                    const perDay = form.rateLimit.perAccountPerDay || 500;
+                    const floor  = form.rateLimit.floor || 30;
+                    const effMin = Math.max(floor, n * perMin);
+                    const effDay = Math.max(floor * 48, n * perDay);
                     return (
                         <div className="mt-3 bg-cyan-50 border border-cyan-200 rounded-lg px-4 py-2.5 flex items-center gap-3 text-sm">
                             <i className="fa-solid fa-calculator text-cyan-500" />
@@ -197,7 +351,7 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
                                 <strong className="text-cyan-700 ml-1">{effMin.toLocaleString()} req/min</strong>
                                 <span className="text-slate-400 mx-1">·</span>
                                 <strong className="text-cyan-700">{effDay.toLocaleString()} req/day</strong>
-                                <span className="text-slate-400 ml-2">({n} accounts × {form.rateLimit.perAccountPerMinute || 200})</span>
+                                <span className="text-slate-400 ml-2">({n} account{n === 1 ? '' : 's'} × {perMin}/min)</span>
                             </span>
                         </div>
                     );
@@ -262,11 +416,27 @@ const PartnerSettingsTab = ({ partner, onRefresh }) => {
                         </div>
                     </div>
 
-                    {partner.webhookSecret && (
-                        <p className="text-xs text-slate-400 mt-2">
-                            <i className="fa-solid fa-lock mr-1" />
-                            Signing Secret: {partner.webhookSecret.slice(0, 10)}{'•'.repeat(20)}
-                        </p>
+                    <p className="text-xs text-slate-400 mt-2">
+                        <i className="fa-solid fa-lock mr-1" />
+                        {partner.hasWebhookSecret
+                            ? 'Deliveries are HMAC-signed. The secret is not stored in a retrievable form — issue a new one from the API Key tab.'
+                            : 'No signing secret yet — set one from the API Key tab so the partner can verify deliveries.'}
+                    </p>
+                    {(partner.webhookPending > 0 || partner.webhookFailed > 0) && (
+                        <div className="mt-2 flex items-center gap-3 text-xs">
+                            {partner.webhookPending > 0 && (
+                                <span className="text-amber-600">
+                                    <i className="fa-solid fa-clock mr-1" />
+                                    {partner.webhookPending} delivery(s) retrying
+                                </span>
+                            )}
+                            {partner.webhookFailed > 0 && (
+                                <span className="text-red-600">
+                                    <i className="fa-solid fa-circle-xmark mr-1" />
+                                    {partner.webhookFailed} failed this month
+                                </span>
+                            )}
+                        </div>
                     )}
                 </div>
             </section>

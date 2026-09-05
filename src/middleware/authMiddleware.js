@@ -153,6 +153,27 @@ const authMiddleware = async (req, res, next) => {
             req.integrations = {};
         }
 
+        // --- 🧩 PARTNER EMBED MODULE CLAMP (PA-H2) ---
+        // An embed session is a tenant's own manager JWT, minted on behalf of a
+        // partner who was sold a specific subset of modules. Without this the
+        // partner's `allowedModules` was decorative: the SuperAdmin checkbox grid
+        // wrote it, the embed page ignored it, and every embed user reached the
+        // full WhatsApp surface (chatbot, broadcasts, analytics) regardless of
+        // what was actually sold.
+        //
+        // Narrowing activeModules BEFORE resolveValues means the existing
+        // requireFeature / entitlement machinery enforces the partner's grant
+        // everywhere, with no per-route changes. The clamp can only ever REMOVE
+        // modules — a partner can never grant their customer more than the
+        // tenant's own workspace already has.
+        if (req.user?.embed && Array.isArray(req.user.embedModules)) {
+            const granted = req.user.embedModules;
+            req.workspace = {
+                ...req.workspace,
+                activeModules: (req.workspace.activeModules || []).filter(m => granted.includes(m))
+            };
+        }
+
         // 🌳 ENTITLEMENTS — resolved ONCE per request from the feature registry
         // (module + planFeature + featureFlag), so requireFeature and any handler
         // read a single { key: boolean } object instead of re-deriving each time.
