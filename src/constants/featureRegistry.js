@@ -126,8 +126,11 @@ const FEATURE_REGISTRY = [
               storage: { type: 'flag', key: 'settings.webLead' }, enforced: false },
             { key: 'settings.leadAssignment', label: 'Lead Assignment', icon: 'fa-user-tag',
               storage: { type: 'flag', key: 'settings.leadAssignment' }, enforced: false },
+            // Enforced at runtime by requireFeature('settings.claudeAI') on the
+            // /mcp route, so the badge must say so — an admin needs to know that
+            // switching this off actually disconnects the tenant's Claude Code.
             { key: 'settings.claudeAI', label: 'Claude AI', icon: 'fa-brain',
-              storage: { type: 'flag', key: 'settings.claudeAI' }, enforced: false },
+              storage: { type: 'flag', key: 'settings.claudeAI' }, enforced: true },
             { key: 'settings.apiAccess', label: 'API Access', icon: 'fa-plug',
               storage: { type: 'feature', key: 'webhooks' }, enforced: true },
         ],

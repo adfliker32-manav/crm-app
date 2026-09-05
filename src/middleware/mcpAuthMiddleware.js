@@ -1,5 +1,6 @@
 const rateLimit = require('express-rate-limit');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
+const { resolveValues } = require('../constants/featureRegistry');
 
 // 120 req/min per IP — enough for interactive Claude sessions, blocks abuse
 const mcpRateLimit = rateLimit({
@@ -45,9 +46,13 @@ const mcpAuthMiddleware = async (req, res, next) => {
     }
 
     try {
+        // featureFlags is REQUIRED here, not optional: the /mcp route is gated by
+        // requireFeature('settings.claudeAI'), which is a registry FLAG node stored
+        // in featureFlags — not in planFeatures. Omitting it from the projection
+        // makes the entitlement unresolvable and the gate fails closed.
         const workspace = await WorkspaceSettings
             .findOne({ mcpApiKey: key })
-            .select('userId accountStatus planFeatures activeModules planExpiryDate')
+            .select('userId accountStatus planFeatures activeModules featureFlags planExpiryDate')
             .lean();
 
         if (!workspace) {
@@ -83,6 +88,23 @@ const mcpAuthMiddleware = async (req, res, next) => {
 
         req.tenantId = workspace.userId;
         req.workspace = workspace;
+
+        // 🌳 ENTITLEMENTS — the same line authMiddleware runs, and the reason this
+        // route works at all.
+        //
+        // requireFeature() resolves a REGISTRY NODE KEY (dotted, e.g.
+        // 'settings.claudeAI') out of req.entitlements. Only when that object is
+        // absent does it fall back to treating the key as a legacy planFeatures
+        // field — and 'settings.claudeAI' is a FLAG, stored in featureFlags under
+        // the dot-encoded name 'settings__claudeAI'. So without this line the
+        // lookup missed in both buckets and every MCP request 403'd with
+        // `feature_locked`, for every tenant, even though flags are opt-out and
+        // should have been allowed by default.
+        //
+        // This route authenticates by API key and deliberately skips
+        // authMiddleware, so nothing else populates it.
+        req.entitlements = resolveValues(workspace);
+
         next();
     } catch (err) {
         console.error('[MCP Auth] DB error:', err.message);
