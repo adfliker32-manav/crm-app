@@ -984,12 +984,18 @@ const startCronJobs = () => {
     // the tenant sees a real error and can retry.
     try {
         const { recoverStuckDocuments } = require('./knowledgeBaseService');
+        const { trackJob, registerJob } = require('./jobHealthService');
+        registerJob('knowledge-base-recovery', {
+            label: 'Knowledge base stuck-document recovery',
+            expectedIntervalSeconds: 900
+        });
         cron.schedule('*/15 * * * *', async () => {
-            try {
-                await recoverStuckDocuments();
-            } catch (err) {
+            await trackJob('knowledge-base-recovery', async () => {
+                const recovered = await recoverStuckDocuments();
+                return { recovered };
+            }).catch(err => {
                 console.error('⚠️ [CronJobs] Knowledge base recovery error:', err.message);
-            }
+            });
         });
         console.log('[CronJobs] Knowledge base stuck-document recovery scheduled (every 15 min)');
     } catch (e) {

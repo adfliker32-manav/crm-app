@@ -87,10 +87,113 @@ const buildUserIdFilter = (userIds) => {
     return userIds;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Object storage purge
+// ─────────────────────────────────────────────────────────────────────────────
+// Deleting a tenant used to remove their database rows and nothing else, so every
+// deletion left their WhatsApp media, library uploads, lead attachments and
+// knowledge-base files in R2 forever — paying rent, with nothing left that could
+// even name them. At 100 tenants with normal churn that compounds quietly.
+//
+// Two passes, because neither is sufficient alone:
+//
+//   1. KEYS FROM THE DATABASE — authoritative. The rows name exactly which
+//      objects exist, whatever their key layout.
+//   2. PREFIX SWEEP — the safety net. A row deleted earlier by some other path
+//      leaves bytes no query can find; the tenant's own prefixes catch those.
+//
+// MUST run BEFORE the rows are deleted — pass 1 reads them.
+//
+// Never throws. A storage problem must not abort an account deletion, or the
+// tenant is left half-removed with no way to finish the job.
+// Only models that carry `userId` — the scope every delete here is built on.
+//
+// SupportMessage is deliberately ABSENT: it has no userId (it is keyed by
+// ticketId + senderId), so a userId query would match nothing and the line would
+// look like cleanup while doing none. Support attachments live under
+// support/<ticketId>/ and outlive the tenant on purpose — a support history is a
+// record of a dispute, not tenant content.
+const STORAGE_KEY_MODELS = [
+    { model: require('../models/MediaAsset'),        field: 'storageKey' },
+    { model: require('../models/LeadDocument'),      field: 'storageKey' },
+    { model: require('../models/KnowledgeDocument'), field: 'storageKey' },
+    { model: require('../models/WhatsAppMessage'),   field: 'content.storageKey' },
+    { model: require('../models/EmailMessage'),      field: 'attachments.storageKey' }
+];
+
+const purgeTenantStorage = async (userIds) => {
+    const storage = require('./storageService');
+    const userIdFilter = buildUserIdFilter(userIds);
+    const ids = Array.isArray(userIds) ? userIds : [userIds];
+
+    let deleted = 0;
+    let failed = 0;
+
+    // ── Pass 1: every key the database can name ──────────────────────────────
+    for (const { model, field } of STORAGE_KEY_MODELS) {
+        try {
+            const rows = await model.find({ userId: userIdFilter }).select(field).lean();
+            const keys = [];
+            for (const row of rows) {
+                // Fields live at three depths: top level, inside `content`, or
+                // inside an `attachments` array.
+                if (row.storageKey) keys.push(row.storageKey);
+                if (row.content?.storageKey) keys.push(row.content.storageKey);
+                for (const att of row.attachments || []) {
+                    if (att?.storageKey) keys.push(att.storageKey);
+                }
+            }
+            if (keys.length) {
+                const res = await storage.deleteObjects(keys);
+                deleted += res.deleted;
+                failed += res.failed;
+            }
+        } catch (err) {
+            console.error(`[Cleanup] Could not collect storage keys from ${model.modelName}:`, err.message);
+            failed++;
+        }
+    }
+
+    // ── Pass 2: sweep the prefixes that embed the tenant id ──────────────────
+    // Mirrors the layouts in mediaLibraryController, inboundMediaService,
+    // knowledgeBaseService, emailTemplateController and leadDocumentService.
+    for (const id of ids) {
+        if (!id) continue;
+        const tenant = String(id);
+        for (const prefix of [
+            `${tenant}/`,                    // media library
+            `wa-inbound/${tenant}/`,         // inbound WhatsApp media
+            `knowledge-base/${tenant}/`,     // RAG documents
+            `email-attachments/${tenant}/`,  // email template attachments
+            `lead-docs/${tenant}/`           // lead file attachments
+        ]) {
+            try {
+                const res = await storage.deleteByPrefix(prefix);
+                deleted += res.deleted;
+                failed += res.failed;
+            } catch (err) {
+                console.error(`[Cleanup] Prefix sweep failed for "${prefix}":`, err.message);
+                failed++;
+            }
+        }
+    }
+
+    if (deleted || failed) {
+        console.log(`[Cleanup] Object storage purge: ${deleted} deleted, ${failed} failed (tenants: ${ids.join(', ')})`);
+    }
+    return { deleted, failed };
+};
+
 const deleteOwnedRecords = async (userIds, options = {}) => {
     const { companyId } = options;
     // Throws before ANY delete runs if the scope is not usable.
     const userIdFilter = buildUserIdFilter(userIds);
+
+    // BEFORE the rows go: they are the only record of which objects exist.
+    // Best-effort — a storage failure must not leave the account half-deleted.
+    await purgeTenantStorage(userIds).catch(err =>
+        console.error('[Cleanup] Storage purge failed, continuing with record deletion:', err.message)
+    );
 
     const deletions = USER_OWNED_MODELS.map((model) =>
         model.deleteMany({ userId: userIdFilter })
@@ -115,5 +218,6 @@ const deleteOwnedRecords = async (userIds, options = {}) => {
 };
 
 module.exports = {
-    deleteOwnedRecords
+    deleteOwnedRecords,
+    purgeTenantStorage
 };

@@ -148,6 +148,27 @@ const ApiDocsTab = ({ apiKey }) => {
 
             <Endpoint
                 method="POST"
+                path="/whatsapp/assign-agent"
+                title="Assign a WhatsApp Chat to an Agent"
+                description="Hand a number's WhatsApp thread to one of your agents — use it when your own CRM assigns the lead to someone. Any phone format works. Send agentEmail as null to unassign. If no lead exists for the number yet, one is created and pre-assigned so the first message lands with the right agent. Requires 'WhatsApp follows lead assignment' to be on in Settings → Lead Assignment."
+                body={`{
+  "phone": "+919876543210",
+  "agentEmail": "raj@yourcompany.com"
+}`}
+                response={`{
+  "success": true,
+  "data": {
+    "leadId": "652f1c8e9b1d4a0012ab34cd",
+    "leadCreated": false,
+    "assignedTo": { "name": "Raj", "email": "raj@yourcompany.com" },
+    "conversationsLinked": 1,
+    "whatsappAssignmentEnabled": true
+  }
+}`}
+            />
+
+            <Endpoint
+                method="POST"
                 path="/appointments"
                 title="Create Appointment"
                 description="Schedule a new appointment on the calendar."

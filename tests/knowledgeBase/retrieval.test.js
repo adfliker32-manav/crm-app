@@ -11,7 +11,7 @@ const kb = require('../../src/services/knowledgeBaseService');
 const embeddings = require('../../src/services/embeddingService');
 
 /** Build an in-memory index in the exact shape loadVectorIndex() produces. */
-function mkIndex(vectors, model = 'text-embedding-004') {
+function mkIndex(vectors, model = 'gemini-embedding-001') {
     const dims = vectors[0].length;
     const count = vectors.length;
     const matrix = new Float32Array(count * dims);

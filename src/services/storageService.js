@@ -45,8 +45,15 @@ let S3Commands = null;
 function getClient() {
     if (!isR2Configured) return null;
     if (!s3Client) {
-        const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
-        S3Commands = { PutObjectCommand, GetObjectCommand, DeleteObjectCommand };
+        const {
+            S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand,
+            // Bulk deletion, for purging a tenant's objects on account deletion.
+            DeleteObjectsCommand, ListObjectsV2Command
+        } = require('@aws-sdk/client-s3');
+        S3Commands = {
+            PutObjectCommand, GetObjectCommand, DeleteObjectCommand,
+            DeleteObjectsCommand, ListObjectsV2Command
+        };
         s3Client = new S3Client({
             region: 'auto',
             endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -153,6 +160,125 @@ async function deleteObject(key) {
 }
 
 /**
+ * Delete many objects at once.
+ *
+ * Deleting a tenant one key at a time is thousands of round trips; S3's
+ * DeleteObjects takes 1000 per call. Returns the count actually removed so the
+ * caller can report it rather than guess.
+ *
+ * Never throws — a storage failure must not abort an account deletion that has
+ * already removed database rows.
+ *
+ * @param {string[]} keys
+ * @returns {Promise<{deleted: number, failed: number}>}
+ */
+async function deleteObjects(keys = []) {
+    const unique = [...new Set(keys.filter(Boolean))];
+    if (unique.length === 0) return { deleted: 0, failed: 0 };
+
+    let deleted = 0;
+    let failed = 0;
+
+    if (DRIVER !== 'r2') {
+        for (const key of unique) {
+            // eslint-disable-next-line no-await-in-loop
+            const ok = await deleteObject(key);
+            if (ok) deleted++; else failed++;
+        }
+        return { deleted, failed };
+    }
+
+    const client = getClient();
+    const BATCH = 1000; // S3/R2 hard limit per DeleteObjects call
+
+    for (let i = 0; i < unique.length; i += BATCH) {
+        const chunk = unique.slice(i, i + BATCH);
+        try {
+            const res = await client.send(new S3Commands.DeleteObjectsCommand({
+                Bucket: R2_BUCKET,
+                Delete: { Objects: chunk.map(Key => ({ Key })), Quiet: true }
+            }));
+            const errors = res?.Errors?.length || 0;
+            deleted += chunk.length - errors;
+            failed += errors;
+            if (errors) {
+                console.error(`[Storage] ${errors} object(s) in a delete batch failed:`,
+                    res.Errors.slice(0, 5).map(e => `${e.Key}: ${e.Message}`).join('; '));
+            }
+        } catch (err) {
+            console.error(`[Storage] Batch delete of ${chunk.length} object(s) failed:`, err.message);
+            failed += chunk.length;
+        }
+    }
+
+    return { deleted, failed };
+}
+
+/**
+ * Delete everything under a key prefix.
+ *
+ * The safety net for account deletion: the database is the authoritative list of
+ * what a tenant owns, but a row that was already gone leaves bytes nobody can
+ * name. Sweeping the tenant's own prefixes catches those.
+ *
+ * ⚠️ A prefix delete is unbounded destruction — an empty or careless prefix would
+ * empty the bucket. Callers must pass a prefix that ends in "/" and contains a
+ * tenant id; that is enforced here rather than trusted.
+ *
+ * @param {string} prefix e.g. "knowledge-base/<tenantId>/"
+ * @returns {Promise<{deleted: number, failed: number}>}
+ */
+async function deleteByPrefix(prefix) {
+    const clean = String(prefix || '').trim();
+
+    if (!clean || !clean.endsWith('/') || clean === '/' || clean.includes('..')) {
+        console.error(`[Storage] Refusing unsafe prefix delete: "${prefix}"`);
+        return { deleted: 0, failed: 0 };
+    }
+
+    if (DRIVER !== 'r2') {
+        // Local driver: remove the directory tree that mirrors the prefix.
+        try {
+            await fs.promises.rm(localPathFor(clean), { recursive: true, force: true });
+            return { deleted: 1, failed: 0 };
+        } catch (err) {
+            console.error(`[Storage] Local prefix delete failed for ${clean}:`, err.message);
+            return { deleted: 0, failed: 1 };
+        }
+    }
+
+    const client = getClient();
+    let deleted = 0;
+    let failed = 0;
+    let ContinuationToken;
+
+    do {
+        let page;
+        try {
+            page = await client.send(new S3Commands.ListObjectsV2Command({
+                Bucket: R2_BUCKET,
+                Prefix: clean,
+                ContinuationToken
+            }));
+        } catch (err) {
+            console.error(`[Storage] Listing "${clean}" failed:`, err.message);
+            return { deleted, failed: failed + 1 };
+        }
+
+        const keys = (page.Contents || []).map(o => o.Key).filter(Boolean);
+        if (keys.length) {
+            const res = await deleteObjects(keys);
+            deleted += res.deleted;
+            failed += res.failed;
+        }
+
+        ContinuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+
+    return { deleted, failed };
+}
+
+/**
  * Public HTTPS URL for an object. Meta downloads media from this URL, so under
  * the r2 driver the bucket (or its custom domain) must be publicly readable.
  */
@@ -175,6 +301,8 @@ module.exports = {
     getBuffer,
     getStream,
     deleteObject,
+    deleteObjects,
+    deleteByPrefix,
     getPublicUrl,
     LOCAL_DIR
 };

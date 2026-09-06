@@ -34,6 +34,21 @@ exports.getSettings = async (req, res) => {
             aiButtonMappingEnabled: config.ai?.aiButtonMappingEnabled !== false,
             aiSupportEnabled: config.ai?.aiSupportEnabled || false,
             maxTurns: config.ai?.maxTurns || 12,
+            // Always sent as a whole object so the UI never has to merge partial
+            // state against schema defaults — a legacy config that predates this
+            // field simply reports the defaults.
+            leadCreation: {
+                enabled:             config.ai?.leadCreation?.enabled === true,
+                minCustomerMessages: config.ai?.leadCreation?.minCustomerMessages ?? 3,
+                requirePhone:        config.ai?.leadCreation?.requirePhone !== false,
+                requireName:         config.ai?.leadCreation?.requireName === true,
+                requireEmail:        config.ai?.leadCreation?.requireEmail === true,
+                instruction:         config.ai?.leadCreation?.instruction || '',
+                status:              config.ai?.leadCreation?.status || 'New',
+                source:              config.ai?.leadCreation?.source || 'WhatsApp AI Chatbot',
+                tags:                config.ai?.leadCreation?.tags || [],
+                autoCreateWhenReady: config.ai?.leadCreation?.autoCreateWhenReady === true
+            },
             tokensUsedThisMonth: config.ai?.tokensUsedThisMonth || 0,
             // AI credit wallet (shared with voice; priced via the AiModelRate table)
             aiCreditsBalance: wallet.balance,
@@ -107,6 +122,47 @@ exports.updateSettings = async (req, res) => {
                 return res.status(400).json({ error: 'maxTurns must be a whole number between 1 and 50.' });
             }
             config.ai.maxTurns = n;
+        }
+
+        // ── AI lead-creation policy ──────────────────────────────────────────
+        // Every field is clamped server-side. `instruction` rides along on every
+        // single AI reply and is billed with it, so it gets the same hard ceiling
+        // treatment as systemPrompt above rather than being trusted from the UI.
+        const leadPayload = req.body.leadCreation;
+        if (leadPayload && typeof leadPayload === 'object') {
+            const lc = config.ai.leadCreation || {};
+
+            if (leadPayload.enabled !== undefined) lc.enabled = !!leadPayload.enabled;
+            if (leadPayload.requirePhone !== undefined) lc.requirePhone = !!leadPayload.requirePhone;
+            if (leadPayload.requireName !== undefined) lc.requireName = !!leadPayload.requireName;
+            if (leadPayload.requireEmail !== undefined) lc.requireEmail = !!leadPayload.requireEmail;
+            if (leadPayload.autoCreateWhenReady !== undefined) lc.autoCreateWhenReady = !!leadPayload.autoCreateWhenReady;
+
+            if (leadPayload.minCustomerMessages !== undefined) {
+                const n = Math.floor(Number(leadPayload.minCustomerMessages));
+                if (!Number.isFinite(n) || n < 1 || n > 20) {
+                    return res.status(400).json({ error: 'minCustomerMessages must be a whole number between 1 and 20.' });
+                }
+                lc.minCustomerMessages = n;
+            }
+
+            if (leadPayload.instruction !== undefined) {
+                lc.instruction = String(leadPayload.instruction).substring(0, 500);
+            }
+            if (leadPayload.status !== undefined) {
+                lc.status = String(leadPayload.status).trim().substring(0, 50) || 'New';
+            }
+            if (leadPayload.source !== undefined) {
+                lc.source = String(leadPayload.source).trim().substring(0, 100) || 'WhatsApp AI Chatbot';
+            }
+            if (leadPayload.tags !== undefined) {
+                lc.tags = Array.isArray(leadPayload.tags)
+                    ? leadPayload.tags.slice(0, 10).map(t => String(t).trim().substring(0, 50)).filter(Boolean)
+                    : [];
+            }
+
+            config.ai.leadCreation = lc;
+            config.markModified('ai.leadCreation');
         }
 
         // Voice Automation settings from the same page

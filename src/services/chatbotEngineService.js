@@ -254,21 +254,24 @@ const getSafeLeadCustomDataEntries = (leadCustomData) => {
     );
 };
 
-const triggerChatbotLeadCreatedEffects = (lead, userId, leadStatus = null) => {
-    setImmediate(async () => {
+// A chatbot-captured lead must reach the SAME hub as every other lead path
+// (leadEffects.js). This used to hand-roll a subset — automations, sequences and
+// Meta CAPI — which quietly skipped the workflow engine, lead-arrival alerts,
+// lead scoring, and the WhatsApp assignment propagation. A lead the bot created
+// therefore never fired the tenant's workflows and never notified an agent.
+//
+// ⚠️ skipWelcome is NOT optional here. The hub's first act is to send the
+// "welcome" email + WhatsApp for a brand-new lead, and this customer is mid-
+// conversation with the bot on WhatsApp right now — greeting them again would be
+// a duplicate message on the very channel they are already talking on.
+const triggerChatbotLeadCreatedEffects = (lead, userId) => {
+    setImmediate(() => {
         try {
-            const { evaluateLead } = require('./AutomationService');
-            evaluateLead(lead, 'LEAD_CREATED').catch(e => console.error('[Chatbot] Automation engine error:', e));
-
-            // FIX: Enroll chatbot-captured leads in drip sequences (was missing)
-            const { enrollLeadInSequences } = require('./sequenceService');
-            enrollLeadInSequences(lead, 'LEAD_CREATED').catch(e => console.error('[Chatbot] Sequence enrollment error:', e));
-
-            // Outbox-backed entry point — resolves config from lead.userId (incl.
-            // agent → parent fallback) and guarantees delivery or visible failure.
-            const { sendMetaEventForLead } = require('./metaConversionService');
-            sendMetaEventForLead(lead, leadStatus || lead.status, null)
-                .catch(e => console.error('[Chatbot] Meta CAPI error:', e));
+            const { queueLeadCreatedEffects } = require('../utils/leadEffects');
+            queueLeadCreatedEffects(lead, userId, {
+                skipWelcome: true,
+                source: 'WhatsApp Chatbot'
+            });
         } catch (err) {
             console.error('[Chatbot] Background trigger error:', err);
         }
@@ -713,6 +716,204 @@ const handoffStuckSession = async (session, conversation, conversationId, tenant
 };
 
 // ============================================================
+// 🎯 AI LEAD-CREATION POLICY
+// ============================================================
+// The scripted flow has had a configurable Smart Lead Engine for a long time
+// (evaluateSmartLead below). The AI path had nothing: whether a conversation
+// became a Lead rested on one sentence in a static prompt, so it fired on a
+// greeting one day and never fired the next.
+//
+// This is the server-side half of the fix. The prompt tells the model the same
+// bar (buildLeadCreationRules in aiService), but the model is not TRUSTED to
+// respect it — an LLM will happily decide a "hi" is a qualified lead. Nothing
+// creates a lead on the AI path without passing through here first.
+//
+// Returns { allowed, reason } — `reason` is for the log, never the customer.
+const evaluateAiLeadPolicy = async ({ policy, conversationId, variables, conversation = null }) => {
+    if (!policy || policy.enabled !== true) {
+        return { allowed: false, reason: 'lead creation policy is disabled' };
+    }
+
+    const minMessages = policy.minCustomerMessages ?? 3;
+    if (minMessages > 0) {
+        const customerMessages = await WhatsAppMessage.countDocuments({
+            conversationId,
+            direction: 'inbound'
+        });
+        if (customerMessages < minMessages) {
+            return {
+                allowed: false,
+                reason: `only ${customerMessages} customer message(s), needs ${minMessages}`
+            };
+        }
+    }
+
+    // A number the conversation already carries counts — the point is to HAVE a
+    // way to call this person back, not to make them type a number we can see.
+    // The check only bites on username-only contacts, where WhatsApp gives us no
+    // number at all and the AI has to ask for one.
+    if (policy.requirePhone) {
+        const collectedPhone = getFirstPopulatedVariable(variables, [
+            'phone', 'phone_number', 'phoneNumber', 'mobile', 'mobile_number', 'mobileNumber', 'lead_phone'
+        ]);
+        if (!collectedPhone && !conversation?.phone) {
+            return { allowed: false, reason: 'no contact number for this customer yet' };
+        }
+    }
+
+    // ⚠️ Read the COLLECTED variables only — never buildLeadPayloadFromSession's
+    // resolved name. That falls back to conversation.displayName, and WhatsApp
+    // always supplies a profile name, so "do we have a name yet?" would be true
+    // from the very first message and this whole check would be a no-op.
+    if (policy.requireName) {
+        const name = getFirstPopulatedVariable(variables, [
+            'name', 'full_name', 'fullName', 'customer_name', 'customerName', 'lead_name'
+        ]);
+        if (!name) return { allowed: false, reason: 'no customer name collected yet' };
+    }
+
+    if (policy.requireEmail) {
+        const email = getFirstPopulatedVariable(variables, [
+            'email', 'email_address', 'emailAddress', 'lead_email'
+        ]);
+        if (!email) return { allowed: false, reason: 'no customer email collected yet' };
+    }
+
+    return { allowed: true, reason: 'policy satisfied' };
+};
+
+// The create_lead payload the tenant configured. The AI may propose a status or
+// source of its own; the tenant's setting wins, because "which stage do new AI
+// leads land in" is a CRM decision, not a per-conversation one.
+const buildPolicyLeadActionData = (policy) => ({
+    status: policy?.status || 'New',
+    source: policy?.source || 'WhatsApp AI Chatbot',
+    tags:   Array.isArray(policy?.tags) ? policy.tags : []
+});
+
+// ============================================================
+// 🎬 AI ACTION EXECUTION — the single door for everything the AI asks for
+// ============================================================
+// There are THREE AI surfaces: the fallback reply, the rescue reply, and the
+// `ai` node inside a flow. They used to carry their own copy of this dispatch,
+// and the copies drifted: the in-flow node created leads by calling executeAction
+// directly, so the tenant's lead-creation policy — minimum messages, required
+// contact number, configured stage/source/tags — was enforced on two surfaces
+// and silently ignored on the third.
+//
+// A policy that can be bypassed by entering through a different door is not a
+// policy. Every AI action now goes through here.
+//
+// @returns {{ leadHandled: boolean, endedSession: boolean }}
+//   endedSession tells a flow caller to stop walking nodes — notify_agent hands
+//   the conversation to a human, and the flow must not keep talking over them.
+const executeAiAction = async ({
+    action,
+    actionSession,
+    conversation,
+    conversationId,
+    leadPolicy = null,
+    logTag = 'AI',
+    session = null
+}) => {
+    const outcome = { leadHandled: false, endedSession: false };
+    if (!action || !action.type) return outcome;
+
+    if (action.type === 'change_stage' && action.stage) {
+        console.log(`🤖 [${logTag}] Executing change_stage → "${action.stage}" for conversation ${conversationId}`);
+        await executeAction({
+            actionType: 'change_stage',
+            actionData: { stage: action.stage }
+        }, actionSession, conversation);
+
+    } else if (action.type === 'assign_tag' && action.tag) {
+        console.log(`🤖 [${logTag}] Executing assign_tag → "${action.tag}" for conversation ${conversationId}`);
+        await executeAction({
+            actionType: 'assign_tag',
+            actionData: { tag: action.tag }
+        }, actionSession, conversation);
+
+    } else if (action.type === 'notify_agent') {
+        const agentMsg = action.reason || `${logTag}: Handoff requested for ${conversation.displayName || conversation.phone}`;
+        console.log(`🤖 [${logTag}] Executing notify_agent — pausing chatbot for 24h on conversation ${conversationId}`);
+        await executeAction({
+            actionType: 'notify_agent',
+            actionData: { message: agentMsg }
+        }, actionSession, conversation);
+
+        // Pause so the human agent can take over, and stop any live session
+        // competing with them for the next reply.
+        await WhatsAppConversation.findByIdAndUpdate(conversationId, {
+            $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
+        });
+        if (session) await endSession(session, 'handoff');
+        outcome.endedSession = true;
+
+    } else if (action.type === 'book_appointment') {
+        console.log(`🤖 [${logTag}] Executing book_appointment for conversation ${conversationId}`);
+        await executeAction({
+            actionType: 'book_appointment',
+            actionData: action
+        }, actionSession, conversation);
+
+    } else if (action.type === 'send_template' && action.templateName) {
+        console.log(`🤖 [${logTag}] Executing send_template → "${action.templateName}" for conversation ${conversationId}`);
+        await executeAction({
+            actionType: 'send_template',
+            actionData: { templateName: action.templateName }
+        }, actionSession, conversation);
+
+    } else if (action.type === 'create_lead') {
+        // The model asked. Whether it gets to is the server's decision.
+        //
+        // OFF MEANS OFF. This used to fall through to "the AI's own judgement,
+        // its own labels" whenever no policy was configured, which made the
+        // Auto-Create Leads switch a lie: a tenant turned it off and the AI
+        // carried on creating leads anyway.
+        if (!leadPolicy) {
+            console.log(`🤖 [${logTag}] create_lead BLOCKED for conversation ${conversationId} — automatic lead creation is switched off for this workspace.`);
+        } else {
+            const verdict = await evaluateAiLeadPolicy({
+                policy: leadPolicy,
+                conversationId,
+                variables: actionSession.variables,
+                conversation
+            });
+            if (verdict.allowed) {
+                console.log(`🤖 [${logTag}] create_lead allowed for conversation ${conversationId} (${verdict.reason})`);
+                await executeAction({
+                    actionType: 'create_lead',
+                    actionData: buildPolicyLeadActionData(leadPolicy)
+                }, actionSession, conversation);
+                outcome.leadHandled = true;
+            } else {
+                console.log(`🤖 [${logTag}] create_lead BLOCKED for conversation ${conversationId} — ${verdict.reason}`);
+            }
+        }
+    }
+
+    return outcome;
+};
+
+/**
+ * The lead policy for a tenant, or null when automatic creation is off.
+ * Shared so every AI surface resolves it the same way.
+ */
+const resolveLeadPolicy = (aiConfig) =>
+    aiConfig?.ai?.leadCreation?.enabled === true ? aiConfig.ai.leadCreation : null;
+
+/**
+ * What the MODEL is told to collect. A number we already have is not something
+ * to ask for: telling the AI "you must obtain their phone number" when WhatsApp
+ * already handed us one makes it pester a customer for a detail on screen. The
+ * server gate still checks the real requirement.
+ */
+const buildPromptLeadPolicy = (leadPolicy, conversation) =>
+    leadPolicy && leadPolicy.requirePhone && conversation?.phone
+        ? { ...(leadPolicy.toObject?.() ?? leadPolicy), requirePhone: false }
+        : leadPolicy;
+
+// ============================================================
 // 🤖 AI REPLY — the single place the AI is allowed to speak
 // ============================================================
 // Two entry points share this:
@@ -862,6 +1063,12 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
         .filter(Boolean)
         .join('\n');
 
+    // The tenant's lead-creation policy. Passed to the model so it aims at the
+    // same bar the server enforces — proposing a lead that is then discarded just
+    // burns a turn. Null/disabled tells the model not to create leads at all.
+    const leadPolicy = resolveLeadPolicy(aiConfig);
+    const promptLeadPolicy = buildPromptLeadPolicy(leadPolicy, conversation);
+
     const WhatsAppTemplate = require('../models/WhatsAppTemplate');
     const availableTemplates = await WhatsAppTemplate.find({ userId: tenantId, status: 'APPROVED' }).select('name category').lean();
 
@@ -873,7 +1080,8 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
             systemPrompt: effectiveSystemPrompt,
             conversationHistory: history,
             leadContext: leadDetails,
-            availableTemplates
+            availableTemplates,
+            leadPolicy: promptLeadPolicy
         });
 
         // Tag the reply with its mode so the turn guards above can count it
@@ -896,87 +1104,90 @@ const runAiReply = async ({ conversation, conversationId, tenantId, session = nu
             await session.save();
         }
 
-        // Execute actions returned by the AI
-        if (action && action.type) {
-            // In rescue mode the real session is used, so AI actions land on the
-            // same variables the flow collected. In fallback mode there is no
-            // session — build a session-like object with leadDetails pre-populated
-            // so executeAction's change_stage path can find/create the lead.
-            let actionSession = session;
-            if (!actionSession) {
-                const fallbackVariables = new Map();
-                if (leadDetails.name)  fallbackVariables.set('name', leadDetails.name);
-                if (leadDetails.phone) fallbackVariables.set('phone', leadDetails.phone);
-                if (leadDetails.email) fallbackVariables.set('email', leadDetails.email);
-                actionSession = {
-                    userId: tenantId,
-                    conversationId,
-                    variables: fallbackVariables,
-                    save: async () => {}
-                };
+        // In rescue mode the real session is used, so AI actions land on the same
+        // variables the flow collected. In fallback mode there is no session —
+        // build a session-like object seeded from the linked lead AND from what
+        // earlier AI turns extracted, so executeAction's change_stage path can
+        // find/create the lead and the policy gate can see the whole conversation.
+        let actionSession = session;
+        if (!actionSession) {
+            const fallbackVariables = new Map();
+            // Earlier turns first; the live lead's details then take precedence.
+            if (conversation.aiVariables) {
+                const stored = conversation.aiVariables instanceof Map
+                    ? conversation.aiVariables
+                    : new Map(Object.entries(conversation.aiVariables));
+                for (const [k, v] of stored) if (v) fallbackVariables.set(k, v);
             }
+            if (leadDetails.name)  fallbackVariables.set('name', leadDetails.name);
+            if (leadDetails.phone) fallbackVariables.set('phone', leadDetails.phone);
+            if (leadDetails.email) fallbackVariables.set('email', leadDetails.email);
+            actionSession = {
+                userId: tenantId,
+                conversationId,
+                variables: fallbackVariables,
+                save: async () => {}
+            };
+        }
 
-            // Save any extracted variables from the AI response
-            if (extracted_variables && typeof extracted_variables === 'object') {
-                for (const [key, value] of Object.entries(extracted_variables)) {
-                    if (value != null && String(value).trim() && String(value).toLowerCase() !== 'null') {
-                        actionSession.variables.set(key, String(value).trim());
-                    }
+        // Save any extracted variables from the AI response.
+        // Runs on EVERY turn, not just ones carrying an action: this used to be
+        // nested inside the action branch, so a name the customer gave while the
+        // AI was still just chatting was thrown away.
+        const freshVariables = {};
+        if (extracted_variables && typeof extracted_variables === 'object') {
+            for (const [key, value] of Object.entries(extracted_variables)) {
+                if (value != null && String(value).trim() && String(value).toLowerCase() !== 'null') {
+                    const clean = String(value).trim();
+                    actionSession.variables.set(key, clean);
+                    freshVariables[key] = clean;
                 }
-                if (actionSession.markModified) actionSession.markModified('variables');
-                console.log(`🤖 [AI ${mode}] Extracted variables:`, Object.fromEntries(
-                    Object.entries(extracted_variables).filter(([, v]) => v != null && String(v).trim() && String(v).toLowerCase() !== 'null')
-                ));
             }
+            if (actionSession.markModified) actionSession.markModified('variables');
+            if (Object.keys(freshVariables).length) {
+                console.log(`🤖 [AI ${mode}] Extracted variables:`, freshVariables);
+            }
+        }
 
-            const logTag = mode === 'rescue' ? 'AI Rescue' : 'AI Fallback';
+        // Persist them on the conversation so the next turn — and the policy gate
+        // — can still see them. Rescue mode already has ChatbotSession for this.
+        if (!session && Object.keys(freshVariables).length) {
+            const namespaced = {};
+            for (const [k, v] of Object.entries(freshVariables)) namespaced[`aiVariables.${k}`] = v;
+            await WhatsAppConversation.findByIdAndUpdate(conversationId, { $set: namespaced });
+        }
 
-            if (action.type === 'change_stage' && action.stage) {
-                console.log(`🤖 [${logTag}] Executing change_stage → "${action.stage}" for conversation ${conversationId}`);
-                await executeAction({
-                    actionType: 'change_stage',
-                    actionData: { stage: action.stage }
-                }, actionSession, conversation);
-            } else if (action.type === 'assign_tag' && action.tag) {
-                console.log(`🤖 [${logTag}] Executing assign_tag → "${action.tag}" for conversation ${conversationId}`);
-                await executeAction({
-                    actionType: 'assign_tag',
-                    actionData: { tag: action.tag }
-                }, actionSession, conversation);
-            } else if (action.type === 'notify_agent') {
-                const agentMsg = action.reason || `${logTag}: Handoff requested for ${conversation.displayName || conversation.phone}`;
-                console.log(`🤖 [${logTag}] Executing notify_agent — pausing chatbot for 24h on conversation ${conversationId}`);
-                await executeAction({
-                    actionType: 'notify_agent',
-                    actionData: { message: agentMsg }
-                }, actionSession, conversation);
+        const logTag = mode === 'rescue' ? 'AI Rescue' : 'AI Fallback';
 
-                // Pause chatbot for 24h so the human agent can take over, and stop
-                // any live session competing with them.
-                await WhatsAppConversation.findByIdAndUpdate(conversationId, {
-                    $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
-                });
-                if (session) await endSession(session, 'handoff');
-            } else if (action.type === 'book_appointment') {
-                console.log(`🤖 [${logTag}] Executing book_appointment for conversation ${conversationId}`);
-                await executeAction({
-                    actionType: 'book_appointment',
-                    actionData: action
-                }, actionSession, conversation);
-            } else if (action.type === 'send_template' && action.templateName) {
-                console.log(`🤖 [${logTag}] Executing send_template → "${action.templateName}" for conversation ${conversationId}`);
-                await executeAction({
-                    actionType: 'send_template',
-                    actionData: { templateName: action.templateName }
-                }, actionSession, conversation);
-            } else if (action.type === 'create_lead') {
-                console.log(`🤖 [${logTag}] Executing create_lead for conversation ${conversationId}`);
+        // Did this turn already deal with the lead? Guards the safety net below
+        // from creating one immediately after the AI's own request did.
+        let leadHandledThisTurn = false;
+
+        // Every AI surface dispatches through one door — see executeAiAction.
+        const outcome = await executeAiAction({
+            action, actionSession, conversation, conversationId,
+            leadPolicy, logTag, session
+        });
+        if (outcome.leadHandled) leadHandledThisTurn = true;
+
+        // ── Safety net ───────────────────────────────────────────────────────
+        // The policy is met but the model never asked. Left to itself an LLM will
+        // sometimes just keep chatting, and the tenant's lead is silently never
+        // captured — the failure people actually notice and complain about. Opt-in
+        // per workspace, and skipped when the conversation already has a lead so
+        // it can never fight the upsert.
+        if (leadPolicy?.autoCreateWhenReady && !leadHandledThisTurn && !conversation.leadId) {
+            const verdict = await evaluateAiLeadPolicy({
+                policy: leadPolicy,
+                conversationId,
+                variables: actionSession.variables,
+                conversation
+            });
+            if (verdict.allowed) {
+                console.log(`🤖 [${logTag}] Safety net creating lead for conversation ${conversationId} — the AI did not ask but the policy is met.`);
                 await executeAction({
                     actionType: 'create_lead',
-                    actionData: {
-                        status: action.status || 'New',
-                        source: action.source || 'WhatsApp AI Chatbot'
-                    }
+                    actionData: buildPolicyLeadActionData(leadPolicy)
                 }, actionSession, conversation);
             }
         }
@@ -1163,14 +1374,31 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
         }
 
         // Check for active session first (only if NOT paused)
-        if (!isPaused) {
+        // ⚠️ THIS RUNS EVEN WHILE PAUSED, and must.
+        //
+        // An agent taking over sets the pause AND cancels every live session
+        // (cancelActiveChatbots marks them 'handoff'), so during a normal takeover
+        // there is no active session here and nothing happens — the agent keeps
+        // the conversation.
+        //
+        // The only way an active session exists under a pause is that the customer
+        // themselves explicitly re-triggered the bot: a keyword, a template reply,
+        // or a click-to-WhatsApp ad. Those used to CLEAR the agent's pause
+        // outright, which let the bot barge into a live human conversation and
+        // stay there. They no longer do — but then this check has to run while
+        // paused, or the flow they just started would begin and freeze on the
+        // customer's very next message.
+        //
+        // Net effect: an explicitly-requested flow runs to completion, the AI and
+        // the ambient triggers below stay silent, and the agent's pause survives.
+        {
             let session = await ChatbotSession.findOne({
                 conversationId: conversationId,
                 status: 'active'
             }).populate('flowId');
 
             if (session) {
-                console.log(`🤖 [Chatbot] Continuing active session ${session._id} for flow "${session.flowId?.name || 'unknown'}" at node ${session.currentNodeId}`);
+                console.log(`🤖 [Chatbot] Continuing active session ${session._id} for flow "${session.flowId?.name || 'unknown'}" at node ${session.currentNodeId}${isPaused ? ' (running under an agent pause)' : ''}`);
                 // If user sent text but the active node expects media, reject and stay on the node.
                 const currentNode = session.flowId?.nodes?.find(n => n.id === session.currentNodeId);
                 if (currentNode?.type === 'request_media') {
@@ -1182,23 +1410,29 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                 return await continueSession(session, messageText, conversationId, userId, message);
             }
 
-            // No active session. Diagnostic: count any sessions for this conversation by status
-            // so it's obvious whether the session was never created vs. ended early.
-            const sessionCounts = await ChatbotSession.aggregate([
-                { $match: { conversationId: new (require('mongoose').Types.ObjectId)(conversationId.toString()) } },
-                { $group: { _id: '$status', count: { $sum: 1 }, last: { $max: '$updatedAt' } } }
-            ]);
-            if (sessionCounts.length > 0) {
-                const summary = sessionCounts.map(s => `${s._id}=${s.count} (last ${s.last?.toISOString?.() || s.last})`).join(', ');
-                console.log(`🤖 [Chatbot] No ACTIVE session for conversation ${conversationId}. Existing sessions: ${summary}`);
-            } else {
-                console.log(`🤖 [Chatbot] No sessions at all for conversation ${conversationId}. User has not yet triggered any flow.`);
+            if (!isPaused) {
+                // No active session. Diagnostic: count any sessions for this conversation by status
+                // so it's obvious whether the session was never created vs. ended early.
+                const sessionCounts = await ChatbotSession.aggregate([
+                    { $match: { conversationId: new (require('mongoose').Types.ObjectId)(conversationId.toString()) } },
+                    { $group: { _id: '$status', count: { $sum: 1 }, last: { $max: '$updatedAt' } } }
+                ]);
+                if (sessionCounts.length > 0) {
+                    const summary = sessionCounts.map(s => `${s._id}=${s.count} (last ${s.last?.toISOString?.() || s.last})`).join(', ');
+                    console.log(`🤖 [Chatbot] No ACTIVE session for conversation ${conversationId}. Existing sessions: ${summary}`);
+                } else {
+                    console.log(`🤖 [Chatbot] No sessions at all for conversation ${conversationId}. User has not yet triggered any flow.`);
+                }
             }
         }
 
         // ─── KEYWORD + FLOW MATCHING ───────────────────────────────
-        // NOTE: Keyword matching runs EVEN when paused — a keyword trigger is an
-        // explicit new intent from the customer and should restart the chatbot.
+        // NOTE: Keyword matching runs EVEN when paused — a keyword is an explicit
+        // new intent from the customer, so the flow they asked for is allowed to
+        // run. It does NOT lift the pause: the agent keeps the conversation, and
+        // everything below that the customer did not explicitly ask for (the
+        // first-message / existing-contact triggers and the AI fallback) stays
+        // silent until the pause expires.
         const allActiveFlows = await getActiveFlows(flowOwnerIds, tenantId);
         console.log(`🤖 [Chatbot] Found ${allActiveFlows.length} active flow(s) for owners: [${flowOwnerIds.join(', ')}]`);
         
@@ -1265,12 +1499,10 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
 
         // If a keyword matched AND chatbot is paused → BYPASS the pause (keyword = new intent)
         if (targetFlow && isPaused) {
-            console.log(`🔓 [Chatbot] Keyword trigger "${targetFlow.name}" bypassing chatbot pause for conversation ${conversationId}`);
-            // Clear the pause so the flow can execute
-            await WhatsAppConversation.findByIdAndUpdate(conversationId, {
-                $set: { chatbotPausedUntil: null }
-            });
-            // Also end any stale active sessions
+            console.log(`🔓 [Chatbot] Keyword trigger "${targetFlow.name}" running under the agent pause for conversation ${conversationId}`);
+            // The pause is DELIBERATELY left in place — see the note on
+            // isPaused above. Only stale sessions are cleared so the new,
+            // explicitly-triggered flow owns the conversation.
             await ChatbotSession.updateMany(
                 { conversationId: conversationId, status: 'active' },
                 { $set: { status: 'abandoned', completedAt: new Date() } }
@@ -1327,10 +1559,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                         targetFlow = replyFlow;
                         // Bypass pause if needed
                         if (isPaused) {
-                            console.log(`🔓 [Chatbot] Template reply trigger "${replyFlow.name}" bypassing chatbot pause`);
-                            await WhatsAppConversation.findByIdAndUpdate(conversationId, {
-                                $set: { chatbotPausedUntil: null }
-                            });
+                            console.log(`🔓 [Chatbot] Template reply trigger "${replyFlow.name}" running under the agent pause`);
                             await ChatbotSession.updateMany(
                                 { conversationId: conversationId, status: 'active' },
                                 { $set: { status: 'abandoned', completedAt: new Date() } }
@@ -1383,10 +1612,7 @@ exports.processIncomingMessage = async (message, conversationId, userId) => {
                 console.log(`🎯 [Chatbot] Meta Ad trigger matched: "${adFlow.name}" (source_id: "${adSourceId}", headline: "${adHeadline}")`);
                 targetFlow = adFlow;
                 if (isPaused) {
-                    console.log(`🔓 [Chatbot] Meta Ad trigger "${adFlow.name}" bypassing chatbot pause`);
-                    await WhatsAppConversation.findByIdAndUpdate(conversationId, {
-                        $set: { chatbotPausedUntil: null }
-                    });
+                    console.log(`🔓 [Chatbot] Meta Ad trigger "${adFlow.name}" running under the agent pause`);
                     await ChatbotSession.updateMany(
                         { conversationId: conversationId, status: 'active' },
                         { $set: { status: 'abandoned', completedAt: new Date() } }
@@ -1673,7 +1899,7 @@ const evaluateSmartLead = async (session, flow, conversation) => {
         await lead.save();
         leadIdToUpdate = lead._id;
 
-        triggerChatbotLeadCreatedEffects(lead, session.userId, newLeadStatus);
+        triggerChatbotLeadCreatedEffects(lead, session.userId);
         
         // Dynamically track new lead generation in flow analytics
         await ChatbotFlow.findByIdAndUpdate(flow._id, {
@@ -2755,7 +2981,11 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                         systemPrompt: effectiveSystemPrompt,
                         conversationHistory: history,
                         leadContext: leadDetails,
-                        availableTemplates
+                        availableTemplates,
+                        // The node is gated by the same policy as every other AI
+                        // surface, so it must be TOLD the same rules — otherwise
+                        // it spends turns proposing leads the server discards.
+                        leadPolicy: buildPromptLeadPolicy(resolveLeadPolicy(aiConfig), conversation)
                     });
 
                     // 4a. Save any extracted variables from the AI response
@@ -2783,54 +3013,24 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                         feature: 'ai_node'
                     });
 
-                    // 5. Execute actions if returned
-                    if (action) {
-                        if (action.type === 'change_stage' && action.stage) {
-                            await executeAction({
-                                actionType: 'change_stage',
-                                actionData: { stage: action.stage }
-                            }, session, conversation);
-                        } else if (action.type === 'assign_tag' && action.tag) {
-                            await executeAction({
-                                actionType: 'assign_tag',
-                                actionData: { tag: action.tag }
-                            }, session, conversation);
-                        } else if (action.type === 'notify_agent') {
-                            const agentMsg = action.reason || `AI Qualify: Handoff requested for ${conversation.displayName || conversation.phone}`;
-                            await executeAction({
-                                actionType: 'notify_agent',
-                                actionData: { message: agentMsg }
-                            }, session, conversation);
+                    // 5. Execute actions if returned.
+                    // Same door as the fallback and rescue surfaces. This used to
+                    // be a private copy of the dispatch that called executeAction
+                    // directly for create_lead, so the tenant's lead policy was
+                    // enforced everywhere EXCEPT inside a flow.
+                    const aiNodeOutcome = await executeAiAction({
+                        action,
+                        actionSession: session,
+                        conversation,
+                        conversationId: conversation._id,
+                        leadPolicy: resolveLeadPolicy(aiConfig),
+                        logTag: 'AI Node',
+                        session
+                    });
 
-                            // Same as the max-turns handoff: pause the bot and end
-                            // the session so a live agent isn't fighting the AI for
-                            // the next reply.
-                            await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
-                                $set: { chatbotPausedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) }
-                            });
-                            await endSession(session, 'handoff');
-                            break;
-                        } else if (action.type === 'book_appointment') {
-                            await executeAction({
-                                actionType: 'book_appointment',
-                                actionData: action
-                            }, session, conversation);
-                        } else if (action.type === 'send_template' && action.templateName) {
-                            await executeAction({
-                                actionType: 'send_template',
-                                actionData: { templateName: action.templateName }
-                            }, session, conversation);
-                        } else if (action.type === 'create_lead') {
-                            await executeAction({
-                                actionType: 'create_lead',
-                                actionData: {
-                                    status: action.status || 'New',
-                                    source: action.source || 'WhatsApp AI Chatbot'
-                                }
-                            }, session, conversation);
-                            console.log(`🤖 [Chatbot] AI triggered create_lead for ${conversation.displayName || conversation.phone}`);
-                        }
-                    }
+                    // notify_agent handed the conversation to a human — stop
+                    // walking nodes rather than talking over them.
+                    if (aiNodeOutcome.endedSession) break;
 
                     // Increment turn count and stay on AI node (re-evaluate on next message)
                     session.variables.set('ai_turn_count', (turnCount + 1).toString());
@@ -3284,7 +3484,7 @@ const executeAction = async (actionData, session, conversation) => {
                         });
                     }
 
-                    triggerChatbotLeadCreatedEffects(lead, session.userId, lead.status);
+                    triggerChatbotLeadCreatedEffects(lead, session.userId);
                 }
 
                 // ── Always link lead to the conversation ──────────────────────
@@ -3453,4 +3653,10 @@ exports.cancelActiveChatbots = async (conversationId) => {
 
 // Exported for Agenda queue processor
 exports.resumeExecution = async (session, flow, nodeId) => { return await executeNode(session, flow, nodeId); };
+
+// Exported for tests: the AI lead-creation policy is the one place that decides
+// whether an AI conversation may become a Lead, so it is worth asserting on
+// directly rather than only through a full runAiReply round trip.
+exports.evaluateAiLeadPolicy = evaluateAiLeadPolicy;
+exports.buildPolicyLeadActionData = buildPolicyLeadActionData;
 

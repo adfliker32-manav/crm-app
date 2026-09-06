@@ -77,14 +77,24 @@ The WhatsApp module is the "Heart" of the real-time CRM.
 Instead of creating a new conversation for every message, the CRM uses an **Atomic Upsert**:
 - **`findOneAndUpdate`**: Automatically finds an existing 1-on-1 chat or creates a new one. 
 - **Linking**: It automatically tries to link the WhatsApp number to a `Lead` in the same workspace using a regex check on the last 10 digits.
+- **Self-Healing Backfill**: The `leadId` link is *also* repaired on every inbound message. A thread that was created before its Lead existed (the common Meta Lead Ads case, where the customer messages first) would otherwise stay unlinked forever. The backfill is **strictly additive** — only `null → a real link`, never a re-link, because re-pointing a linked thread would silently steal it from another Lead.
 
-### 4.3 WhatsApp Media Proxy Layer
-The CRM caches media objects (`image`, `video`, `document`) locally to eliminate redundant Meta API calls.
+### 4.3 Lead-Based Conversation Assignment
+Who owns a WhatsApp thread is **derived**, never set directly.
+
+- **The Rule**: `WhatsAppConversation.assignedTo` is a **read-only mirror** of the linked `Lead.assignedTo`. `whatsappAssignmentService.js` is its **only writer** — there is deliberately no API, request body or UI control that sets it independently. If the two ever disagree, the Lead wins (`scripts/backfillWhatsAppAssignment.js` re-derives the whole collection and is safe to re-run).
+- **Why mirror instead of joining**: the inbox list, the unread badge and search all paginate and sort by `lastMessageAt`. A `$lookup` back to the Lead would force a full-collection aggregation before `$sort/$skip/$limit` on every keystroke. One denormalized indexed field is `O(index)`.
+- **The Propagation Hub**: every code path that writes `Lead.assignedTo` **must** call `queueLeadAssignmentEffects` (`utils/leadEffects.js`). That mirrors the owner onto every linked conversation and emits the socket events that move the thread into the new agent's inbox and evict the old one. It is an explicit call rather than a Mongoose hook on purpose: the bulk paths use `updateMany`, which fires no document middleware, so a hook would miss exactly the case that matters most.
+- **Off by default**: the whole mechanism is inert unless `WorkspaceSettings.whatsappFollowsLeadAssignment` is `true`. With it off, the inbox stays fully shared across the company — which is the single most common cause of "I assigned it but the chat didn't move."
+
+### 4.4 WhatsApp Media Proxy Layer
+Meta's media URLs expire and require auth, so the CRM mirrors media objects (`image`, `video`, `document`) into object storage to eliminate redundant Meta API calls.
+- **Storage**: Inbound media is mirrored to **Cloudflare R2** (`inboundMediaService.js` → `storage.putObject`, key layout `wa-inbound/<userId>/<mediaId>`). Nothing is kept on the server's disk — R2 is the single home for all media across the media library, WhatsApp, support and email attachments.
 - **Media Auth**: Browser `<img>` tags cannot send Authorization headers. To solve this, we use a **Token-Based Media Proxy**.
 - **The Flow**: 
     1.  Frontend requests `/whatsapp/media/:id?token=TOKEN`.
     2.  Middleware verifies the token from the query string.
-    3.  Backend downloads the binary from Meta (or fetches from local `uploads/whatsapp/` cache) and pipes it to the browser.
+    3.  Backend serves the object from R2, downloading from Meta on a cache miss, and pipes it to the browser.
 
 ---
 
@@ -133,6 +143,26 @@ The CRM allows "Zero-API" syncing with Google Sheets.
 Instead of manual uploads, Facebook/Instagram Meta Ads can be connected directly.
 - **Meta Webhook**: When a customer clicks an "Instant Form" on Facebook, Meta pings your `/api/meta/webhook`.
 - **Normalization**: The system extracts the "Lead Gen ID," fetches the full form entry from Meta's Graph API, and instantly creates a new Lead in the CRM, triggering all associated automations.
+
+### 7.3 External CRM API (`/api/v1`)
+For a tenant who runs **their own** CRM and wants to drive this one from it. Full endpoint reference lives in `EXTERNAL_API_DOCS.md` and in-app under **Settings → API Access**.
+
+- **Auth**: an `x-api-key` header carrying the tenant's `ext_…` key (`WorkspaceSettings.extApiKey`). No JWT. CORS is open, because a partner's server can be anywhere.
+- **Gating**: requires `planFeatures.webhooks` (Growth/Enterprise). Rate limited to **30 req/min and 500/day per key**, plus a 60/min IP wall in front of it. `req.tenantId` is set by the auth middleware and every query is scoped to it.
+- **Surface**: leads (create/list/get/update/note), WhatsApp (send, template, list templates, assign), email send, appointments, and read-only stats.
+
+> **Do not confuse this with `/api/partner/v1`.** That is a *reseller* API where one partner manages many sub-accounts (`x-partner-key` + `x-account-id`). `/api/v1` is a single tenant integrating their own systems.
+
+#### Assigning a WhatsApp chat from an external CRM
+`POST /api/v1/whatsapp/assign-agent` with `{ phone, agentEmail }`. This is what lets a partner keep agent ownership in step across two systems: when they assign a lead to an agent in their CRM, the matching WhatsApp thread moves to the same agent here.
+
+- **It writes `Lead.assignedTo`, never the conversation.** See §4.3 — the conversation field is a derived mirror. The endpoint sets the Lead owner and calls the propagation hub; the mirror, the socket handoff and the old agent's eviction all follow from that.
+- **Matching**: the phone is normalized and matched on the **last 10 digits**, so `+91 98765 43210`, `919876543210` and `9876543210` all resolve to the same contact — the same convention `duplicateService` and the WhatsApp webhook already use.
+- **The agent is resolved by email**, scoped to the workspace (`_id === tenantId` or `parentId === tenantId`). A third-party CRM has no reason to know internal ObjectIds, and the scope is what stops an email alone from reaching another workspace's user.
+- **Link before sync**: the propagation hub filters conversations on `leadId`, so a thread that predates its Lead is invisible to it. `whatsappAssignmentService.linkConversationsToLead()` links by phone suffix first — **only `leadId: null` rows**, matching the additive rule in §4.2.
+- **No lead yet → one is created, pre-assigned.** Partners routinely assign at intake, before the customer has ever messaged. Creating the Lead now means the §4.2 self-healing backfill routes the customer's *first* inbound message straight to that agent instead of the shared inbox. These leads pass through the same `checkLeadLimit` guard and fire the same creation effects as any other API-created lead.
+- **`agentEmail` is required but nullable.** `null` is the explicit unassign. It cannot be merely optional: `validate()` runs `stripUnknown`, so a misspelled key (`agent_email`) would be silently dropped and read as "no agent" — a 200 that *unassigns* the chat the partner was trying to hand over. Requiring the key makes that a 400.
+- **The response reports `whatsappAssignmentEnabled`** and adds a `warning` when the workspace toggle from §4.3 is off, so the integration surfaces the reason instead of looking like a silent no-op.
 
 ---
 
@@ -184,6 +214,46 @@ Polling is the biggest CPU consumer. We mitigate this by:
 3.  **Controller** (`leadController.js`) processes the data.
 4.  **Service** (`AutomationService.js`) evaluates any side-effects.
 5.  **Socket** (`socketService.js`) notifies the UI.
+
+---
+
+## Section 11: AI Knowledge Base (RAG)
+
+Tenants upload price lists, catalogues and FAQs; the WhatsApp AI chatbot answers customers from them instead of guessing. Gated on `planFeatures.knowledgeBase`, **off by default** so no existing tenant starts spending AI credits on deploy.
+
+### 11.1 The Two Halves
+- **Index (once per upload)**: `file → parse → chunk → embed → KnowledgeChunk rows`. `documentParserService` handles 5 types only — csv, xlsx, docx, pdf, txt. Tabular sources get **one row per chunk** with the headers repeated into each (`"Brand: Hyundai | Price: 18.2L"`) so the embedding knows 18.2L is a price; prose gets ~500-char windows with ~100-char overlap at sentence boundaries.
+- **Retrieve (every message)**: `customer text → embed → cosine → top-K chunks`. Capped at `KB_RETRIEVE_TIMEOUT_MS` (6s) and always degrades to "no knowledge context" rather than costing the customer their reply.
+
+### 11.2 The Vector Cache
+Retrieval runs on the inbound-WhatsApp hot path, so vectors are cached in-process as packed `Float32Array`s — half the bytes of a JS number array and contiguous, making scoring a tight loop over one buffer. The cache is **bounded** (`KB_VECTOR_CACHE_MB`, default 192 MB) because an unbounded per-tenant cache on a box running 100+ tenants is just a slow memory leak. **Any write must call `invalidateCache(tenantId)`.**
+
+### 11.3 ⚠️ Cosine Scores Are Not Comparable Across Providers
+This is the trap most likely to be reintroduced. A similarity score only means something relative to the model that produced it. Measured against real indexed data:
+
+| Model | Relevant | Unrelated |
+| :--- | :--- | :--- |
+| `text-embedding-3-small` (OpenAI) | 0.27 – 0.69 | 0.15 – 0.23 |
+| `gemini-embedding-001` (Gemini) | 0.57 – 0.81 | 0.46 – 0.55 |
+
+OpenAI spreads scores across the whole range; Gemini compresses them into a narrow high band. A **single shared cut-off cannot serve both** — it silently returns nothing for one provider or everything for the other. A shared floor of `0.35` did exactly that: every OpenAI tenant's document sat at "Ready / N sections indexed" while returning **no match** for any paraphrased question, with a perfectly healthy index.
+
+Each model therefore carries its **own `minScore`** in `EMBEDDING_MODELS` (openai `0.25`, gemini `0.55`); `resolveEmbeddingContext` returns it and `retrieveKnowledge` reads it off the context. **Never reintroduce a shared default, and never let a caller substitute one** — a controller passing its own fallback whenever the client omitted the field defeats the per-model value entirely. `KB_MIN_SCORE` exists only as a global override and is unset in normal operation.
+
+### 11.4 AI Lead-Creation Policy
+The AI can emit a `create_lead` action, but **the model is not trusted to decide when**. An LLM will happily conclude that "hi" is a qualified lead, and the previous behaviour — one vague sentence in a shared static prompt — meant it fired inconsistently and identically for every tenant.
+
+`IntegrationConfig.ai.leadCreation` makes it a tenant setting: a minimum number of customer messages, required details (contact number / name / email), an optional plain-English rule, plus the stage, source and tags the resulting lead gets. `evaluateAiLeadPolicy()` in `chatbotEngineService` is the gate — **every** AI lead-creation path goes through it, including the opt-in safety net that creates the lead when the policy is met but the model never asked. The prompt is told the same thresholds only so it stops proposing leads that get discarded.
+
+- **The contact number is the one requirement on by default**, and it is *not* redundant on WhatsApp. As Meta rolls out Usernames a contact can hide their number — `WhatsAppConversation.phone` is nullable for exactly that case, and `Lead.phone` is optional — so without it a username-only chat can mint a lead nobody can call back. The check is satisfied by `conversation.phone` OR a number the AI collected, so the ordinary case passes silently; `runAiReply` also strips the requirement from the *prompt* copy of the policy when a number is already known, so the AI never asks for one it can see.
+- **⚠️ The name check must read raw collected variables.** `buildLeadPayloadFromSession` resolves a name through `variables → conversation.displayName → 'WhatsApp Lead'`. WhatsApp always supplies a profile name, so reusing that fallback chain would make "require a name" pass on the first message and the whole policy decorative.
+- **`WhatsAppConversation.aiVariables`** persists what the AI extracts across turns. The AI fallback path has no `ChatbotSession`, so it previously rebuilt a throwaway variable map each turn and discarded anything the customer said earlier — which made a "require a name" rule unenforceable.
+
+### 11.5 Model & Dimension Safety
+- **Never compare vectors across models.** Gemini `gemini-embedding-001` = 768 dims (truncated from 3072 via `outputDimensionality`, Google's MRL truncation — 3072 would put ~24 KB of BSON doubles on every chunk row); OpenAI `text-embedding-3-small` = 1536. Cross-model cosine returns plausible-but-random rankings, so the bot confidently quotes the wrong price. Every chunk stores `embeddingModel` + `embeddingDims`, and retrieval filters on the model actually in use.
+- **Gemini embeds asymmetrically**: indexing sends `taskType: RETRIEVAL_DOCUMENT`, queries send `RETRIEVAL_QUERY`. OpenAI has no equivalent parameter and ignores it.
+- **Retired models**: providers do retire embedding models (Google retired `text-embedding-004`). `recoverStuckDocuments()` marks any document whose `embeddingModel` is absent from every current spec as `stale`, so a retirement cannot leave documents sitting at "Ready" while answering nothing. Switching a tenant's provider does the same via `markStaleForProviderChange()`; re-indexing is the only way back.
+- **Billing**: embedding models **must** have `AiModelRate` rows. `aiCreditService` charges a conservative *chat* fallback rate for any unknown model, which over-bills an upload ~20x. `embeddingService.ensureRates()` upserts them lazily on first use.
 
 ---
 

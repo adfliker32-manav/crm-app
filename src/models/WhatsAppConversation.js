@@ -67,6 +67,20 @@ const whatsAppConversationSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    // Details the AI has extracted from this conversation (name, email, business
+    // name, …), accumulated across turns.
+    //
+    // The scripted flow keeps its answers on ChatbotSession.variables, but the AI
+    // fallback path has no session at all — it rebuilt a throwaway variable map on
+    // every turn, so anything the customer said earlier was gone by the next
+    // message. That made "only create a lead once you have their name" impossible
+    // to enforce: the name had to arrive in the very same message as the decision.
+    // Persisting here gives the AI path the memory the flow path already had.
+    aiVariables: {
+        type: Map,
+        of: String,
+        default: undefined
+    },
     tags: [{
         type: String
     }],

@@ -156,6 +156,22 @@ router.put('/accounts/:id/deactivate', validateObjectId({ params: ['id'] }), aut
 router.post('/accounts/:id/add-ai-credits', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, topUpAiCredits);
 router.get('/accounts/:id/ai-ledger', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, getTenantAiLedger);
 
+// ── Background job health ────────────────────────────────────────────────────
+// The scheduled half of the system (flow delays, no-reply timeouts, the
+// follow-up sweep, knowledge-base recovery) runs detached and used to fail with
+// nothing but a console line. This is the one place to see whether it is alive.
+// Read-only, so it needs no schema.
+router.get('/job-health', authMiddleware, requireSuperAdmin, async (req, res) => {
+    try {
+        const { getJobHealth } = require('../services/jobHealthService');
+        const health = await getJobHealth();
+        res.json({ success: true, ...health });
+    } catch (err) {
+        console.error('[SuperAdmin] job-health failed:', err.message);
+        res.status(500).json({ success: false, message: 'Could not read job health.' });
+    }
+});
+
 // Self-serve AI credit top-up revenue (Razorpay Orders) — per-client, kept separate
 // from subscription finance so credit sales don't distort MRR.
 router.get('/ai-credit-topups', authMiddleware, requireSuperAdmin, listAiCreditTopups);

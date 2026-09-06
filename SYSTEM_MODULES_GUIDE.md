@@ -26,8 +26,9 @@ The Lead Management module is the central repository for all customer data.
 WhatsApp is the primary engagement channel for the CRM.
 - **Real-Time Messaging**: Uses Meta's Cloud API webhooks to receive messages instantly. The `whatsappWebhookController` validates signatures for security and upserts conversations.
 - **Broadcast Campaigns**: Allows sending bulk messages to specific lead segments. It includes a queue system (`broadcastQueueService`) to manage Meta's rate limits and track delivery/read statuses.
-- **Media Proxy**: Since Meta's media URLs expire and require auth, the CRM uses a secure **Proxy Layer**. This downloads and caches images/videos locally, serving them to the frontend via authenticated routes.
+- **Media Proxy**: Since Meta's media URLs expire and require auth, the CRM uses a secure **Proxy Layer**. Media is mirrored to **Cloudflare R2** object storage (never the server's disk) and served to the frontend via authenticated routes.
 - **Template Management**: Integration with Meta's Template API allows admins to create and sync pre-approved message templates.
+- **Lead-Based Assignment**: A conversation's owner is a **derived mirror** of the linked Lead's owner — assign the Lead and the chat follows, including a live socket handoff between agents' inboxes. `whatsappAssignmentService` is the only writer; nothing sets a conversation's owner independently. Controlled per workspace by **Settings → Lead Assignment**, off by default (the inbox is otherwise fully shared).
 
 ### 2.3 Email & IMAP Service
 Provides a full-featured email client experience within the CRM.
@@ -55,11 +56,25 @@ An intelligent layer that handles initial customer queries.
 - **Intent Matching**: Uses keyword-based or AI-driven matching to identify what the customer wants.
 - **Flow Builder**: Admins can configure automated "Question-Answer" sequences to qualify leads before a human intervenes.
 - **Session Control**: Maintains a `Session` state for each user to track where they are in a conversation flow.
+- **Lead Capture, Two Engines**: Scripted flows use the **Smart Lead Engine** (qualify after N node interactions / required variables → tags + stage). AI conversations use an equivalent **lead-creation policy** in AI Settings: a minimum number of customer messages plus required details (contact number by default, optionally name and email), narrowed further by a plain-English rule if wanted. Both are off until configured, and in both cases the **server** decides — the AI can only ask.
 
-### 2.7 Google Sheet & External Sync
+### 2.7 AI Knowledge Base (RAG)
+Lets the chatbot answer from the tenant's **own documents** instead of guessing.
+- **Upload & Index**: Tenants upload price lists, catalogues or FAQs (csv, xlsx, docx, pdf, txt — max 25 MB). Files are parsed, split into chunks and embedded into vectors stored on `KnowledgeChunk`.
+- **Retrieval**: Each customer message is embedded and matched against those vectors by cosine similarity; the top passages are injected into the AI's prompt with strict instructions to quote only those figures and never invent a value.
+- **Test View**: A "try a question" box shows exactly what the bot would retrieve, so a tenant can tell "the AI is broken" apart from "my price list has no Creta row."
+- **Metering**: Both indexing and per-query embedding are billed to the tenant's AI credit wallet. Off by default per plan.
+
+### 2.8 Google Sheet & External Sync
 Allows seamless data movement between the CRM and other tools.
 - **Sheet Sync**: Periodically fetches data from a public/shared Google Sheet (CSV format) and updates CRM leads.
 - **Webhook Inbound**: A generic endpoint that allows tools like Zapier, Pabbly, or custom websites to push leads directly into the CRM.
+
+### 2.9 External CRM API (`/api/v1`)
+A REST API for a tenant who runs **their own** CRM and wants to drive this one from it — authenticated by a per-workspace `x-api-key`, rate limited per key, and available on Growth/Enterprise plans. Full reference in `EXTERNAL_API_DOCS.md` and in-app under **Settings → API Access**.
+- **Covers**: leads (create, list, get, update, note), WhatsApp (send, template, assign), email, appointments and read-only stats.
+- **Cross-System Agent Sync**: `POST /whatsapp/assign-agent` takes a phone number and an agent's email, so when a lead is assigned in the partner's CRM the matching WhatsApp chat moves to the same agent here. If that number has no lead yet, one is created pre-assigned so the customer's very first message still reaches the right agent.
+- **Not the Partner API**: `/api/partner/v1` is a separate, *reseller*-facing surface for managing many sub-accounts — see the Partner App module.
 
 ---
 
@@ -67,22 +82,27 @@ Allows seamless data movement between the CRM and other tools.
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | React + Vite | Fast, responsive Single Page Application (SPA). |
-| **State Management** | Redux Toolkit | Centralized store for leads, chats, and UI state. |
-| **Backend** | Node.js (Express) | High-performance API handling. |
-| **Database** | MongoDB | Flexible NoSQL storage for multi-tenant data. |
+| **Frontend** | React + Vite + Tailwind | Fast, responsive Single Page Application (SPA). |
+| **State Management** | React Context | `AuthContext`, `NotificationContext`, `ConfirmContext`, `PromptContext` — no Redux. |
+| **Backend** | Node.js (Express 5) | High-performance API handling. |
+| **Database** | MongoDB (Mongoose) | Flexible NoSQL storage for multi-tenant data. |
 | **Real-Time** | Socket.io | Instant UI updates (New message alerts, Stage updates). |
-| **Tasks** | Agenda.js | Persistent background job scheduling. |
+| **Tasks** | BullMQ + Redis, Agenda.js, node-cron | BullMQ drives the workflow engine; Agenda handles delayed automations; node-cron runs the sweeps. |
+| **Object Storage** | Cloudflare R2 | All media, attachments and knowledge-base files. |
 
 ---
 
 ## 4. Directory Structure Map
 
 - `/src/controllers`: Logic for handling API requests.
-- `/src/services`: Core business logic (WhatsApp, Email, Automation).
+- `/src/services`: Core business logic (WhatsApp, Email, Automation, AI).
 - `/src/models`: Database schemas and data validation.
 - `/src/routes`: API endpoint definitions.
-- `/client/src/pages`: UI components and screen logic.
-- `/client/src/store`: Redux slices and API hooks.
+- `/src/middleware`: Auth, validation and rate-limit guards.
+- `/src/workflow-engine`: The BullMQ-backed visual workflow runtime.
+- `/client/src/pages`: Screen-level UI.
+- `/client/src/components`: Feature components, grouped by module.
+- `/client/src/context`: Shared React context providers (auth, notifications).
+- `/tests`: Node test-runner suites, grouped by module.
 
 ---

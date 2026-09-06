@@ -168,7 +168,11 @@ async function processIncomingMessage(messageObj, value) {
             const limitCheck = await checkLeadLimit(ownerUser._id);
             if (!limitCheck.allowed) {
                 console.warn(`⚠️ [Webhook] Lead limit reached for tenant ${ownerUser._id} — skipping auto-create for ${normalizedPhone || bsuid}`);
-                return res.status(200).json({ success: true, message: 'Lead limit reached' });
+                // `res` does not exist here — this is a helper called from the
+                // message loop, not a route handler, so the old `return res...`
+                // threw ReferenceError instead of skipping the lead. Every other
+                // exit in this function is a bare return.
+                return;
             }
 
             // For username-only contacts without a phone, use BSUID as identifier

@@ -1227,7 +1227,14 @@ const toolHandlers = {
         await Lead.findByIdAndUpdate(leadId, update);
 
         if (goesDead) {
-            fireStageChange({ ...lead, status: 'Dead Lead' }, prevStatus, 'Dead Lead');
+            // `fireStageChange` never existed anywhere in the codebase — this
+            // threw ReferenceError every time an MCP client marked a lead dead,
+            // so the stage change was written but none of its effects ran.
+            // queueLeadStageChangeEffects is the hub every other path uses.
+            queueLeadStageChangeEffects(
+                { ...lead, status: 'Dead Lead', _id: lead._id },
+                prevStatus
+            );
         }
 
         return {

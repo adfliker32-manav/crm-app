@@ -21,9 +21,23 @@
 //   entirely empty, which is never true on an existing install.
 //
 // ⚠️ DIMENSIONS
-//   Gemini text-embedding-004 → 768 floats; OpenAI text-embedding-3-small → 1536.
+//   Gemini gemini-embedding-001 → 3072 native, truncated to 768 via
+//   outputDimensionality; OpenAI text-embedding-3-small → 1536.
 //   Callers must persist the returned `model`/`dims` next to every vector they
 //   store and refuse to compare vectors across models. See KnowledgeChunk.
+//
+// ⚠️ SIMILARITY SCORES ARE NOT COMPARABLE ACROSS PROVIDERS
+//   A cosine score only means something relative to the model that produced it.
+//   Measured against a real indexed document:
+//
+//     text-embedding-3-small   relevant 0.27-0.69   unrelated 0.15-0.23
+//     gemini-embedding-001     relevant 0.57-0.81   unrelated 0.46-0.55
+//
+//   OpenAI spreads its scores across the whole range; Gemini compresses
+//   everything into a narrow high band, so "0.5" is a good match on one model and
+//   noise on the other. A single shared cut-off therefore cannot serve both — it
+//   silently returns nothing for one provider or everything for the other. Each
+//   model carries its own `minScore` below, and retrieval reads it from there.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const IntegrationConfig = require('../models/IntegrationConfig');
@@ -31,14 +45,33 @@ const AiModelRate = require('../models/AiModelRate');
 const aiCreditService = require('./aiCreditService');
 const { getGlobalAIKey } = require('../utils/aiKeyResolver');
 
-// Per provider: the embedding model used, its vector length, and the credit rate
-// seeded into AiModelRate. Rates are ~4x the provider's real token price, matching
-// the margin the chat models in aiCreditService.DEFAULT_RATES already carry, and
-// are admin-editable afterwards like any other row.
+// Per provider: the embedding model used, its vector length, its retrieval
+// cut-off (see the score note above) and the credit rate seeded into AiModelRate.
+// Rates are ~4x the provider's real token price, matching the margin the chat
+// models in aiCreditService.DEFAULT_RATES already carry, and are admin-editable
+// afterwards like any other row.
+//
+// `outputDimensionality` is Gemini-only: gemini-embedding-001 returns 3072 floats
+// by default, which would put 24 KB of BSON doubles on every chunk row and 12 MB
+// per 1,000-chunk tenant in the vector cache. Google's MRL truncation to 768 is
+// the supported way down, and costs little accuracy. Truncated vectors are not
+// unit-normalised, which is fine here because every comparison is cosine —
+// scoreIndex divides by the stored magnitude.
 const EMBEDDING_MODELS = {
-    gemini: { model: 'text-embedding-004',     dims: 768,  creditsPer1kTokens: 1, label: 'Gemini Embedding 004' },
-    openai: { model: 'text-embedding-3-small', dims: 1536, creditsPer1kTokens: 1, label: 'OpenAI Embedding 3 Small' }
+    gemini: {
+        model: 'gemini-embedding-001', dims: 768, outputDimensionality: 768,
+        creditsPer1kTokens: 1, minScore: 0.55, label: 'Gemini Embedding 001'
+    },
+    openai: {
+        model: 'text-embedding-3-small', dims: 1536,
+        creditsPer1kTokens: 1, minScore: 0.25, label: 'OpenAI Embedding 3 Small'
+    }
 };
+
+// Gemini asks what the vector is FOR and embeds asymmetrically: a question and
+// the passage that answers it are encoded differently on purpose. Skipping this
+// costs real recall. OpenAI has no equivalent parameter and ignores it.
+const TASK_TYPE = { document: 'RETRIEVAL_DOCUMENT', query: 'RETRIEVAL_QUERY' };
 
 // Provider batch ceilings. Gemini's batchEmbedContents caps at 100 requests;
 // OpenAI accepts far more per call but a smaller batch keeps one failure cheap
@@ -103,7 +136,7 @@ async function ensureRates() {
  * The provider follows the tenant's CHAT provider (IntegrationConfig.ai.provider)
  * so one workspace never mixes vendors, and the key is the platform-wide one.
  *
- * @returns {Promise<{provider:string, model:string, dims:number, apiKey:string}>}
+ * @returns {Promise<{provider:string, model:string, dims:number, minScore:number, apiKey:string}>}
  * @throws  {EmbeddingError} when the platform has no key for that provider.
  */
 async function resolveEmbeddingContext(tenantId) {
@@ -120,7 +153,16 @@ async function resolveEmbeddingContext(tenantId) {
         );
     }
 
-    return { provider, model: spec.model, dims: spec.dims, apiKey };
+    return {
+        provider,
+        model: spec.model,
+        dims: spec.dims,
+        // The floor retrieval must use for THIS model. Carried on the context so
+        // no caller has to know which provider a tenant is on.
+        minScore: spec.minScore,
+        outputDimensionality: spec.outputDimensionality,
+        apiKey
+    };
 }
 
 // ── Token accounting ────────────────────────────────────────────────────────
@@ -137,7 +179,7 @@ function prepareInput(text) {
 }
 
 // ── Provider calls ──────────────────────────────────────────────────────────
-async function embedBatchGemini(texts, { model, apiKey }) {
+async function embedBatchGemini(texts, { model, apiKey, outputDimensionality }, taskType) {
     const { GoogleGenerativeAI } = require('@google/generative-ai');
     const client = new GoogleGenerativeAI(apiKey);
     const embedder = client.getGenerativeModel({ model });
@@ -145,7 +187,9 @@ async function embedBatchGemini(texts, { model, apiKey }) {
     const result = await embedder.batchEmbedContents({
         requests: texts.map(text => ({
             model: `models/${model}`,
-            content: { role: 'user', parts: [{ text }] }
+            content: { role: 'user', parts: [{ text }] },
+            ...(outputDimensionality ? { outputDimensionality } : {}),
+            ...(taskType ? { taskType } : {})
         }))
     });
 
@@ -184,12 +228,12 @@ function isRetryable(err) {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function embedBatchWithRetry(texts, ctx, attempt = 0) {
+async function embedBatchWithRetry(texts, ctx, taskType, attempt = 0) {
     const MAX_ATTEMPTS = 4;
     try {
         return ctx.provider === 'openai'
             ? await embedBatchOpenAI(texts, ctx)
-            : await embedBatchGemini(texts, ctx);
+            : await embedBatchGemini(texts, ctx, taskType);
     } catch (err) {
         if (attempt >= MAX_ATTEMPTS - 1 || !isRetryable(err)) {
             throw new EmbeddingError(
@@ -199,7 +243,7 @@ async function embedBatchWithRetry(texts, ctx, attempt = 0) {
         }
         // 1s, 2s, 4s — enough to ride out a provider rate-limit window.
         await sleep(1000 * Math.pow(2, attempt));
-        return embedBatchWithRetry(texts, ctx, attempt + 1);
+        return embedBatchWithRetry(texts, ctx, taskType, attempt + 1);
     }
 }
 
@@ -211,7 +255,7 @@ async function embedBatchWithRetry(texts, ctx, attempt = 0) {
  *
  * @returns {Promise<{vectors:number[][], tokens:number, model:string, dims:number}>}
  */
-async function embedTexts(texts, ctx) {
+async function embedTexts(texts, ctx, { taskType = TASK_TYPE.document } = {}) {
     const inputs = texts.map(prepareInput);
     if (!inputs.length) return { vectors: [], tokens: 0, model: ctx.model, dims: ctx.dims };
     if (inputs.some(t => !t)) {
@@ -223,7 +267,7 @@ async function embedTexts(texts, ctx) {
     let tokens = 0;
 
     for (let i = 0; i < inputs.length; i += size) {
-        const batch = await embedBatchWithRetry(inputs.slice(i, i + size), ctx);
+        const batch = await embedBatchWithRetry(inputs.slice(i, i + size), ctx, taskType);
         vectors.push(...batch.vectors);
         tokens += batch.tokens;
     }
@@ -240,9 +284,12 @@ async function embedTexts(texts, ctx) {
     return { vectors, tokens, model: ctx.model, dims: ctx.dims };
 }
 
-/** Embed exactly one text (the retrieval path). */
+/**
+ * Embed exactly one text (the retrieval path).
+ * Tagged as a QUERY, not a document — see TASK_TYPE.
+ */
 async function embedQuery(text, ctx) {
-    const { vectors, tokens } = await embedTexts([text], ctx);
+    const { vectors, tokens } = await embedTexts([text], ctx, { taskType: TASK_TYPE.query });
     return { vector: vectors[0], tokens };
 }
 
@@ -278,6 +325,7 @@ function cosineSimilarity(a, b) {
 
 module.exports = {
     EMBEDDING_MODELS,
+    TASK_TYPE,
     EmbeddingError,
     ensureRates,
     resolveEmbeddingContext,

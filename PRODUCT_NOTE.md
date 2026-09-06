@@ -38,6 +38,8 @@
 - WhatsApp message logs and conversation history
 - **Webhook support** for receiving incoming WhatsApp messages
 - **Chatbot flows** — build automated response logic
+- **AI chatbot with your own knowledge base** — upload price lists, catalogues or FAQs and the bot answers customers from your real data instead of guessing
+- **Chats follow lead ownership** — assign a lead and its WhatsApp thread moves to that agent's inbox instantly
 
 ### 6. 📱 Meta (Facebook) Lead Sync
 - **Facebook OAuth login** to connect your business page
@@ -55,13 +57,19 @@
 - Agent performance and response time tracking
 - Activity logs for audit trails
 
-### 9. ⚙️ Settings
+### 9. 🔌 API & Integrations
+- **REST API** (`/api/v1`) with a per-workspace API key — connect an existing CRM or any third-party tool
+- Push and read leads, send WhatsApp/email, book appointments, pull stats
+- **Keep agent ownership in sync** — when your own system assigns a lead to someone, the matching WhatsApp chat is handed to the same agent here
+- Google Sheet sync and generic inbound webhooks (Zapier, Pabbly, website forms)
+
+### 10. ⚙️ Settings
 - Company profile management
 - Email & WhatsApp configuration
 - Meta/Facebook integration setup
 - Subscription & billing info
 
-### 10. 🛡️ Super Admin Panel
+### 11. 🛡️ Super Admin Panel
 - Manage all registered companies/managers
 - View subscription plans and overall platform stats
 - Platform-wide user and company oversight

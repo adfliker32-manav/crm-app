@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { trackJob, registerJob } = require('./jobHealthService');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // whatsappQueueService
@@ -26,6 +27,9 @@ const defineWhatsAppJobs = (agenda) => {
     // Fires when a chatbot delay node timer expires OR a no-reply timeout fires.
     // Resumes the flow from the next node after the delay.
     agenda.define('resume-chatbot-session', { priority: 'normal', concurrency: 10 }, async (job) => {
+      // Event-driven, so no expected interval — but a run that starts failing
+      // strands customers mid-flow, which is exactly what used to be invisible.
+      return trackJob('chatbot-resume-session', async () => {
         const { sessionId, flowId, nextNodeId, cancelIfReplied, scheduledAt, isNoReplyTimeout, questionNodeId } = job.attrs.data;
         try {
             const ChatbotSession = mongoose.model('ChatbotSession');
@@ -113,15 +117,23 @@ const defineWhatsAppJobs = (agenda) => {
             }
         } catch (err) {
             console.error('❌ [Queue] resume-chatbot-session failed:', err.message);
+            // Surfaced to the heartbeat. Swallowing it here is what made a
+            // permanently broken resume look identical to a healthy one, while
+            // customers sat mid-flow waiting for a node that never fired.
+            throw err;
+        } finally {
+            // Always clean up completed job (prevent DB bloat) — including on
+            // failure, which is why this moved into a finally.
+            await job.remove().catch(() => {});
         }
-        // Always clean up completed job (prevent DB bloat)
-        await job.remove();
+      });
     });
 
     // ── Job 2: CHECK_REPLY_TIMEOUT ────────────────────────────────────────────
     // Fires when a WAIT_FOR_REPLY automation window expires.
     // If the lead still hasn't replied → executes ifNoReplyAction branch.
     agenda.define('CHECK_REPLY_TIMEOUT', { priority: 'high', concurrency: 5 }, async (job) => {
+      return trackJob('automation-reply-timeout', async () => {
         const { watcherId } = job.attrs.data;
         try {
             const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
@@ -230,9 +242,18 @@ const defineWhatsAppJobs = (agenda) => {
             console.log(`⏱️ [Timeout] Watcher expired → lead "${lead.name}" → stage "${watcher.ifNoReplyAction?.changeStage}"`);
         } catch (err) {
             console.error('❌ [Timeout] CHECK_REPLY_TIMEOUT failed:', err.message);
+            throw err;
+        } finally {
+            await job.remove().catch(() => {});
         }
-        await job.remove();
+      });
     });
+
+    // Both jobs are event-driven rather than scheduled, so they carry no expected
+    // interval — but they must exist on the health screen from boot, otherwise a
+    // job that has never once succeeded simply has no row and looks fine.
+    registerJob('chatbot-resume-session', { label: 'Chatbot delay / no-reply resume' });
+    registerJob('automation-reply-timeout', { label: 'Automation reply timeout' });
 
     console.log('✅ [Queue] WhatsApp job definitions registered (resume-chatbot-session, CHECK_REPLY_TIMEOUT)');
 };

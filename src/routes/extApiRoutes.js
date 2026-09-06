@@ -13,6 +13,7 @@ const router  = express.Router();
 
 const { extApiAuthMiddleware, extApiIpRateLimit } = require('../middleware/extApiAuthMiddleware');
 const ctrl = require('../controllers/extApiController');
+const { validate, schemas } = require('../middleware/validateRequest');
 
 // Apply IP rate limit first (cheap), then API key auth
 router.use(extApiIpRateLimit);
@@ -48,6 +49,12 @@ router.post('/whatsapp/send', ctrl.sendWhatsApp);
 
 // POST /api/v1/whatsapp/template         → send a template message
 router.post('/whatsapp/template', ctrl.sendWhatsAppTemplate);
+
+// POST /api/v1/whatsapp/assign-agent     → hand this number's chat to an agent
+//   Body: { phone, agentEmail }  — agentEmail: null unassigns (the key itself
+//   is required; see the schema note on why omitting it must not be allowed).
+//   Writes Lead.assignedTo; the conversation mirror follows from there.
+router.post('/whatsapp/assign-agent', validate(schemas.extAssignWhatsAppAgent), ctrl.assignWhatsAppAgent);
 
 // ── Email ─────────────────────────────────────────────────────────────────────
 // POST /api/v1/email/send               → send email to lead or direct address

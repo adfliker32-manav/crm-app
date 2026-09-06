@@ -150,7 +150,54 @@ Send an approved Meta WhatsApp template.
 ```
 *(Variables in the template will be automatically resolved if you provide a `leadId` instead of just a `phone`)*
 
-### 7. Create Appointment
+### 7. Assign a WhatsApp Chat to an Agent
+Hand the WhatsApp conversation for a phone number to one of your agents. Use this
+when a lead is assigned to someone in your own CRM and you want the same person to
+own the WhatsApp thread here.
+
+**Endpoint:** `POST /whatsapp/assign-agent`
+
+**Body:**
+```json
+{
+  "phone": "+919876543210",
+  "agentEmail": "raj@yourcompany.com"
+}
+```
+
+`agentEmail` must be the email of a user in your workspace. Send
+`"agentEmail": null` to unassign — the key itself is always required, so that a
+misspelled field name is rejected instead of quietly unassigning the chat. The
+phone number can be sent in any format: `+91 98765 43210`, `919876543210` and
+`9876543210` all resolve to the same contact.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "leadId": "652f1c8e9b1d4a0012ab34cd",
+    "leadCreated": false,
+    "assignedTo": { "id": "652f...", "name": "Raj", "email": "raj@yourcompany.com" },
+    "conversationsLinked": 1,
+    "whatsappAssignmentEnabled": true
+  }
+}
+```
+
+**Notes:**
+- If no lead exists for that number yet, one is created and pre-assigned. When
+  the customer sends their first WhatsApp message it goes straight to that agent
+  instead of the shared inbox. Auto-created leads count toward your plan's lead
+  limit.
+- `whatsappAssignmentEnabled: false` means **Settings → Lead Assignment → "WhatsApp
+  follows lead assignment"** is switched off for your workspace. The lead is still
+  assigned, but the chat itself will not move until you enable that setting. The
+  response includes a `warning` field when this happens.
+- If the customer has never messaged you, `conversationsLinked` is `0`. That is
+  expected — there is no thread to move yet.
+
+### 8. Create Appointment
 Schedule a new appointment on the calendar.
 
 **Endpoint:** `POST /appointments`

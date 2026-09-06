@@ -167,9 +167,12 @@ exports.testQuery = async (req, res) => {
     try {
         const { query, topK, minScore } = req.body;
 
+        // minScore is passed through UNTOUCHED. Substituting a default here would
+        // override the floor calibrated for the tenant's embedding model and put
+        // the test view out of step with what the live bot actually retrieves.
         const results = await knowledgeBaseService.retrieveKnowledge(req.tenantId, query, {
             topK: topK || 5,
-            minScore: minScore != null ? minScore : knowledgeBaseService.DEFAULT_MIN_SCORE
+            minScore
         });
 
         res.json({

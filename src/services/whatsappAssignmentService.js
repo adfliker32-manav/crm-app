@@ -221,6 +221,54 @@ async function resolveAssigneeForConversation({ tenantId, leadId, lead }) {
 }
 
 /**
+ * Link a phone number's UNLINKED conversations to a lead.
+ *
+ * syncConversationsForLead below filters on `leadId`, so a thread that was
+ * never linked to a Lead is invisible to it. That is the normal state for a
+ * customer who messaged in before the Lead existed, which is exactly the case
+ * an external CRM hits when it assigns by phone number.
+ *
+ * Matching mirrors the webhook's own lookup: last-10-digit suffix, against
+ * both `waContactId` and `phone`, because the same person can be stored under
+ * differently-formatted numbers.
+ *
+ * STRICTLY ADDITIVE — only `leadId: null` rows are touched, never a re-link.
+ * Re-pointing a thread that already belongs to another Lead would silently
+ * steal it, and the webhook holds the same rule
+ * (whatsappWebhookController: "only ever null -> a real link").
+ *
+ * Never throws — a failure here must not fail the caller's lead write.
+ *
+ * @returns {Promise<{linked:number}>}
+ */
+async function linkConversationsToLead({ tenantId, phone, leadId }) {
+    if (!tenantId || !leadId || !phone) return { linked: 0 };
+
+    // Digits only, so the value is safe to interpolate into a regex.
+    const suffix = String(phone).replace(/\D/g, '').slice(-10);
+    if (suffix.length < 7) return { linked: 0 };
+
+    try {
+        const companyUserIds = await getCompanyUserIds(tenantId);
+        const res = await WhatsAppConversation.updateMany(
+            {
+                userId: { $in: companyUserIds },
+                leadId: null,
+                $or: [
+                    { waContactId: { $regex: suffix + '$' } },
+                    { phone: { $regex: suffix + '$' } }
+                ]
+            },
+            { $set: { leadId } }
+        );
+        return { linked: res.modifiedCount ?? res.nModified ?? 0 };
+    } catch (err) {
+        console.error('[WA Assignment] linkConversationsToLead failed:', err.message);
+        return { linked: 0 };
+    }
+}
+
+/**
  * Push a lead's assignment onto every conversation linked to it.
  *
  * updateMany, not updateOne: one lead can legitimately have several
@@ -471,6 +519,7 @@ module.exports = {
     invalidateFollowLeadCache,
     // assignment
     resolveAssigneeForConversation,
+    linkConversationsToLead,
     syncConversationsForLead,
     syncConversationsForLeads,
     detachDeletedLeads,

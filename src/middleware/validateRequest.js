@@ -47,6 +47,17 @@ const schemas = {
     // schema — leaving it on noBody would silently delete that field.
     noBody: Joi.object({}),
 
+    // External CRM API -> POST /api/v1/whatsapp/assign-agent.
+    // `agentEmail` is REQUIRED but nullable, deliberately. Sending null is how a
+    // partner unassigns, so if the key were merely optional, stripUnknown would
+    // turn a misspelled field name (`agent_email`) into a silent UNASSIGNMENT
+    // that returns 200 — the caller means to hand the chat over and it quietly
+    // takes it away instead. Forcing the key makes that a 400.
+    extAssignWhatsAppAgent: Joi.object({
+        phone:      Joi.string().trim().min(5).max(30).required(),
+        agentEmail: Joi.string().email().lowercase().trim().required().allow(null, '')
+    }),
+
     // Settings -> Lead Assignment -> WhatsApp Conversation Assignment.
     // Required (not optional): the handler rejects a non-boolean anyway, and an
     // optional key would let stripUnknown turn a typo'd field name into a silent

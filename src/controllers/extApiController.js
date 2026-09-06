@@ -16,6 +16,7 @@
  *   POST   /api/v1/whatsapp/send          → send WhatsApp text message
  *   POST   /api/v1/whatsapp/template      → send WhatsApp template
  *   GET    /api/v1/whatsapp/templates     → list available templates
+ *   POST   /api/v1/whatsapp/assign-agent  → assign a number's chat to an agent
  *   POST   /api/v1/email/send             → send email to a lead / address
  *   POST   /api/v1/appointments           → create appointment
  *   PUT    /api/v1/appointments/:id       → update appointment
@@ -36,7 +37,9 @@ const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationS
 const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
 const { normalizePhone } = require('../services/duplicateService');
 const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
-const { queueLeadCreatedEffects, queueLeadStageChangeEffects } = require('../utils/leadEffects');
+const { queueLeadCreatedEffects, queueLeadStageChangeEffects, queueLeadAssignmentEffects } = require('../utils/leadEffects');
+const { checkLeadLimit } = require('../utils/leadLimitGuard');
+const whatsappAssignment = require('../services/whatsappAssignmentService');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -160,7 +163,6 @@ exports.createLead = async (req, res) => {
         }
 
         // 🔒 BUG-5 FIX: Enforce lead limit before creating via External API.
-        const { checkLeadLimit } = require('../utils/leadLimitGuard');
         const limitCheck = await checkLeadLimit(req.tenantId);
         if (!limitCheck.allowed) {
             return res.status(403).json({
@@ -533,6 +535,162 @@ exports.listWhatsAppTemplates = async (req, res) => {
     } catch (err) {
         console.error('[ExtAPI] listWhatsAppTemplates error:', err.message);
         res.status(500).json({ success: false, message: 'Failed to fetch templates.' });
+    }
+};
+
+// ─── 9b. ASSIGN A WHATSAPP CHAT TO AN AGENT (by phone number) ─────────────────
+// For a partner running their own CRM: when they hand a lead to an agent over
+// there, this hands the matching WhatsApp thread to the same agent over here.
+//
+// It writes Lead.assignedTo, NOT WhatsAppConversation.assignedTo. The
+// conversation field is a derived mirror of the Lead and
+// whatsappAssignmentService is its only writer — see that file's header. So the
+// job here is to put the right owner on the right Lead, make sure the thread is
+// linked to it, and let queueLeadAssignmentEffects propagate.
+exports.assignWhatsAppAgent = async (req, res) => {
+    try {
+        const { phone, agentEmail } = req.body;
+
+        if (!phone || !String(phone).trim()) {
+            return res.status(400).json({ success: false, message: '`phone` is required.' });
+        }
+
+        // Same normalisation the duplicate checker and the WhatsApp webhook use,
+        // so "+91 98765 43210", "919876543210" and "9876543210" all resolve to
+        // the same lead.
+        const normalized = normalizePhone(phone);
+        if (!normalized) {
+            return res.status(400).json({ success: false, message: 'Invalid `phone` number.' });
+        }
+        const phoneSuffix = normalized.slice(-10);
+
+        // ── Resolve the agent ────────────────────────────────────────────────
+        // Email, not an internal id: a third-party CRM has no reason to know our
+        // ObjectIds. An explicit null unassigns, which is how the partner mirrors
+        // an un-assignment on their side — the route schema requires the key to
+        // be present so a misspelled field cannot unassign by accident.
+        let agent = null;
+        if (agentEmail !== undefined && agentEmail !== null && String(agentEmail).trim() !== '') {
+            // Scoped to this workspace for the same reason createLead is: an
+            // email alone must never reach a user in someone else's account.
+            agent = await User.findOne({
+                email: String(agentEmail).toLowerCase().trim(),
+                $or: [{ _id: req.tenantId }, { parentId: req.tenantId }]
+            }).select('_id name email').lean();
+
+            if (!agent) {
+                return res.status(400).json({
+                    success: false,
+                    message: '`agentEmail` does not match any user in this workspace.'
+                });
+            }
+        }
+        const nextAssignee = agent ? agent._id : null;
+
+        // ── Find the lead ────────────────────────────────────────────────────
+        // Most-recently-touched wins, matching the webhook's tie-break when a
+        // number appears on more than one lead.
+        let lead = await Lead.findOne({
+            userId: req.tenantId,
+            deletedAt: null,
+            phone: { $regex: phoneSuffix + '$' }
+        }).sort({ updatedAt: -1, createdAt: -1 });
+
+        let leadCreated = false;
+
+        if (!lead) {
+            // The partner can assign before the customer has ever messaged. A
+            // lead created now means the webhook's self-heal picks the right
+            // owner up on the very first inbound message instead of dropping it
+            // into the shared inbox.
+            const limitCheck = await checkLeadLimit(req.tenantId);
+            if (!limitCheck.allowed) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'lead_limit_reached',
+                    message: limitCheck.message,
+                    currentCount: limitCheck.currentCount,
+                    limit: limitCheck.limit
+                });
+            }
+
+            lead = new Lead({
+                userId: req.tenantId,
+                name: String(phone).trim().slice(0, 200),
+                phone: String(phone).trim().slice(0, 30),
+                source: 'External API',
+                status: 'New',
+                assignedTo: nextAssignee
+            });
+            lead.history.push({
+                type: 'System',
+                subType: 'Created',
+                content: agent
+                    ? `Lead created via External API and assigned to ${agent.name}`
+                    : 'Lead created via External API',
+                date: new Date()
+            });
+            await lead.save();
+            leadCreated = true;
+
+            // Same effects any other API-created lead gets — automations,
+            // sequences and scoring must not treat this one as special.
+            queueLeadCreatedEffects(lead, req.tenantId.toString(), {
+                source: 'External API',
+                startedBy: 'api'
+            });
+        } else if (String(lead.assignedTo || '') !== String(nextAssignee || '')) {
+            lead.assignedTo = nextAssignee;
+            lead.history.push({
+                type: 'System',
+                subType: 'Assignment',
+                content: agent
+                    ? `Assigned to ${agent.name} via External API`
+                    : 'Unassigned via External API',
+                date: new Date()
+            });
+            await lead.save();
+        }
+
+        // ── Link the thread, then let the mirror do its work ─────────────────
+        // A conversation that predates its lead has leadId: null, and
+        // syncConversationsForLead filters on leadId — so without this the
+        // assignment would land on the lead and never reach the chat.
+        const { linked } = await whatsappAssignment.linkConversationsToLead({
+            tenantId: req.tenantId,
+            phone: normalized,
+            leadId: lead._id
+        });
+
+        // The single sanctioned path: mirrors onto the conversation and pushes
+        // the live socket events that move it between agents' inboxes.
+        queueLeadAssignmentEffects(lead, req.tenantId.toString());
+
+        // Assignment mirroring is off by default per workspace. The lead write
+        // above still happened, but the chat will not visibly move — say so
+        // rather than letting the integration look like a silent no-op.
+        // Read through the service's own cached accessor rather than
+        // req.workspace: the auth middleware does not project this field.
+        const mirrorEnabled = await whatsappAssignment.isFollowLeadEnabled(req.tenantId);
+
+        res.json({
+            success: true,
+            data: {
+                leadId: lead._id,
+                leadCreated,
+                assignedTo: agent
+                    ? { id: agent._id, name: agent.name, email: agent.email }
+                    : null,
+                conversationsLinked: linked,
+                whatsappAssignmentEnabled: mirrorEnabled
+            },
+            ...(mirrorEnabled ? {} : {
+                warning: 'Lead-based WhatsApp assignment is turned off for this workspace, so the chat itself was not reassigned. Enable it in Settings → Lead Assignment.'
+            })
+        });
+    } catch (err) {
+        console.error('[ExtAPI] assignWhatsAppAgent error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to assign WhatsApp chat.' });
     }
 };
 

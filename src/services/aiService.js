@@ -74,9 +74,59 @@ function formatLeadContext(leadContext = {}) {
 /**
  * Appends JSON schema enforcement rules to the system prompt.
  */
-function buildEnforcedSystemPrompt(basePrompt, leadContext, availableTemplates = []) {
+/**
+ * The LEAD CREATION RULES block.
+ *
+ * With no policy this returns the ORIGINAL wording, so every caller that does not
+ * pass one (the in-flow AI node, support chat, the settings test harness) behaves
+ * exactly as before.
+ *
+ * With a policy, the tenant's own rule replaces it. The numeric floor is stated
+ * even though the server enforces it independently — telling the model the same
+ * bar it will be held to stops it from repeatedly proposing a lead that is then
+ * silently discarded, which just wastes a turn.
+ */
+function buildLeadCreationRules(leadPolicy) {
+    if (!leadPolicy || !leadPolicy.enabled) {
+        // Automatic lead creation is OFF for this workspace, so the server will
+        // refuse the action. Say so rather than advertising a capability that
+        // gets discarded — every proposal the model makes here is a wasted turn
+        // the tenant still pays for.
+        return `LEAD CREATION RULES:
+- Automatic lead creation is DISABLED for this business. NEVER set action type to "create_lead" — it will be rejected.
+- Keep extracting customer details into "extracted_variables" as normal; they are still recorded against the conversation.`;
+    }
+
+    const required = [];
+    if (leadPolicy.requirePhone) required.push("the customer's contact number");
+    if (leadPolicy.requireName)  required.push("the customer's name");
+    if (leadPolicy.requireEmail) required.push("the customer's email address");
+
+    const lines = [
+        'LEAD CREATION RULES:',
+        '- Set action type to "create_lead" ONLY when every condition below is met. The system rejects it otherwise.',
+        `- The customer must have sent at least ${leadPolicy.minCustomerMessages} message(s) in this conversation.`
+    ];
+    if (required.length) {
+        lines.push(`- You must have collected ${required.join(' and ')}. Ask for it if you do not have it yet.`);
+    }
+    if (leadPolicy.instruction) {
+        lines.push(`- This business's own rule, which overrides your judgement: ${leadPolicy.instruction}`);
+    }
+    lines.push('- Do NOT create a lead for a greeting, a wrong number, or an idle question.');
+    lines.push('- Leave "status" and "source" null — the business configures those itself.');
+    lines.push('- The system uses the saved variables (name, phone, email, business_name, industry) to create or update the lead, and later variables keep updating it.');
+
+    return lines.join('\n');
+}
+
+// Exported for tests: the fallback wording must stay byte-identical for every
+// caller that passes no policy, which is the whole backward-compatibility claim.
+exports.__buildLeadCreationRules = buildLeadCreationRules;
+
+function buildEnforcedSystemPrompt(basePrompt, leadContext, availableTemplates = [], leadPolicy = null) {
     const contextText = formatLeadContext(leadContext);
-    
+
     let templatesText = '';
     if (availableTemplates && availableTemplates.length > 0) {
         templatesText = '\n=== AVAILABLE WHATSAPP TEMPLATES ===\n' +
@@ -122,10 +172,7 @@ VARIABLE EXTRACTION RULES:
 - The system will automatically save these variables for lead creation.
 - If the customer provides multiple details in one message (e.g. "I'm Rahul from ABC Hospital"), extract ALL of them.
 
-LEAD CREATION RULES:
-- When you have collected enough qualifying information (at minimum: the customer's name), you may set action type to "create_lead".
-- The system will automatically use the saved variables (name, phone, email, business_name, industry) to create or update the lead in the CRM.
-- You do NOT need to wait for all fields — create the lead whenever you have sufficient info, and additional variables will update the lead on subsequent turns.
+${buildLeadCreationRules(leadPolicy)}
 
 BEHAVIOR RULES:
 1. Keep replies conversational, helpful, and VERY brief (1-2 sentences).
@@ -289,7 +336,7 @@ async function callOpenAI(apiKey, modelName, systemPrompt, history, lastUserMess
 /**
  * Main service function to generate replies and qualification actions.
  */
-exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conversationHistory = [], leadContext = {}, availableTemplates = [] }) => {
+exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conversationHistory = [], leadContext = {}, availableTemplates = [], leadPolicy = null }) => {
     console.log(`[AI_SERVICE DEBUG] Received key: length=${apiKey?.length}, prefix=${apiKey?.substring(0, 5)}`);
     if (!apiKey) {
         throw new Error('API key is required.');
@@ -306,7 +353,7 @@ exports.generateReply = async ({ provider, apiKey, modelName, systemPrompt, conv
         historySubset = normalized.slice(0, normalized.length - 1);
     }
     
-    const finalSystemPrompt = buildEnforcedSystemPrompt(systemPrompt, leadContext, availableTemplates);
+    const finalSystemPrompt = buildEnforcedSystemPrompt(systemPrompt, leadContext, availableTemplates, leadPolicy);
     
     console.log(`🤖 Sending request to ${provider} (${modelName || 'default'}). History length: ${historySubset.length}. Msg: "${lastUserMessage}"`);
     

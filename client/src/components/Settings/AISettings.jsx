@@ -22,6 +22,23 @@ const AISettings = () => {
     const [aiFallbackEnabled, setAiFallbackEnabled] = useState(false);
     const [aiButtonMappingEnabled, setAiButtonMappingEnabled] = useState(true);
     const [maxTurns, setMaxTurns] = useState(12);
+    // When the AI chatbot is allowed to turn a conversation into a Lead. The
+    // scripted flow has had this for ages (Smart Lead Engine); this is the AI-side
+    // equivalent, kept as one object because it saves and loads as one.
+    const [leadCreation, setLeadCreation] = useState({
+        enabled: false,
+        minCustomerMessages: 3,
+        requirePhone: true,
+        requireName: false,
+        requireEmail: false,
+        instruction: '',
+        status: 'New',
+        source: 'WhatsApp AI Chatbot',
+        tags: [],
+        autoCreateWhenReady: false
+    });
+    const [stages, setStages] = useState([]);
+    const setLead = (field, value) => setLeadCreation(prev => ({ ...prev, [field]: value }));
     const [tokensUsed, setTokensUsed] = useState(0);
     // AI credit wallet (shared with voice). Priced via the admin model-rate table.
     const [creditsBalance, setCreditsBalance] = useState(0);
@@ -168,6 +185,9 @@ const AISettings = () => {
                 // Defaults ON, so treat only an explicit false as off.
                 setAiButtonMappingEnabled(data.aiButtonMappingEnabled !== false);
                 setMaxTurns(data.maxTurns || 12);
+                // Server always sends the whole object with defaults resolved, so
+                // a legacy config that predates this feature still lands cleanly.
+                if (data.leadCreation) setLeadCreation(prev => ({ ...prev, ...data.leadCreation }));
                 setTokensUsed(data.tokensUsedThisMonth || 0);
                 setCreditsBalance(data.aiCreditsBalance || 0);
                 setCreditsUsed(data.aiCreditsUsedThisMonth || 0);
@@ -192,9 +212,21 @@ const AISettings = () => {
             }
         };
 
+        // Real pipeline stages for the "new lead lands in" picker, same source the
+        // flow builder's Smart Lead Engine uses.
+        const fetchStages = async () => {
+            try {
+                const response = await api.get('/stages');
+                setStages(response.data || []);
+            } catch (error) {
+                console.error('Failed to load stages:', error);
+            }
+        };
+
         fetchSettings();
         checkServiceHealth();
         refreshCredits();
+        fetchStages();
     }, [showError, refreshCredits]);
 
     // Human labels for ledger feature codes.
@@ -234,7 +266,8 @@ const AISettings = () => {
                 aiEnabled,
                 aiFallbackEnabled,
                 aiButtonMappingEnabled,
-                maxTurns
+                maxTurns,
+                leadCreation
             };
             
             await api.put('/ai/settings', payload);
@@ -504,7 +537,103 @@ const AISettings = () => {
                                     {renderToggle('AI Nodes in Flows', 'Use AI qualification blocks inside the visual chatbot flow builder.', aiEnabled, () => setAiEnabled(!aiEnabled))}
                                     {renderToggle('AI Fallback (Auto-Reply)', 'When a message matches no keyword flow, the AI takes over to qualify the lead.', aiFallbackEnabled, () => setAiFallbackEnabled(!aiFallbackEnabled))}
                                     {renderToggle('Smart Button Matching', 'If a customer types instead of tapping a button, the AI infers which option they meant and continues.', aiButtonMappingEnabled, () => setAiButtonMappingEnabled(!aiButtonMappingEnabled))}
+                                    {renderToggle('Auto-Create Leads from AI Chats', 'On: the AI turns a conversation into a CRM lead once your conditions below are met. Off: the AI never creates a lead — it keeps chatting and recording details, and you add the lead yourself.', leadCreation.enabled, () => setLead('enabled', !leadCreation.enabled))}
                                 </div>
+
+                                {leadCreation.enabled && (
+                                    <div className="mt-4 pt-4 border-t border-slate-100 space-y-4">
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-600 mb-1">Minimum customer messages</label>
+                                                <input
+                                                    type="number" min="1" max="20"
+                                                    value={leadCreation.minCustomerMessages}
+                                                    onChange={(e) => setLead('minCustomerMessages', parseInt(e.target.value) || 1)}
+                                                    className="w-full p-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold text-slate-800"
+                                                />
+                                                <p className="text-[11px] text-slate-400 mt-1">Stops a lead being created from a single &ldquo;hi&rdquo;.</p>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-600 mb-1">New lead lands in</label>
+                                                <select
+                                                    value={leadCreation.status}
+                                                    onChange={(e) => setLead('status', e.target.value)}
+                                                    className="w-full p-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold text-slate-800"
+                                                >
+                                                    {!stages.some(s => s.name === leadCreation.status) && (
+                                                        <option value={leadCreation.status}>{leadCreation.status}</option>
+                                                    )}
+                                                    {stages.map(s => <option key={s._id} value={s.name}>{s.name}</option>)}
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-600 mb-1.5">Require before creating</label>
+                                            <div className="flex flex-wrap gap-4">
+                                                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                                    <input type="checkbox" checked={leadCreation.requirePhone}
+                                                        onChange={(e) => setLead('requirePhone', e.target.checked)}
+                                                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                                                    Contact number
+                                                </label>
+                                                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                                    <input type="checkbox" checked={leadCreation.requireName}
+                                                        onChange={(e) => setLead('requireName', e.target.checked)}
+                                                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                                                    Customer&rsquo;s name
+                                                </label>
+                                                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                                    <input type="checkbox" checked={leadCreation.requireEmail}
+                                                        onChange={(e) => setLead('requireEmail', e.target.checked)}
+                                                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                                                    Email address
+                                                </label>
+                                            </div>
+                                            <p className="text-[11px] text-slate-400 mt-1.5">
+                                                Most WhatsApp chats already carry the number, so &ldquo;contact number&rdquo; is satisfied automatically and the customer is never asked twice. It only bites when someone messages from a WhatsApp username with their number hidden &mdash; then the AI asks before creating a lead you could not call back.
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-600 mb-1">
+                                                When should the AI create a lead? <span className="font-normal text-slate-400">(optional)</span>
+                                            </label>
+                                            <textarea
+                                                rows="2" maxLength={500}
+                                                placeholder="e.g. Only once the customer asks for a quote or a site visit."
+                                                value={leadCreation.instruction}
+                                                onChange={(e) => setLead('instruction', e.target.value)}
+                                                className="w-full p-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
+                                            />
+                                            <p className="text-[11px] text-slate-400 mt-1">
+                                                Sent to the AI on every reply, so keep it short. The conditions above are enforced regardless.
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-600 mb-1">Lead source label</label>
+                                            <input
+                                                type="text" maxLength={100}
+                                                value={leadCreation.source}
+                                                onChange={(e) => setLead('source', e.target.value)}
+                                                className="w-full p-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                            />
+                                        </div>
+
+                                        <label className="flex items-start gap-2.5 text-sm text-slate-700 cursor-pointer bg-slate-50 border border-slate-100 rounded-xl p-3">
+                                            <input type="checkbox" checked={leadCreation.autoCreateWhenReady}
+                                                onChange={(e) => setLead('autoCreateWhenReady', e.target.checked)}
+                                                className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                                            <span>
+                                                <span className="font-bold">Create the lead even if the AI doesn&rsquo;t ask</span>
+                                                <span className="block text-[11px] text-slate-500 mt-0.5">
+                                                    Once the conditions above are met. Recommended &mdash; without it, a chatty AI can finish a good conversation without ever capturing the lead.
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                )}
                             </div>
 
                             {/* AI engine — unified Adfliker model selector */}

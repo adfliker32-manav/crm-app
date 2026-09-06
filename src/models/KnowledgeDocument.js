@@ -16,7 +16,7 @@ const mongoose = require('mongoose');
 //                                        is on now (see the dimension note below)
 //
 // ⚠️ EMBEDDING DIMENSIONS ARE NOT INTERCHANGEABLE
-//   Gemini text-embedding-004    → 768 floats
+//   Gemini gemini-embedding-001  → 768 floats (truncated from 3072)
 //   OpenAI text-embedding-3-small→ 1536 floats
 //   Cosine similarity between vectors of different length is meaningless, and
 //   comparing across DIFFERENT MODELS of the same length is worse — it returns

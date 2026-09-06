@@ -1,4 +1,4 @@
-const { Queue, Worker } = require('bullmq');
+const { Queue, Worker, DelayedError } = require('bullmq');
 const { getRedisConnection } = require('./redisConnection');
 const WhatsAppBroadcast    = require('../models/WhatsAppBroadcast');
 const Lead                 = require('../models/Lead');
@@ -22,6 +22,33 @@ const BATCH_JITTER_MS = 1000; // 0–1000 ms random additive delay per batch
 // TTL is generous (48 h) to survive the longest possible broadcast + buffer.
 // The set is also deleted explicitly when the broadcast reaches COMPLETED.
 const SENT_SET_TTL_SECONDS = 48 * 3600;
+
+// ─── Fair share between tenants ───────────────────────────────────────────────
+// The worker used to run two jobs across ALL tenants. One client sending 20,000
+// messages therefore occupied half the platform's broadcast capacity for hours,
+// and a second client's campaign simply waited — with nothing in the UI to
+// explain why.
+//
+// Rather than a queue per tenant (100 queues, 100 worker connections, most idle),
+// the worker now runs more jobs in parallel but caps how many of those slots any
+// ONE tenant may hold. A big broadcast keeps its single slot and the rest stay
+// available, so a small tenant's campaign starts immediately instead of queuing
+// behind a giant one.
+//
+// Meta pacing is unaffected: BATCH_RATE_MS throttles each broadcast individually,
+// so more parallel broadcasts means more tenants progressing, not a faster burn
+// through any one tenant's allowance.
+const GLOBAL_CONCURRENCY     = Number(process.env.BROADCAST_CONCURRENCY) || 6;
+const PER_TENANT_CONCURRENCY = Number(process.env.BROADCAST_PER_TENANT_CONCURRENCY) || 1;
+
+// How long a job may hold its slot without a heartbeat before it is presumed
+// dead. A hard worker crash cannot leak a slot forever — the entry ages out.
+const SLOT_STALE_MS = 10 * 60 * 1000;
+const SLOT_KEY = (tenantId) => `broadcast:active:${tenantId}`;
+
+// When a tenant is already at their cap, the job is pushed back by this much
+// rather than failing. Short enough to feel responsive, long enough not to spin.
+const SLOT_RETRY_DELAY_MS = 15000;
 
 const QUEUE_NAME = 'whatsapp-broadcast';
 
@@ -51,7 +78,7 @@ const getBroadcastQueue = () => {
 const startBroadcastWorker = () => {
     _worker = new Worker(QUEUE_NAME, _processBroadcastJob, {
         connection:  getRedisConnection(),
-        concurrency: 2
+        concurrency: GLOBAL_CONCURRENCY
     });
 
     _worker.on('completed', (job) =>
@@ -61,19 +88,78 @@ const startBroadcastWorker = () => {
         console.error(`[Broadcast] Job ${job?.id} (broadcast ${job?.data?.broadcastId}) failed: ${err.message}`)
     );
 
-    console.log('✅ BullMQ Broadcast Worker started (concurrency: 2)');
+    console.log(`✅ BullMQ Broadcast Worker started (concurrency: ${GLOBAL_CONCURRENCY}, max ${PER_TENANT_CONCURRENCY} per tenant)`);
     return _worker;
+};
+
+// ─── Per-tenant slots ─────────────────────────────────────────────────────────
+// A sorted set of in-flight job ids scored by their last heartbeat. Counting only
+// fresh entries makes the cap self-healing: a worker that dies without releasing
+// its slot ages out instead of blocking that tenant forever, which a plain
+// counter would do.
+
+/** @returns {Promise<boolean>} true if the caller now holds a slot. */
+const _acquireTenantSlot = async (redis, tenantId, jobId) => {
+    const key = SLOT_KEY(tenantId);
+    try {
+        await redis.zremrangebyscore(key, 0, Date.now() - SLOT_STALE_MS);
+        const active = await redis.zcard(key);
+        if (active >= PER_TENANT_CONCURRENCY) return false;
+
+        await redis.zadd(key, Date.now(), String(jobId));
+        // Backstop in case a tenant is deleted mid-broadcast.
+        await redis.expire(key, 24 * 3600);
+        return true;
+    } catch (err) {
+        // Redis trouble must not stop broadcasts entirely — fall back to the old
+        // behaviour (no fairness) rather than refusing to send.
+        console.error(`[Broadcast] Slot check failed for tenant ${tenantId}, proceeding unfenced:`, err.message);
+        return true;
+    }
+};
+
+const _heartbeatTenantSlot = async (redis, tenantId, jobId) => {
+    try {
+        await redis.zadd(SLOT_KEY(tenantId), Date.now(), String(jobId));
+    } catch { /* a missed heartbeat only risks an early slot release */ }
+};
+
+const _releaseTenantSlot = async (redis, tenantId, jobId) => {
+    try {
+        await redis.zrem(SLOT_KEY(tenantId), String(jobId));
+    } catch (err) {
+        console.error(`[Broadcast] Could not release slot for tenant ${tenantId}:`, err.message);
+    }
 };
 
 const getBroadcastWorker = () => _worker;
 
 // ─── Job processor ────────────────────────────────────────────────────────────
-async function _processBroadcastJob(job) {
+async function _processBroadcastJob(job, token) {
     const { broadcastId, userId, tenantId } = job.data;
     const leadOwnerId = tenantId || userId;
     const redis   = getRedisConnection();
     const sentKey = `broadcast:${broadcastId}:sent`; // Redis Set of sent lead IDs
 
+    // Fair share: if this tenant is already using their allowance, hand the
+    // worker slot to somebody else instead of letting one big campaign hold it.
+    // moveToDelayed + DelayedError is BullMQ's sanctioned way to put a job back
+    // without marking it failed or losing its retry budget.
+    const gotSlot = await _acquireTenantSlot(redis, leadOwnerId, job.id);
+    if (!gotSlot) {
+        console.log(`[Broadcast ${broadcastId}] Tenant ${leadOwnerId} is at their concurrent-broadcast limit (${PER_TENANT_CONCURRENCY}) — deferring ${SLOT_RETRY_DELAY_MS}ms so other tenants can run.`);
+        await job.moveToDelayed(Date.now() + SLOT_RETRY_DELAY_MS, token);
+        throw new DelayedError();
+    }
+
+    try {
+        return await _runBroadcastJob(job, { broadcastId, userId, leadOwnerId, redis, sentKey });
+    } finally {
+        await _releaseTenantSlot(redis, leadOwnerId, job.id);
+    }
+}
+
+async function _runBroadcastJob(job, { broadcastId, userId, leadOwnerId, redis, sentKey }) {
     const broadcast = await WhatsAppBroadcast.findById(broadcastId).populate('templateId');
 
     if (!broadcast || !['PROCESSING', 'SCHEDULED'].includes(broadcast.status)) {
@@ -149,6 +235,10 @@ async function _processBroadcastJob(job) {
 
         for (const contact of contacts) {
             if (batch.length === 0) {
+                // Keep this tenant's slot alive — a long broadcast would
+                // otherwise age out of its own fairness entry and let a
+                // second job in alongside it.
+                await _heartbeatTenantSlot(redis, leadOwnerId, job.id);
                 const current = await WhatsAppBroadcast.findById(broadcastId).select('status').lean();
                 if (!current || current.status === 'CANCELLED') {
                     console.log(`[Broadcast ${broadcastId}] Cancelled — stopping CSV iteration.`);
@@ -207,6 +297,10 @@ async function _processBroadcastJob(job) {
         for await (const lead of cursor) {
             // Cancellation check at start of every new batch.
             if (batch.length === 0) {
+                // Keep this tenant's slot alive — a long broadcast would
+                // otherwise age out of its own fairness entry and let a
+                // second job in alongside it.
+                await _heartbeatTenantSlot(redis, leadOwnerId, job.id);
                 const current = await WhatsAppBroadcast.findById(broadcastId).select('status').lean();
                 if (!current || current.status === 'CANCELLED') {
                     console.log(`[Broadcast ${broadcastId}] Cancelled or deleted — stopping cursor.`);

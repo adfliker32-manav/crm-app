@@ -1,0 +1,947 @@
+<title>WhatsApp Engine Teardown</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root {
+  --ink:        #0d1714;
+  --ink-2:      #33443e;
+  --ink-3:      #64786f;
+  --paper:      #f6f8f7;
+  --surface:    #ffffff;
+  --surface-2:  #eef2f0;
+  --line:       #d8e0dc;
+  --line-soft:  #e7ecea;
+  --accent:     #00695a;
+  --accent-2:   #00a884;
+  --accent-wash:#e4f2ee;
+  --crit:       #a32218;
+  --crit-wash:  #fbe9e7;
+  --warn:       #8a5200;
+  --warn-wash:  #fbf0dc;
+  --ok:         #1c6b3f;
+  --ok-wash:    #e3f2e8;
+  --info:       #1c4f8a;
+  --info-wash:  #e6eefa;
+  --shadow:     0 1px 2px rgba(13,23,20,.05), 0 8px 24px -12px rgba(13,23,20,.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink:        #e6ede9;
+    --ink-2:      #a9bbb3;
+    --ink-3:      #7b8f87;
+    --paper:      #0b120f;
+    --surface:    #121b18;
+    --surface-2:  #182320;
+    --line:       #27352f;
+    --line-soft:  #1e2a26;
+    --accent:     #4fd6b0;
+    --accent-2:   #00a884;
+    --accent-wash:#122b25;
+    --crit:       #ff8a7a;
+    --crit-wash:  #2e1512;
+    --warn:       #e5b166;
+    --warn-wash:  #2b1f0c;
+    --ok:         #6fce97;
+    --ok-wash:    #10241a;
+    --info:       #7db3ef;
+    --info-wash:  #121f30;
+    --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"] {
+  --ink:        #e6ede9;
+  --ink-2:      #a9bbb3;
+  --ink-3:      #7b8f87;
+  --paper:      #0b120f;
+  --surface:    #121b18;
+  --surface-2:  #182320;
+  --line:       #27352f;
+  --line-soft:  #1e2a26;
+  --accent:     #4fd6b0;
+  --accent-2:   #00a884;
+  --accent-wash:#122b25;
+  --crit:       #ff8a7a;
+  --crit-wash:  #2e1512;
+  --warn:       #e5b166;
+  --warn-wash:  #2b1f0c;
+  --ok:         #6fce97;
+  --ok-wash:    #10241a;
+  --info:       #7db3ef;
+  --info-wash:  #121f30;
+  --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.7);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "IBM Plex Serif", Georgia, serif;
+  font-size: 16.5px;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, .ui { font-family: "IBM Plex Sans", system-ui, sans-serif; }
+code, pre, .mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; }
+
+/* ---------- shell ---------- */
+.wrap {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 56px;
+  max-width: 1220px;
+  margin: 0 auto;
+  padding: 0 32px 120px;
+}
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: 1fr; gap: 0; padding: 0 20px 80px; }
+  nav.toc { position: static !important; height: auto !important; border-right: 0 !important; padding-top: 8px !important; margin-bottom: 28px; }
+}
+
+nav.toc {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 40px 20px 40px 0;
+  border-right: 1px solid var(--line-soft);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 13px;
+}
+nav.toc .toc-label {
+  text-transform: uppercase;
+  letter-spacing: .13em;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ink-3);
+  margin: 0 0 12px;
+}
+nav.toc a {
+  display: block;
+  padding: 5px 0;
+  color: var(--ink-2);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  padding-left: 12px;
+  margin-left: -14px;
+  transition: color .15s, border-color .15s;
+}
+nav.toc a:hover { color: var(--accent); border-left-color: var(--accent); }
+nav.toc a.sub { padding-left: 26px; font-size: 12.5px; color: var(--ink-3); }
+nav.toc hr { border: 0; border-top: 1px solid var(--line-soft); margin: 14px 0; }
+
+main { padding-top: 40px; min-width: 0; }
+
+/* ---------- masthead ---------- */
+.masthead { padding-bottom: 30px; border-bottom: 3px solid var(--ink); margin-bottom: 8px; }
+.eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 14px;
+}
+h1 {
+  font-size: clamp(38px, 5.4vw, 60px);
+  line-height: 1.02;
+  letter-spacing: -.025em;
+  font-weight: 600;
+  margin: 0 0 18px;
+  text-wrap: balance;
+}
+.standfirst {
+  font-size: 19px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 60ch;
+  margin: 0;
+}
+.byline {
+  display: flex; flex-wrap: wrap; gap: 22px;
+  margin-top: 26px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.byline b { color: var(--ink); font-weight: 500; }
+
+/* ---------- sections ---------- */
+section { padding-top: 60px; scroll-margin-top: 24px; }
+h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 0 0 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+h3 {
+  font-size: 27px;
+  letter-spacing: -.015em;
+  font-weight: 600;
+  margin: 26px 0 12px;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+h4 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 28px 0 8px;
+  letter-spacing: -.005em;
+}
+p { max-width: 68ch; margin: 0 0 16px; }
+main ul, main ol { max-width: 66ch; padding-left: 22px; margin: 0 0 16px; }
+main li { margin-bottom: 7px; }
+strong { font-weight: 600; }
+a { color: var(--accent); }
+
+code {
+  font-size: .855em;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: .1em .38em;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+/* ---------- pipeline ladder ---------- */
+.ladder { list-style: none; padding: 0; margin: 24px 0 8px; max-width: 100%; counter-reset: step; }
+.ladder > li {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 18px;
+  padding: 0 0 22px;
+  position: relative;
+  margin: 0;
+}
+.ladder > li::before {
+  counter-increment: step;
+  content: counter(step, decimal-leading-zero);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1;
+}
+.ladder > li::after {
+  content: "";
+  position: absolute;
+  left: 15px; top: 30px; bottom: -2px;
+  width: 1px;
+  background: var(--line);
+}
+.ladder > li:last-child::after { display: none; }
+.ladder h4 { margin: 4px 0 4px; }
+.ladder p { margin: 0 0 6px; font-size: 15.5px; }
+.ladder .where {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* ---------- tables ---------- */
+.tablewrap { overflow-x: auto; margin: 22px 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-family: "IBM Plex Sans", sans-serif; font-size: 14px; }
+th {
+  text-align: left;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  font-weight: 600;
+  color: var(--ink-3);
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+td { padding: 12px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; color: var(--ink-2); }
+tr:last-child td { border-bottom: 0; }
+td b, td strong { color: var(--ink); }
+.num { font-variant-numeric: tabular-nums; text-align: center; font-family: "IBM Plex Mono", monospace; color: var(--ink); }
+
+/* ---------- chips ---------- */
+.chip {
+  display: inline-block;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  padding: 2px 8px;
+  border-radius: 3px;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+.chip.crit { background: var(--crit-wash); color: var(--crit); }
+.chip.warn { background: var(--warn-wash); color: var(--warn); }
+.chip.ok   { background: var(--ok-wash);   color: var(--ok); }
+.chip.info { background: var(--info-wash); color: var(--info); }
+.chip.neut { background: var(--surface-2); color: var(--ink-3); }
+
+/* ---------- callouts ---------- */
+.note {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-wash);
+  padding: 16px 20px;
+  margin: 22px 0;
+  border-radius: 0 5px 5px 0;
+  max-width: 70ch;
+}
+.note.crit { border-left-color: var(--crit); background: var(--crit-wash); }
+.note.warn { border-left-color: var(--warn); background: var(--warn-wash); }
+.note p:last-child { margin-bottom: 0; }
+.note .tag {
+  display: block;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+  margin-bottom: 7px;
+  color: var(--accent);
+}
+.note.crit .tag { color: var(--crit); }
+.note.warn .tag { color: var(--warn); }
+
+/* ---------- subsystem cards ---------- */
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 24px 0; }
+.cell { background: var(--surface); padding: 18px 20px; }
+.cell h4 { margin: 0 0 6px; font-size: 15px; }
+.cell p { font-size: 14.5px; margin: 0 0 8px; color: var(--ink-2); }
+.cell .where { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); display: block; }
+
+/* ---------- findings ---------- */
+.finding {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface);
+  padding: 18px 22px;
+  margin: 16px 0;
+  box-shadow: var(--shadow);
+}
+.finding.crit { border-left-color: var(--crit); }
+.finding.warn { border-left-color: var(--warn); }
+.finding.info { border-left-color: var(--info); }
+.finding.ok   { border-left-color: var(--ok); }
+.finding-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.finding-head h4 { margin: 0; font-size: 16.5px; }
+.finding .id { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); }
+.finding p { font-size: 15px; margin: 0 0 10px; max-width: 72ch; }
+.finding p:last-child { margin-bottom: 0; }
+.finding .fix { font-size: 14px; color: var(--ink-2); border-top: 1px dashed var(--line); padding-top: 10px; margin-top: 12px; }
+.finding .fix b { font-family: "IBM Plex Sans", sans-serif; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); display: block; margin-bottom: 4px; }
+
+/* ---------- svg map ---------- */
+.mapwrap { overflow-x: auto; margin: 26px 0; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 22px; }
+svg.map { display: block; min-width: 660px; width: 100%; height: auto; }
+svg.map .box  { fill: var(--surface-2); stroke: var(--line); stroke-width: 1; }
+svg.map .box-a{ fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.2; }
+svg.map .lbl  { fill: var(--ink); font-family: "IBM Plex Sans", sans-serif; font-size: 12.5px; font-weight: 600; }
+svg.map .sub  { fill: var(--ink-3); font-family: "IBM Plex Mono", monospace; font-size: 9.5px; }
+svg.map .flow { stroke: var(--ink-3); stroke-width: 1.2; fill: none; }
+svg.map .flow-a { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+svg.map .cap { fill: var(--ink-3); font-family: "IBM Plex Mono", monospace; font-size: 9px; }
+svg.map .head { fill: var(--ink-3); }
+svg.map .head-a { fill: var(--accent); }
+
+.legend { display: flex; gap: 20px; flex-wrap: wrap; font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-3); margin-top: 14px; }
+.legend span { display: flex; align-items: center; gap: 6px; }
+.swatch { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
+
+/* ---------- verdict ---------- */
+.verdict { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 26px 0; }
+.vcell { background: var(--surface); padding: 16px 18px; }
+.vcell .k { font-family: "IBM Plex Sans", sans-serif; font-size: 10px; letter-spacing: .11em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+.vcell .v { font-family: "IBM Plex Sans", sans-serif; font-size: 25px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+
+footer { margin-top: 76px; padding-top: 24px; border-top: 1px solid var(--line); font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-3); }
+footer p { max-width: 72ch; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------- print / save-as-PDF ---------- */
+@media print {
+  /* Force the light palette — a dark-mode browser would otherwise print
+     white text on a ground the printer drops, producing blank pages. */
+  :root, :root[data-theme="dark"], :root:not([data-theme="light"]) {
+    --ink: #0d1714; --ink-2: #33443e; --ink-3: #5d7168;
+    --paper: #ffffff; --surface: #ffffff; --surface-2: #f2f5f4;
+    --line: #c9d4cf; --line-soft: #e2e8e5;
+    --accent: #00594d; --accent-2: #00a884; --accent-wash: #eef6f4;
+    --crit: #96200f; --crit-wash: #fbeeec;
+    --warn: #7a4a00; --warn-wash: #fbf4e6;
+    --ok: #185c36; --ok-wash: #ecf5ef;
+    --info: #17457a; --info-wash: #ecf1f9;
+    --shadow: none;
+  }
+  @page { margin: 15mm 14mm; }
+
+  body { font-size: 10.5pt; line-height: 1.5; background: #fff; }
+  nav.toc { display: none; }
+  .wrap { display: block; max-width: none; padding: 0; }
+  main { padding-top: 0; }
+
+  /* Let long content flow, but keep atomic blocks whole. */
+  section { padding-top: 22pt; break-inside: auto; }
+  h2 { break-after: avoid; }
+  h3, h4 { break-after: avoid; }
+  .finding, .note, .cell, .vcell, .ladder > li { break-inside: avoid; }
+  tr, .mapwrap { break-inside: avoid; }
+  table { font-size: 9pt; }
+  p, main li { max-width: none; }
+
+  /* Screen-only affordances that mean nothing on paper. */
+  .finding { box-shadow: none; }
+  a { color: var(--ink); text-decoration: none; }
+  .masthead { break-after: avoid; }
+
+  /* The map is the one wide element; scale it to the page. */
+  .mapwrap { padding: 8pt; }
+  svg.map { min-width: 0; width: 100%; }
+}
+</style>
+
+<div class="wrap">
+
+<nav class="toc">
+  <p class="toc-label">Contents</p>
+  <a href="#map">System map</a>
+  <a href="#pipeline">Inbound pipeline</a>
+  <a href="#ladder">Routing precedence</a>
+  <a href="#arbitration">Who may speak</a>
+  <hr>
+  <p class="toc-label">Subsystems</p>
+  <a href="#flows" class="sub">Flow chatbot</a>
+  <a href="#ai" class="sub">AI chatbot</a>
+  <a href="#rag" class="sub">Knowledge base</a>
+  <a href="#templates" class="sub">Templates</a>
+  <a href="#broadcasts" class="sub">Broadcasts</a>
+  <a href="#inbox" class="sub">Inbox &amp; assignment</a>
+  <a href="#media" class="sub">Media</a>
+  <hr>
+  <a href="#wiring">Wiring &amp; transports</a>
+  <a href="#state">Shared state</a>
+  <a href="#overrides">Override analysis</a>
+  <a href="#findings">Findings</a>
+  <a href="#ops">Operating limits</a>
+</nav>
+
+<main>
+
+<header class="masthead">
+  <p class="eyebrow">Architecture &amp; Audit Report</p>
+  <h1>WhatsApp Engine Teardown</h1>
+  <p class="standfirst">Seven subsystems share one inbound message, one outbound channel and one conversation record. This is how they are wired, in what order they get to act, and where that order can still surprise you.</p>
+  <div class="byline">
+    <span><b>Module</b> &nbsp;WhatsApp + Chatbot + AI</span>
+    <span><b>Reviewed</b> &nbsp;~19,000 lines</span>
+    <span><b>Date</b> &nbsp;6 Sep 2026</span>
+  </div>
+</header>
+
+<div class="verdict">
+  <div class="vcell"><div class="k">Subsystems</div><div class="v">7</div></div>
+  <div class="vcell"><div class="k">Entry point</div><div class="v">1</div></div>
+  <div class="vcell"><div class="k">Routing stages</div><div class="v">9</div></div>
+  <div class="vcell"><div class="k">Pause bypasses</div><div class="v" style="color:var(--warn)">3</div></div>
+  <div class="vcell"><div class="k">Open findings</div><div class="v" style="color:var(--crit)">6</div></div>
+</div>
+
+<!-- ============ SYSTEM MAP ============ -->
+<section id="map">
+  <h2>01 — System map</h2>
+  <h3>Everything hangs off one webhook and one send layer</h3>
+  <p>The module looks like seven products but has exactly <strong>two doors</strong>. Everything inbound arrives at <code>whatsappWebhookController</code>; everything outbound leaves through <code>whatsappService</code>. Every subsystem in between is a consumer of the first and a caller of the second — none of them talk to Meta directly, and none of them talk to each other except through the conversation record.</p>
+
+  <div class="mapwrap">
+    <svg class="map" viewBox="0 0 900 430" role="img" aria-label="Architecture map: Meta webhook feeds the chatbot router, which dispatches to flow engine, AI reply or silence; all outbound goes through the send layer back to Meta.">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" class="head"/>
+        </marker>
+        <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" class="head-a"/>
+        </marker>
+      </defs>
+
+      <!-- Meta -->
+      <rect class="box-a" x="16" y="176" width="104" height="56" rx="5"/>
+      <text class="lbl" x="68" y="199" text-anchor="middle">Meta Cloud</text>
+      <text class="sub" x="68" y="215" text-anchor="middle">Graph API</text>
+
+      <!-- webhook -->
+      <rect class="box-a" x="168" y="168" width="132" height="72" rx="5"/>
+      <text class="lbl" x="234" y="192" text-anchor="middle">Webhook</text>
+      <text class="sub" x="234" y="208" text-anchor="middle">HMAC verify</text>
+      <text class="sub" x="234" y="221" text-anchor="middle">upsert + dedupe</text>
+
+      <!-- router -->
+      <rect class="box-a" x="352" y="168" width="132" height="72" rx="5"/>
+      <text class="lbl" x="418" y="192" text-anchor="middle">Router</text>
+      <text class="sub" x="418" y="208" text-anchor="middle">processIncoming</text>
+      <text class="sub" x="418" y="221" text-anchor="middle">9-stage ladder</text>
+
+      <!-- consumers -->
+      <rect class="box" x="546" y="26" width="150" height="52" rx="5"/>
+      <text class="lbl" x="621" y="47" text-anchor="middle">Auto-replies</text>
+      <text class="sub" x="621" y="62" text-anchor="middle">welcome / OOO</text>
+
+      <rect class="box" x="546" y="96" width="150" height="52" rx="5"/>
+      <text class="lbl" x="621" y="117" text-anchor="middle">Flow engine</text>
+      <text class="sub" x="621" y="132" text-anchor="middle">session + nodes</text>
+
+      <rect class="box" x="546" y="166" width="150" height="52" rx="5"/>
+      <text class="lbl" x="621" y="187" text-anchor="middle">AI reply</text>
+      <text class="sub" x="621" y="202" text-anchor="middle">fallback / rescue</text>
+
+      <rect class="box" x="546" y="236" width="150" height="52" rx="5"/>
+      <text class="lbl" x="621" y="257" text-anchor="middle">Silence</text>
+      <text class="sub" x="621" y="272" text-anchor="middle">paused → human</text>
+
+      <rect class="box" x="546" y="306" width="150" height="52" rx="5"/>
+      <text class="lbl" x="621" y="327" text-anchor="middle">Broadcasts</text>
+      <text class="sub" x="621" y="342" text-anchor="middle">BullMQ, outbound</text>
+
+      <!-- knowledge base feeding AI -->
+      <rect class="box" x="352" y="292" width="132" height="56" rx="5"/>
+      <text class="lbl" x="418" y="314" text-anchor="middle">Knowledge base</text>
+      <text class="sub" x="418" y="330" text-anchor="middle">RAG retrieval</text>
+
+      <!-- send layer -->
+      <rect class="box-a" x="752" y="176" width="132" height="56" rx="5"/>
+      <text class="lbl" x="818" y="199" text-anchor="middle">Send layer</text>
+      <text class="sub" x="818" y="215" text-anchor="middle">whatsappService</text>
+
+      <!-- arrows in -->
+      <path class="flow-a" d="M120 204 H162" marker-end="url(#aha)"/>
+      <path class="flow-a" d="M300 204 H346" marker-end="url(#aha)"/>
+
+      <!-- router to consumers -->
+      <path class="flow" d="M484 200 C 516 200, 516 52, 540 52" marker-end="url(#ah)"/>
+      <path class="flow" d="M484 200 C 516 200, 516 122, 540 122" marker-end="url(#ah)"/>
+      <path class="flow" d="M484 202 H540" marker-end="url(#ah)"/>
+      <path class="flow" d="M484 208 C 516 208, 516 262, 540 262" marker-end="url(#ah)"/>
+
+      <!-- kb to AI -->
+      <path class="flow" d="M484 314 C 512 314, 512 206, 540 200" marker-end="url(#ah)" stroke-dasharray="3 3"/>
+
+      <!-- consumers to send -->
+      <path class="flow" d="M696 52 C 730 52, 730 190, 746 194" marker-end="url(#ah)"/>
+      <path class="flow" d="M696 122 C 730 122, 730 196, 746 198" marker-end="url(#ah)"/>
+      <path class="flow" d="M696 192 C 722 192, 728 198, 746 200" marker-end="url(#ah)"/>
+      <path class="flow" d="M696 332 C 730 332, 730 216, 746 212" marker-end="url(#ah)"/>
+
+      <!-- send back to meta -->
+      <path class="flow-a" d="M818 176 V 96 C 818 84, 810 78, 796 78 H 84 C 70 78, 68 90, 68 104 V 170" marker-end="url(#aha)"/>
+      <text class="cap" x="440" y="70" text-anchor="middle">all outbound returns to Meta through one layer</text>
+    </svg>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--accent)"></i> single-door path</span>
+      <span><i class="swatch" style="background:var(--ink-3)"></i> dispatch</span>
+      <span><i class="swatch" style="background:var(--ink-3);opacity:.5"></i> context injection</span>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="cell"><h4>Inbound door</h4><p>Verifies Meta's HMAC signature, dedupes by message id, upserts the conversation, mirrors media, then hands off asynchronously.</p><span class="where">whatsappWebhookController.js</span></div>
+    <div class="cell"><h4>Router</h4><p>The single decision point. Walks a nine-stage ladder and picks exactly one owner for the message.</p><span class="where">chatbotEngineService.processIncomingMessage</span></div>
+    <div class="cell"><h4>Outbound door</h4><p>Template/text/media/interactive sends, language resolution, approval pre-check, retry and a global kill switch.</p><span class="where">whatsappService.js</span></div>
+    <div class="cell"><h4>Conversation record</h4><p>The shared blackboard. Every subsystem reads and writes it; it is how they coordinate without calling each other.</p><span class="where">WhatsAppConversation</span></div>
+  </div>
+</section>
+
+<!-- ============ PIPELINE ============ -->
+<section id="pipeline">
+  <h2>02 — Inbound pipeline</h2>
+  <h3>What happens between Meta's POST and the customer's reply</h3>
+  <p>This is a genuine sequence — each stage depends on the one before it, and a failure at any stage stops the ones after it. The numbering is the execution order, not decoration.</p>
+
+  <ol class="ladder">
+    <li>
+      <h4>Signature verification</h4>
+      <p>SHA-256 HMAC of the raw body against the app secret, compared with <code>crypto.timingSafeEqual</code> and a length guard. An unsigned or mismatched payload is rejected before anything is parsed.</p>
+      <p class="where">verifySignature() · whatsappWebhookController.js:109</p>
+    </li>
+    <li>
+      <h4>Immediate acknowledgement</h4>
+      <p>Meta gets <code>200 OK</code> at once and the real work runs inside <code>setImmediate</code>. Meta retries any webhook it considers slow, so acknowledging late would duplicate every message.</p>
+      <p class="where">whatsappWebhookController.js:223</p>
+    </li>
+    <li>
+      <h4>Tenant resolution</h4>
+      <p>The incoming <code>phone_number_id</code> is matched to an active tenant. Everything downstream is scoped by the resolved id — there is no path that trusts a tenant id from the payload.</p>
+    </li>
+    <li>
+      <h4>Dual-key contact lookup</h4>
+      <p>Finds the Lead and the conversation by <strong>BSUID first, then phone suffix</strong>. BSUID is the durable identifier; as Meta rolls out usernames a contact may have no phone at all, which is why the lookup cannot be phone-only.</p>
+      <p class="where">whatsappWebhookController.js:813–866</p>
+    </li>
+    <li>
+      <h4>Atomic conversation upsert</h4>
+      <p>One <code>findOneAndUpdate</code> creates or updates the thread, increments unread and message counters, and re-activates archived threads. Concurrent inbound messages cannot create duplicates.</p>
+    </li>
+    <li>
+      <h4>Self-healing backfill</h4>
+      <p>Repairs the <code>leadId</code> link and re-derives the assigned agent on every inbound message. Strictly additive — <code>null → a real link</code> only, never a re-link, so a thread already owned by another Lead is never stolen.</p>
+      <p class="where">whatsappWebhookController.js:922–939</p>
+    </li>
+    <li>
+      <h4>Media mirroring</h4>
+      <p>Any image, video, document or audio is downloaded from Meta and mirrored to Cloudflare R2 under <code>wa-inbound/&lt;userId&gt;/&lt;mediaId&gt;</code>, because Meta's media URLs expire.</p>
+      <p class="where">inboundMediaService.js</p>
+    </li>
+    <li>
+      <h4>Routing</h4>
+      <p>The nine-stage ladder in the next section runs and selects exactly one owner for this message.</p>
+    </li>
+    <li>
+      <h4>Reply and fan-out</h4>
+      <p>The chosen owner composes a reply through the send layer, the message is persisted, and socket events push the thread into the right agents' inboxes in real time.</p>
+    </li>
+  </ol>
+</section>
+
+<!-- ============ LADDER ============ -->
+<section id="ladder">
+  <h2>03 — Routing precedence</h2>
+  <h3>The ladder that decides who owns the message</h3>
+  <p>This is the answer to "is there logic overriding anywhere". The router evaluates candidates in a fixed order and <strong>stops at the first match</strong> — so precedence is explicit, not emergent. The column that matters is the last one: three stages deliberately ignore the pause flag.</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>#</th><th>Stage</th><th>Trigger</th><th>Runs when paused?</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td><b>Auto-replies</b><br><span class="mono" style="font-size:11px;color:var(--ink-3)">OOO beats welcome</span></td><td>First inbound, or 4h+ gap for out-of-office</td><td><span class="chip neut">No</span></td></tr>
+      <tr><td class="num">2</td><td><b>Media routing</b></td><td>Non-text message</td><td><span class="chip neut">No</span></td></tr>
+      <tr><td class="num">3</td><td><b>Active session</b></td><td>An open flow session exists</td><td><span class="chip neut">No</span></td></tr>
+      <tr><td class="num">4</td><td><b>Keyword flow</b></td><td>Fuzzy keyword match (Levenshtein)</td><td><span class="chip warn">Bypasses</span></td></tr>
+      <tr><td class="num">5</td><td><b>Template reply</b></td><td>Reply to an outbound template, within 24h</td><td><span class="chip warn">Bypasses</span></td></tr>
+      <tr><td class="num">6</td><td><b>Meta ad (CTWA)</b></td><td>Real referral payload attached</td><td><span class="chip warn">Bypasses</span></td></tr>
+      <tr><td class="num">7</td><td><b>First message</b></td><td>Contact's very first inbound</td><td><span class="chip neut">No</span></td></tr>
+      <tr><td class="num">8</td><td><b>Existing contact</b></td><td>Any later inbound</td><td><span class="chip neut">No</span></td></tr>
+      <tr><td class="num">9</td><td><b>AI fallback</b></td><td>Nothing above matched</td><td><span class="chip neut">No</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <span class="tag">The single most important fact</span>
+    <p>The AI is <strong>last</strong>. It never competes with a flow — it only speaks when every scripted route has declined the message. A tenant who reports "the AI hijacked my chatbot" has a flow that stopped matching, not an AI that overrode one.</p>
+  </div>
+</section>
+
+<!-- ============ ARBITRATION ============ -->
+<section id="arbitration">
+  <h2>04 — Who may speak</h2>
+  <h3>Four gates sit between a message and a reply</h3>
+  <p>Beyond the ladder, four independent conditions can silence the bot. They compose rather than override — any one of them is enough to stop a reply.</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Gate</th><th>Set by</th><th>Effect</th><th>Cleared by</th></tr></thead>
+    <tbody>
+      <tr><td><b>Agent takeover</b></td><td>An agent replying in the inbox</td><td><code>chatbotPausedUntil</code> +24h and every active session cancelled</td><td>Time, or a stage 4–6 bypass</td></tr>
+      <tr><td><b>Turn cap</b></td><td><code>ai.maxTurns</code> (default 12)</td><td>AI hands off to a human instead of replying</td><td>New conversation</td></tr>
+      <tr><td><b>Credit exhaustion</b></td><td>AI wallet at zero</td><td>Apology message, then a 24h pause</td><td>Top-up</td></tr>
+      <tr><td><b>Plan / feature gate</b></td><td><code>planFeatures.aiChatbot</code></td><td>AI paths inert; scripted flows keep working</td><td>Plan change</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>The separation in the last row is deliberate and worth knowing: <strong>the visual flow builder is free, the LLM layer is paid.</strong> Turning off AI does not disable the chatbot.</p>
+</section>
+
+<!-- ============ FLOWS ============ -->
+<section id="flows">
+  <h2>05 — Subsystem: flow chatbot</h2>
+  <h3>The scripted engine</h3>
+  <p>A flow is a node graph stored on <code>ChatbotFlow</code>; a live traversal is a <code>ChatbotSession</code> holding the current node and a variable map. The engine walks nodes until it hits one that needs the customer, then parks.</p>
+
+  <h4>Node types in play</h4>
+  <p>Message, question, buttons, list, product/catalog, template, media request, delay, condition, action, AI, handoff, notify-agent and booking-link. Two carry state worth understanding:</p>
+  <ul>
+    <li><strong>Delay nodes</strong> schedule a job on Agenda (<code>resume-chatbot-session</code>) and can be set to cancel if the customer replies first — so a "wait 2 days then follow up" never fires at someone mid-conversation.</li>
+    <li><strong>Question nodes</strong> can arm a no-reply timeout (<code>CHECK_REPLY_TIMEOUT</code>) that advances the flow when the customer goes quiet.</li>
+  </ul>
+
+  <h4>Miss handling</h4>
+  <p>When a button or list reply cannot be matched, the engine re-prompts once, then hands that single turn to the AI in <strong>rescue mode</strong> — the session stays alive on its current node, so the flow resumes the moment the customer says something the node understands. Rescue turns are counted per session so a permanently broken node cannot burn a tenant's whole AI quota.</p>
+
+  <h4>Smart Lead Engine</h4>
+  <p>Per-flow lead qualification: rules combining <em>minimum node interactions</em> and <em>required variables</em>, producing a qualification level plus tags and a stage change. It runs on session progression, not on message receipt.</p>
+  <p class="where mono" style="font-size:11.5px;color:var(--ink-3)">evaluateSmartLead() · chatbotEngineService.js:1526</p>
+</section>
+
+<!-- ============ AI ============ -->
+<section id="ai">
+  <h2>06 — Subsystem: AI chatbot</h2>
+  <h3>Three surfaces, one generator</h3>
+  <p>Every LLM call in the module goes through <code>aiService.generateReply</code>, which returns a strict JSON envelope: <code>reply</code>, <code>extracted_variables</code>, and an optional <code>action</code>. What differs is where it is called from.</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Surface</th><th>Fires when</th><th>Session?</th><th>Actions handled</th></tr></thead>
+    <tbody>
+      <tr><td><b>Fallback</b></td><td>Ladder stage 9 — nothing matched</td><td>No</td><td>All six</td></tr>
+      <tr><td><b>Rescue</b></td><td>A flow node cannot parse the reply</td><td>Yes — stays active</td><td>All six</td></tr>
+      <tr><td><b>In-flow AI node</b></td><td>The flow reaches an <code>ai</code> node</td><td>Yes</td><td><span class="chip warn">Five of six</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>The six actions the model may request are <code>change_stage</code>, <code>assign_tag</code>, <code>notify_agent</code>, <code>book_appointment</code>, <code>send_template</code> and <code>create_lead</code>. The mismatch in the third row is a real defect — see <a href="#f1">finding W-1</a>.</p>
+
+  <h4>Lead creation policy</h4>
+  <p>Recently added: <code>IntegrationConfig.ai.leadCreation</code> gives the tenant a server-enforced floor (minimum customer messages, required contact number / name / email) plus a plain-English instruction injected into the prompt. The gate is the authority — the model only <em>asks</em>, and a request that fails the policy is logged and dropped.</p>
+
+  <div class="note">
+    <span class="tag">Design rule worth preserving</span>
+    <p>The LLM is never trusted with an irreversible decision. It proposes; the server disposes. Every action it can request is either idempotent (<code>create_lead</code> upserts) or gated server-side.</p>
+  </div>
+</section>
+
+<!-- ============ RAG ============ -->
+<section id="rag">
+  <h2>07 — Subsystem: knowledge base</h2>
+  <h3>Retrieval-augmented answers from the tenant's own documents</h3>
+  <p>Tenants upload price lists, catalogues and FAQs. Files are parsed, chunked and embedded; at reply time the customer's message is embedded and the closest chunks are injected into the system prompt with strict instructions to quote only those figures.</p>
+
+  <div class="grid2">
+    <div class="cell"><h4>Index</h4><p>file → parse → chunk → embed → <code>KnowledgeChunk</code>. Five formats only: csv, xlsx, docx, pdf, txt.</p><span class="where">knowledgeBaseService.processDocument</span></div>
+    <div class="cell"><h4>Retrieve</h4><p>Cosine similarity against a bounded in-process cache of packed Float32 vectors. Hard 6s timeout, degrades to no-context rather than stalling the reply.</p><span class="where">retrieveKnowledge()</span></div>
+    <div class="cell"><h4>Chunking</h4><p>Tabular = one row per chunk with headers repeated in. Prose = ~500-char windows, ~100-char overlap at sentence boundaries.</p><span class="where">documentParserService</span></div>
+    <div class="cell"><h4>Injection</h4><p>Reaches <strong>both</strong> AI paths — the fallback reply and the in-flow AI node.</p><span class="where">buildRagContext() · lines 938, 2910</span></div>
+  </div>
+
+  <div class="note warn">
+    <span class="tag">The trap that already bit once</span>
+    <p>Cosine scores are <strong>not comparable across embedding models</strong>. A shared cut-off of 0.35 — correct for Gemini's compressed high band — silently returned <em>nothing</em> for every OpenAI tenant, while the document sat there showing "Ready". Each model now carries its own floor. Never reintroduce a shared default.</p>
+  </div>
+</section>
+
+<!-- ============ TEMPLATES ============ -->
+<section id="templates">
+  <h2>08 — Subsystem: templates</h2>
+  <h3>The 24-hour window is the whole reason this exists</h3>
+  <p>Outside a 24-hour window from the customer's last message, Meta permits only pre-approved templates. Free text is rejected. Every scheduled or proactive send in the product therefore has to reason about which side of that window it is on.</p>
+
+  <h4>Two guards before any template send</h4>
+  <ul>
+    <li><strong>Language pair resolution.</strong> Meta identifies a template by <em>(name, language)</em>. Asking for <code>en_US</code> against a template created as <code>en</code> returns error 132001 — "template name does not exist" — which reads like an approval problem and is not. The stored template row is authoritative, and <code>{userId, name}</code> is unique, so there is exactly one right answer.</li>
+    <li><strong>Approval pre-check.</strong> <code>checkTemplateSendable</code> refuses anything not <code>APPROVED</code>. A template with no local row is treated as sendable rather than blocked, since it may simply be unsynced.</li>
+  </ul>
+
+  <p>Template <em>replies</em> feed back into routing at ladder stage 5, including the case where the customer types "yes" instead of tapping a button — then the engine falls back to the last outbound template within the window, but only if no other inbound has arrived since, which together make the message unambiguously a reply to it.</p>
+</section>
+
+<!-- ============ BROADCASTS ============ -->
+<section id="broadcasts">
+  <h2>09 — Subsystem: broadcasts</h2>
+  <h3>The only subsystem with its own queue infrastructure</h3>
+  <p>Broadcasts are the one path that generates thousands of sends from a single click, so they get real queue machinery rather than a loop.</p>
+
+  <div class="verdict">
+    <div class="vcell"><div class="k">Batch size</div><div class="v">5</div></div>
+    <div class="vcell"><div class="k">Batch interval</div><div class="v">5s</div></div>
+    <div class="vcell"><div class="k">Throughput</div><div class="v">60<span style="font-size:14px;color:var(--ink-3)">/min</span></div></div>
+    <div class="vcell"><div class="k">Worker concurrency</div><div class="v">2</div></div>
+    <div class="vcell"><div class="k">Retry attempts</div><div class="v">3</div></div>
+  </div>
+
+  <ul>
+    <li><strong>BullMQ on Redis</strong>, exponential backoff, worker concurrency 2 across <em>all</em> tenants — one tenant's blast cannot starve another's.</li>
+    <li><strong>Jitter</strong> of 0–1000ms per batch, so parallel tenant broadcasts do not synchronise into a spike Meta reads as abuse.</li>
+    <li><strong>Idempotency</strong> via a per-broadcast Redis set of already-sent leads (48h TTL). A worker crash and BullMQ retry cannot double-message anyone.</li>
+    <li><strong>Cursor streaming</strong> over recipients rather than loading the whole audience into memory.</li>
+  </ul>
+</section>
+
+<!-- ============ INBOX ============ -->
+<section id="inbox">
+  <h2>10 — Subsystem: inbox &amp; assignment</h2>
+  <h3>Ownership is derived, never set</h3>
+  <p><code>WhatsAppConversation.assignedTo</code> is a <strong>read-only mirror</strong> of the linked Lead's owner. <code>whatsappAssignmentService</code> is its only writer; there is deliberately no API, request body or UI control that sets it independently. If the two ever disagree, the Lead wins and a backfill script re-derives the collection.</p>
+
+  <p>It is denormalised rather than joined because the inbox list, the unread badge and search all paginate and sort by <code>lastMessageAt</code> — a lookup would force a full-collection aggregation on every keystroke.</p>
+
+  <h4>Real-time delivery</h4>
+  <p>Conversation events go to a dedicated <code>wa:&lt;userId&gt;</code> socket room, never <code>user:&lt;id&gt;</code>. The reason is specific: <code>join:company</code> lets an agent into their manager's personal room, so filtering the emit loop alone would still leak every conversation to any agent who joined. Both halves — the audience filter <em>and</em> the separate room — are required.</p>
+
+  <p>The whole mechanism is inert unless <code>whatsappFollowsLeadAssignment</code> is on. With it off, the inbox is fully shared, which is the historical behaviour.</p>
+</section>
+
+<!-- ============ MEDIA ============ -->
+<section id="media">
+  <h2>11 — Subsystem: media</h2>
+  <h3>Nothing touches the server's disk</h3>
+  <p>All media — library uploads, inbound WhatsApp attachments, support and email attachments — lives on Cloudflare R2. Meta's media URLs expire and require auth headers that a browser <code>&lt;img&gt;</code> tag cannot send, so the inbox serves them through a token-based proxy that reads from R2 and falls back to downloading from Meta on a cache miss.</p>
+</section>
+
+<!-- ============ WIRING ============ -->
+<section id="wiring">
+  <h2>12 — Wiring &amp; transports</h2>
+  <h3>Five ways these parts talk to each other</h3>
+  <p>Understanding which transport carries what explains most of the module's failure modes — an in-process call fails loudly, a queued job fails silently until someone looks.</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Transport</th><th>Carries</th><th>Failure mode</th></tr></thead>
+    <tbody>
+      <tr><td><b>Direct calls</b></td><td>Router → engine → send layer</td><td>Loud — surfaces in the request</td></tr>
+      <tr><td><b>Agenda</b></td><td>Flow delay nodes, no-reply timeouts</td><td>Silent — job simply never runs</td></tr>
+      <tr><td><b>BullMQ + Redis</b></td><td>Broadcasts, workflow engine</td><td>Retries, then a failed-job record</td></tr>
+      <tr><td><b>node-cron</b></td><td>Follow-ups (10 min), 72h session expiry, stuck-document sweep</td><td>Silent — needs monitoring</td></tr>
+      <tr><td><b>Socket.IO</b></td><td>Inbox live updates, assignment handoffs</td><td>Cosmetic — a refresh recovers</td></tr>
+      <tr><td><b>Shared documents</b></td><td>Conversation + Lead as a blackboard</td><td>Staleness, not failure</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <span class="tag">Effects hub</span>
+    <p>Every path that creates a Lead must call <code>queueLeadCreatedEffects</code>, and every path that writes <code>Lead.assignedTo</code> must call <code>queueLeadAssignmentEffects</code>. These are explicit calls, not Mongoose hooks, because the bulk paths use <code>updateMany</code> — which fires no document middleware and would silently skip exactly the case that matters most.</p>
+  </div>
+</section>
+
+<!-- ============ STATE ============ -->
+<section id="state">
+  <h2>13 — Shared state</h2>
+  <h3>The fields more than one subsystem writes</h3>
+  <p>These are the coordination points. Each has exactly one legitimate owner; bugs in this module almost always come from a second writer appearing.</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Field</th><th>Owner</th><th>Also read by</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td><code>chatbotPausedUntil</code></td><td>Inbox (agent takeover)</td><td>Router, AI, credit guard</td><td>Three ladder stages may clear it</td></tr>
+      <tr><td><code>assignedTo</code></td><td><code>whatsappAssignmentService</code></td><td>Inbox scope, sockets</td><td>Derived from Lead — never set directly</td></tr>
+      <tr><td><code>leadId</code></td><td>Webhook backfill</td><td>Assignment, AI context</td><td>Additive only — never re-linked</td></tr>
+      <tr><td><code>aiVariables</code></td><td>AI reply path</td><td>Lead policy gate</td><td>Merged per turn, never cleared</td></tr>
+      <tr><td><code>session.variables</code></td><td>Flow engine</td><td>Actions, Smart Lead</td><td>Session-scoped, dies with it</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ============ OVERRIDES ============ -->
+<section id="overrides">
+  <h2>14 — Override analysis</h2>
+  <h3>Where one subsystem can countermand another</h3>
+  <p>You asked specifically whether anything overrides anything. The short answer: <strong>the architecture is sound — precedence is explicit and single-owner</strong> — but there are three places where one subsystem legitimately overrules another, and one of them will surprise you.</p>
+
+  <div class="finding warn" id="o1">
+    <div class="finding-head"><span class="chip warn">By design</span><h4>Keyword triggers break an agent's takeover</h4></div>
+    <p>An agent replying sets a 24-hour pause and cancels live sessions. But ladder stages 4–6 bypass the pause and <em>clear it outright</em>. So while a human is actively handling a complaint, a customer who happens to type a word matching a keyword flow will have the bot barge in mid-conversation — and the agent's pause is gone, not just skipped.</p>
+    <p class="fix"><b>Why it is like this</b> A keyword is treated as an explicit new intent from the customer, which is defensible. The surprise is the scope: it clears the pause for everything, rather than letting that one flow run.</p>
+  </div>
+
+  <div class="finding info" id="o2">
+    <div class="finding-head"><span class="chip info">Safe by accident</span><h4>Two lead engines can both fire on one conversation</h4></div>
+    <p>A flow session running the Smart Lead Engine can also trigger an AI rescue turn, whose lead policy may independently decide to create a lead. Both write through <code>create_lead</code>, which upserts — so the second becomes an update rather than a duplicate.</p>
+    <p class="fix"><b>Assessment</b> Correct outcome, but it holds because the action is idempotent, not because anything coordinates the two engines. Worth knowing before either is changed.</p>
+  </div>
+
+  <div class="finding ok" id="o3">
+    <div class="finding-head"><span class="chip ok">Correct</span><h4>Out-of-office beats welcome, exclusively</h4></div>
+    <p>Both auto-replies can qualify on the same message. The engine checks out-of-office first and sets a flag that suppresses the welcome, so a customer messaging after hours gets one message, not two.</p>
+  </div>
+</section>
+
+<!-- ============ FINDINGS ============ -->
+<section id="findings">
+  <h2>15 — Findings</h2>
+  <h3>Six open items</h3>
+  <p>Severity reflects customer-visible impact, not effort. Nothing here is architectural — the module's structure is good.</p>
+
+  <div class="finding crit" id="f1">
+    <div class="finding-head"><span class="chip crit">High</span><span class="id">W-1</span><h4>The in-flow AI node silently discards <code>create_lead</code></h4></div>
+    <p>The prompt tells the model that <code>create_lead</code> is one of six available actions. The in-flow AI node's handler implements five of them — <code>change_stage</code>, <code>assign_tag</code>, <code>notify_agent</code>, <code>book_appointment</code>, <code>send_template</code> — and has no branch for <code>create_lead</code>. When the model returns it inside a flow, the action is dropped with no log and no lead.</p>
+    <p class="fix"><b>Fix</b> Either implement the branch (routing it through the same policy gate the fallback path uses), or stop advertising the action to that surface. Advertising a capability and silently ignoring it is the worst of both — it also wastes tokens on every call.</p>
+  </div>
+
+  <div class="finding crit" id="f2">
+    <div class="finding-head"><span class="chip crit">High</span><span class="id">W-2</span><h4>"Auto-Create Leads" off does not mean no auto-created leads</h4></div>
+    <p>Switching the new toggle off does not stop the AI creating leads — it reverts to the previous uncontrolled behaviour, where the model decides on its own and labels the lead however it likes. The control reads as a kill switch and is not one.</p>
+    <p class="fix"><b>Fix</b> Either make off mean off, or replace the toggle with three explicit choices — <em>Never / Let the AI decide / Use my rules</em>. The current label is the problem, not the behaviour.</p>
+  </div>
+
+  <div class="finding warn" id="f3">
+    <div class="finding-head"><span class="chip warn">Medium</span><span class="id">W-3</span><h4>Queued and cron work fails silently</h4></div>
+    <p>Flow delay nodes, no-reply timeouts, the 10-minute follow-up sweep and the 72-hour session expiry all run detached. A failure produces a log line and nothing else — no surfaced error, no retry visible to the tenant. A flow that stops advancing looks to the customer like the business stopped replying.</p>
+    <p class="fix"><b>Fix</b> Emit a counter or health record per scheduled job so a stalled Agenda or a dead cron is visible without reading logs.</p>
+  </div>
+
+  <div class="finding warn" id="f4">
+    <div class="finding-head"><span class="chip warn">Medium</span><span class="id">W-4</span><h4>Deleting a tenant orphans their R2 objects forever</h4></div>
+    <p>Account cleanup purges no object storage and never deletes the media rows. Every tenant deletion leaves inbound media, library assets and knowledge-base files paying rent in R2 with nothing referencing them.</p>
+    <p class="fix"><b>Fix</b> Extend the cleanup service to enumerate and delete by key prefix per tenant, or run a periodic reconciliation against live rows.</p>
+  </div>
+
+  <div class="finding warn" id="f5">
+    <div class="finding-head"><span class="chip warn">Medium</span><span class="id">W-5</span><h4>Agent takeover is cleared, not merely bypassed</h4></div>
+    <p>Detailed in <a href="#o1">the override analysis</a>. Listed here because the fix is small and the customer-visible effect — a bot interrupting a live human conversation — is not.</p>
+    <p class="fix"><b>Fix</b> Let the triggering flow run without writing <code>chatbotPausedUntil: null</code>, so the agent's pause survives the interruption.</p>
+  </div>
+
+  <div class="finding info" id="f6">
+    <div class="finding-head"><span class="chip info">Low</span><span class="id">W-6</span><h4>The July audit's High and Medium items are still open</h4></div>
+    <p>The 2026-07-30 audit found 38 items. Both Criticals and four missing approval checks were fixed the following day; the remaining Highs and Mediums have not been revisited since.</p>
+    <p class="fix"><b>Fix</b> Re-triage that list against the current code — several may already be fixed incidentally.</p>
+  </div>
+</section>
+
+<!-- ============ OPS ============ -->
+<section id="ops">
+  <h2>16 — Operating limits</h2>
+  <h3>Numbers worth knowing before you scale</h3>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Limit</th><th>Value</th><th>Where it binds</th></tr></thead>
+    <tbody>
+      <tr><td>Broadcast throughput</td><td class="num">60/min</td><td>Meta-safe pacing, all tenants share 2 workers</td></tr>
+      <tr><td>AI turns per conversation</td><td class="num">12</td><td>Then handoff to a human</td></tr>
+      <tr><td>Knowledge retrieval budget</td><td class="num">6s</td><td>Then reply without context</td></tr>
+      <tr><td>Vector cache</td><td class="num">192 MB</td><td>Bounded LRU across all tenants</td></tr>
+      <tr><td>Knowledge file size</td><td class="num">25 MB</td><td>Per document</td></tr>
+      <tr><td>Session idle expiry</td><td class="num">72h</td><td>Cron marks abandoned</td></tr>
+      <tr><td>Customer-service window</td><td class="num">24h</td><td>Meta — templates only outside it</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h4>Metered AI operations</h4>
+  <p>Six operations debit the tenant's credit wallet: <code>ai_fallback</code>, <code>ai_rescue</code>, <code>ai_node</code>, <code>button_mapping</code>, <code>knowledge_index</code> and <code>knowledge_query</code>. Embedding models must have rate rows or they bill at a conservative <em>chat</em> fallback rate — roughly twenty times too high for an upload.</p>
+
+  <h4>Gates that must be switched on per tenant</h4>
+  <ul>
+    <li><code>planFeatures.aiChatbot</code> — the LLM layer</li>
+    <li><code>planFeatures.knowledgeBase</code> — RAG uploads</li>
+    <li><code>whatsappFollowsLeadAssignment</code> — lead-based inbox ownership</li>
+    <li><code>viewWhatsApp</code> per agent — inbox route access</li>
+  </ul>
+  <p>All four default to off or restricted. Most "the feature does nothing" reports resolve to one of these.</p>
+</section>
+
+<footer>
+  <p>Architecture and audit review of the WhatsApp module — inbound webhook, flow chatbot, AI chatbot, knowledge base, templates, broadcasts, inbox, assignment and media. Findings reflect the working tree as of 6 September 2026, including uncommitted changes to the knowledge base, external API and AI lead policy.</p>
+</footer>
+
+</main>
+</div>

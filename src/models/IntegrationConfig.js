@@ -202,7 +202,50 @@ const integrationConfigSchema = new mongoose.Schema({
         maxTurns: { type: Number, default: 12 },
         // NOTE: Despite the name, this counts AI *messages* (1 per reply), not actual LLM tokens.
         // Kept for backward compatibility. The monthly limit (planFeatures.aiMessageLimit) is per-message.
-        tokensUsedThisMonth: { type: Number, default: 0 }
+        tokensUsedThisMonth: { type: Number, default: 0 },
+
+        // ── When the AI chatbot may turn a conversation into a Lead ──────────
+        // The scripted flow has had a configurable Smart Lead Engine for a long
+        // time (ChatbotFlow.smartLeadSettings: min node interactions, required
+        // variables, tags, stage). The AI path had nothing — whether a lead got
+        // created rested on one vague sentence in a shared static prompt, so it
+        // fired on a greeting one day and never fired the next.
+        //
+        // This is the AI-side equivalent. It is a POLICY layer only: the actual
+        // create_lead action already exists and is idempotent (it upserts by
+        // conversation link, then by phone/email). Two halves, deliberately:
+        //   - a deterministic floor the SERVER enforces, so no prompt wording can
+        //     produce junk leads from "hi";
+        //   - `instruction`, injected into the prompt, for the nuance a numeric
+        //     threshold cannot express ("only once they ask for a quote").
+        leadCreation: {
+            // Off by default: existing tenants must see no behaviour change.
+            enabled:             { type: Boolean, default: false },
+            minCustomerMessages: { type: Number,  default: 3 },
+            // A contact number is the one thing that makes a lead actionable, so
+            // it is the only requirement on by default.
+            //
+            // It is NOT redundant on WhatsApp: as Meta rolls out Usernames a
+            // contact can hide their number, and WhatsAppConversation.phone is
+            // nullable precisely for that case. Lead.phone is optional too, so
+            // without this check a username-only chat produces a lead nobody can
+            // ring back. When the conversation already carries a number the check
+            // is satisfied automatically — the customer is never asked twice.
+            requirePhone:        { type: Boolean, default: true },
+            requireName:         { type: Boolean, default: false },
+            requireEmail:        { type: Boolean, default: false },
+            //
+            // Resent and BILLED on every AI reply, hence the length cap enforced
+            // in aiProxyController — same reasoning as the systemPrompt cap.
+            instruction:         { type: String,  default: '' },
+            status:              { type: String,  default: 'New' },
+            source:              { type: String,  default: 'WhatsApp AI Chatbot' },
+            tags:                { type: [String], default: [] },
+            // Safety net: create the lead once the floor is met even if the AI
+            // never asks. Without it, a reticent model means the lead is silently
+            // never captured, which is the failure people actually notice.
+            autoCreateWhenReady: { type: Boolean, default: false }
+        }
     },
 
     // 📞 AI Voice Automation Configuration

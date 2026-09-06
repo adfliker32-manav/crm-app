@@ -208,82 +208,126 @@ const resolveAppSecret = async (wabaId) => {
         // Returning verifiable: true with no secret makes the caller reject the
         // request. Meta retries on 5xx, so a transient DB outage causes a brief
         // delay rather than accepting potentially spoofed payloads.
-        console.error('❌ [Webhook] DB error resolving app secret — failing closed. Webhooks will be rejected until DB recovers:', e.message);
-        return { secret: null, verifiable: true };
+        // `unavailable` distinguishes "we could not check" from "the check
+        // failed". The caller turns the former into a 5xx so Meta redelivers once
+        // the DB is back, and the latter into a 200 that quietly drops a payload
+        // we could not authenticate. Before the webhook became durable both cases
+        // were the same silent drop, and the retry this comment promised never
+        // actually happened.
+        console.error('❌ [Webhook] DB error resolving app secret — failing closed. Webhooks will be retried until DB recovers:', e.message);
+        return { secret: null, verifiable: true, unavailable: true };
     }
 };
 
 // Handle incoming webhook
+//
+// ORDER MATTERS HERE: verify → persist → acknowledge.
+//
+// This used to answer 200 first and process in a setImmediate callback. Once Meta
+// has its 200 the message is never redelivered, so everything still in flight
+// when the process died was lost — on every deploy and every crash, not just in
+// theory. The payload is now handed to Redis before Meta is told anything, and a
+// failure to persist becomes a 5xx so Meta redelivers.
+//
+// Signature verification also moved ahead of the acknowledgement: acknowledging a
+// payload we have not authenticated, and only then deciding to drop it, meant the
+// 200 said "accepted" about a request we rejected.
 exports.handleWebhook = async (req, res) => {
-    // 1. Respond immediately to acknowledge receipt and prevent Meta timeouts/retries
-    res.sendStatus(200);
-    debug('✅ Sent 200 OK to Meta immediately');
+    const start = process.hrtime();
 
-    // 2. Process everything else in the background
-    setImmediate(async () => {
-        const start = process.hrtime();
-        let isSuccess = false;
+    try {
+        console.log('📥 [WEBHOOK] POST /webhook/whatsapp received');
+        debug('📋 Request headers:', JSON.stringify(req.headers, null, 2));
+        debugJSON('📦 Request body (raw)', req.body);
 
-        try {
-            console.log('📥 [WEBHOOK] POST /webhook/whatsapp received (Async processing)');
-            debug('📋 Request headers:', JSON.stringify(req.headers, null, 2));
-            debugJSON('📦 Request body (raw)', req.body);
+        // Resolve per-tenant app secret using the WABA ID in the payload,
+        // then verify the HMAC signature before accepting any content.
+        const wabaIdFromPayload = req.body?.entry?.[0]?.id;
+        const { secret: resolvedSecret, verifiable, unavailable } = await resolveAppSecret(wabaIdFromPayload);
 
-            // Resolve per-tenant app secret using the WABA ID in the payload,
-            // then verify the HMAC signature before processing any content.
-            const wabaIdFromPayload = req.body?.entry?.[0]?.id;
-            const { secret: resolvedSecret, verifiable } = await resolveAppSecret(wabaIdFromPayload);
-            if (verifiable) {
-                // Either an explicit per-tenant secret, or an Embedded Signup WABA that
-                // should be signed with META_APP_SECRET. A missing/invalid signature here
-                // IS suspicious — reject regardless of environment.
-                if (!resolvedSecret || !verifySignature(req, resolvedSecret)) {
-                    console.error(`❌ Invalid webhook signature - dropping request. WABA: ${wabaIdFromPayload} | Has rawBody: ${!!req.rawBody} | Had secret: ${!!resolvedSecret}`);
-                    telemetryService.recordWebhook(false, false, 0);
-                    return;
-                }
-            } else {
-                // Manual-credentials connection (or unknown WABA) — no secret exists
-                // anywhere for us to check against; this is an accepted trade-off of
-                // that connect flow, not a misconfiguration. Do not fail closed here.
-                // BUG #2 FIX: Always log this at warn (not debug) so it is visible in
-                // production when troubleshooting missing inbound messages.
-                console.warn(`⚠️ [Webhook] WABA ${wabaIdFromPayload} — no app secret found (manual-credentials connection). Proceeding without signature verification.`);
-            }
-
-            const body = req.body;
-
-            // Check if this is a WhatsApp webhook
-            debug(`🔍 body.object = "${body.object}"`);
-            if (body.object !== 'whatsapp_business_account') {
-                // BUG #5 FIX: Use console.log (always visible) not debug() for non-WA events
-                // so dropped webhooks from other Meta products are traceable in production.
-                console.log(`[Webhook] Non-WhatsApp event dropped: object="${body.object}" — ignoring.`);
-                telemetryService.recordWebhook(false, false, 0);
-                return;
-            }
-
-            // Process entries asynchronously
-            if (body.entry && body.entry.length > 0) {
-                debug(`📋 Processing ${body.entry.length} entry/entries...`);
-                // Process entries safely without blocking the main event loop for too long
-                for (const entry of body.entry) {
-                    await processEntry(entry);
-                }
-            } else {
-                debug('⚠️  No entries found in webhook body');
-            }
-
-            isSuccess = true;
-        } catch (error) {
-            console.error('❌ Webhook background processing error:', error);
-            debug('❌ Full error stack:', error.stack);
-        } finally {
-            const diff = process.hrtime(start);
-            const timeInMs = (diff[0] * 1e3) + (diff[1] * 1e-6);
-            telemetryService.recordWebhook(isSuccess, false, timeInMs);
+        // We could not reach the DB to find out how to verify this payload.
+        // Do not drop it — ask Meta to send it again.
+        if (unavailable) {
+            telemetryService.recordWebhook(false, false, 0);
+            return res.sendStatus(503);
         }
-    });
+
+        if (verifiable) {
+            // Either an explicit per-tenant secret, or an Embedded Signup WABA that
+            // should be signed with META_APP_SECRET. A missing/invalid signature here
+            // IS suspicious — reject regardless of environment.
+            if (!resolvedSecret || !verifySignature(req, resolvedSecret)) {
+                console.error(`❌ Invalid webhook signature - dropping request. WABA: ${wabaIdFromPayload} | Has rawBody: ${!!req.rawBody} | Had secret: ${!!resolvedSecret}`);
+                telemetryService.recordWebhook(false, false, 0);
+                // 200, not 4xx: the payload is unauthenticated, so we neither
+                // process it nor invite Meta to send it again.
+                return res.sendStatus(200);
+            }
+        } else {
+            // Manual-credentials connection (or unknown WABA) — no secret exists
+            // anywhere for us to check against; this is an accepted trade-off of
+            // that connect flow, not a misconfiguration. Do not fail closed here.
+            // BUG #2 FIX: Always log this at warn (not debug) so it is visible in
+            // production when troubleshooting missing inbound messages.
+            console.warn(`⚠️ [Webhook] WABA ${wabaIdFromPayload} — no app secret found (manual-credentials connection). Proceeding without signature verification.`);
+        }
+
+        const body = req.body;
+
+        debug(`🔍 body.object = "${body.object}"`);
+        if (body.object !== 'whatsapp_business_account') {
+            // BUG #5 FIX: Use console.log (always visible) not debug() for non-WA events
+            // so dropped webhooks from other Meta products are traceable in production.
+            console.log(`[Webhook] Non-WhatsApp event dropped: object="${body.object}" — ignoring.`);
+            telemetryService.recordWebhook(false, false, 0);
+            return res.sendStatus(200);
+        }
+
+        if (!body.entry || body.entry.length === 0) {
+            debug('⚠️  No entries found in webhook body');
+            return res.sendStatus(200);
+        }
+
+        // No Redis configured (local dev, or a deployment that never set it up).
+        // Fall back to the old inline behaviour rather than 503-ing every inbound
+        // message: that path is lossy on a crash, which is the bug being fixed,
+        // but it is what this deployment had before and refusing all traffic
+        // instead would be a strictly worse trade.
+        if (!process.env.REDIS_URL) {
+            console.warn('⚠️  [Webhook] REDIS_URL is not set — processing inline. Inbound messages in flight will be LOST on restart or crash. Set REDIS_URL for durable delivery.');
+            res.sendStatus(200);
+            setImmediate(async () => {
+                try {
+                    for (const entry of body.entry) await processEntry(entry);
+                    telemetryService.recordWebhook(true, false, 0);
+                } catch (err) {
+                    console.error('❌ Webhook inline processing error:', err);
+                    telemetryService.recordWebhook(false, false, 0);
+                }
+            });
+            return;
+        }
+
+        // Persist BEFORE acknowledging. If this throws, Meta must retry.
+        const { enqueueInboundWebhook } = require('../services/whatsappInboundQueue');
+        const jobId = await enqueueInboundWebhook({
+            entries: body.entry,
+            wabaId: wabaIdFromPayload || null,
+            receivedAt: new Date().toISOString()
+        });
+
+        const ms = Math.round(process.hrtime(start)[0] * 1000 + process.hrtime(start)[1] / 1e6);
+        debug(`✅ Queued ${body.entry.length} entry/entries as job ${jobId} in ${ms}ms — acknowledging Meta`);
+        telemetryService.recordWebhook(true, true, ms);
+        return res.sendStatus(200);
+
+    } catch (error) {
+        // Reaching here means we could NOT take responsibility for the payload.
+        // Answer 5xx so Meta redelivers it rather than dropping it silently.
+        console.error('❌ [Webhook] Could not accept inbound payload — asking Meta to retry:', error.message);
+        telemetryService.recordWebhook(false, false, 0);
+        return res.sendStatus(503);
+    }
 };
 
 // Handle Meta's template approval / rejection webhook event.
@@ -1409,3 +1453,8 @@ const extractMessagePreview = (message) => {
     if (message.reaction) return `${message.reaction.emoji} Reaction`;
     return 'Message';
 };
+
+// Exported for the inbound queue worker (whatsappInboundQueue) and for tests.
+// Declared down here on purpose: `processEntry` is a `const`, so assigning it to
+// exports above its declaration throws a TDZ ReferenceError at module load.
+exports.processEntry = processEntry;

@@ -60,7 +60,19 @@ const DEFAULT_STORAGE_LIMIT_MB = 1024;
 const DEFAULT_TOP_K = 5;
 // Below this cosine score a chunk is noise. Injecting a weak match is worse than
 // injecting nothing: it invites the model to answer from an unrelated row.
-const DEFAULT_MIN_SCORE = Number(process.env.KB_MIN_SCORE) || 0.35;
+//
+// ⚠️ THE REAL FLOOR IS PER MODEL, not this constant. Cosine scores are only
+// meaningful relative to the model that produced them — OpenAI's spread and
+// Gemini's compressed high band do not share a cut-off (see embeddingService's
+// header for the measured ranges). A single shared value silently returned
+// NOTHING for every OpenAI tenant, which reads as "the AI can't see my document"
+// even though the index was perfectly healthy. So each model carries its own
+// minScore and retrieval reads it off the resolved embedding context; this
+// constant is only the fallback for a context that declares none.
+const DEFAULT_MIN_SCORE = 0.35;
+// Escape hatch: when set, KB_MIN_SCORE overrides every per-model floor. Left
+// unset in normal operation.
+const MIN_SCORE_OVERRIDE = process.env.KB_MIN_SCORE ? Number(process.env.KB_MIN_SCORE) : null;
 // Hard ceiling on the whole retrieve step. The inbound WhatsApp webhook has a
 // finite budget before Meta retries the delivery, so a slow embedding API must
 // degrade to "no knowledge context", never stall the reply.
@@ -591,7 +603,32 @@ async function recoverStuckDocuments() {
     if (result.modifiedCount > 0) {
         console.log(`[KnowledgeBase] Recovered ${result.modifiedCount} stuck document(s).`);
     }
-    return result.modifiedCount;
+
+    // Documents embedded with a model the platform NO LONGER OFFERS are excluded
+    // by retrieval's `embeddingModel` filter, so they sit at "Ready" while
+    // answering nothing — the same silent failure this sweep exists to prevent.
+    // Providers do retire embedding models (Google retired text-embedding-004),
+    // and when the spec below moves, yesterday's rows are stranded. This needs no
+    // per-tenant lookup: a model absent from EVERY spec is dead for everyone.
+    const liveModels = Object.values(embeddings.EMBEDDING_MODELS).map(m => m.model);
+    const retired = await KnowledgeDocument.updateMany(
+        {
+            deletedAt: null,
+            status: 'ready',
+            embeddingModel: { $nin: [...liveModels, null] }
+        },
+        {
+            $set: {
+                status: 'stale',
+                errorMessage: 'The embedding model this document was indexed with has been retired. Re-index it to make it searchable again.'
+            }
+        }
+    );
+    if (retired.modifiedCount > 0) {
+        console.log(`[KnowledgeBase] Marked ${retired.modifiedCount} document(s) stale — retired embedding model.`);
+    }
+
+    return result.modifiedCount + retired.modifiedCount;
 }
 
 // ── Retrieval (the hot path) ────────────────────────────────────────────────
@@ -620,7 +657,10 @@ function withTimeout(promise, ms, label) {
 async function retrieveKnowledge(tenantId, queryText, options = {}) {
     const {
         topK = DEFAULT_TOP_K,
-        minScore = DEFAULT_MIN_SCORE,
+        // Deliberately NOT defaulted here: the correct floor depends on which
+        // embedding model this tenant runs on, which is not known until the
+        // context resolves below. `undefined` means "use the model's own".
+        minScore,
         charge = true
     } = options;
 
@@ -655,7 +695,13 @@ async function retrieveKnowledge(tenantId, queryText, options = {}) {
             }).catch(err => console.warn('[KnowledgeBase] Query charge failed:', err.message));
         }
 
-        const hits = scoreIndex(index, vector, topK, minScore);
+        // Caller's explicit value wins (the tenant's test-query slider), then the
+        // env override, then the floor calibrated for this specific model.
+        const floor = minScore != null
+            ? minScore
+            : (MIN_SCORE_OVERRIDE ?? ctx.minScore ?? DEFAULT_MIN_SCORE);
+
+        const hits = scoreIndex(index, vector, topK, floor);
         if (!hits.length) return [];
 
         // Content is fetched from Mongo rather than cached, so an edited or

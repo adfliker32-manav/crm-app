@@ -5,6 +5,7 @@ const WhatsAppMessage = require('../models/WhatsAppMessage');
 const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } = require('./whatsappService');
 const { emitToUsers, emitToConversation } = require('./socketService');
 const { getCompanyUserIds } = require('../utils/whatsappUtils');
+const { trackJob, registerJob } = require('./jobHealthService');
 
 // Chatbot Follow-up Service
 // Runs every 10 minutes via cron.
@@ -15,8 +16,15 @@ const { getCompanyUserIds } = require('../utils/whatsappUtils');
 //   - Does NOT update lastInteractionAt (so delay is absolute from last contact)
 //   - Increments followUpIndex after each send so the same message is never sent twice
 
+const JOB_NAME = 'chatbot-followup-sweep';
+
 const initializeFollowupService = () => {
+    // Registered up front so a sweep that has been broken since boot still shows
+    // on the health screen — with no row, nothing looks wrong.
+    registerJob(JOB_NAME, { label: 'Chatbot follow-up sweep', expectedIntervalSeconds: 600 });
+
     cron.schedule('*/10 * * * *', async () => {
+      await trackJob(JOB_NAME, async () => {
         try {
             const now = new Date();
 
@@ -150,7 +158,12 @@ const initializeFollowupService = () => {
             }
         } catch (error) {
             console.error('❌ Critical error in chatbot followup cron job:', error);
+            // Rethrow so the heartbeat records a failure. Previously this was
+            // swallowed here and a permanently broken sweep looked identical to
+            // a healthy one.
+            throw error;
         }
+      }).catch(() => { /* already recorded by trackJob */ });
     });
 
     console.log('🤖 Chatbot Follow-up service initialized (Cron: every 10 minutes)');

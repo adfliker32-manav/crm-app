@@ -394,6 +394,13 @@ mongoose.connect(MONGO_URI, {
         const { startBroadcastWorker, getBroadcastQueue } = require('./src/services/broadcastQueueService');
         startBroadcastWorker();
 
+        // Inbound WhatsApp worker. The webhook persists every verified payload
+        // here BEFORE acknowledging Meta, so this worker is what actually
+        // answers customers — if it is not running, inbound messages pile up in
+        // Redis rather than being lost, but nobody gets a reply.
+        const { startInboundWorker } = require('./src/services/whatsappInboundQueue');
+        startInboundWorker();
+
         // ── Orphan recovery ────────────────────────────────────────────────────
         // On every startup, find broadcasts whose BullMQ job was lost (e.g. Redis
         // restart wiped the queue). Re-queue them so they are not stuck forever.
