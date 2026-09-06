@@ -796,6 +796,12 @@ const uploadMediaBufferForSending = async (userId, buffer, mimeType, fileName) =
 };
 
 module.exports = {
+    // Exported for inboundMediaService: mirroring an inbound image/document to R2
+    // needs the SAME per-tenant Meta token these senders use. Leaving it off this
+    // list made the destructured require resolve to undefined, and the mirror
+    // failed inside its own try/catch — so every inbound media message silently
+    // kept only Meta's expiring URL and no durable copy.
+    getCredentials,
     sendWhatsAppMessage,
     checkTemplateSendable,
     sendWhatsAppTextMessage,

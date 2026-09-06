@@ -146,10 +146,9 @@ const manualEnroll = async (req, res) => {
         }).lean();
         if (existing) return res.status(409).json({ message: 'Lead is already enrolled in this sequence' });
 
-        // Use the sequence engine to enroll
-        const { enrollLeadInSequences } = require('../services/sequenceService');
-        // enrollLeadInSequences filters by trigger — for manual we call with the lead object directly
-        // but we need to force-enroll regardless of trigger, so we create the enrollment directly
+        // enrollLeadInSequences is deliberately NOT reused here: it only enrolls leads
+        // whose sequence matches a TRIGGER. A manual enrol must work regardless of
+        // trigger, so the enrollment row is created directly and scheduled below.
         const enrollment = await SequenceEnrollment.create({
             tenantId: req.tenantId,
             sequenceId: id,
@@ -159,9 +158,14 @@ const manualEnroll = async (req, res) => {
             enrolledAt: new Date()
         });
 
-        // Schedule the first step immediately
+        // Schedule the first step immediately.
+        // scheduleStepJob takes POSITIONAL (enrollmentId, delayHours) - it was being
+        // called with an options object AND was not on sequenceService exports, so this
+        // threw "scheduleStepJob is not a function" on every manual enrol. The 500 came
+        // AFTER the enrollment row was written, leaving an active enrollment with no
+        // scheduled job that also blocked the lead from ever auto-enrolling again.
         const { scheduleStepJob } = require('../services/sequenceService');
-        await scheduleStepJob({ enrollmentId: enrollment._id, sequenceId: id, stepIndex: 0, delayHours: seq.steps[0]?.delayHours || 0 });
+        await scheduleStepJob(enrollment._id, seq.steps[0]?.delayHours || 0);
 
         // Increment enrollmentCount on the sequence
         await Sequence.updateOne({ _id: id }, { $inc: { enrollmentCount: 1 } });

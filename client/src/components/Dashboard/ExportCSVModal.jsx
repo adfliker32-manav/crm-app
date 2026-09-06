@@ -4,7 +4,7 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { displayCustomValue } from '../../utils/customFieldHelpers';
 
-const ExportCSVModal = ({ isOpen, onClose, leads = [], stages = [], userTags = [], selectedIds = null }) => {
+const ExportCSVModal = ({ isOpen, onClose, leads = [], stages = [], userTags = [], selectedIds = null, exportLabel = null }) => {
     const { showError, showSuccess } = useNotification();
     const [selectedStage, setSelectedStage] = useState('All');
     const [selectedSource, setSelectedSource] = useState('All');
@@ -125,7 +125,7 @@ const ExportCSVModal = ({ isOpen, onClose, leads = [], stages = [], userTags = [
                         </div>
                         <div>
                             <h2 className="text-xl font-bold text-slate-800">Export Leads</h2>
-                            <p className="text-sm text-slate-500">Filter before exporting to CSV</p>
+                            <p className="text-sm text-slate-500">{exportLabel ? 'Exporting ' + exportLabel : 'Filter before exporting to CSV'}</p>
                         </div>
                     </div>
                 </div>

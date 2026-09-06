@@ -274,4 +274,6 @@ const defineSequenceJobs = (agenda) => {
     });
 };
 
-module.exports = { enrollLeadInSequences, pauseLeadSequences, defineSequenceJobs };
+// scheduleStepJob is exported for sequenceController.manualEnroll, which builds
+// its enrollment row directly instead of going through enrollLeadInSequences.
+module.exports = { enrollLeadInSequences, pauseLeadSequences, defineSequenceJobs, scheduleStepJob };

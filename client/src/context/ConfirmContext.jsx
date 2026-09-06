@@ -8,17 +8,32 @@ export const ConfirmProvider = ({ children }) => {
         title: '',
         message: '',
         type: 'warning',
+        confirmText: 'Confirm',
         onConfirm: null,
         onCancel: null
     });
 
-    const showConfirm = useCallback((message, title = 'Confirm Action', type = 'warning') => {
+    // Accepts EITHER the positional form showConfirm(message, title, type) or a
+    // single options object { message, title, type, confirmText }.
+    //
+    // ⚠️ The object form is not sugar — it is a guard. ConfirmDialog renders
+    // `message` straight into JSX, so an options object arriving in that slot made
+    // React throw "Objects are not valid as a React child", which the ErrorBoundary
+    // turned into a full-page "Something went wrong". The promise below never
+    // resolved either, so the action being confirmed silently never ran.
+    const showConfirm = useCallback((messageOrOptions, title = 'Confirm Action', type = 'warning') => {
+        const isOptions = messageOrOptions
+            && typeof messageOrOptions === 'object'
+            && !React.isValidElement(messageOrOptions);
+        const opts = isOptions ? messageOrOptions : { message: messageOrOptions };
+
         return new Promise((resolve) => {
             setConfirmState({
                 isOpen: true,
-                title,
-                message,
-                type,
+                title: opts.title ?? title,
+                message: opts.message ?? '',
+                type: opts.type ?? type,
+                confirmText: opts.confirmText || 'Confirm',
                 onConfirm: () => {
                     setConfirmState(prev => ({ ...prev, isOpen: false }));
                     resolve(true);

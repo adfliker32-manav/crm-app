@@ -3,9 +3,18 @@ import { useConfirm } from '../context/ConfirmContext';
 
 const ConfirmDialog = () => {
     const { confirmState } = useConfirm();
-    const { isOpen, title, message, type, onConfirm, onCancel } = confirmState;
+    const { isOpen, title, message, type, confirmText, onConfirm, onCancel } = confirmState;
 
     if (!isOpen) return null;
+
+    // Last-resort guard: a non-renderable `message` (an object slipped into the
+    // positional slot) would throw inside render, and this dialog sits high enough
+    // in the tree that the ErrorBoundary replaces the ENTIRE page with "Something
+    // went wrong" — losing the user's work over a bad confirm call. Degrade to
+    // readable text instead of taking the app down.
+    const body = (typeof message === 'string' || React.isValidElement(message))
+        ? message
+        : String(message ?? '');
 
     const iconConfig = {
         warning: {
@@ -39,7 +48,7 @@ const ConfirmDialog = () => {
                     </div>
                     <div className="flex-1">
                         <h3 className="text-lg font-bold text-gray-800 mb-2">{title}</h3>
-                        <p className="text-sm text-gray-600 leading-relaxed">{message}</p>
+                        <p className="text-sm text-gray-600 leading-relaxed">{body}</p>
                     </div>
                 </div>
 
@@ -54,7 +63,7 @@ const ConfirmDialog = () => {
                         onClick={onConfirm}
                         className={`px-5 py-2.5 text-white rounded-lg font-medium transition ${config.buttonClass}`}
                     >
-                        Confirm
+                        {confirmText || 'Confirm'}
                     </button>
                 </div>
             </div>
