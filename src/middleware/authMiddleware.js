@@ -15,10 +15,30 @@ const agentPermCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const tokenVersionCache = new NodeCache({ stdTTL: 60, checkperiod: 30 });
 
 // Export utilities to clear caches immediately when settings change.
-const clearTenantCache = (tenantId) => {
-    if (tenantId) {
-        tenantCache.del(`workspace_${tenantId}`);
-        tenantCache.del(`integrations_${tenantId}`);
+//
+// ⚠️ This cache lives in PROCESS memory. Clearing it only fixes the instance
+// that handled the write — every other web instance and every BullMQ worker
+// kept serving the stale workspace for up to the 5-minute TTL, which is how a
+// settings change could appear to do nothing (the inbound-WhatsApp worker in
+// particular never sees the request that made the change). So the clear is also
+// broadcast over Redis pub/sub; see services/cacheInvalidationBus.
+//
+// `broadcast: false` is used by the bus itself when APPLYING a received
+// message — without it every instance would echo every invalidation back onto
+// the channel forever.
+const clearTenantCache = (tenantId, { broadcast = true } = {}) => {
+    if (!tenantId) return;
+    tenantCache.del(`workspace_${tenantId}`);
+    tenantCache.del(`integrations_${tenantId}`);
+
+    if (broadcast) {
+        try {
+            require('../services/cacheInvalidationBus').publishTenantInvalidation(tenantId);
+        } catch (err) {
+            // Never let an invalidation broadcast fail the write that caused it —
+            // the TTL is the backstop.
+            console.error('[authMiddleware] cache invalidation broadcast failed:', err.message);
+        }
     }
 };
 

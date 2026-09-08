@@ -470,8 +470,17 @@ const WhatsAppInbox = () => {
         // Emitted by the server when a Lead's owner changes and lead-based
         // WhatsApp assignment is enabled. `revoked` means THIS user just lost
         // access; anyone else receiving it either gained it or already had it.
-        const handleConversationAssigned = ({ conversationId, assignedTo, revoked }) => {
+        const handleConversationAssigned = ({ conversationId, assignedTo, assignedToName, revoked }) => {
             const convId = typeof conversationId === 'string' ? conversationId : String(conversationId);
+
+            // The list renders the owner as a POPULATED object (chat.assignedTo.name),
+            // but the socket payload carries a bare id — writing it straight in
+            // blanked the badge on every live reassignment until the next full
+            // refetch, which read as the feature having failed. Rebuild the same
+            // shape the REST layer returns.
+            const nextAssignee = assignedTo
+                ? { _id: assignedTo, name: assignedToName || null }
+                : null;
 
             if (revoked) {
                 setConversations(prev => prev.filter(c => c._id !== convId));
@@ -492,11 +501,11 @@ const WhatsAppInbox = () => {
                     setTimeout(() => fetchConversationsRef.current?.(), 0);
                     return prev;
                 }
-                return prev.map(c => (c._id === convId ? { ...c, assignedTo } : c));
+                return prev.map(c => (c._id === convId ? { ...c, assignedTo: nextAssignee } : c));
             });
 
             if (selectedChatRef.current?._id === convId) {
-                setSelectedChat(prev => (prev ? { ...prev, assignedTo } : prev));
+                setSelectedChat(prev => (prev ? { ...prev, assignedTo: nextAssignee } : prev));
             }
         };
 

@@ -205,18 +205,44 @@ function withPredicate(scope, predicate) {
  * behaves under req.dataScope.
  */
 async function resolveAssigneeForConversation({ tenantId, leadId, lead }) {
-    if (!await isFollowLeadEnabled(tenantId)) return null;
+    const { assignedTo } = await resolveAssignmentForConversation({ tenantId, leadId, lead });
+    return assignedTo;
+}
 
-    if (lead !== undefined && lead !== null) return lead.assignedTo || null;
-    if (!leadId) return null;
+/**
+ * Same resolution, but it also reports WHY the answer is null.
+ *
+ * `resolveAssigneeForConversation` collapses three very different situations
+ * into a bare `null`: the workspace toggle is off, there is no lead, or the
+ * lead is deliberately UNASSIGNED. A caller that wants to keep a conversation
+ * in step with its lead cannot act on that — writing null whenever it sees null
+ * would wipe every conversation's owner in a workspace that has the feature
+ * switched off, and skipping null (what the inbound webhook used to do) means
+ * un-assigning a lead never takes the chat away from the old agent, who keeps
+ * seeing it indefinitely.
+ *
+ * @returns {Promise<{enabled: boolean, assignedTo: (ObjectId|null)}>}
+ *          `enabled: false` means "this workspace does not mirror assignment —
+ *          do not write anything". `enabled: true` with `assignedTo: null`
+ *          means "this thread genuinely has no owner — clear it".
+ */
+async function resolveAssignmentForConversation({ tenantId, leadId, lead }) {
+    if (!await isFollowLeadEnabled(tenantId)) return { enabled: false, assignedTo: null };
+
+    if (lead !== undefined && lead !== null) {
+        return { enabled: true, assignedTo: lead.assignedTo || null };
+    }
+    if (!leadId) return { enabled: true, assignedTo: null };
 
     try {
         const Lead = require('../models/Lead');
         const doc = await Lead.findById(leadId).select('assignedTo').lean();
-        return doc?.assignedTo || null;
+        return { enabled: true, assignedTo: doc?.assignedTo || null };
     } catch (err) {
-        console.error('[WA Assignment] resolveAssigneeForConversation failed:', err.message);
-        return null;
+        console.error('[WA Assignment] resolveAssignmentForConversation failed:', err.message);
+        // Fail closed: report "not enabled" so the caller writes nothing rather
+        // than clearing an owner because of a transient read failure.
+        return { enabled: false, assignedTo: null };
     }
 }
 
@@ -383,6 +409,23 @@ async function detachDeletedLeads({ leadIds, tenantId }) {
 // ── Real-time audience ────────────────────────────────────────────────────────
 
 /**
+ * The company roster this module needs to compute an audience: role, the
+ * full-inbox permission, and the display name (so an assignment event can carry
+ * the new owner's name instead of a bare id).
+ *
+ * Split out so a caller that computes MANY audiences — a bulk reassignment
+ * touching hundreds of conversations — can load it once instead of once per
+ * conversation. See broadcastAssignmentChanges.
+ */
+async function loadCompanyRoster(companyUserIds = []) {
+    if (companyUserIds.length === 0) return [];
+    const User = require('../models/User');
+    return User.find({ _id: { $in: companyUserIds } })
+        .select('name role permissions.viewAllWhatsApp')
+        .lean();
+}
+
+/**
  * Which company users may receive socket events for a given conversation.
  *
  * Filtering the emit loop is NOT on its own enough to stop a leak — see
@@ -390,17 +433,18 @@ async function detachDeletedLeads({ leadIds, tenantId }) {
  * lets an agent into their manager's `user:<id>` room. Both halves are needed.
  *
  * Falls back to the full company list on any error, matching today's behaviour.
+ *
+ * @param {Array} [options.roster] a preloaded loadCompanyRoster() result. Pass
+ *        it when computing several audiences for the same company, otherwise
+ *        every call re-reads the whole team from Mongo.
  */
-async function conversationAudience({ tenantId, companyUserIds, assignedTo }) {
+async function conversationAudience({ tenantId, companyUserIds, assignedTo, roster = null }) {
     const all = companyUserIds || [];
     if (!await isFollowLeadEnabled(tenantId)) return all;
     if (all.length === 0) return all;
 
     try {
-        const User = require('../models/User');
-        const users = await User.find({ _id: { $in: all } })
-            .select('role permissions.viewAllWhatsApp')
-            .lean();
+        const users = roster || await loadCompanyRoster(all);
 
         const assignee = assignedTo ? String(assignedTo) : null;
         return users
@@ -473,16 +517,38 @@ async function broadcastAssignmentChanges({ tenantId, companyUserIds, changes = 
     try {
         const { emitToWhatsAppUsers, removeUserFromConversation } = require('./socketService');
 
+        // The audience depends ONLY on the assignee, and a bulk reassignment
+        // moves every lead to the SAME one — so computing it inside the loop ran
+        // one identical team-wide User.find per conversation (500 leads → 500
+        // queries). Load the roster once and memoize per distinct assignee.
+        const roster = await loadCompanyRoster(companyUserIds || []);
+        const audienceByAssignee = new Map();
+        const audienceFor = async (assignedTo) => {
+            const key = assignedTo ? String(assignedTo) : 'null';
+            if (!audienceByAssignee.has(key)) {
+                audienceByAssignee.set(key, await conversationAudience({
+                    tenantId, companyUserIds, assignedTo, roster
+                }));
+            }
+            return audienceByAssignee.get(key);
+        };
+
+        // The inbox renders the owner as a populated { name } object, so an
+        // event carrying only an id would blank the badge until the next full
+        // refetch — the reassignment would look like it had failed. Resolve the
+        // name from the roster we already hold.
+        const nameById = new Map(roster.map(u => [String(u._id), u.name || null]));
+
         for (const change of changes) {
+            const assigneeId = change.assignedTo ? String(change.assignedTo) : null;
             const payload = {
                 conversationId: String(change._id),
-                assignedTo: change.assignedTo ? String(change.assignedTo) : null
+                assignedTo: assigneeId,
+                assignedToName: assigneeId ? (nameById.get(assigneeId) || null) : null
             };
 
             // Whoever can see it now.
-            const audience = await conversationAudience({
-                tenantId, companyUserIds, assignedTo: change.assignedTo
-            });
+            const audience = await audienceFor(change.assignedTo);
             emitToWhatsAppUsers(audience, 'whatsapp:conversationAssigned', payload);
 
             // And the agent who just lost it — they are NOT in the audience
@@ -519,11 +585,13 @@ module.exports = {
     invalidateFollowLeadCache,
     // assignment
     resolveAssigneeForConversation,
+    resolveAssignmentForConversation,
     linkConversationsToLead,
     syncConversationsForLead,
     syncConversationsForLeads,
     detachDeletedLeads,
     // real-time
+    loadCompanyRoster,
     conversationAudience,
     broadcastConversationEvent,
     broadcastAssignmentChanges

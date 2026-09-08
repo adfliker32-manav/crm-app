@@ -75,7 +75,41 @@ const getRedisCommandConnection = () => {
     return _cmdConnection;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBSCRIBER CONNECTION
+// ─────────────────────────────────────────────────────────────────────────────
+// A connection in subscriber mode accepts ONLY (P)SUBSCRIBE/UNSUBSCRIBE — Redis
+// rejects every other command on it. So pub/sub needs a connection of its own
+// and must never borrow the queue or command ones.
+//
+// maxRetriesPerRequest is irrelevant here (no commands are issued) but the
+// connection MUST reconnect on its own: a subscriber that quietly stays down
+// after a blip stops receiving invalidations while looking healthy. ioredis
+// re-subscribes to its channels automatically on reconnect.
+let _subConnection = null;
+
+const getRedisSubscriberConnection = () => {
+    if (_subConnection) return _subConnection;
+
+    const url = process.env.REDIS_URL || 'redis://localhost:6379';
+
+    _subConnection = new IORedis(url, {
+        maxRetriesPerRequest: null,
+        enableReadyCheck:     false,
+        lazyConnect:          false
+    });
+
+    _subConnection.on('error', (err) => console.error('⚠️  Redis (subscriber) error:', err.message));
+
+    return _subConnection;
+};
+
 const closeRedisConnection = async () => {
+    if (_subConnection) {
+        await _subConnection.quit().catch(() => { /* already down */ });
+        _subConnection = null;
+        console.log('✅ Redis: subscriber connection closed');
+    }
     if (_connection) {
         await _connection.quit();
         _connection = null;
@@ -88,4 +122,4 @@ const closeRedisConnection = async () => {
     }
 };
 
-module.exports = { getRedisConnection, getRedisCommandConnection, closeRedisConnection };
+module.exports = { getRedisConnection, getRedisCommandConnection, getRedisSubscriberConnection, closeRedisConnection };

@@ -9,7 +9,8 @@ const telemetryService = require('../services/telemetryService');
 const { emitToUser, emitToConversation } = require('../services/socketService');
 const {
     broadcastConversationEvent,
-    resolveAssigneeForConversation
+    resolveAssigneeForConversation,
+    resolveAssignmentForConversation
 } = require('../services/whatsappAssignmentService');
 const { forwardIfPartnerAccount } = require('../services/partnerWebhookService');
 
@@ -918,12 +919,16 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // Guaranteed to never throw duplicate key exceptions on concurrent inserts
         debug(`🔎 Upserting conversation: targetUserId=${targetUserId}, waContactId=${upsertContactId} (incoming from: ${from || bsuid})`);
 
-        // Derived owner: mirrors the matched Lead's assignedTo. Returns null
-        // whenever lead-based assignment is off, so this is inert by default.
-        const derivedAssignee = await resolveAssigneeForConversation({
-            tenantId: targetUserId,
-            lead: lead || null
-        });
+        // Derived owner: mirrors the matched Lead's assignedTo. `mirrorEnabled`
+        // is false whenever lead-based assignment is off for this workspace, so
+        // this is inert by default. The two are reported separately because a
+        // bare null cannot distinguish "feature off" from "lead deliberately
+        // unassigned" — see resolveAssignmentForConversation.
+        const { enabled: mirrorEnabled, assignedTo: derivedAssignee } =
+            await resolveAssignmentForConversation({
+                tenantId: targetUserId,
+                lead: lead || null
+            });
 
         const updatePayload = {
             $setOnInsert: {
@@ -977,8 +982,15 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // Keep the derived owner in step with the Lead on every inbound message.
         // Cheap (the Lead is already loaded) and self-healing: a conversation
         // that missed a reassignment catches up the next time the customer writes.
-        if (existingConversation && derivedAssignee !== null &&
-            String(existingConversation.assignedTo || '') !== String(derivedAssignee)) {
+        //
+        // Gated on mirrorEnabled, NOT on `derivedAssignee !== null`. The old
+        // null check meant an UN-assignment never propagated: clearing a lead's
+        // owner left the chat with the previous agent, who kept seeing it (and
+        // kept receiving its live events) forever. Now null is written too —
+        // but only when the workspace actually mirrors assignment, so a
+        // workspace with the feature off still never has its owners touched.
+        if (existingConversation && mirrorEnabled &&
+            String(existingConversation.assignedTo || '') !== String(derivedAssignee || '')) {
             updatePayload.$set.assignedTo = derivedAssignee;
         }
 

@@ -27,6 +27,7 @@ const {
     conversationScope,
     withPredicate,
     resolveAssigneeForConversation,
+    resolveAssignmentForConversation,
     isAssignmentRestricted,
     broadcastConversationEvent
 } = require('../services/whatsappAssignmentService');
@@ -460,6 +461,28 @@ exports.startConversation = async (req, res) => {
         const companyUserIds = await getCompanyUserIds(userId);
         const phoneLast10 = normalizedPhone.slice(-10);
 
+        // 🔐 Resolve the requested lead ONCE, SCOPED to this workspace.
+        // Every later use of `leadId` (the derived owner, the conversation's
+        // lead link, the template variable context) previously went through a
+        // bare `Lead.findById(req.body.leadId)` with no tenant filter, so a
+        // caller could name another workspace's lead and get it written onto
+        // this conversation — along with a foreign user as its derived owner,
+        // and that lead's data rendered into the outgoing template.
+        let requestedLead = null;
+        if (leadId) {
+            requestedLead = await Lead.findOne({ _id: leadId, ...req.dataScope });
+            if (!requestedLead) {
+                return res.status(404).json({ message: 'Lead not found or access denied' });
+            }
+        }
+
+        // The lead this thread belongs to: the one named by the caller, or the
+        // most recently touched lead carrying this phone number.
+        const findLeadByPhone = () => Lead.findOne({
+            userId: { $in: companyUserIds },
+            phone: { $regex: phoneLast10 + '$' }
+        }).sort({ updatedAt: -1 });
+
         // Company-wide lookup so we never create a duplicate thread for a
         // contact that already exists somewhere in the workspace — but the
         // access check below decides whether this caller may USE it.
@@ -492,12 +515,8 @@ exports.startConversation = async (req, res) => {
             } else {
                 // New thread — the contact's lead must be theirs. An unknown
                 // number has no lead, and therefore no owner, so it is refused.
-                const targetLead = leadId
-                    ? await Lead.findOne({ _id: leadId, ...req.dataScope }).select('assignedTo').lean()
-                    : await Lead.findOne({
-                        userId: { $in: companyUserIds },
-                        phone: { $regex: phoneLast10 + '$' }
-                    }).sort({ updatedAt: -1 }).select('assignedTo').lean();
+                const targetLead = requestedLead
+                    || await findLeadByPhone().select('assignedTo').lean();
 
                 if (!targetLead || String(targetLead.assignedTo || '') !== String(userId)) {
                     return res.status(403).json({
@@ -507,15 +526,15 @@ exports.startConversation = async (req, res) => {
             }
         }
 
-        if (!conversation) {
-            // Resolve the derived owner from the lead this thread belongs to.
-            const resolvedLead = leadId
-                ? await Lead.findById(leadId).select('assignedTo').lean()
-                : await Lead.findOne({
-                    userId: { $in: companyUserIds },
-                    phone: { $regex: phoneLast10 + '$' }
-                }).sort({ updatedAt: -1 }).select('assignedTo').lean();
+        // The lead behind this thread, however it was identified. Only looked
+        // up when it can actually be used — a thread that already carries a
+        // leadId is never re-pointed, so the phone lookup would be wasted.
+        const needsLeadLookup = !conversation || !conversation.leadId;
+        const resolvedLead = needsLeadLookup
+            ? (requestedLead || await findLeadByPhone().select('assignedTo').lean())
+            : null;
 
+        if (!conversation) {
             const assignedTo = await resolveAssigneeForConversation({
                 tenantId: req.tenantId,
                 lead: resolvedLead || null
@@ -526,13 +545,30 @@ exports.startConversation = async (req, res) => {
                 userId: userId,
                 waContactId: normalizedPhone,
                 phone: normalizedPhone,
-                leadId: leadId || resolvedLead?._id || null,
+                leadId: resolvedLead?._id || null,
                 assignedTo,
                 initiatedBy: 'user',
                 metadata: {
                     firstMessageAt: new Date()
                 }
             });
+        } else if (!conversation.leadId && resolvedLead?._id) {
+            // An EXISTING thread that was never linked to a lead. The link and
+            // the derived owner used to be set only on the create path, so
+            // starting a conversation with a lead whose thread already existed
+            // left it orphaned (leadId: null) forever — invisible to lead-based
+            // assignment, which filters on leadId.
+            //
+            // STRICTLY ADDITIVE, matching the webhook's rule: only ever
+            // null -> a real link. Re-pointing a thread that already belongs to
+            // another lead would silently steal it.
+            conversation.leadId = resolvedLead._id;
+
+            const { enabled, assignedTo } = await resolveAssignmentForConversation({
+                tenantId: req.tenantId,
+                lead: resolvedLead
+            });
+            if (enabled) conversation.assignedTo = assignedTo;
         }
 
         let result, waMessageId, messageContent, messageType;
@@ -544,7 +580,11 @@ exports.startConversation = async (req, res) => {
             
             if (templateObj) {
                 const userObj = await User.findById(userId);
-                const leadObj = leadId ? await Lead.findById(leadId) : await Lead.findOne({ userId: userId, phone: normalizedPhone });
+                // Scoped: `requestedLead` was already resolved through
+                // req.dataScope, so a foreign lead's fields can never be
+                // rendered into this workspace's outgoing template.
+                const leadObj = requestedLead
+                    || await Lead.findOne({ userId: userId, phone: normalizedPhone });
                 
                 const { resolveTemplateMedia } = require('../services/mediaLibraryService');
                 const media = await resolveTemplateMedia(templateObj, userId);

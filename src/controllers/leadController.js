@@ -411,6 +411,59 @@ const updateLead = async (req, res) => {
 
         const updates = { ...req.body };
 
+        // ── Reassignment through the lead-edit endpoint ──────────────────────
+        // `assignedTo` is declared on the updateLead schema but is deliberately
+        // NOT in ALLOWED_LEAD_UPDATE_FIELDS, so applyLeadUpdates used to drop it
+        // silently: the API answered 200 OK, the owner never changed, and the
+        // WhatsApp conversation never followed. Handled explicitly here instead.
+        //
+        // Gated on `assignLeads`, not `editLeads` (this route's own gate):
+        // PUT /leads/:id must not become a way around the permission that
+        // PUT /leads/:id/assign enforces.
+        let assignmentChanged = false;
+        let assigneeName = null;
+        if (hasOwn(updates, 'assignedTo')) {
+            const rawAssignee = updates.assignedTo;
+            delete updates.assignedTo; // never let applyLeadUpdates see it
+
+            const nextAssignee = rawAssignee ? String(rawAssignee) : null;
+            const currentAssignee = lead.assignedTo ? String(lead.assignedTo) : null;
+
+            if (nextAssignee !== currentAssignee) {
+                const canAssign = ['manager', 'superadmin'].includes(req.user.role)
+                    || req.user.permissions?.assignLeads === true;
+                if (!canAssign) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "Permission denied: You do not have 'assignLeads' permission"
+                    });
+                }
+
+                if (nextAssignee) {
+                    // Same in-workspace check assignLead performs — an id alone
+                    // must never reach a user in someone else's account.
+                    const agent = await User.findOne({
+                        _id: nextAssignee, parentId: ownerId, role: 'agent'
+                    }).select('_id name').lean();
+                    if (!agent) {
+                        return res.status(400).json({ message: 'Invalid agent ID' });
+                    }
+                    lead.assignedTo = agent._id;
+                    assigneeName = agent.name;
+                } else {
+                    lead.assignedTo = null;
+                }
+                assignmentChanged = true;
+
+                lead.history.push({
+                    type: 'System',
+                    subType: 'Assignment',
+                    content: assigneeName ? `Assigned to ${assigneeName}` : 'Unassigned',
+                    date: new Date()
+                });
+            }
+        }
+
         // Same option-list enforcement as create. `partial` because an edit may
         // touch only some fields, and `existingData` so a value stored before an
         // admin retired its option still round-trips instead of blocking the save.
@@ -467,6 +520,13 @@ const updateLead = async (req, res) => {
 
         await lead.save();
 
+        // The Lead is the single source of truth for who owns its WhatsApp
+        // conversation, so every path that writes assignedTo must call this —
+        // fired only after the write lands.
+        if (assignmentChanged) {
+            queueLeadAssignmentEffects(lead, ownerId);
+        }
+
         const initiatorName = await resolveActorName(req.user);
 
         const changesObj = {};
@@ -481,7 +541,14 @@ const updateLead = async (req, res) => {
             entityId: lead._id,
             entityName: lead.name,
             changes: Object.keys(changesObj).length > 0 ? changesObj : null,
-            metadata: { fieldsUpdated: Object.keys(updates) },
+            // `assignedTo` is consumed above and deleted from `updates`, so it
+            // has to be re-added here or a reassignment would be invisible in
+            // the audit trail.
+            metadata: {
+                fieldsUpdated: assignmentChanged
+                    ? [...Object.keys(updates), 'assignedTo']
+                    : Object.keys(updates)
+            },
             companyId: ownerId
         }).catch(err => console.error('Audit log error:', err));
 

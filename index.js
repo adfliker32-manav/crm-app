@@ -415,6 +415,14 @@ mongoose.connect(MONGO_URI, {
         console.warn('⚠️  REDIS_URL not set — BullMQ Broadcast Worker will not start.');
         console.warn('   Add REDIS_URL to .env to enable broadcast queue.');
       } else {
+        // ── Cross-instance cache invalidation ──────────────────────────────────
+        // Must start BEFORE the workers: they cache workspace settings (the
+        // WhatsApp lead-assignment toggle among them) in process memory, and
+        // without this bus a settings change made on a web instance never
+        // reaches them until the 5-minute TTL expires.
+        const { startCacheInvalidationBus } = require('./src/services/cacheInvalidationBus');
+        startCacheInvalidationBus();
+
         const { startBroadcastWorker, getBroadcastQueue } = require('./src/services/broadcastQueueService');
         startBroadcastWorker();
 
