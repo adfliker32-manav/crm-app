@@ -2,6 +2,30 @@ const path = require('path');
 // 1. .env file ko zabardasti load karo (Safe Mode)
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
+// ── REDIS_URL placeholder guard ─────────────────────────────────────────────
+// Every Redis consumer decides whether Redis exists with `!process.env.REDIS_URL`
+// — including the inbound-webhook fallback that processes messages INLINE when
+// there is no queue. A leftover placeholder ("PASTE_YOUR_REDIS_URL_HERE") is a
+// non-empty string, so it passed all of those checks: the code believed it had
+// a queue, every connection then died with ENOTFOUND on a hostname literally
+// named `paste_your_redis_url_here`, and the inline fallback never engaged. The
+// visible symptom is the WhatsApp chatbot silently never replying and
+// broadcasts never dispatching, with only a DNS error in the log to show for it.
+//
+// Treat an unusable value as absent so the documented no-Redis paths run.
+const rawRedisUrl = (process.env.REDIS_URL || '').trim();
+if (rawRedisUrl && !/^rediss?:\/\//i.test(rawRedisUrl)) {
+    console.warn(`⚠️  REDIS_URL is not a redis:// URL ("${rawRedisUrl}") — treating it as unset.`);
+    console.warn('   Inbound WhatsApp will process inline; broadcasts stay disabled until a real Redis URL is set.');
+    // Blank it rather than `delete` it. webhookController and whatsappService
+    // both call dotenv.config() again at require time, and dotenv only skips a
+    // key it finds via hasOwnProperty — deleting the key made it eligible for
+    // re-injection from .env, so the placeholder came straight back and the
+    // ENOTFOUND storm continued. An empty string keeps the property present
+    // (dotenv leaves it alone) while still being falsy for every `!REDIS_URL`.
+    process.env.REDIS_URL = '';
+}
+
 const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');

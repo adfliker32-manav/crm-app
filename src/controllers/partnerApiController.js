@@ -60,6 +60,43 @@ const checkWebhookUrl = async (url) => {
     }
 };
 
+/**
+ * Turn the partner's `allowedModules` grant into the planFeatures that actually
+ * enforce it.
+ *
+ * ⚠️ Two DIFFERENT vocabularies gate the WhatsApp module, and provisioning only
+ * ever spoke the first one:
+ *
+ *   1. `allowedModules` (whatsapp_chatbot, whatsapp_broadcasts, …) — decides
+ *      which TABS the embed draws, and is clamped into activeModules server-side.
+ *   2. `planFeatures` — what the feature registry reads for every node stored as
+ *      `{ type: 'feature' }`: whatsapp.chatbot.ai → aiChatbot,
+ *      whatsapp.chatbot.knowledgeBase → knowledgeBase, whatsapp.broadcast →
+ *      campaigns. These are enforced:true, so requireFeature 403s without them.
+ *
+ * Provisioning wrote only leadLimit/agentLimit, leaving the rest to the
+ * WorkspaceSettings schema defaults — and `knowledgeBase` defaults to FALSE.
+ * The result: a partner sold the whole WhatsApp module got an account whose
+ * Chatbot tab rendered but whose Knowledge Base was permanently an upsell wall,
+ * with nothing in the SuperAdmin UI able to fix it. Granting whatsapp_chatbot
+ * now grants the AI layer and its knowledge base together, because the RAG
+ * store is useless without the AI that reads it.
+ */
+const whatsappPlanFeatures = (partner) => {
+    const granted = Array.isArray(partner.allowedModules) ? partner.allowedModules : [];
+    const chatbot = granted.includes('whatsapp_chatbot');
+
+    return {
+        // The AI layer and its knowledge base travel together (registry nests
+        // knowledgeBase under whatsapp.chatbot.ai for exactly this reason).
+        aiChatbot:     chatbot,
+        knowledgeBase: chatbot,
+        // whatsapp.broadcast reads planFeatures.campaigns, not the module key.
+        campaigns:     granted.includes('whatsapp_broadcasts'),
+        advancedAnalytics: granted.includes('whatsapp_analytics')
+    };
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ACCOUNT MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════
@@ -171,7 +208,8 @@ exports.createAccount = async (req, res) => {
                 // of 100 leads no matter what the admin configured.
                 planFeatures: {
                     leadLimit:  defaults.leadLimit  ?? 500,
-                    agentLimit: defaults.agentLimit ?? 3
+                    agentLimit: defaults.agentLimit ?? 3,
+                    ...whatsappPlanFeatures(partner)
                 },
                 subscriptionPlan: 'Partner',
                 subscriptionStatus: 'active',
@@ -910,3 +948,7 @@ exports.getWhatsAppAnalytics = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to get analytics.' });
     }
 };
+
+// Shared with scripts/setup_partner_test.js so the provisioning mapping and any
+// backfill can never drift apart.
+exports._whatsappPlanFeatures = whatsappPlanFeatures;

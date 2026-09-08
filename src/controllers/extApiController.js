@@ -40,6 +40,7 @@ const { buildMetaComponents, buildTemplateContext } = require('../utils/template
 const { queueLeadCreatedEffects, queueLeadStageChangeEffects, queueLeadAssignmentEffects } = require('../utils/leadEffects');
 const { checkLeadLimit } = require('../utils/leadLimitGuard');
 const whatsappAssignment = require('../services/whatsappAssignmentService');
+const { recordOutboundMessage } = require('../services/whatsappOutboundRecorder');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -50,6 +51,62 @@ const runInBackground = (label, fn) => {
 
 // Statuses that still occupy a slot. Cancelled/No-Show free it up again.
 const ACTIVE_APPT_STATUSES = ['Pending', 'Confirmed'];
+const APPOINTMENT_STATUSES = ['Pending', 'Confirmed', 'Cancelled', 'Completed', 'No-Show'];
+
+/**
+ * The tenant's lead for a phone number, however either side formatted it.
+ *
+ * The suffix regex is what makes "+91 98765 43210", "919876543210" and
+ * "9876543210" resolve to one lead, but a regex cannot seek inside an index —
+ * it walks every phone key under this tenant in {userId:1, phone:1}. So try an
+ * exact match first: partners send a consistent format, so the common call
+ * becomes a real index hit and the scan is the fallback, not the default.
+ *
+ * Most-recently-touched wins, matching the webhook's tie-break when a number
+ * appears on more than one lead.
+ */
+const findLeadByPhone = async (tenantId, phone, { lean = true } = {}) => {
+    const normalized = normalizePhone(phone);
+    if (!normalized) return null;
+
+    const exact = Lead.findOne({ userId: tenantId, deletedAt: null, phone: String(phone).trim() })
+        .sort({ updatedAt: -1, createdAt: -1 });
+    const hit = await (lean ? exact.lean() : exact);
+    if (hit) return hit;
+
+    const suffix = Lead.findOne({
+        userId: tenantId,
+        deletedAt: null,
+        phone: { $regex: normalized.slice(-10) + '$' }
+    }).sort({ updatedAt: -1, createdAt: -1 });
+    return lean ? suffix.lean() : suffix;
+};
+
+/**
+ * Flattens a populated assignedTo back into the shape the partner codes against.
+ *
+ * `assignedTo` stays the bare id so existing integrations keep working, and the
+ * email comes alongside it: the partner maps agents by email (spec §5.3 and
+ * /whatsapp/assign-agent both speak email), so an ObjectId on its own gave them
+ * no way to mirror OUR assignment back into THEIR CRM.
+ */
+const describeAssignee = (assignedTo) => {
+    if (!assignedTo) return { assignedTo: null, assignedToName: null, assignedToEmail: null };
+    if (typeof assignedTo === 'object' && assignedTo._id) {
+        return {
+            assignedTo:      assignedTo._id,
+            assignedToName:  assignedTo.name  || null,
+            assignedToEmail: assignedTo.email || null
+        };
+    }
+    // Not populated (the user was deleted) — keep the id, admit we have no email.
+    return { assignedTo, assignedToName: null, assignedToEmail: null };
+};
+
+// Template names are Meta's, not ours: lowercase letters, digits and
+// underscores. Checking it here turns a caller's typo into a 400 that names the
+// problem instead of a 404 that reads as "you have no such template".
+const TEMPLATE_NAME_RE = /^[a-z0-9_]+$/;
 
 // The tenant's booking-page timezone, so the Appointment pre-save hook derives
 // appointmentAt in local time (reminders key off it). Null when no page exists.
@@ -67,8 +124,13 @@ const resolveTenantTzOffset = async (tenantId) => {
 /**
  * Existing active appointment overlapping this slot, honouring the booking page's
  * buffer when one is configured. Returns the conflicting doc, or null.
+ *
+ * `serviceType` is not optional decoration: in conflictScope 'service' mode the
+ * tenant runs several resources off one page (Dr. Sweta / Dr. Mira), and each
+ * one keeps its own calendar. Comparing across all of them refused a perfectly
+ * free slot with a 409 and left the partner CRM unable to book at all.
  */
-const findSlotConflict = async (tenantId, dateObj, appointmentTime, excludeApptId = null) => {
+const findSlotConflict = async (tenantId, dateObj, appointmentTime, excludeApptId = null, serviceType = null) => {
     const { timeToMinutes, conflicts } = require('../utils/appointmentUtils');
     const BookingPage = require('../models/BookingPage');
 
@@ -82,10 +144,16 @@ const findSlotConflict = async (tenantId, dateObj, appointmentTime, excludeApptI
     };
     if (excludeApptId) query._id = { $ne: excludeApptId };
 
-    const [sameDay, page] = await Promise.all([
-        Appointment.find(query).select('_id appointmentTime').lean(),
-        BookingPage.findOne({ userId: tenantId }).select('bufferMinutes').lean()
-    ]);
+    const page = await BookingPage.findOne({ userId: tenantId })
+        .select('_id bufferMinutes conflictScope').lean();
+
+    // Same rule the in-app and public booking paths apply.
+    if ((page?.conflictScope || 'page') === 'service' && page?._id && serviceType) {
+        query.bookingPageId = page._id;
+        query.serviceType   = serviceType;
+    }
+
+    const sameDay = await Appointment.find(query).select('_id appointmentTime').lean();
 
     const buffer = Number(page?.bufferMinutes || 0);
     const wanted = timeToMinutes(appointmentTime);
@@ -124,7 +192,9 @@ exports.createLead = async (req, res) => {
 
         const leadData = {
             userId:    req.tenantId,
-            name:      name.trim(),
+            // Bounded to the documented 200 chars, the same as updateLead — the
+            // Lead schema puts no maxlength on name, so nothing else would.
+            name:      name.trim().slice(0, 200),
             source:    (source || 'External API').slice(0, 100),
             // Stage names are tenant-configurable, so there is no enum to check
             // against — but it still must be a bounded string rather than whatever
@@ -160,6 +230,36 @@ exports.createLead = async (req, res) => {
                 safeCustom[String(k).slice(0, 50)] = typeof val === 'string' ? val.slice(0, 500) : val;
             });
             leadData.customData = safeCustom;
+        }
+
+        // ── Deduplicate by phone ──────────────────────────────────────────────
+        // The partner's worker retries on a 5xx, and their CRM is the primary
+        // store pushing the same lead to us — so without this a retry silently
+        // forked a second mirror lead, and the WhatsApp thread could then link
+        // to either one. Returning the EXISTING id is what the partner actually
+        // needs: they store it as ourLeadId, which makes the push idempotent.
+        // Matches the web-form intake's `duplicate: true` convention. Callers
+        // that genuinely want several leads on one number send allowDuplicate.
+        if (leadData.phone && req.body.allowDuplicate !== true) {
+            const existing = await findLeadByPhone(req.tenantId, leadData.phone);
+            if (existing) {
+                return res.json({
+                    success: true,
+                    duplicate: true,
+                    message: 'A lead with this phone number already exists; returning it instead of creating a second one. Send `allowDuplicate: true` to override.',
+                    data: {
+                        id:        existing._id,
+                        name:      existing.name,
+                        phone:     existing.phone,
+                        email:     existing.email,
+                        status:    existing.status,
+                        source:    existing.source,
+                        dealValue: existing.dealValue,
+                        tags:      existing.tags,
+                        createdAt: existing.createdAt
+                    }
+                });
+            }
         }
 
         // 🔒 BUG-5 FIX: Enforce lead limit before creating via External API.
@@ -215,7 +315,25 @@ exports.createLead = async (req, res) => {
 // ─── 3. LIST LEADS ────────────────────────────────────────────────────────────
 exports.listLeads = async (req, res) => {
     try {
-        const { status, source, tag, search, dateFrom, dateTo } = req.query;
+        // Coerced to strings before they reach the query. express-mongo-sanitize
+        // runs on the body and params but NOT on req.query (it is a getter in
+        // Express 5), so `?status[$ne]=` arrives as an object and would go
+        // straight into the filter. Every query here is tenant-scoped so it was
+        // never a data leak, but a filter operator is not a filter value.
+        const str = (v) => (v === undefined || v === null ? undefined : String(v));
+        const status   = str(req.query.status);
+        const source   = str(req.query.source);
+        const tag      = str(req.query.tag);
+        const search   = str(req.query.search);
+        const dateFrom = str(req.query.dateFrom);
+        const dateTo   = str(req.query.dateTo);
+        // Our-side edits (a chatbot renaming a lead, an agent moving a stage)
+        // never change createdAt, so a partner polling on dateFrom alone never
+        // sees them again after the first sync. updatedFrom is the "what changed"
+        // feed that keeps the mirror honest.
+        const updatedFrom = str(req.query.updatedFrom);
+        const updatedTo   = str(req.query.updatedTo);
+
         const limit = Math.min(parseInt(req.query.limit) || 25, 100);
         const page  = Math.max(parseInt(req.query.page)  || 1, 1);
         const skip  = (page - 1) * limit;
@@ -225,6 +343,21 @@ exports.listLeads = async (req, res) => {
         if (source)   query.source = source;
         if (tag)      query.tags   = tag;
         if (search)   query.name   = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+
+        if (updatedFrom || updatedTo) {
+            query.updatedAt = {};
+            if (updatedFrom) {
+                const d = new Date(updatedFrom);
+                if (isNaN(d.getTime())) return res.status(400).json({ success: false, message: 'Invalid updatedFrom format. Use ISO 8601 (e.g. 2026-01-15).' });
+                query.updatedAt.$gte = d;
+            }
+            if (updatedTo) {
+                const d = new Date(updatedTo);
+                if (isNaN(d.getTime())) return res.status(400).json({ success: false, message: 'Invalid updatedTo format. Use ISO 8601 (e.g. 2026-01-15).' });
+                query.updatedAt.$lte = d;
+            }
+        }
+
         if (dateFrom || dateTo) {
             query.createdAt = {};
             if (dateFrom) {
@@ -239,10 +372,15 @@ exports.listLeads = async (req, res) => {
             }
         }
 
+        // Polling "what changed" has to be ordered by what changed, or page 2 of
+        // an updatedFrom sweep is ordered by an unrelated field.
+        const sortKey = (updatedFrom || updatedTo) ? { updatedAt: -1 } : { createdAt: -1 };
+
         const [leads, total] = await Promise.all([
             Lead.find(query)
-                .select('name phone email status source dealValue tags assignedTo createdAt')
-                .sort({ createdAt: -1 })
+                .select('name phone email status source dealValue tags assignedTo createdAt updatedAt')
+                .populate('assignedTo', 'name email')
+                .sort(sortKey)
                 .skip(skip)
                 .limit(limit)
                 .lean(),
@@ -251,7 +389,7 @@ exports.listLeads = async (req, res) => {
 
         res.json({
             success: true,
-            data:    leads.map(l => ({ ...l, id: l._id })),
+            data:    leads.map(l => ({ ...l, id: l._id, ...describeAssignee(l.assignedTo) })),
             total,
             page,
             limit,
@@ -273,13 +411,14 @@ exports.getLead = async (req, res) => {
 
         const lead = await Lead.findOne({ _id: id, userId: req.tenantId, deletedAt: null })
             .select('name phone email status source dealValue tags assignedTo notes customData createdAt updatedAt')
+            .populate('assignedTo', 'name email')
             .lean();
 
         if (!lead) {
             return res.status(404).json({ success: false, message: 'Lead not found.' });
         }
 
-        res.json({ success: true, data: { ...lead, id: lead._id } });
+        res.json({ success: true, data: { ...lead, id: lead._id, ...describeAssignee(lead.assignedTo) } });
     } catch (err) {
         console.error('[ExtAPI] getLead error:', err.message);
         res.status(500).json({ success: false, message: 'Failed to fetch lead.' });
@@ -402,28 +541,46 @@ exports.sendWhatsApp = async (req, res) => {
         }
 
         let toPhone = phone;
+        let lead    = null;
 
         // If leadId provided, look up the phone
-        if (!toPhone && leadId) {
+        if (leadId) {
             if (!isValidId(leadId)) {
                 return res.status(400).json({ success: false, message: 'Invalid leadId.' });
             }
-            const lead = await Lead.findOne({ _id: leadId, userId: req.tenantId, deletedAt: null })
-                .select('phone').lean();
+            lead = await Lead.findOne({ _id: leadId, userId: req.tenantId, deletedAt: null })
+                .select('phone name assignedTo').lean();
             if (!lead) return res.status(404).json({ success: false, message: 'Lead not found.' });
-            if (!lead.phone) return res.status(400).json({ success: false, message: 'Lead has no phone number.' });
-            toPhone = lead.phone;
+            if (!toPhone) {
+                if (!lead.phone) return res.status(400).json({ success: false, message: 'Lead has no phone number.' });
+                toPhone = lead.phone;
+            }
         }
 
         if (!toPhone) {
             return res.status(400).json({ success: false, message: 'Provide `phone` or `leadId`.' });
         }
 
-        const result = await sendWhatsAppTextMessage(toPhone, message.slice(0, 4096), req.tenantId);
+        const body   = message.slice(0, 4096);
+        const result = await sendWhatsAppTextMessage(toPhone, body, req.tenantId, { skipConversationRecord: true });
+        const waMessageId = result?.messages?.[0]?.id || null;
+
+        // Put it in the inbox thread. Awaited, not fire-and-forget: the partner
+        // may call assign-agent or poll straight after, and a half-written
+        // conversation is worse than a few extra milliseconds.
+        await recordOutboundMessage({
+            tenantId: req.tenantId,
+            phone: toPhone,
+            lead,
+            type: 'text',
+            text: body,
+            waMessageId,
+            source: 'API'
+        });
 
         res.json({
             success: true,
-            messageId: result?.messages?.[0]?.id || null,
+            messageId: waMessageId,
             to: toPhone,
             sentAt: new Date().toISOString()
         });
@@ -440,6 +597,12 @@ exports.sendWhatsAppTemplate = async (req, res) => {
 
         if (!templateName) {
             return res.status(400).json({ success: false, message: '`templateName` is required.' });
+        }
+        if (typeof templateName !== 'string' || !TEMPLATE_NAME_RE.test(templateName)) {
+            return res.status(400).json({
+                success: false,
+                message: '`templateName` must be lowercase letters, digits and underscores only (^[a-z0-9_]+$).'
+            });
         }
 
         let toPhone = phone;
@@ -479,27 +642,46 @@ exports.sendWhatsAppTemplate = async (req, res) => {
         const { resolveTemplateMedia } = require('../services/mediaLibraryService');
         const media = await resolveTemplateMedia(template, req.tenantId);
 
-        let components;
-        if (lead || media) {
-            const owner = await User.findById(req.tenantId).select('name companyName').lean();
-            const tplContext = buildTemplateContext({
-                lead: { ...lead, phone: lead?.phone || toPhone },
-                user: owner,
-                system: { customData: { media } }
-            });
-            components = buildMetaComponents(template.components || [], template.variableMapping, tplContext);
-        }
+        // Built unconditionally. This used to be guarded by `if (lead || media)`,
+        // so sending a template that HAS {{1}} placeholders by phone alone
+        // produced no components at all and Meta rejected the send with an
+        // opaque parameter-count error. buildMetaComponents emits one parameter
+        // per placeholder regardless, resolving what it can from the phone and
+        // the workspace, so the shape always matches what Meta approved.
+        const owner = await User.findById(req.tenantId).select('name companyName').lean();
+        const tplContext = buildTemplateContext({
+            lead: { ...(lead || {}), phone: lead?.phone || toPhone },
+            user: owner,
+            system: { customData: { media } }
+        });
+        const components = buildMetaComponents(template.components || [], template.variableMapping, tplContext);
         const result = await sendWhatsAppMessage(
             toPhone,
             templateName,
             req.tenantId,
             components,
-            languageCode || template.language
+            languageCode || template.language,
+            // Recorded below instead, with the lead the partner actually named —
+            // richer than the phone-number lookup the central path would do.
+            { skipConversationRecord: true }
         );
+        const waMessageId = result?.messages?.[0]?.id || null;
+
+        // The follow-up the partner just fired has to be visible to whichever
+        // agent handles the customer's reply — see whatsappOutboundRecorder.
+        await recordOutboundMessage({
+            tenantId: req.tenantId,
+            phone: toPhone,
+            lead,
+            type: 'template',
+            templateName,
+            waMessageId,
+            source: 'API'
+        });
 
         res.json({
             success: true,
-            messageId: result?.messages?.[0]?.id || null,
+            messageId: waMessageId,
             template: templateName,
             to: toPhone,
             sentAt: new Date().toISOString()
@@ -538,6 +720,54 @@ exports.listWhatsAppTemplates = async (req, res) => {
     }
 };
 
+// ─── 9c. DELIVERY STATUS FOR ONE SENT MESSAGE ────────────────────────────────
+// The spec has the partner store our `messageId` on their follow-up record
+// (§12) but gave them nothing to do with it afterwards — no way to tell a
+// delivered follow-up from one Meta bounced. Every send is now recorded against
+// its conversation, so the wamid the send returned resolves to a real row and
+// the status the delivery webhook writes onto it is readable here.
+exports.getWhatsAppMessageStatus = async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        if (!messageId || typeof messageId !== 'string') {
+            return res.status(400).json({ success: false, message: '`messageId` is required.' });
+        }
+
+        const WhatsAppMessage = require('../models/WhatsAppMessage');
+        const msg = await WhatsAppMessage.findOne({
+            userId: req.tenantId,
+            waMessageId: String(messageId)
+        }).select('waMessageId direction type status statusTimestamps error timestamp conversationId content').lean();
+
+        if (!msg) {
+            return res.status(404).json({
+                success: false,
+                message: 'No message found for that messageId. Statuses arrive from Meta asynchronously — a message sent moments ago may not have one yet.'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                messageId:      msg.waMessageId,
+                status:         msg.status,
+                direction:      msg.direction,
+                type:           msg.type,
+                templateName:   msg.content?.templateName || null,
+                sentAt:         msg.statusTimestamps?.sent      || msg.timestamp || null,
+                deliveredAt:    msg.statusTimestamps?.delivered || null,
+                readAt:         msg.statusTimestamps?.read      || null,
+                failedAt:       msg.statusTimestamps?.failed    || null,
+                error:          msg.error?.message ? { code: msg.error.code || null, message: msg.error.message } : null,
+                conversationId: msg.conversationId
+            }
+        });
+    } catch (err) {
+        console.error('[ExtAPI] getWhatsAppMessageStatus error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to fetch message status.' });
+    }
+};
+
 // ─── 9b. ASSIGN A WHATSAPP CHAT TO AN AGENT (by phone number) ─────────────────
 // For a partner running their own CRM: when they hand a lead to an agent over
 // there, this hands the matching WhatsApp thread to the same agent over here.
@@ -562,7 +792,6 @@ exports.assignWhatsAppAgent = async (req, res) => {
         if (!normalized) {
             return res.status(400).json({ success: false, message: 'Invalid `phone` number.' });
         }
-        const phoneSuffix = normalized.slice(-10);
 
         // ── Resolve the agent ────────────────────────────────────────────────
         // Email, not an internal id: a third-party CRM has no reason to know our
@@ -588,13 +817,8 @@ exports.assignWhatsAppAgent = async (req, res) => {
         const nextAssignee = agent ? agent._id : null;
 
         // ── Find the lead ────────────────────────────────────────────────────
-        // Most-recently-touched wins, matching the webhook's tie-break when a
-        // number appears on more than one lead.
-        let lead = await Lead.findOne({
-            userId: req.tenantId,
-            deletedAt: null,
-            phone: { $regex: phoneSuffix + '$' }
-        }).sort({ updatedAt: -1, createdAt: -1 });
+        // Not lean: this document gets assignedTo written and saved below.
+        let lead = await findLeadByPhone(req.tenantId, phone, { lean: false });
 
         let leadCreated = false;
 
@@ -705,15 +929,26 @@ exports.sendEmail = async (req, res) => {
 
         let toEmail = to;
 
-        if (!toEmail && leadId) {
+        // leadId is validated whenever it is present, not only when it is the
+        // recipient source. It is stamped onto the EmailLog / inbox row, so a
+        // malformed id used to blow up on the ObjectId cast — inside the catch
+        // that records the failure too — and returned a 500 for an email that
+        // had ALREADY left the building. A partner retrying that 500 sends the
+        // customer the same mail twice. A foreign id is refused for the same
+        // reason it is everywhere else here: nothing on our tenant's records may
+        // point into another workspace.
+        if (leadId !== undefined && leadId !== null && leadId !== '') {
             if (!isValidId(leadId)) {
                 return res.status(400).json({ success: false, message: 'Invalid leadId.' });
             }
             const lead = await Lead.findOne({ _id: leadId, userId: req.tenantId, deletedAt: null })
                 .select('email name').lean();
             if (!lead) return res.status(404).json({ success: false, message: 'Lead not found.' });
-            if (!lead.email) return res.status(400).json({ success: false, message: 'Lead has no email address.' });
-            toEmail = lead.email;
+
+            if (!toEmail) {
+                if (!lead.email) return res.status(400).json({ success: false, message: 'Lead has no email address.' });
+                toEmail = lead.email;
+            }
         }
 
         if (!toEmail) {
@@ -782,6 +1017,16 @@ exports.createAppointment = async (req, res) => {
             source:          'manual'
         };
 
+        // An unknown status used to reach the schema enum and surface as a 500,
+        // which reads to the partner as "your server is broken" rather than
+        // "that status does not exist".
+        if (!APPOINTMENT_STATUSES.includes(apptData.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid status. Use one of: ${APPOINTMENT_STATUSES.join(', ')}`
+            });
+        }
+
         let leadDoc = null;
         if (leadId && isValidId(leadId)) {
             leadDoc = await Lead.findOne({ _id: leadId, userId: req.tenantId });
@@ -805,7 +1050,9 @@ exports.createAppointment = async (req, res) => {
         // page's slot grid, so we enforce only the conflict rule (+ page buffer).
         // In service-scope mode, also narrow by serviceType so resources don't
         // block each other.
-        const conflict = await findSlotConflict(req.tenantId, d, apptData.appointmentTime);
+        const conflict = await findSlotConflict(
+            req.tenantId, d, apptData.appointmentTime, null, apptData.serviceType
+        );
         if (conflict) {
             return res.status(409).json({
                 success: false,
@@ -897,13 +1144,12 @@ exports.updateAppointment = async (req, res) => {
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found.' });
 
         const { status, appointmentDate, appointmentTime, notes, customerName } = req.body;
-        const VALID_STATUSES = ['Pending', 'Confirmed', 'Cancelled', 'Completed', 'No-Show'];
 
         if (status) {
-            if (!VALID_STATUSES.includes(status)) {
+            if (!APPOINTMENT_STATUSES.includes(status)) {
                 return res.status(400).json({
                     success: false,
-                    message: `Invalid status. Use one of: ${VALID_STATUSES.join(', ')}`
+                    message: `Invalid status. Use one of: ${APPOINTMENT_STATUSES.join(', ')}`
                 });
             }
             appt.status = status;
@@ -921,7 +1167,7 @@ exports.updateAppointment = async (req, res) => {
         // ignoring this appointment so it never conflicts with itself.
         if (appointmentDate || appointmentTime) {
             const conflict = await findSlotConflict(
-                req.tenantId, appt.appointmentDate, appt.appointmentTime, appt._id
+                req.tenantId, appt.appointmentDate, appt.appointmentTime, appt._id, appt.serviceType
             );
             if (conflict) {
                 return res.status(409).json({

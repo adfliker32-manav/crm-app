@@ -32,6 +32,30 @@ const clearTokenVersionCache = (userId) => {
     if (userId) tokenVersionCache.del(`tv_${userId}`);
 };
 
+/**
+ * Partner-facing module key → the internal activeModules ids it implies.
+ *
+ * PartnerApp.allowedModules speaks 'whatsapp_chatbot'; WorkspaceSettings
+ * .activeModules speaks 'whatsapp', 'leads', 'chatbot'. The embed clamp below
+ * needs the second vocabulary, so translate here rather than comparing the two
+ * namespaces and silently dropping everything that doesn't match.
+ *
+ * ⚠️ `leads` is included deliberately. WhatsApp in this product is lead-centric:
+ * the inbox links conversations to leads, broadcasts pick their audience from
+ * leads/tags, and AI qualification writes lead stages. An embed sold "WhatsApp"
+ * cannot function without the leads API, so granting the WhatsApp module means
+ * granting read/write on that tenant's OWN leads. It is still the tenant's own
+ * data and the embed still renders only the WhatsApp tabs — but this is wider
+ * than the tab list suggests, so weigh it before selling a WhatsApp-only tier.
+ */
+const PARTNER_MODULE_IMPLIES = {
+    whatsapp:            ['whatsapp', 'leads'],
+    whatsapp_templates:  ['whatsapp'],
+    whatsapp_broadcasts: ['whatsapp', 'leads'],
+    whatsapp_chatbot:    ['whatsapp', 'chatbot', 'leads'],
+    whatsapp_analytics:  ['whatsapp'],
+};
+
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   console.error('❌ CRITICAL: JWT_SECRET not found in environment variables!');
@@ -166,11 +190,26 @@ const authMiddleware = async (req, res, next) => {
         // everywhere, with no per-route changes. The clamp can only ever REMOVE
         // modules — a partner can never grant their customer more than the
         // tenant's own workspace already has.
+        //
+        // ⚠️ TWO VOCABULARIES. `embedModules` holds PARTNER-facing keys
+        // ('whatsapp_chatbot', 'whatsapp_broadcasts'), while activeModules holds
+        // INTERNAL module ids ('whatsapp', 'leads', 'chatbot'). Comparing them
+        // directly — as this did — stripped every id that wasn't literally one
+        // of the partner keys, and `leads` is the one that matters: the WhatsApp
+        // module is lead-centric, so /stages, /leads and /tags all 403'd with
+        // module_locked. The tabs rendered, then the AI settings panel (which
+        // loads /stages for stage mapping) and Broadcasts (which needs an
+        // audience) failed on open. Translate before filtering.
         if (req.user?.embed && Array.isArray(req.user.embedModules)) {
-            const granted = req.user.embedModules;
+            const implied = new Set(
+                req.user.embedModules.flatMap(k => PARTNER_MODULE_IMPLIES[k] || [k])
+            );
             req.workspace = {
                 ...req.workspace,
-                activeModules: (req.workspace.activeModules || []).filter(m => granted.includes(m))
+                // Still a FILTER over the tenant's own activeModules, so the
+                // clamp can only ever remove — a partner can never grant their
+                // customer more than the workspace already has.
+                activeModules: (req.workspace.activeModules || []).filter(m => implied.has(m))
             };
         }
 

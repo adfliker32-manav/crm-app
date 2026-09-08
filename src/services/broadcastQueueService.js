@@ -444,7 +444,7 @@ async function _processOneLead(lead, template, user, userId, broadcastId, sentKe
             tplContext
         );
 
-        const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language);
+        const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language, { skipConversationRecord: true });
 
         // A successful send returns Meta's raw body ({ messages: [...] }). There is
         // no success flag, and a FAILURE never reaches this line at all —

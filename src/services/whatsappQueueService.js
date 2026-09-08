@@ -186,7 +186,7 @@ const defineWhatsAppJobs = (agenda) => {
             } else if (watcher.ifNoReplyAction?.sendTemplateId && lead.phone) {
                 const result = await sendWhatsAppMessage(
                     lead.phone, watcher.ifNoReplyAction.sendTemplateId, watcher.tenantId.toString(),
-                    null, noReplyGate?.template?.language
+                    null, noReplyGate?.template?.language, { skipConversationRecord: true }
                 );
                 console.log(`📤 [Timeout] No-reply follow-up template sent to ${lead.phone}`);
 

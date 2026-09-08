@@ -50,6 +50,10 @@ router.post('/whatsapp/send', ctrl.sendWhatsApp);
 // POST /api/v1/whatsapp/template         → send a template message
 router.post('/whatsapp/template', ctrl.sendWhatsAppTemplate);
 
+// GET  /api/v1/whatsapp/message/:messageId → delivery status for a wamid we returned
+//   Lets the partner close the loop on the messageId they stored at send time.
+router.get('/whatsapp/message/:messageId', ctrl.getWhatsAppMessageStatus);
+
 // POST /api/v1/whatsapp/assign-agent     → hand this number's chat to an agent
 //   Body: { phone, agentEmail }  — agentEmail: null unassigns (the key itself
 //   is required; see the schema note on why omitting it must not be allowed).

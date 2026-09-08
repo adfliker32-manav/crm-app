@@ -95,7 +95,7 @@ const executeStepAction = async (step, lead, sequenceName) => {
         }
 
         const result = await sendWhatsAppMessage(
-            lead.phone, step.action.templateId, lead.userId.toString(), null, gate.template?.language
+            lead.phone, step.action.templateId, lead.userId.toString(), null, gate.template?.language, { skipConversationRecord: true }
         );
 
         // FIX: Sync to conversation DB so sequence WA sends appear in inbox

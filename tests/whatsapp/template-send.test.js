@@ -39,7 +39,9 @@ test('the stored template language and the send default cannot silently disagree
     // exactly what made 11 call sites request en_US for an en template.
     assert.doesNotMatch(svc, /languageCode\s*=\s*'en_US'\s*\)/,
         'sendWhatsAppMessage must not default the language to en_US');
-    assert.match(svc, /languageCode\s*=\s*null\s*\)/,
+    // [,)] rather than just ) — languageCode is no longer the last parameter now
+    // that the senders take a trailing options bag. What matters is the default.
+    assert.match(svc, /languageCode\s*=\s*null\s*[,)]/,
         'the language must be resolved, not assumed');
 });
 

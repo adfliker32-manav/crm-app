@@ -93,12 +93,15 @@ const initializeFollowupService = () => {
                             currentFollowUp.templateName,
                             currentFollowUp.templateLanguage || 'en',
                             [],
-                            session.userId
+                            session.userId,
+                            // Both branches fall through to the messageDoc write
+                            // below, so the central record would be a duplicate.
+                            { skipConversationRecord: true }
                         );
                         msgText = `[Follow-up Template: ${currentFollowUp.templateName}]`;
                     } else {
                         msgText = currentFollowUp.messageText;
-                        waResult = await sendWhatsAppTextMessage(conversation.phone, msgText, session.userId);
+                        waResult = await sendWhatsAppTextMessage(conversation.phone, msgText, session.userId, { skipConversationRecord: true });
                     }
 
                     // FIX: Save follow-up message to DB so it appears in Inbox UI

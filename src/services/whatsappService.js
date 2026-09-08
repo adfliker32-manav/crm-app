@@ -107,7 +107,30 @@ const checkTemplateSendable = async (userId, templateName) => {
     }
 };
 
-const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null, languageCode = null) => {
+/**
+ * Every successful send lands in the conversation, from here, so that no sender
+ * can forget. Callers that write a richer record themselves opt out with
+ * `skipConversationRecord: true` — currently the inbox UI
+ * (whatsappConversationController), the chatbot (chatbotEngineService +
+ * chatbotFollowupService), broadcasts (broadcastQueueService), sequences
+ * (sequenceService), the send queue (whatsappQueueService), lead automations
+ * (whatsappAutomationService) and the external CRM API (extApiController,
+ * which passes the lead it was handed).
+ *
+ * Awaited, not fire-and-forget: a caller that reads the thread straight after
+ * sending must not race the write. It never throws — see the recorder's header.
+ */
+const _recordOutbound = async (options, payload) => {
+    if (options?.skipConversationRecord) return;
+    try {
+        const { recordOutboundMessage } = require('./whatsappOutboundRecorder');
+        await recordOutboundMessage({ lead: options?.lead || null, ...payload });
+    } catch (err) {
+        console.error('[WhatsApp] outbound record failed:', err.message);
+    }
+};
+
+const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = null, components = null, languageCode = null, options = {}) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
             console.log(`🛑 WHATSAPP KILL SWITCH ACTIVE. Blocked template '${templateName}' to ${to}`);
@@ -149,6 +172,17 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
         );
 
         console.log(`✅ SUCCESS: Message Sent! Response ID: ${response.data.messages[0].id}`);
+
+        await _recordOutbound(options, {
+            tenantId: userId,
+            phone: to,
+            type: 'template',
+            templateName,
+            waMessageId: response.data.messages?.[0]?.id || null,
+            isAutomated: options?.isAutomated === true,
+            automationSource: options?.automationSource || null
+        });
+
         return response.data;
     } catch (error) {
         // 🔑 TOKEN EXPIRY DETECTION: Surface clear error for expired/invalid tokens
@@ -240,6 +274,16 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null, options =
             }).catch(err => console.error('Error logging WhatsApp:', err));
         }
 
+        await _recordOutbound(options, {
+            tenantId: userId,
+            phone: to,
+            type: 'text',
+            text: messageText,
+            waMessageId: messageId || null,
+            isAutomated: options?.isAutomated === true,
+            automationSource: options?.automationSource || null
+        });
+
         return response.data;
     } catch (error) {
         // 🔑 TOKEN EXPIRY DETECTION
@@ -258,7 +302,7 @@ const sendWhatsAppTextMessage = async (to, messageText, userId = null, options =
     }
 };
 
-const sendMediaMessage = async (to, mediaType, mediaIdentifier, caption = null, userId = null) => {
+const sendMediaMessage = async (to, mediaType, mediaIdentifier, caption = null, userId = null, options = {}) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
             throw new Error("Emergency: WhatsApp sending is temporarily disabled.");
@@ -290,6 +334,18 @@ const sendMediaMessage = async (to, mediaType, mediaIdentifier, caption = null, 
             }),
             { maxRetries: 3, label: `WA-Media:${mediaType}` }
         );
+
+        await _recordOutbound(options, {
+            tenantId: userId,
+            phone: to,
+            type: mediaType,
+            text: caption || '',
+            waMessageId: response.data.messages?.[0]?.id || null,
+            mediaData: isUrl ? { mediaUrl: mediaIdentifier } : { mediaId: mediaIdentifier },
+            isAutomated: options?.isAutomated === true,
+            automationSource: options?.automationSource || null
+        });
+
         return response.data;
     } catch (error) {
         if (error.response?.data?.error?.code === 190) {
@@ -300,7 +356,7 @@ const sendMediaMessage = async (to, mediaType, mediaIdentifier, caption = null, 
     }
 };
 
-const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
+const sendInteractiveMessage = async (to, bodyText, buttons, userId = null, options = {}) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
             throw new Error("Emergency: WhatsApp sending is temporarily disabled.");
@@ -332,6 +388,17 @@ const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
             }),
             { maxRetries: 3, label: 'WA-Interactive' }
         );
+
+        await _recordOutbound(options, {
+            tenantId: userId,
+            phone: to,
+            type: 'interactive',
+            text: bodyText,
+            waMessageId: response.data.messages?.[0]?.id || null,
+            isAutomated: options?.isAutomated === true,
+            automationSource: options?.automationSource || null
+        });
+
         return response.data;
     } catch (error) {
         if (error.response?.data?.error?.code === 190) {
@@ -344,7 +411,7 @@ const sendInteractiveMessage = async (to, bodyText, buttons, userId = null) => {
 
 // Native WhatsApp interactive List Message — up to 10 rows behind a single
 // "View Options" button, for choices that don't fit the 3-button limit.
-const sendListMessage = async (to, bodyText, buttonText, items, userId = null) => {
+const sendListMessage = async (to, bodyText, buttonText, items, userId = null, options = {}) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
             throw new Error("Emergency: WhatsApp sending is temporarily disabled.");
@@ -379,6 +446,17 @@ const sendListMessage = async (to, bodyText, buttonText, items, userId = null) =
             }),
             { maxRetries: 3, label: 'WA-List' }
         );
+
+        await _recordOutbound(options, {
+            tenantId: userId,
+            phone: to,
+            type: 'list',
+            text: bodyText,
+            waMessageId: response.data.messages?.[0]?.id || null,
+            isAutomated: options?.isAutomated === true,
+            automationSource: options?.automationSource || null
+        });
+
         return response.data;
     } catch (error) {
         if (error.response?.data?.error?.code === 190) {
@@ -389,7 +467,7 @@ const sendListMessage = async (to, bodyText, buttonText, items, userId = null) =
     }
 };
 
-const sendCtaUrlMessage = async (to, bodyText, buttonText, buttonUrl, userId = null) => {
+const sendCtaUrlMessage = async (to, bodyText, buttonText, buttonUrl, userId = null, options = {}) => {
     try {
         if (await isFeatureDisabled('DISABLE_WHATSAPP')) {
             throw new Error("Emergency: WhatsApp sending is temporarily disabled.");
@@ -422,6 +500,17 @@ const sendCtaUrlMessage = async (to, bodyText, buttonText, buttonUrl, userId = n
             }),
             { maxRetries: 3, label: 'WA-CtaUrl' }
         );
+
+        await _recordOutbound(options, {
+            tenantId: userId,
+            phone: to,
+            type: 'cta',
+            text: bodyText,
+            waMessageId: response.data.messages?.[0]?.id || null,
+            isAutomated: options?.isAutomated === true,
+            automationSource: options?.automationSource || null
+        });
+
         return response.data;
     } catch (error) {
         if (error.response?.data?.error?.code === 190) {
@@ -475,6 +564,16 @@ const sendWhatsAppTemplateMessage = async (to, templateName, languageCode = 'en'
                 triggerType: options.triggerType || 'template'
             }).catch(err => console.error('Error logging template:', err));
         }
+
+        await _recordOutbound(options, {
+            tenantId: userId,
+            phone: to,
+            type: 'template',
+            templateName,
+            waMessageId: messageId || null,
+            isAutomated: options?.isAutomated === true,
+            automationSource: options?.automationSource || null
+        });
 
         return response.data;
     } catch (error) {

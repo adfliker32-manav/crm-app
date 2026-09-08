@@ -208,8 +208,18 @@ const WhatsAppManagement = ({ embedded = false, embedUser = null }) => {
         }
     };
 
+    // The negative margins cancel the main app layout's page padding so the
+    // inbox can run edge-to-edge. An embed has NO such padding — there the same
+    // margins dragged the UI outside the iframe (up under the "Powered by" bar
+    // and off both sides). `h-screen` is wrong there too: the embed reserves
+    // space for that bar, so a hard 100vh overflows the frame by its height.
+    // Fill the parent instead and let the embed decide how tall that is.
+    const shellClass = embedded
+        ? 'h-full w-full flex flex-col bg-[#f0f2f5] overflow-hidden'
+        : '-mx-4 md:-mx-6 -my-4 md:-my-6 h-screen flex flex-col bg-[#f0f2f5] overflow-hidden';
+
     return (
-        <div className="-mx-4 md:-mx-6 -my-4 md:-my-6 h-screen flex flex-col bg-[#f0f2f5] overflow-hidden">
+        <div className={shellClass}>
             {/* Premium Vibrant Header */}
             {!(effectiveTab === 'chatbot' && editingFlowId) && (
                 <div className="bg-gradient-to-r from-[#008069] via-[#00a884] to-[#05cd99] text-white shadow-xl z-20 relative overflow-hidden">

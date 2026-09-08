@@ -7,7 +7,27 @@ const Lead = require('../models/Lead');
 const User = require('../models/User');
 const AgencySettings = require('../models/AgencySettings');
 const axios = require('axios');
-const { sendWhatsAppTextMessage, sendInteractiveMessage, sendListMessage, sendCtaUrlMessage, sendMediaMessage } = require('./whatsappService');
+// The engine writes its own conversation record for every reply (saveBotMessage),
+// with the bot context — session, node, automationSource — that the central
+// recorder in whatsappService cannot know. So every sender is wrapped once here
+// to opt out of that central write, rather than threading the same flag through
+// the ~40 send sites below and hoping the next one remembers it.
+const _wa = require('./whatsappService');
+// optsIndex is the position of each sender's trailing options bag. It is spelled
+// out rather than read from fn.length, because Function.length stops counting at
+// the first defaulted parameter — every one of these would report the wrong slot.
+const _botSend = (fn, optsIndex) => (...args) => {
+    const padded = [...args];
+    while (padded.length < optsIndex) padded.push(undefined);
+    const existing = padded[optsIndex];
+    padded[optsIndex] = { ...(existing && typeof existing === 'object' ? existing : {}), skipConversationRecord: true };
+    return fn(...padded);
+};
+const sendWhatsAppTextMessage = _botSend(_wa.sendWhatsAppTextMessage, 3); // (to, text, userId, options)
+const sendInteractiveMessage  = _botSend(_wa.sendInteractiveMessage,  4); // (to, body, buttons, userId, options)
+const sendListMessage         = _botSend(_wa.sendListMessage,         5); // (to, body, buttonText, items, userId, options)
+const sendCtaUrlMessage       = _botSend(_wa.sendCtaUrlMessage,       5); // (to, body, buttonText, url, userId, options)
+const sendMediaMessage        = _botSend(_wa.sendMediaMessage,        5); // (to, type, id, caption, userId, options)
 const { emitToUser, emitToUsers, emitToConversation } = require('./socketService');
 const { getCompanyUserIds } = require('../utils/whatsappUtils');
 const whatsappQueueService = require('./whatsappQueueService');
@@ -2458,7 +2478,7 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
             case 'template':
                 // Send an approved WhatsApp template message
                 if (node.data.templateName) {
-                    const { sendWhatsAppTemplateMessage } = require('./whatsappService');
+                    const sendWhatsAppTemplateMessage = _botSend(_wa.sendWhatsAppTemplateMessage, 5);
                     const templateResult = await sendWhatsAppTemplateMessage(
                         conversation.phone,
                         node.data.templateName,
@@ -2772,7 +2792,12 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                             const alertMsg = `🔔 *Chatbot Agent Request*\nA customer (${conversation.displayName || conversation.phone}) needs your attention.${note}\nChatbot is paused for 24 hours for this conversation.`;
                             
                             // Send text message directly to agent
-                            await sendWhatsAppTextMessage(agent.phone, alertMsg, session.userId);
+                            // _wa.* directly, NOT the wrapped sender: this alert goes to the
+                            // AGENT's own number, so saveBotMessage (which records against
+                            // the CUSTOMER's conversation) never covers it. Going through
+                            // the wrapper would opt it out of the central record and leave
+                            // it a ghost. Let whatsappService record it on its own thread.
+                            await _wa.sendWhatsAppTextMessage(agent.phone, alertMsg, session.userId);
                             console.log(`[Chatbot] Successfully sent notify_agent WhatsApp to agent ${targetAgentId}`);
                         } else {
                             console.warn(`[Chatbot] notify_agent: Agent ${targetAgentId} has no phone number configured.`);
@@ -3102,7 +3127,7 @@ const executeAction = async (actionData, session, conversation) => {
                     const WhatsAppTemplate = require('../models/WhatsAppTemplate');
                     const template = await WhatsAppTemplate.findOne({ userId: session.userId, name: tplName, status: 'APPROVED' }).lean();
                     if (template) {
-                        const { sendWhatsAppTemplateMessage } = require('./whatsappService');
+                        const sendWhatsAppTemplateMessage = _botSend(_wa.sendWhatsAppTemplateMessage, 5);
                         const { resolveTemplateMedia } = require('./mediaLibraryService');
                         const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
                         
@@ -3235,7 +3260,7 @@ const executeAction = async (actionData, session, conversation) => {
 
             case 'book_appointment': {
                 const Appointment = require('../models/Appointment');
-                const { sendWhatsAppTextMessage: _waText } = require('./whatsappService');
+                const _waText = sendWhatsAppTextMessage;
                 const { serviceType, appointmentDate, appointmentTime } = actionData.actionData || {};
 
                 console.log(`🤖 [Chatbot] executeAction(book_appointment) Data:`, JSON.stringify(actionData.actionData));
@@ -3524,7 +3549,12 @@ const executeAction = async (actionData, session, conversation) => {
                         const agent = await User.findById(notifyUserId).select('phone name').lean();
                         if (agent?.phone) {
                             const alertMsg = `🔔 *Chatbot Handoff*\nConversation with ${conversation.displayName || conversation.phone} needs your attention.\n${agentMsg}`;
-                            await sendWhatsAppTextMessage(agent.phone, alertMsg, session.userId);
+                            // _wa.* directly, NOT the wrapped sender: this alert goes to the
+                            // AGENT's own number, so saveBotMessage (which records against
+                            // the CUSTOMER's conversation) never covers it. Going through
+                            // the wrapper would opt it out of the central record and leave
+                            // it a ghost. Let whatsappService record it on its own thread.
+                            await _wa.sendWhatsAppTextMessage(agent.phone, alertMsg, session.userId);
                             console.log(`🔔 WhatsApp agent alert sent to ${agent.phone} for conversation ${conversation._id}`);
                         } else {
                             console.warn(`[Chatbot] notify_agent: agent ${notifyUserId} has no phone number configured — WhatsApp alert skipped.`);

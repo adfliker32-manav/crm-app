@@ -172,7 +172,7 @@ exports.sendMessage = async (req, res) => {
             return res.status(400).json({ message: 'Cannot send message: contact has no phone number or BSUID.' });
         }
         const recipientType = conversation.phone ? undefined : 'user_id';
-        const result = await sendWhatsAppTextMessage(recipient, text.trim(), userId, { recipientType });
+        const result = await sendWhatsAppTextMessage(recipient, text.trim(), userId, { recipientType, skipConversationRecord: true });
         const waMessageId = result?.messages?.[0]?.id;
 
         // Create message record
@@ -562,13 +562,13 @@ exports.startConversation = async (req, res) => {
 
             const { sendWhatsAppMessage } = require('../services/whatsappService');
             const languageCode = templateObj ? templateObj.language : 'en_US';
-            result = await sendWhatsAppMessage(normalizedPhone, templateName, userId, metaComponents, languageCode);
+            result = await sendWhatsAppMessage(normalizedPhone, templateName, userId, metaComponents, languageCode, { skipConversationRecord: true });
             waMessageId = result?.messages?.[0]?.id;
             messageContent = { text: `[Template: ${templateName}]`, templateName: templateName };
             messageType = 'template';
         } else {
             // Send via free-text (only works within 24hr window)
-            result = await sendWhatsAppTextMessage(normalizedPhone, text.trim(), userId);
+            result = await sendWhatsAppTextMessage(normalizedPhone, text.trim(), userId, { skipConversationRecord: true });
             waMessageId = result?.messages?.[0]?.id;
             messageContent = { text: text.trim() };
             messageType = 'text';

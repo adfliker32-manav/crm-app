@@ -196,7 +196,7 @@ const sendAutomatedWhatsAppOnLeadCreate = async (lead, userId) => {
                     template.components || [], template.variableMapping, tplContext
                 );
                 console.log(`📤 [WA-Auto] Sending template "${template.name}" to ${lead.phone}...`);
-                const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language);
+                const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language, { skipConversationRecord: true });
                 const messageId = result?.messages?.[0]?.id;
                 console.log(`✅ [WA-Auto] Automated WhatsApp sent to ${lead.phone} using template: ${template.name} (msgId: ${messageId})`);
 
@@ -266,7 +266,7 @@ const sendAutomatedWhatsAppOnStageChange = async (lead, oldStage, newStage, user
                 const metaComponents = buildMetaComponents(
                     template.components || [], template.variableMapping, tplContext
                 );
-                const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language);
+                const result = await sendWhatsAppMessage(lead.phone, template.name, userId, metaComponents, template.language, { skipConversationRecord: true });
                 console.log(`✅ Automated WhatsApp sent to ${lead.phone} for stage change to ${newStage} using template ${template.name}`);
 
                 // FIX #79: Sync to conversation DB (was missing — ghost messages)

@@ -16,6 +16,7 @@
  */
 
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 
 // ─── Invalid-key rejection cache ──────────────────────────────────────────────
@@ -83,7 +84,7 @@ function _checkPerKeyLimit(apiKey) {
 
 // Periodic cleanup to prevent memory leak
 // _invalidKeyCache is declared ABOVE this setInterval — safe reference
-setInterval(() => {
+const _sweepTimer = setInterval(() => {
     const now = Date.now();
     for (const [k, v] of _perKeyMinuteMap.entries()) {
         if (now > v.resetAt) _perKeyMinuteMap.delete(k);
@@ -95,6 +96,10 @@ setInterval(() => {
         if (now > exp) _invalidKeyCache.delete(k);
     }
 }, 5 * 60 * 1000);
+// Housekeeping must not be the reason the process stays alive — same as the
+// partner-API middleware's sweep. Without this, anything that merely REQUIRES
+// this file (a test run, a one-shot script, a graceful shutdown) hangs forever.
+if (_sweepTimer.unref) _sweepTimer.unref();
 
 // ─── IP-level rate limit (outer wall — cheap, no DB) ──────────────────────────
 const extApiIpRateLimit = rateLimit({
@@ -102,7 +107,10 @@ const extApiIpRateLimit = rateLimit({
     max: 60,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.ip,
+    // ipKeyGenerator, not req.ip: a bare IPv6 address is one bucket per address,
+    // and a caller holding a routine /64 has 2^64 of them — the outer wall was
+    // free to walk around. The helper buckets IPv6 by subnet.
+    keyGenerator: (req) => ipKeyGenerator(req.ip),
     handler: (req, res) => {
         res.status(429).json({
             success: false,
