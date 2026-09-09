@@ -153,12 +153,54 @@ const queueLeadStageChangeEffects = (lead, fromStage = undefined, options = {}) 
  * @param {object} lead     needs at least { _id, assignedTo }
  * @param {string} tenantId the workspace owner (req.tenantId / lead.userId)
  */
+/**
+ * Link a lead's phone number to any conversation that has no lead yet.
+ *
+ * Callers pass wildly different lead shapes — a full Mongoose document, a lean
+ * projection, or `{ _id, assignedTo }` built by hand (AssignUserNode does the
+ * last one) — so the phone is fetched when it was not supplied. `null` is a
+ * real answer (a lead genuinely without a phone) and is not re-fetched;
+ * `undefined` means "not projected".
+ *
+ * Never throws: linking is opportunistic and must not break an assignment.
+ */
+const linkLeadConversations = async (svc, lead, tenantId) => {
+    try {
+        if (!await svc.isFollowLeadEnabled(tenantId)) return;
+
+        let phone = lead.phone;
+        if (phone === undefined) {
+            const Lead = require('../models/Lead');
+            const doc = await Lead.findById(lead._id).select('phone').lean();
+            phone = doc?.phone || null;
+        }
+        if (!phone) return;
+
+        await svc.linkConversationsToLead({ tenantId, phone, leadId: lead._id });
+    } catch (err) {
+        console.error('WhatsApp conversation link error (non-blocking):', err.message);
+    }
+};
+
 const queueLeadAssignmentEffects = (lead, tenantId) => {
     if (!lead?._id || !tenantId) return;
 
     runInBackground('WhatsApp assignment sync error (non-blocking):', async () => {
         const svc = require('../services/whatsappAssignmentService');
         const { getCompanyUserIds } = require('./whatsappUtils');
+
+        // Link BEFORE syncing. syncConversationsForLead filters on `leadId`, so a
+        // thread that was never linked to a Lead is invisible to it — and that is
+        // the normal state for anyone who messaged in before the Lead existed.
+        //
+        // Only the external API used to do this, so assigning from the CRM UI,
+        // a workflow, an automation rule or MCP moved the Lead and left the chat
+        // exactly where it was. It looked like assignment was broken, and for
+        // every unlinked thread it was.
+        //
+        // Gated on the toggle to keep this module inert when the workspace does
+        // not mirror assignment (see whatsappAssignmentService's header).
+        await linkLeadConversations(svc, lead, tenantId);
 
         const result = await svc.syncConversationsForLead({
             leadId: lead._id,
@@ -189,6 +231,21 @@ const queueBulkLeadAssignmentEffects = (leadIds, assignedTo, tenantId) => {
     runInBackground('WhatsApp bulk assignment sync error (non-blocking):', async () => {
         const svc = require('../services/whatsappAssignmentService');
         const { getCompanyUserIds } = require('./whatsappUtils');
+
+        // Same link-before-sync as the single path. Each conversation needs ITS
+        // own lead's id, so this cannot collapse into one updateMany — it is a
+        // sequential pass, which is fine because the whole call is backgrounded.
+        // Only leads that actually have a phone are visited.
+        if (await svc.isFollowLeadEnabled(tenantId)) {
+            const Lead = require('../models/Lead');
+            const docs = await Lead.find({ _id: { $in: leadIds } }).select('_id phone').lean();
+            for (const doc of docs) {
+                if (!doc.phone) continue;
+                await svc.linkConversationsToLead({
+                    tenantId, phone: doc.phone, leadId: doc._id
+                });
+            }
+        }
 
         const result = await svc.syncConversationsForLeads({
             leadIds,

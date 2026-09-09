@@ -919,16 +919,59 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // Guaranteed to never throw duplicate key exceptions on concurrent inserts
         debug(`🔎 Upserting conversation: targetUserId=${targetUserId}, waContactId=${upsertContactId} (incoming from: ${from || bsuid})`);
 
-        // Derived owner: mirrors the matched Lead's assignedTo. `mirrorEnabled`
-        // is false whenever lead-based assignment is off for this workspace, so
-        // this is inert by default. The two are reported separately because a
-        // bare null cannot distinguish "feature off" from "lead deliberately
-        // unassigned" — see resolveAssignmentForConversation.
+        // ── Which Lead does this conversation mirror? ────────────────────────
+        // The invariant is `conversation.assignedTo === Lead(conversation.leadId).assignedTo`,
+        // so the LINKED lead is authoritative — not "whatever lead this phone
+        // number happens to match today".
+        //
+        // Deriving from the phone match alone was wrong in two ways:
+        //   1. The lookup above can miss (the lead's phone was edited or stored
+        //      in another format, the customer wrote from a second number). It
+        //      then yielded assignedTo:null, which reads as "genuinely
+        //      unassigned" — so the next inbound message silently TOOK THE CHAT
+        //      AWAY from the agent who owned it.
+        //   2. When the phone matched a DIFFERENT lead than the linked one (a
+        //      later duplicate wins, the lookup sorts by updatedAt), the owner
+        //      mirrored lead B while leadId still pointed at lead A — the mirror
+        //      no longer mirrored its own link.
+        //
+        // A link to a DELETED lead is treated as no link at all (`staleLink`),
+        // which lets the backfill below re-point or clear it. Without that, such
+        // a row can never recover: the backfill only ever filled a null leadId.
+        let mirrorLead = lead;
+        let staleLink = false;
+        const linkedLeadId = existingConversation?.leadId || null;
+
+        if (linkedLeadId && String(lead?._id || '') !== String(linkedLeadId)) {
+            try {
+                const linked = await Lead.findById(linkedLeadId).select('assignedTo').lean();
+                if (linked) {
+                    mirrorLead = linked;
+                } else {
+                    staleLink = true;
+                    debug(`   ⚠️ Conversation ${existingConversation._id} points at deleted lead ${linkedLeadId} — treating as unlinked`);
+                }
+            } catch (linkErr) {
+                // Fail closed: keep the phone-matched lead out of it and write
+                // nothing, rather than clearing an owner over a transient read.
+                console.error('[Webhook] linked-lead read failed:', linkErr.message);
+                mirrorLead = undefined;
+            }
+        }
+
+        // `mirrorEnabled` is false whenever lead-based assignment is off for this
+        // workspace, so this is inert by default. The two are reported separately
+        // because a bare null cannot distinguish "feature off" from "lead
+        // deliberately unassigned" — see resolveAssignmentForConversation.
+        // `mirrorLead === undefined` means "could not determine" and makes the
+        // resolver fall through to its own fail-closed path.
         const { enabled: mirrorEnabled, assignedTo: derivedAssignee } =
-            await resolveAssignmentForConversation({
-                tenantId: targetUserId,
-                lead: lead || null
-            });
+            mirrorLead === undefined
+                ? { enabled: false, assignedTo: null }
+                : await resolveAssignmentForConversation({
+                    tenantId: targetUserId,
+                    lead: staleLink ? (lead || null) : (mirrorLead || null)
+                });
 
         const updatePayload = {
             $setOnInsert: {
@@ -974,9 +1017,20 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         // where the customer often messages first. Without this, lead-based
         // assignment silently never applies to those threads.
         // Strictly additive: only ever null -> a real link, never a re-link.
-        if (existingConversation && !existingConversation.leadId && lead?._id) {
+        //
+        // `staleLink` extends this to a link pointing at a DELETED lead. That row
+        // is already detached in every meaningful sense — resolveAssignment reads
+        // null off it — but it stayed permanently un-relinkable because this
+        // branch required leadId to be null. Re-pointing it is not "stealing" a
+        // thread from another lead: the other lead no longer exists.
+        if (existingConversation && lead?._id && (!existingConversation.leadId || staleLink)) {
             updatePayload.$set.leadId = lead._id;
-            debug(`   Backfilled leadId ${lead._id} on conversation ${existingConversation._id}`);
+            debug(`   ${staleLink ? 'Re-pointed stale' : 'Backfilled'} leadId ${lead._id} on conversation ${existingConversation._id}`);
+        } else if (existingConversation && staleLink) {
+            // Dangling link and nothing to re-point to — clear it so the row
+            // stops pretending to be linked and can be picked up later.
+            updatePayload.$set.leadId = null;
+            debug(`   Cleared dangling leadId on conversation ${existingConversation._id}`);
         }
 
         // Keep the derived owner in step with the Lead on every inbound message.
@@ -992,6 +1046,22 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
         if (existingConversation && mirrorEnabled &&
             String(existingConversation.assignedTo || '') !== String(derivedAssignee || '')) {
             updatePayload.$set.assignedTo = derivedAssignee;
+        }
+
+        // ⚠️ MongoDB rejects an update document that touches the SAME path in both
+        // $set and $setOnInsert: "Updating the path 'x' would create a conflict at
+        // 'x'". It validates this statically, before deciding insert vs update, so
+        // the clash throws even when only one of the two operators could ever apply.
+        //
+        // Every backfill above (waBsuid, phone, leadId, assignedTo) targets a path
+        // that $setOnInsert already declares, so any one of them firing killed the
+        // whole upsert — and with it the inbound message, on every retry. Dropping
+        // the insert-only copy is safe because the two always carry the SAME value:
+        // on a genuine insert $set now supplies it instead.
+        for (const key of Object.keys(updatePayload.$set)) {
+            if (key in updatePayload.$setOnInsert) {
+                delete updatePayload.$setOnInsert[key];
+            }
         }
 
         let conversation;

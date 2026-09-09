@@ -66,7 +66,7 @@ exports.getConversations = async (req, res) => {
 
         const [conversations, total] = await Promise.all([
             WhatsAppConversation.find(query)
-                .populate('leadId', 'name email status')
+                .populate('leadId', 'name email status assignedTo')
                 .populate('assignedTo', 'name email')
                 .sort({ lastMessageAt: -1 })
                 .skip(skip)
@@ -101,7 +101,7 @@ exports.getConversation = async (req, res) => {
         const scope = await conversationScope(req);
 
         const conversation = await WhatsAppConversation.findOne({ _id: id, ...scope })
-            .populate('leadId', 'name email phone status source dealValue')
+            .populate('leadId', 'name email phone status source dealValue assignedTo')
             .populate('assignedTo', 'name email')
             .lean();
 
@@ -312,7 +312,7 @@ exports.linkToLead = async (req, res) => {
             { _id: id, ...scope },
             { $set: { leadId: leadId || null, assignedTo } },
             { returnDocument: 'after' }
-        ).populate('leadId', 'name email phone status source dealValue');
+        ).populate('leadId', 'name email phone status source dealValue assignedTo');
 
         if (!conversation) {
             return res.status(404).json({ message: 'Conversation not found' });

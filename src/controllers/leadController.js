@@ -440,16 +440,15 @@ const updateLead = async (req, res) => {
                 }
 
                 if (nextAssignee) {
-                    // Same in-workspace check assignLead performs — an id alone
-                    // must never reach a user in someone else's account.
-                    const agent = await User.findOne({
-                        _id: nextAssignee, parentId: ownerId, role: 'agent'
-                    }).select('_id name').lean();
-                    if (!agent) {
-                        return res.status(400).json({ message: 'Invalid agent ID' });
+                    // Same in-workspace resolution assignLead performs — an id
+                    // alone must never reach a user in someone else's account,
+                    // and the workspace owner counts as a valid assignee.
+                    const resolvedAssignee = await resolveAssignee(nextAssignee, ownerId);
+                    if (!resolvedAssignee.ok) {
+                        return res.status(resolvedAssignee.status).json({ message: resolvedAssignee.message });
                     }
-                    lead.assignedTo = agent._id;
-                    assigneeName = agent.name;
+                    lead.assignedTo = resolvedAssignee.agent._id;
+                    assigneeName = resolvedAssignee.agent.name;
                 } else {
                     lead.assignedTo = null;
                 }
@@ -1421,6 +1420,36 @@ const getFollowUpDoneLeads = async (req, res) => {
 // ==========================================
 // 15. ASSIGN LEAD TO AGENT (Single)
 // ==========================================
+
+/**
+ * Resolve an assignee id to a real user inside THIS workspace.
+ *
+ * Accepts the workspace owner as well as their agents. The assign dropdown
+ * fetches `/auth/my-team?includeManager=true` and lists the manager first, but
+ * this check used to require `parentId: ownerId, role: 'agent'` — which the
+ * owner never satisfies, so picking the name at the top of the list always
+ * failed with "Invalid agent ID". The external API already allowed both
+ * (`$or: [{_id: tenantId}, {parentId: tenantId}]`); this brings the CRM in line.
+ *
+ * Returns `{ ok: false, status, message }` on any rejection so callers answer
+ * 400 for a malformed or foreign id rather than throwing a CastError into a 500.
+ */
+const resolveAssignee = async (agentId, ownerId) => {
+    if (!agentId) return { ok: true, agent: null };
+
+    if (!mongoose.isValidObjectId(agentId)) {
+        return { ok: false, status: 400, message: 'Invalid agent ID' };
+    }
+
+    const agent = await User.findOne({
+        _id: agentId,
+        $or: [{ _id: ownerId }, { parentId: ownerId }]
+    }).select('_id name').lean();
+
+    if (!agent) return { ok: false, status: 400, message: 'Invalid agent ID' };
+    return { ok: true, agent };
+};
+
 const assignLead = async (req, res) => {
     try {
         const { id } = req.params;
@@ -1433,14 +1462,31 @@ const assignLead = async (req, res) => {
             return res.status(404).json({ message: "Lead not found" });
         }
 
-        if (agentId) {
-            const agent = await User.findOne({ _id: agentId, parentId: ownerId, role: 'agent' });
-            if (!agent) {
-                return res.status(400).json({ message: "Invalid agent ID" });
-            }
+        const resolved = await resolveAssignee(agentId, ownerId);
+        if (!resolved.ok) {
+            return res.status(resolved.status).json({ message: resolved.message });
         }
 
-        lead.assignedTo = agentId || null;
+        // Only write history when the owner actually changes — re-selecting the
+        // same agent should not litter the timeline.
+        const previousAssignee = lead.assignedTo ? String(lead.assignedTo) : null;
+        const nextAssignee = resolved.agent ? String(resolved.agent._id) : null;
+        const assignmentChanged = previousAssignee !== nextAssignee;
+
+        lead.assignedTo = resolved.agent ? resolved.agent._id : null;
+
+        // The lead timeline is the audit trail agents actually read, and it was
+        // the one place a reassignment left no trace — PUT /leads/:id and the
+        // external API both record it, this route did not.
+        if (assignmentChanged) {
+            lead.history.push({
+                type: 'System',
+                subType: 'Assignment',
+                content: resolved.agent ? `Assigned to ${resolved.agent.name}` : 'Unassigned',
+                date: new Date()
+            });
+        }
+
         await lead.save();
 
         // The Lead owns the WhatsApp conversation: push the new owner onto it.
@@ -1485,28 +1531,71 @@ const bulkAssignLeads = async (req, res) => {
 
         let ownerId = req.tenantId;
 
-        if (agentId) {
-            const agent = await User.findOne({ _id: agentId, parentId: ownerId, role: 'agent' });
-            if (!agent) {
-                return res.status(400).json({ message: "Invalid agent ID" });
-            }
+        // Same resolution as the single-assign route, so the manager is a valid
+        // assignee here too and a malformed id answers 400 instead of throwing a
+        // CastError into a 500.
+        const resolved = await resolveAssignee(agentId, ownerId);
+        if (!resolved.ok) {
+            return res.status(resolved.status).json({ message: resolved.message });
+        }
+        const nextAssignee = resolved.agent ? resolved.agent._id : null;
+
+        // A single malformed id used to blow the whole request up with a
+        // CastError → 500. Filter to well-formed ids and let the scope query
+        // decide the rest.
+        const validIds = targetIds.filter(i => mongoose.isValidObjectId(i));
+        if (validIds.length === 0) {
+            return res.status(400).json({ message: "No valid lead IDs provided" });
         }
 
         // Resolve which ids are actually in scope BEFORE writing, so the
         // conversation sync below only ever follows leads we really touched.
-        const scopedLeads = await Lead.find({ _id: { $in: targetIds }, ...req.dataScope })
+        const scopedLeads = await Lead.find({ _id: { $in: validIds }, ...req.dataScope })
             .select('_id')
             .lean();
         const scopedIds = scopedLeads.map(l => l._id);
 
+        // Bulk reassignment left NO audit trail of any kind — no lead history and
+        // no activity log — so moving a whole book of business between agents was
+        // invisible after the fact. The history entry rides along with the same
+        // updateMany (capped like every other history write in this codebase).
+        const historyEntry = {
+            type: 'System',
+            subType: 'Assignment',
+            content: resolved.agent ? `Assigned to ${resolved.agent.name} (bulk)` : 'Unassigned (bulk)',
+            date: new Date()
+        };
+
         const result = await Lead.updateMany(
             { _id: { $in: scopedIds }, ...req.dataScope },
-            { $set: { assignedTo: agentId || null } }
+            {
+                $set: { assignedTo: nextAssignee },
+                $push: { history: { $each: [historyEntry], $slice: -100 } }
+            }
         );
+
+        logActivity({
+            userId: getRequestUserId(req.user),
+            userName: req.user.name || 'Unknown',
+            actionType: 'LEAD_ASSIGNED',
+            entityType: 'Lead',
+            // ActivityLog.entityId is required, and a bulk action has no single
+            // target — the company stands in, the same convention the export log
+            // already uses ("the lead database as a whole"). Passing null (or
+            // omitting it, as bulkUpdateStatus does) fails schema validation and
+            // the write is swallowed by the .catch, so the action is never logged.
+            entityId: ownerId,
+            entityName: `${scopedIds.length} leads (bulk)`,
+            metadata: {
+                assignedTo: resolved.agent ? resolved.agent.name : 'Unassigned',
+                count: scopedIds.length
+            },
+            companyId: ownerId
+        }).catch(err => console.error('Audit log error:', err));
 
         // updateMany fires no document middleware — the propagation has to be
         // an explicit call. One batched updateMany, not one per lead.
-        queueBulkLeadAssignmentEffects(scopedIds, agentId || null, ownerId);
+        queueBulkLeadAssignmentEffects(scopedIds, nextAssignee, ownerId);
 
         res.json({ success: true, message: `${result.modifiedCount} leads updated`, modifiedCount: result.modifiedCount });
     } catch (err) {
@@ -1966,6 +2055,9 @@ const bulkUpdateStatus = async (req, res) => {
             userName: req.user.name || 'Unknown',
             actionType: 'LEAD_EDITED',
             entityType: 'Lead',
+            // Required by the schema — without it this log silently failed
+            // validation and every bulk status change went unrecorded.
+            entityId: req.tenantId,
             entityName: 'Bulk Status Update',
             metadata: { updatedCount: result.modifiedCount, newStatus: status },
             companyId: req.tenantId

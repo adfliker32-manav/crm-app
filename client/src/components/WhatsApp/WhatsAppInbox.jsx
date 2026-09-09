@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import { useAuth } from '../../context/AuthContext';
 import useSocket from '../../hooks/useSocket';
 import MediaLibrary, { formatBytes as formatLibraryBytes } from './MediaLibrary';
 
@@ -145,6 +146,7 @@ const WhatsAppSticker = ({ src }) => {
 const WhatsAppInbox = () => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
+    const { user } = useAuth();
     const [conversations, setConversations] = useState([]);
     const [selectedChat, setSelectedChat] = useState(null);
     const [messages, setMessages] = useState([]);
@@ -177,6 +179,17 @@ const WhatsAppInbox = () => {
     const [showInlineQuickReplyPicker, setShowInlineQuickReplyPicker] = useState(false);
     const [showQuickReplyManager, setShowQuickReplyManager] = useState(false);
     const quickReplyPickerRef = useRef(null);
+    // ── Assign this chat to an agent ──
+    // The control writes the LEAD's owner, never the conversation's. See
+    // whatsappAssignmentService: WhatsAppConversation.assignedTo is a derived
+    // mirror and that service is its only writer, so a chat-level assignment
+    // would be reverted by the next inbound message.
+    const [assignAgents, setAssignAgents] = useState([]);
+    const [assignSaving, setAssignSaving] = useState(false);
+    // Whether this workspace actually mirrors lead ownership onto chats. Off by
+    // default, and if it is off the assignment still lands on the Lead but the
+    // chat does not move — the UI has to say so rather than look broken.
+    const [mirrorEnabled, setMirrorEnabled] = useState(false);
     const [convPage, setConvPage] = useState(1);
     const [convHasMore, setConvHasMore] = useState(true);
     const [convLoadingMore, setConvLoadingMore] = useState(false);
@@ -192,6 +205,102 @@ const WhatsAppInbox = () => {
     const convHasMoreRef = useRef(true);
     const convLoadingMoreRef = useRef(false);
     const { socket, isConnected } = useSocket();
+
+    // Mirrors the gate on PUT /leads/:id/assign (checkPermission('assignLeads')).
+    // Cosmetic only — the server is still the authority; this just avoids showing
+    // a control that would 403.
+    const canAssign = user?.role === 'superadmin'
+        || user?.role === 'manager'
+        || user?.permissions?.assignLeads === true;
+
+    // Team roster + whether this workspace mirrors assignment. Fetched once, and
+    // only for someone who can actually assign.
+    useEffect(() => {
+        if (!canAssign) return;
+        let cancelled = false;
+
+        (async () => {
+            try {
+                // includeManager: the owner is a legitimate assignee — the Leads
+                // page dropdown does the same.
+                const res = await api.get('/auth/my-team?includeManager=true');
+                if (!cancelled) setAssignAgents(Array.isArray(res.data) ? res.data : []);
+            } catch (err) {
+                console.error('Failed to load team for assignment:', err);
+            }
+
+            try {
+                const cfg = await api.get('/leads/whatsapp-assignment-config');
+                if (!cancelled) setMirrorEnabled(cfg.data?.whatsappFollowsLeadAssignment === true);
+            } catch (err) {
+                // Non-fatal: assume off, which only makes the UI more cautious.
+                console.error('Failed to load assignment config:', err);
+            }
+        })();
+
+        return () => { cancelled = true; };
+    }, [canAssign]);
+
+    /**
+     * Hand this chat to an agent by reassigning its linked LEAD.
+     *
+     * There is deliberately no endpoint that sets a conversation's owner
+     * directly. Writing one would create a second source of truth that the
+     * inbound webhook overwrites on the customer's next message.
+     */
+    const handleAssignChat = async (agentId) => {
+        const leadId = selectedChat?.leadId?._id;
+        if (!leadId || assignSaving) return;
+
+        const agent = assignAgents.find(a => String(a._id) === String(agentId));
+        const previous = selectedChat.assignedTo || null;
+        const next = agentId ? { _id: agentId, name: agent?.name || null } : null;
+
+        setAssignSaving(true);
+
+        // Only paint the badge when this workspace actually mirrors ownership
+        // onto conversations. With the toggle OFF, syncConversationsForLead
+        // returns early and never writes conversation.assignedTo — so an
+        // optimistic update here would show an owner the server does not have,
+        // and it would silently vanish on the next refresh.
+        const applyOptimistic = (value) => {
+            if (!mirrorEnabled) return;
+            setSelectedChat(prev => (prev ? { ...prev, assignedTo: value } : prev));
+            setConversations(prev => prev.map(c => (
+                c._id === selectedChat._id ? { ...c, assignedTo: value } : c
+            )));
+        };
+
+        applyOptimistic(next);
+
+        try {
+            await api.put(`/leads/${leadId}/assign`, { agentId: agentId || null });
+
+            // Say what actually happened. With mirroring off the LEAD moved but
+            // the chat did not, and claiming otherwise is how a support ticket
+            // starts.
+            if (agent) {
+                showSuccess(mirrorEnabled
+                    ? `Chat assigned to ${agent.name}`
+                    : `Lead assigned to ${agent.name} — the chat stays shared`);
+            } else {
+                showSuccess(mirrorEnabled ? 'Chat unassigned' : 'Lead unassigned');
+            }
+
+            // Keep the panel's own dropdown honest even when the badge is not
+            // repainted: the lead's owner did change.
+            setSelectedChat(prev => (prev
+                ? { ...prev, leadId: { ...prev.leadId, assignedTo: agentId || null } }
+                : prev));
+        } catch (err) {
+            // Roll the optimistic write back — leaving it would show an owner the
+            // server rejected.
+            applyOptimistic(previous);
+            showError(err.response?.data?.message || 'Failed to assign this chat');
+        } finally {
+            setAssignSaving(false);
+        }
+    };
 
     const fetchConversations = useCallback(async (pageNum = 1, merge = false) => {
         if (pageNum === 1) {
@@ -505,7 +614,19 @@ const WhatsAppInbox = () => {
             });
 
             if (selectedChatRef.current?._id === convId) {
-                setSelectedChat(prev => (prev ? { ...prev, assignedTo: nextAssignee } : prev));
+                setSelectedChat(prev => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        assignedTo: nextAssignee,
+                        // The Assigned Agent dropdown reads the LEAD's owner, so it
+                        // would go stale on someone else's reassignment unless the
+                        // linked lead is updated in the same breath.
+                        leadId: prev.leadId
+                            ? { ...prev.leadId, assignedTo: assignedTo || null }
+                            : prev.leadId
+                    };
+                });
             }
         };
 
@@ -1770,6 +1891,65 @@ const WhatsAppInbox = () => {
                                     <span className="text-sm text-[#111b21]">{selectedChat.leadId.status || '—'}</span>
                                 </div>
                             </div>
+                        </div>
+                    )}
+
+                    {/* ── Assigned Agent ──────────────────────────────────────
+                        Assigning here writes the LINKED LEAD's owner; the chat
+                        follows it. That is why the control is hidden when the
+                        thread has no lead — there would be nothing to write. */}
+                    {canAssign && (
+                        <div className="bg-white p-5 mb-2">
+                            <h4 className="text-sm font-medium text-[#8696a0] mb-3 uppercase tracking-wider">Assigned Agent</h4>
+
+                            {selectedChat.leadId ? (
+                                <>
+                                    <div className="relative">
+                                        {/* Reads the LEAD's owner, because that is what
+                                            this control writes. conversation.assignedTo
+                                            would be wrong whenever mirroring is off: the
+                                            lead has an owner, the conversation never
+                                            gets one, and the dropdown would sit on
+                                            "Unassigned" forever. */}
+                                        <select
+                                            value={selectedChat.leadId?.assignedTo || ''}
+                                            onChange={(e) => handleAssignChat(e.target.value || null)}
+                                            disabled={assignSaving}
+                                            className="w-full appearance-none bg-[#f0f2f5] border border-[#e9edef] rounded-lg pl-9 pr-8 py-2.5 text-sm text-[#111b21] focus:outline-none focus:ring-2 focus:ring-[#00a884] disabled:opacity-60 cursor-pointer"
+                                        >
+                                            <option value="">Unassigned</option>
+                                            {assignAgents.map(a => (
+                                                <option key={a._id} value={a._id}>
+                                                    {a.name}{a.role === 'manager' ? ' (Owner)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <i className={`fa-solid ${assignSaving ? 'fa-spinner fa-spin' : 'fa-user-tag'} absolute left-3 top-1/2 -translate-y-1/2 text-[#00a884] text-sm pointer-events-none`}></i>
+                                        <i className="fa-solid fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-[#8696a0] text-xs pointer-events-none"></i>
+                                    </div>
+
+                                    {mirrorEnabled ? (
+                                        <p className="text-[11px] text-[#8696a0] mt-2 leading-relaxed">
+                                            Assigning moves this chat to that agent's inbox. Ownership follows the linked lead.
+                                        </p>
+                                    ) : (
+                                        // Without this the control looks broken: the lead really is
+                                        // reassigned, but the chat stays visible to everyone.
+                                        <p className="text-[11px] text-amber-600 mt-2 leading-relaxed">
+                                            <i className="fa-solid fa-circle-info mr-1"></i>
+                                            This sets the lead's owner. The inbox is currently shared with the whole
+                                            team, so the chat will not move. Enable Lead Assignment in Settings to
+                                            change that.
+                                        </p>
+                                    )}
+                                </>
+                            ) : (
+                                <p className="text-[11px] text-[#8696a0] leading-relaxed">
+                                    <i className="fa-solid fa-link-slash mr-1"></i>
+                                    This chat is not linked to a lead yet, so it cannot be assigned. It links
+                                    automatically once a lead with this number exists.
+                                </p>
+                            )}
                         </div>
                     )}
 
