@@ -298,6 +298,57 @@ const triggerChatbotLeadCreatedEffects = (lead, userId) => {
     });
 };
 
+/**
+ * AUDIT BUG-03 FIX: chatbot stage changes go through the same hub as every other path.
+ *
+ * Three places in this file wrote `Lead.status` with a bare findByIdAndUpdate and then
+ * fired, at most, the Meta CAPI event. `queueLeadStageChangeEffects` — the hub the
+ * lead controller, the bulk endpoints, the external API, MCP and the workflow engine's
+ * own update_stage node all call — appeared NOWHERE in this file. So a bot qualifying
+ * a lead into "Interested" ran no STAGE_CHANGED workflow, no sequence enrolment, no
+ * automation rule and no score update, while dragging that same lead across the board
+ * by hand ran all four. The chatbot is the highest-volume stage-mover in the product.
+ *
+ * `fromStage` must be the stage the lead was in BEFORE the write — a STAGE_CHANGED
+ * workflow narrowed by "moved FROM" cannot match without it.
+ */
+const triggerChatbotStageChangeEffects = (lead, fromStage) => {
+    if (!lead?._id) return;
+    setImmediate(() => {
+        try {
+            const { queueLeadStageChangeEffects } = require('../utils/leadEffects');
+            queueLeadStageChangeEffects(lead, fromStage);
+        } catch (err) {
+            console.error('[Chatbot] Stage-change effects error:', err.message);
+        }
+    });
+};
+
+/**
+ * AUDIT BUG-09 FIX: chatbot-applied tags raise TAG_ADDED.
+ *
+ * The bot's assign_tag action and the qualification rules' assignTags both wrote
+ * `$addToSet: { tags }` straight onto the Lead and fired nothing, so "when the bot
+ * tags someone Interested, start the nurture sequence" was not buildable.
+ *
+ * Only genuinely NEW tags are passed in by the callers: re-adding a tag the lead
+ * already carries is a no-op on the document and must not re-trigger tag workflows
+ * (the same guard AddTagNode applies, and the one bulkAddTags was missing).
+ */
+const fireChatbotTagAdded = (lead, addedTags) => {
+    const tags = (Array.isArray(addedTags) ? addedTags : [addedTags]).filter(Boolean);
+    if (!lead?._id || tags.length === 0) return;
+    setImmediate(() => {
+        try {
+            const WorkflowEngine = require('../workflow-engine/WorkflowEngine');
+            WorkflowEngine.fireTrigger('TAG_ADDED', { lead, addedTags: tags })
+                .catch(e => console.error('[Chatbot] TAG_ADDED fireTrigger error:', e.message));
+        } catch (err) {
+            console.error('[Chatbot] TAG_ADDED effects error:', err.message);
+        }
+    });
+};
+
 // ============================================================
 // 🔧 HELPER: Persist automated outbound messages to the DB
 // Without this, chatbot replies are invisible in the inbox UI.
@@ -1852,7 +1903,19 @@ const evaluateSmartLead = async (session, flow, conversation) => {
             updateOp.$addToSet = { tags: { $each: bestRule.assignTags } };
         }
 
+        // AUDIT BUG-03/BUG-09: the pre-image. Without it there is no `fromStage` for the
+        // STAGE_CHANGED trigger, and no way to tell which of `assignTags` were actually
+        // new ($addToSet is a silent no-op for tags the lead already carries).
+        const leadBefore = await Lead.findById(leadIdToUpdate).select('status tags').lean();
+
         const updatedLead = await Lead.findByIdAndUpdate(leadIdToUpdate, updateOp, { returnDocument: 'after' });
+
+        // AUDIT BUG-09 FIX: fire TAG_ADDED for the tags this rule genuinely added.
+        if (didLevelUp && bestRule?.assignTags?.length > 0 && updatedLead) {
+            const previouslyHeld = leadBefore?.tags || [];
+            const newlyAdded = bestRule.assignTags.filter(t => !previouslyHeld.includes(t));
+            fireChatbotTagAdded(updatedLead, newlyAdded);
+        }
 
         if (didLevelUp && bestRule?.assignTags?.length > 0) {
             await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
@@ -1862,15 +1925,17 @@ const evaluateSmartLead = async (session, flow, conversation) => {
         
         // Fire Automation & Meta CAPI hooks for Lead Upgrade Status Change
         if (didLevelUp && bestRule?.changeStageTo && updatedLead) {
+            // AUDIT BUG-03 FIX: this block hand-rolled two of the four stage-change
+            // effects and omitted the other two. queueLeadStageChangeEffects runs the
+            // same evaluateLead + enrollLeadInSequences this used to call, and adds the
+            // STAGE_CHANGED workflow trigger and the lead-score update that were
+            // missing — so the duplicated calls are replaced by the hub rather than
+            // sitting alongside it (calling both would double-fire automation rules).
+            // Meta CAPI stays here: the hub deliberately carries none.
+            triggerChatbotStageChangeEffects(updatedLead, leadBefore?.status);
+
             setImmediate(async () => {
                 try {
-                    const { evaluateLead } = require('./AutomationService');
-                    evaluateLead(updatedLead, 'STAGE_CHANGED').catch(e => console.error('[Chatbot] Automation engine error:', e));
-
-                    // FIX: Enroll in drip sequences on chatbot-triggered stage change (was missing)
-                    const { enrollLeadInSequences } = require('./sequenceService');
-                    enrollLeadInSequences(updatedLead, 'STAGE_CHANGED', bestRule.changeStageTo).catch(e => console.error('[Chatbot] Sequence enrollment (STAGE_CHANGED) error:', e));
-
                     // Outbox-backed entry point — resolves config from the lead's
                     // owner and guarantees delivery or visible failure.
                     const { sendMetaEventForLead } = require('./metaConversionService');
@@ -3114,9 +3179,20 @@ const executeAction = async (actionData, session, conversation) => {
                     });
                     // Also tag the Lead if linked
                     if (conversation.leadId) {
-                        await Lead.findByIdAndUpdate(conversation.leadId, {
-                            $addToSet: { tags: actionData.actionData.tag }
-                        });
+                        // AUDIT BUG-09 FIX: take the pre-image so TAG_ADDED fires only
+                        // when the tag is genuinely new — $addToSet is a no-op for a tag
+                        // the lead already has, and re-firing tag workflows on a no-op is
+                        // exactly the loop guard AddTagNode applies.
+                        const tag = actionData.actionData.tag;
+                        const prevLead = await Lead.findByIdAndUpdate(
+                            conversation.leadId,
+                            { $addToSet: { tags: tag } },
+                            { returnDocument: 'before' }
+                        );
+                        if (prevLead && !(prevLead.tags || []).includes(tag)) {
+                            const prev = typeof prevLead.toObject === 'function' ? prevLead.toObject() : prevLead;
+                            fireChatbotTagAdded({ ...prev, tags: [...(prev.tags || []), tag] }, [tag]);
+                        }
                     }
                 }
                 break;
@@ -3233,8 +3309,8 @@ const executeAction = async (actionData, session, conversation) => {
 
                 // ── Update the stage ──────────────────────────────────────────
                 const stageBeforeChange = leadForStage.status;
-                await Lead.findByIdAndUpdate(leadForStage._id, {
-                    $set: { status: newStage },
+                const stagedLead = await Lead.findByIdAndUpdate(leadForStage._id, {
+                    $set: { status: newStage, stageEnteredAt: new Date() },
                     $push: {
                         history: {
                             $each: [{
@@ -3245,8 +3321,14 @@ const executeAction = async (actionData, session, conversation) => {
                             $slice: -100
                         }
                     }
-                });
+                }, { returnDocument: 'after' });
                 console.log(`🤖 [Chatbot] change_stage: lead ${leadForStage._id} → "${newStage}"`);
+
+                // AUDIT BUG-03 FIX: this path fired NOTHING but the CAPI event below —
+                // no STAGE_CHANGED workflow, no sequence, no automation rule, no score.
+                if (stagedLead && stageBeforeChange !== newStage) {
+                    triggerChatbotStageChangeEffects(stagedLead, stageBeforeChange);
+                }
 
                 // CAPI: chatbot/AI stage change is a qualification signal (was missing)
                 if (stageBeforeChange !== newStage) {
@@ -3461,8 +3543,9 @@ const executeAction = async (actionData, session, conversation) => {
                     // ── UPSERT PATH: Lead exists → just update stage ──────────
                     const stageChanged = lead.status !== targetStage;
                     if (stageChanged) {
-                        await Lead.findByIdAndUpdate(lead._id, {
-                            $set: { status: targetStage },
+                        const stageBefore = lead.status;
+                        const upsertedLead = await Lead.findByIdAndUpdate(lead._id, {
+                            $set: { status: targetStage, stageEnteredAt: new Date() },
                             $push: {
                                 history: {
                                     $each: [{
@@ -3474,8 +3557,15 @@ const executeAction = async (actionData, session, conversation) => {
                                     $slice: -100
                                 }
                             }
-                        });
+                        }, { returnDocument: 'after' });
                         console.log(`🤖 [Chatbot] create_lead (upsert): lead ${lead._id} stage updated → "${targetStage}"`);
+
+                        // AUDIT BUG-03 FIX: the upsert branch of create_lead moved the
+                        // lead and ran nothing at all — not even the CAPI event the
+                        // sibling create branch fires.
+                        if (upsertedLead) {
+                            triggerChatbotStageChangeEffects(upsertedLead, stageBefore);
+                        }
                     } else {
                         console.log(`🤖 [Chatbot] create_lead (upsert): lead ${lead._id} already in stage "${targetStage}", no change needed.`);
                     }

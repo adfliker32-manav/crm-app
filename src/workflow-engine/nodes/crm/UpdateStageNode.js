@@ -43,7 +43,24 @@ const UpdateStageNode = {
 
     execute: async (context, data) => {
         const lead = context.getLead();
-        if (!lead) return { nextPort: 'output', output: {} };
+        // ── AUDIT BUG-16 FIX: make the no-contact skip VISIBLE ───────────────────
+        // A WEBHOOK_RECEIVED delivery that matches no lead, or a WHATSAPP_REPLY from a
+        // number that is not a lead yet, both produce a contactId:null execution — and
+        // publish-time validation only guards SCHEDULED_TRIGGER, so those workflows
+        // publish cleanly. This node then returned the SUCCESS port with an empty
+        // output, so the run completed, reported success, and had done nothing, with
+        // nothing in the timeline to say why.
+        //
+        // Still routes to 'output' so downstream non-CRM steps (a notification, an
+        // HTTP call) keep running as they do today — promoting this to an 'error' port
+        // would silently truncate existing graphs. The skip is now recorded instead.
+        if (!lead) {
+            console.warn(`[UpdateStageNode] No contact on execution ${context.executionId} — stage not changed.`);
+            return {
+                nextPort: 'output',
+                output: { 'lead.stageSkipped': true, 'lead.stageSkipReason': 'no_contact_in_execution' }
+            };
+        }
 
         const stageName = data.stageName;
 

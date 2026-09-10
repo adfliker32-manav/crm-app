@@ -42,6 +42,36 @@ const ALLOWED_LEAD_UPDATE_FIELDS = new Set([
 
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
+// ── AUDIT BUG-05 / BUG-06: what actually changed ──────────────────────────────
+// `changedFields` on the LEAD_UPDATED trigger used to be `Object.keys(req.body)` —
+// the fields the client SUBMITTED, not the fields whose value DIFFERS. The lead edit
+// form PUTs the whole object, so every save reported name, email, phone, status,
+// source, dealValue and tags as changed and a workflow narrowed to "only when
+// dealValue changes" fired on someone fixing a typo in the name. The filter was
+// honoured; it just always matched, which is the worst kind of broken.
+//
+// These two helpers give a real before/after comparison. Lead fields are a mix of
+// Mongoose Maps (customData), Mongoose arrays (tags), Dates (nextFollowUpDate),
+// ObjectIds (assignedTo) and scalars, and none of those compare correctly with ===.
+const normalizeForCompare = (value) => {
+    if (value === null || value === undefined) return '';
+    if (value instanceof Date) return value.getTime();
+    if (value instanceof Map) return JSON.stringify(Object.fromEntries(value));
+    if (Array.isArray(value)) return JSON.stringify(value.map(v => String(v)));
+    if (typeof value === 'object') {
+        if (typeof value.toHexString === 'function') return value.toHexString();
+        try { return JSON.stringify(value); } catch { return String(value); }
+    }
+    return typeof value === 'number' ? value : String(value);
+};
+
+const valuesDiffer = (before, after) => normalizeForCompare(before) !== normalizeForCompare(after);
+
+// Fields whose change is worth reporting to LEAD_UPDATED. `assignedTo` and
+// `nextFollowUpDate` are handled outside ALLOWED_LEAD_UPDATE_FIELDS by updateLead,
+// so they have to be listed explicitly or they can never appear in changedFields.
+const TRACKED_LEAD_FIELDS = [...ALLOWED_LEAD_UPDATE_FIELDS, 'assignedTo', 'nextFollowUpDate'];
+
 // Strict 24-char hex, NOT mongoose.Types.ObjectId.isValid(): that helper accepts
 // any 12-character string (12 bytes is a valid raw ObjectId) and then casts it to
 // a DIFFERENT id than the caller supplied.
@@ -411,6 +441,12 @@ const updateLead = async (req, res) => {
 
         const updates = { ...req.body };
 
+        // AUDIT BUG-05/BUG-06: snapshot every tracked field BEFORE anything mutates the
+        // document. It has to happen here, above applyNextFollowUpDateUpdate and the
+        // assignedTo branch, because both write to `lead` before applyLeadUpdates runs.
+        const beforeValues = {};
+        for (const field of TRACKED_LEAD_FIELDS) beforeValues[field] = lead[field];
+
         // ── Reassignment through the lead-edit endpoint ──────────────────────
         // `assignedTo` is declared on the updateLead schema but is deliberately
         // NOT in ALLOWED_LEAD_UPDATE_FIELDS, so applyLeadUpdates used to drop it
@@ -625,12 +661,23 @@ const updateLead = async (req, res) => {
 
         // L3 FIX: fire LEAD_UPDATED (previously a dead trigger — defined but never
         // fired). changedFields lets triggerConfig field filters match.
-        runInBackground('Workflow Engine Error (LEAD_UPDATED):', () =>
-            WorkflowEngine.fireTrigger('LEAD_UPDATED', {
-                lead,
-                changedFields: Object.keys(updates || {})
-            })
+        //
+        // AUDIT BUG-05 FIX: compare against the pre-update snapshot instead of listing
+        // the request body's keys, so "only when this field changes" means it.
+        // AUDIT BUG-06 FIX: `assignedTo` is consumed and deleted from `updates` far
+        // above, so it could never appear in a body-key list — a LEAD_UPDATED workflow
+        // watching the single most commonly automated field matched nothing, forever.
+        // Reading it from the snapshot covers it like any other field. (logActivity had
+        // to special-case exactly this a few lines up; now nothing has to.)
+        const changedFields = TRACKED_LEAD_FIELDS.filter(
+            field => valuesDiffer(beforeValues[field], lead[field])
         );
+
+        if (changedFields.length > 0) {
+            runInBackground('Workflow Engine Error (LEAD_UPDATED):', () =>
+                WorkflowEngine.fireTrigger('LEAD_UPDATED', { lead, changedFields })
+            );
+        }
 
         // L3 FIX: fire TAG_ADDED for tags added via a plain lead edit. Compute the
         // set difference so re-saving existing tags never re-fires the trigger.
@@ -870,6 +917,15 @@ const updateStage = async (req, res) => {
         await Lead.updateMany(
             { userId: ownerId, status: oldName },
             { $set: { status: name.trim() } }
+        );
+
+        // AUDIT BUG-08 FIX: stages are referenced by NAME throughout the workflow
+        // engine, so renaming one used to silently switch off every workflow watching
+        // it — the trigger filter still held the dead string, and an update_stage node
+        // kept writing that dead string back onto leads. Cascading is non-blocking:
+        // the rename itself has already succeeded and must not fail because of this.
+        runInBackground('Stage rename cascade error (non-blocking):', () =>
+            require('../utils/stageRename').cascadeStageRename(ownerId, oldName, name.trim())
         );
 
         return res.json({ success: true, stage });
@@ -1835,7 +1891,24 @@ const bulkAddTags = async (req, res) => {
             return res.status(400).json({ message: "No tags provided" });
         }
 
+        // AUDIT BUG-07: same cap bulkUpdateStatus enforces. This was the only bulk
+        // endpoint here with no size limit, which made it the easiest way to blow the
+        // tenant's workflow execution burst budget in a single request.
+        if (leadIds.length > 500) {
+            return res.status(400).json({ message: 'Too many leads in one request. Tag at most 500 at a time.' });
+        }
+
         const query = { _id: { $in: leadIds }, ...req.dataScope };
+
+        // AUDIT BUG-07 FIX: snapshot the tags each lead already had, BEFORE the write.
+        // $addToSet is a silent no-op for a tag the lead already carries, but the
+        // trigger used to fire for every lead in the selection with the full requested
+        // tag list — re-read AFTER the update, by which point there was no way left to
+        // tell who had gained anything. Selecting 200 leads and adding "hot-lead" put
+        // every already-hot lead back through the campaign. The single-lead path in
+        // updateLead computes this set difference for exactly this reason.
+        const before = await Lead.find(query).select('_id tags').lean();
+        const tagsBefore = new Map(before.map(l => [String(l._id), l.tags || []]));
 
         // $addToSet prevents duplicate tags on the same lead
         const result = await Lead.updateMany(
@@ -1849,7 +1922,10 @@ const bulkAddTags = async (req, res) => {
         runInBackground('Workflow Engine Error (TAG_ADDED):', async () => {
             const taggedLeads = await Lead.find(query).lean();
             for (const taggedLead of taggedLeads) {
-                WorkflowEngine.fireTrigger('TAG_ADDED', { lead: taggedLead, addedTags: tags })
+                const had = tagsBefore.get(String(taggedLead._id)) || [];
+                const newlyAdded = tags.filter(t => !had.includes(t));
+                if (newlyAdded.length === 0) continue;   // nothing changed for this lead
+                WorkflowEngine.fireTrigger('TAG_ADDED', { lead: taggedLead, addedTags: newlyAdded })
                     .catch(err => console.error('TAG_ADDED fireTrigger error:', err.message));
             }
         });
@@ -2044,9 +2120,25 @@ const bulkUpdateStatus = async (req, res) => {
         const movedLeads = targets.filter(l => l.status !== status);
         if (movedLeads.length > 0) {
             setTimeout(() => {
-                movedLeads.forEach(prev =>
-                    queueLeadStageChangeEffects({ ...prev, status }, prev.status)
-                );
+                movedLeads.forEach(prev => {
+                    const moved = { ...prev, status };
+                    queueLeadStageChangeEffects(moved, prev.status);
+
+                    // ── AUDIT BUG-17 FIX: bulk fires LEAD_UPDATED too ────────────
+                    // Moving ONE lead's stage fires STAGE_CHANGED *and* LEAD_UPDATED
+                    // (updateLead does both); the bulk path fired only the first. So a
+                    // LEAD_UPDATED workflow watching `status` ran when you dragged one
+                    // card and not when you selected fifty and used the bulk menu —
+                    // the same user action, different automation depending on batch
+                    // size. This block's own comment already claims parity with
+                    // "dragging one lead across the board"; it was one trigger short.
+                    runInBackground('Workflow Engine Error (LEAD_UPDATED bulk):', () =>
+                        WorkflowEngine.fireTrigger('LEAD_UPDATED', {
+                            lead: moved,
+                            changedFields: ['status']
+                        })
+                    );
+                });
             }, 0);
         }
 

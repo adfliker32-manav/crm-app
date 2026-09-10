@@ -89,7 +89,24 @@ const FindLeadsNode = {
         }
 
         // Bounded projection + limit: never materialise the whole lead set in the worker.
-        const leads = await Lead.find(query).select('_id').limit(cap).lean();
+        //
+        // ── AUDIT BUG-13 FIX: project what buildInitialVariables reads ────────────
+        // This used to select `_id` only and dispatch `{ _id, userId }` as the child's
+        // lead. fireTrigger hands that straight to buildInitialVariables, which then
+        // seeded lead.name / lead.email / lead.phone / lead.status / lead.tags as
+        // EMPTY STRINGS into the child execution's variables — where they stayed for
+        // the whole run. context.getLead() re-reads the real document, so the send
+        // itself worked, but {{lead.name}} in a subject line or WhatsApp body is
+        // interpolated from `variables`: every message from a scheduled or bulk
+        // campaign went out with blank personalisation, and any condition node
+        // branching on lead.status read '' and took the wrong branch.
+        //
+        // These are all scalars — no history array, no customData — so the projection
+        // stays bounded and the 1000-lead cap is unaffected.
+        const leads = await Lead.find(query)
+            .select('_id userId name phone email source status score assignedTo dealValue tags')
+            .limit(cap)
+            .lean();
 
         if (leads.length === 0) {
             return { nextPort: 'empty', output: { 'leads.matched': 0 } };
@@ -101,7 +118,9 @@ const FindLeadsNode = {
         for (const l of leads) {
             try {
                 await WorkflowEngine.fireTrigger('MANUAL_TRIGGER', {
-                    lead: { _id: l._id, userId: context.tenantId },
+                    // BUG-13: pass the projected lead, not a two-field stub — the
+                    // child's lead.* variables are built from exactly this object.
+                    lead: { ...l, userId: l.userId || context.tenantId },
                     workflowId: String(data.targetWorkflowId).trim(),
                     startedBy: 'cron',
                     // C8: children inherit the causation chain, so a find_leads that

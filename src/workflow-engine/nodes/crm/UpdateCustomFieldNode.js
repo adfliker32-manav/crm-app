@@ -145,7 +145,15 @@ const UpdateCustomFieldNode = {
     },
     execute: async (context, data) => {
         const lead = context.getLead();
-        if (!lead) return { nextPort: 'output', output: {} };
+        // AUDIT BUG-16 FIX: record the no-contact skip instead of reporting a silent
+        // success. See the note in UpdateStageNode for why this stays on 'output'.
+        if (!lead) {
+            console.warn(`[UpdateCustomFieldNode] No contact on execution ${context.executionId} — field not written.`);
+            return {
+                nextPort: 'output',
+                output: { 'field.skipped': true, 'field.skipReason': 'no_contact_in_execution' }
+            };
+        }
 
         const updateKey = data.fieldKey?.trim();
 
@@ -181,6 +189,23 @@ const UpdateCustomFieldNode = {
         }
 
         await Lead.findByIdAndUpdate(lead._id, { $set: { [updateKey]: value } });
+
+        // ── AUDIT BUG-17 FIX: a workflow-driven field write is a lead update ──────
+        // See AssignUserNode for the reasoning. `changedFields` carries the key the
+        // author actually configured, so a LEAD_UPDATED filter on that field matches.
+        const { runInBackground } = require('../../../utils/controllerHelpers');
+        runInBackground('Workflow Engine Error (LEAD_UPDATED):', async () => {
+            const WorkflowEngine = require('../../WorkflowEngine');
+            const updated = await Lead.findById(lead._id).lean();
+            if (!updated) return;
+            return WorkflowEngine.fireTrigger('LEAD_UPDATED', {
+                lead: updated,
+                changedFields: [updateKey],
+                _depth: context.getTriggerDepth() + 1,
+                _chain: [...context.getTriggerChain(), `${context.workflowId}:field=${updateKey}`]
+            });
+        });
+
         return { nextPort: 'output', output: { [`field.${updateKey}`]: value } };
     }
 };

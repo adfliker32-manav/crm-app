@@ -146,6 +146,22 @@ test('L-19: fireTrigger returns an array on every path', () => {
     // The catch used to fall through returning undefined, so callers doing
     // `(await fireTrigger(...))[0]` threw exactly when something had gone wrong.
     assert.match(e, /fireTrigger\(\$\{triggerType\}\) error:[\s\S]{0,200}?return \[\];/);
+
+    // AUDIT BUG-20: this test was named for EVERY path and checked exactly one —
+    // the catch block. Three early returns (feature disabled, no tenantId, and the
+    // no-matching-workflow branch that most calls actually take) still returned
+    // undefined, so the invariant the name asserts was false the whole time this
+    // test was green. Check the whole function body instead of one branch.
+    const start = e.indexOf('const fireTrigger = async (triggerType, payload)');
+    const end   = e.indexOf('executeNode()', start);
+    assert.ok(start !== -1 && end > start, 'could not slice the fireTrigger body');
+    const bareReturns = e.slice(start, end)
+        .split('\n')
+        .filter(line => line.trim() === 'return;');
+    assert.deepStrictEqual(
+        bareReturns, [],
+        'fireTrigger has a bare `return;` — every exit must return an array of execution ids'
+    );
 });
 
 // ─── L-22: an explicitly emptied filter matches nothing ──────────────────────

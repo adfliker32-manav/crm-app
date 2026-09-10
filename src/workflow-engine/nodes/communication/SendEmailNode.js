@@ -146,7 +146,13 @@ const SendEmailNode = {
             lead,
             user,
             system: { customData: safeVars },
-            appointment: context.env.trigger?.appointment || context.env.trigger?.payload?.appointment
+            // AUDIT BUG-01 FIX: `context.env` was never defined on ExecutionContext, so
+            // this line threw `TypeError: Cannot read properties of undefined` on EVERY
+            // run — above the try/catch below, so it escaped to the engine and the whole
+            // execution failed after its retries. No email was ever sent by this node.
+            // ExecutionContext now exposes `env`; the optional chaining on `env` itself
+            // is what stops a future context shape from silently breaking sends again.
+            appointment: context.env?.trigger?.appointment || context.env?.trigger?.payload?.appointment
         });
 
         const subject = resolveTemplate(data.subject || '', tplContext);

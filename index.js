@@ -525,23 +525,6 @@ mongoose.connect(MONGO_URI, {
       setAgenda(agenda); // Register for graceful shutdown
       console.log('✅ Agenda Job Queue Started (Automations, WhatsApp, Email)');
 
-    // ── Workflow Engine: Node Registration + BullMQ Worker ────────────────
-    try {
-      // Register all node types into the NodeRegistry (must happen before engine runs)
-      require('./src/workflow-engine/registerAllNodes');
-
-      if (!process.env.REDIS_URL) {
-        console.warn('⚠️  REDIS_URL not set — Workflow Engine worker will not start. Workflows will not execute.');
-      } else {
-        const { startWorkflowWorker, initializeScheduledTriggers } = require('./src/workflow-engine/WorkflowQueue');
-        startWorkflowWorker();
-        initializeScheduledTriggers();
-        console.log('✅ Workflow Engine Worker started');
-      }
-    } catch (err) {
-      console.error('⚠️  Failed to start Workflow Engine:', err.message);
-    }
-
       // Purge stale jobs older than 7 days to prevent DB bloat
       try {
         const jobsCollection = mongoose.connection.db.collection('agendaJobs');
@@ -560,6 +543,33 @@ mongoose.connect(MONGO_URI, {
       }
     } catch (error) {
       console.error('⚠️ Failed to start Agenda Queues:', error.message);
+    }
+
+    // ── Workflow Engine: Node Registration + BullMQ Worker ────────────────
+    // AUDIT BUG-04 FIX: this block used to live INSIDE the Agenda try above, so any
+    // Agenda failure (a defineXJobs throw, agenda.start() timing out) jumped straight
+    // to that catch and skipped it entirely. `registerAllNodes` never ran, which left
+    // NodeRegistry EMPTY — the builder's node palette came back blank and
+    // validateForPublish rejected every workflow with "Unknown node type" — and the
+    // worker never started, so nothing executed and no cron registered. The only clue
+    // was a log line blaming Agenda. Two unrelated subsystems shared one failure
+    // domain; it now sits at the same level as the IMAP and cron blocks below.
+    try {
+      // Register all node types into the NodeRegistry (must happen before engine runs).
+      // This is needed by the WEB process too — validateForPublish and GET /node-types
+      // both read the registry — so it must run even when there is no Redis worker.
+      require('./src/workflow-engine/registerAllNodes');
+
+      if (!process.env.REDIS_URL) {
+        console.warn('⚠️  REDIS_URL not set — Workflow Engine worker will not start. Workflows will not execute.');
+      } else {
+        const { startWorkflowWorker, initializeScheduledTriggers } = require('./src/workflow-engine/WorkflowQueue');
+        startWorkflowWorker();
+        initializeScheduledTriggers();
+        console.log('✅ Workflow Engine Worker started');
+      }
+    } catch (err) {
+      console.error('⚠️  Failed to start Workflow Engine:', err.message);
     }
 
     // Start IMAP Email Polling Service

@@ -422,21 +422,25 @@ export default function ConfigSidebar({
     const [users, setUsers] = useState([]);
     const [waTemplates, setWaTemplates] = useState([]);
     const [customFields, setCustomFields] = useState([]);
+    // AUDIT BUG-19: the real `source` values in this workspace's leads.
+    const [leadSources, setLeadSources] = useState([]);
 
     useEffect(() => {
         const load = async () => {
             try {
-                const [s, u, w, cf] = await Promise.all([
+                const [s, u, w, cf, src] = await Promise.all([
                     api.get('/stages').catch(() => ({ data: [] })),
                     api.get('/auth/my-team?includeManager=true').catch(() => ({ data: [] })),
                     api.get('/whatsapp/templates').catch(() => ({ data: {} })),
-                    api.get('/custom-fields').catch(() => ({ data: [] }))
+                    api.get('/custom-fields').catch(() => ({ data: [] })),
+                    api.get('/workflows/lead-sources').catch(() => ({ data: [] }))
                 ]);
                 setStages(s.data || []);
                 setUsers(u.data || []);
                 const tmpl = w.data?.templates || w.data?.data || [];
                 setWaTemplates(tmpl.filter(t => t.status === 'APPROVED'));
                 setCustomFields(cf.data || []);
+                setLeadSources(Array.isArray(src.data) ? src.data : []);
             } catch {}
         };
         load();
@@ -596,13 +600,29 @@ export default function ConfigSidebar({
                     {workflow?.trigger === 'LEAD_CREATED' && (
                         <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 16 }}>
                             <label style={triggerLabelStyle}>Only for leads from source (optional)</label>
+                            {/* AUDIT BUG-19 FIX: the server matches this EXACTLY (after
+                                trim + lowercase) — no substring, no prefix. The old
+                                placeholder said "e.g. Facebook" while real sources are
+                                named "Meta Sync", "Sheet Sync", "WhatsApp Chatbot", so
+                                anyone following it built a workflow that never fired.
+                                The datalist offers the values actually in use while
+                                still allowing a source that has no leads yet. */}
                             <input
                                 type="text"
+                                list="wf-lead-sources"
                                 value={workflow?.triggerConfig?.source || ''}
                                 onChange={e => onUpdateTriggerConfig({ source: e.target.value })}
-                                placeholder="e.g. Facebook (leave blank for any source)"
+                                placeholder={leadSources.length > 0
+                                    ? `e.g. ${leadSources[0]} (leave blank for any source)`
+                                    : 'Leave blank for any source'}
                                 style={triggerInputStyle}
                             />
+                            <datalist id="wf-lead-sources">
+                                {leadSources.map(s => <option key={s} value={s} />)}
+                            </datalist>
+                            <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 6, lineHeight: 1.4 }}>
+                                Must match the lead's source exactly. Pick from the list to be sure.
+                            </p>
                         </div>
                     )}
 

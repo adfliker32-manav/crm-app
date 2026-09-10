@@ -122,7 +122,22 @@ const checkWorkflowExecutionRate = async (tenantId) => {
             .expire(key, Math.ceil(windowMs / 1000) + 60)
             .exec();
         const count = res[2][1];
-        return { count, allowed: count <= max, remaining: Math.max(0, max - count), limit: max };
+        const allowed = count <= max;
+
+        // ── AUDIT BUG-10 FIX: a rejected trigger must not hold window capacity ────
+        // The add has to happen before the count (that is what makes the check atomic
+        // under concurrency), but leaving the member behind when the answer is "no"
+        // meant denied attempts occupied slots exactly like admitted ones. While
+        // events kept arriving the set never fell below `max`, so the tenant stayed
+        // locked out for a full ten minutes after the last ATTEMPT rather than the
+        // last EXECUTION — a self-perpetuating lockout that defeats the whole point
+        // of the sliding window, which replaced a fixed bucket precisely so capacity
+        // would return continuously. Releasing our own member restores that.
+        if (!allowed) {
+            try { await redis.zrem(key, member); } catch { /* best effort */ }
+        }
+
+        return { count, allowed, remaining: Math.max(0, max - count), limit: max };
     } catch (err) {
         // Fail open, loudly — see checkLimit for why this is an error, not a warning.
         if (!_degradedSince) _degradedSince = Date.now();

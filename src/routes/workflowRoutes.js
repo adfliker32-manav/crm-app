@@ -66,6 +66,11 @@ const canManageWorkflows = checkPermission('manageTeam');
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/node-types', workflowController.getNodeTypes);
 
+// AUDIT BUG-19: real `source` values for the LEAD_CREATED trigger filter. Read-only
+// and tenant-scoped, so it sits with the other builder-support endpoints above the
+// permission gate — an agent who can view a workflow can see its filter options.
+router.get('/lead-sources', workflowController.getLeadSources);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ANALYTICS
 // ─────────────────────────────────────────────────────────────────────────────

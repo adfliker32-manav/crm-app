@@ -96,6 +96,26 @@ const AssignUserNode = {
                 lead.userId
             );
 
+            // ── AUDIT BUG-17 FIX: a workflow-driven reassignment is a lead update ──
+            // update_stage re-fires STAGE_CHANGED, but assign_user and
+            // update_custom_field re-fired nothing — so "when a lead is reassigned,
+            // notify the new owner" worked for a UI edit and not for a workflow doing
+            // the identical write. The causation chain is carried through so a
+            // LEAD_UPDATED workflow that assigns is bounded by the depth guard rather
+            // than ping-ponging (the same guard update_stage and add_tag rely on).
+            const { runInBackground } = require('../../../utils/controllerHelpers');
+            runInBackground('Workflow Engine Error (LEAD_UPDATED):', async () => {
+                const WorkflowEngine = require('../../WorkflowEngine');
+                const updated = await Lead.findById(lead._id).lean();
+                if (!updated) return;
+                return WorkflowEngine.fireTrigger('LEAD_UPDATED', {
+                    lead: updated,
+                    changedFields: ['assignedTo'],
+                    _depth: context.getTriggerDepth() + 1,
+                    _chain: [...context.getTriggerChain(), `${context.workflowId}:assign`]
+                });
+            });
+
             setImmediate(() => {
                 emitToUser(data.userId.toString(), 'notification:agent', {
                     leadId: lead._id, leadName: lead.name,

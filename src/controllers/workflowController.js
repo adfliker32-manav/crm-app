@@ -712,6 +712,15 @@ exports.publishWorkflow = async (req, res) => {
                     errors: [scheduleErr.message]
                 });
             }
+        } else {
+            // ── AUDIT BUG-14 FIX: take the old schedule DOWN ─────────────────────
+            // Registering was conditional and there was no else branch, so switching a
+            // published scheduled workflow to (say) LEAD_CREATED and republishing left
+            // `cron:<workflowId>` alive forever — ticking, enqueueing a job, and
+            // finding no matching workflow every time. updateStatus already removes
+            // the schedule unconditionally for exactly this reason; publish did not.
+            // Harmless when nothing is scheduled: removeJobScheduler is a no-op then.
+            await WorkflowQueue.removeScheduledTrigger(workflow._id).catch(() => {});
         }
 
         workflow.status      = 'published';
@@ -1257,6 +1266,35 @@ exports.testWorkflow = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /api/workflows/lead-sources
+// The distinct `source` values in this tenant's leads, for the LEAD_CREATED
+// trigger filter.
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT BUG-19 FIX: `filterMatches` is equality-only after trim + lowercase — no
+// substring, no prefix — while the builder offered a free-text box placeholdered
+// "e.g. Facebook". The values the system actually writes are 'Meta Sync',
+// 'External API', 'API', 'MCP API', 'Sheet Sync', 'WhatsApp Chatbot'. Following the
+// placeholder produced a workflow that never fired, with no feedback anywhere.
+// Offering the real values is the fix; the field stays free-text (backed by a
+// datalist) because a source can legitimately be named before any lead uses it.
+exports.getLeadSources = async (req, res) => {
+    try {
+        const sources = await Lead.distinct('source', { userId: req.tenantId });
+        res.json(
+            sources
+                .filter(s => typeof s === 'string' && s.trim() !== '')
+                .sort((a, b) => a.localeCompare(b))
+                .slice(0, 200)
+        );
+    } catch (err) {
+        console.error('[workflowController] getLeadSources:', err);
+        // A filter helper must never break the builder — an empty list just means
+        // the author types the value by hand, exactly as before.
+        res.json([]);
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/workflows/analytics
 // High-level analytics across all workflows for this tenant.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1414,9 +1452,27 @@ exports.webhookTrigger = async (req, res) => {
             || req.get('x-request-id')
             || req.get('x-github-delivery')
             || body._deliveryId;
+        // ── AUDIT BUG-12 FIX: the content-hash fallback needs a time bound ────────
+        // A sender that supplies a delivery id gets exact-once semantics. Everyone
+        // else got a bare hash of the payload, and the unique (workflowId,
+        // idempotencyKey) index is only released when the execution is TTL-deleted 90
+        // DAYS after it completes. So any integration posting a recurring identical
+        // body — a nightly "run the report" ping, a fixed-shape alert, a Zapier step
+        // with constant fields — fired exactly once per quarter, while every later
+        // call got a cheerful 200 "Webhook received successfully" and was silently
+        // skipped. The caller had no way to tell.
+        //
+        // Bucketing the hash by a window keeps the property that actually matters —
+        // a provider's retry storm collapses into one execution — without pretending
+        // that the same payload an hour later is the same delivery. A retry that
+        // straddles a bucket boundary can still produce a second execution; that is
+        // the trade, and the fix for a sender that cannot accept it is to send one of
+        // the delivery-id headers preferred above.
+        const DEDUPE_WINDOW_MS = Number(process.env.WORKFLOW_WEBHOOK_DEDUPE_WINDOW_MS) || 600_000;
+        const bucket = Math.floor(Date.now() / DEDUPE_WINDOW_MS);
         const idempotencyKey = deliveryId
             ? `hdr:${String(deliveryId).slice(0, 200)}`
-            : `body:${crypto.createHash('sha256').update(JSON.stringify({ body, query })).digest('hex')}`;
+            : `body:${bucket}:${crypto.createHash('sha256').update(JSON.stringify({ body, query })).digest('hex')}`;
 
         await WorkflowEngine.fireTrigger('WEBHOOK_RECEIVED', {
             tenantId: workflow.tenantId,

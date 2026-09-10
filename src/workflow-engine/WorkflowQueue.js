@@ -250,8 +250,10 @@ const initializeScheduledTriggers = async () => {
             trigger: 'SCHEDULED_TRIGGER'
         }).lean();
 
+        const wanted = new Set();
         for (const wf of workflows) {
             if (wf.triggerConfig && wf.triggerConfig.cronExpression) {
+                wanted.add(`cron:${wf._id.toString()}`);
                 await enqueueScheduledTrigger(
                     wf._id.toString(),
                     wf.triggerConfig.cronExpression,
@@ -259,7 +261,42 @@ const initializeScheduledTriggers = async () => {
                 );
             }
         }
-        console.log(`[WorkflowQueue] Initialized ${workflows.length} scheduled triggers.`);
+
+        // ── AUDIT BUG-14 FIX: reconcile BOTH directions ──────────────────────────
+        // This only ever ADDED. Combined with publishWorkflow having no "remove the
+        // schedule when the trigger is no longer SCHEDULED_TRIGGER" branch, orphaned
+        // `cron:<workflowId>` schedulers accumulated across deploys and were visible
+        // only by inspecting Redis by hand. Each one ticks forever, enqueues a job,
+        // and finds no matching workflow — permanent background noise that also makes
+        // the queue's own metrics lie about how much work is real.
+        //
+        // Startup is the right place for this sweep: it is the one moment we hold the
+        // complete list of what SHOULD be scheduled. Removal is best-effort per
+        // scheduler so one failure cannot abort the rest of the reconcile.
+        let removed = 0;
+        try {
+            const q = getWorkflowQueue();
+            const existing = await q.getJobSchedulers(0, -1, true);
+            for (const sched of (existing || [])) {
+                const id = sched?.key || sched?.id;
+                if (!id || !String(id).startsWith('cron:') || wanted.has(id)) continue;
+                try {
+                    await q.removeJobScheduler(id);
+                    removed++;
+                    console.log(`[WorkflowQueue] Removed orphaned schedule ${id} (workflow is no longer published+scheduled).`);
+                } catch (rmErr) {
+                    console.warn(`[WorkflowQueue] Could not remove orphaned schedule ${id}: ${rmErr.message}`);
+                }
+            }
+        } catch (sweepErr) {
+            // Never let the sweep stop the registrations above from taking effect.
+            console.warn('[WorkflowQueue] Scheduler reconcile skipped:', sweepErr.message);
+        }
+
+        console.log(
+            `[WorkflowQueue] Initialized ${wanted.size} scheduled trigger(s)` +
+            `${removed > 0 ? `, removed ${removed} orphan(s)` : ''}.`
+        );
     } catch (err) {
         console.error('[WorkflowQueue] Failed to initialize scheduled triggers:', err);
     }

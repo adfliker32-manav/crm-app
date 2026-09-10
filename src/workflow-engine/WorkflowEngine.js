@@ -88,6 +88,20 @@ const getQueue = () => {
     return _queue;
 };
 
+/**
+ * AUDIT BUG-01/BUG-02 helper: turn a flattened variable back into the value it
+ * came from. flattenVariables serialises objects and arrays with JSON.stringify,
+ * so this is the inverse for exactly those. Anything else — a plain string, a
+ * value that hit the MAX_TRIGGER_VALUE_CHARS truncation and is therefore no
+ * longer valid JSON — comes back untouched rather than throwing.
+ */
+const parseMaybeJson = (value) => {
+    if (typeof value !== 'string') return value;
+    const s = value.trim();
+    if (!s.startsWith('{') && !s.startsWith('[')) return value;
+    try { return JSON.parse(s); } catch { return value; }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EXECUTION CONTEXT
 // Passed to every node's execute() call. Nodes read/write variables here.
@@ -111,6 +125,41 @@ class ExecutionContext {
         // minimal delta atomically instead of rewriting the whole variables blob
         // (which would clobber a concurrent sibling branch's writes).
         this._dirty      = {};
+        // AUDIT BUG-01/BUG-02: memoised `env` (see the getter below).
+        this._env        = null;
+    }
+
+    /**
+     * AUDIT BUG-01 / BUG-02 FIX: the trigger's payload, as OBJECTS.
+     *
+     * SendEmailNode and SendWhatsAppNode both read `context.env.trigger.appointment`
+     * to fill the appointment placeholders in a template. `env` was never defined on
+     * this class, so:
+     *   - SendEmailNode (unguarded `context.env.trigger?...`) threw a TypeError on
+     *     EVERY run, above its own try/catch — so the node never sent anything and
+     *     the execution failed after exhausting its retries;
+     *   - SendWhatsAppNode (guarded `context.env?.trigger?...`) silently resolved to
+     *     undefined, so the confirmation template went to Meta with every
+     *     localizable_param empty.
+     *
+     * `variables` already carries the whole payload: flattenVariables stores the
+     * JSON string of each object at its own prefix AND flattens its children, so
+     * `variables['trigger.appointment']` is the serialised appointment. Rebuilding
+     * from there needs no schema change and stays consistent with `{{trigger.*}}`.
+     *
+     * Only the TOP-LEVEL `trigger.<key>` entries are lifted — the nested
+     * `trigger.<key>.<sub>` ones are the same data one level down.
+     */
+    get env() {
+        if (this._env) return this._env;
+        const trigger = {};
+        for (const [key, value] of Object.entries(this.variables)) {
+            const m = /^trigger\.([^.]+)$/.exec(key);
+            if (!m) continue;
+            trigger[m[1]] = parseMaybeJson(value);
+        }
+        this._env = { trigger };
+        return this._env;
     }
 
     get(key) {
@@ -874,8 +923,13 @@ const settleBranches = async (executionId, delta) => {
  */
 const fireTrigger = async (triggerType, payload) => {
     try {
+        // AUDIT BUG-20: every exit from fireTrigger returns an ARRAY of created
+        // execution ids. This is a documented invariant (L-19) that three early
+        // returns quietly broke — including the one taken by most calls, where the
+        // tenant simply has no workflow for this trigger. See the note on the final
+        // `return createdExecutionIds` for why a caller writing `.length` mattered.
         if (await isFeatureDisabled('DISABLE_WORKFLOW_ENGINE')) {
-            return;
+            return [];
         }
 
         // ── C8 FIX: break cross-workflow side-effect loops ──────────────────
@@ -916,7 +970,7 @@ const fireTrigger = async (triggerType, payload) => {
         }
         if (!tenantId) {
             console.warn(`[WorkflowEngine] Cannot fire trigger ${triggerType} without a tenantId.`);
-            return;
+            return [];   // AUDIT BUG-20
         }
 
         // H5 FIX: the burst-limit charge used to happen HERE, before the engine knew
@@ -946,7 +1000,9 @@ const fireTrigger = async (triggerType, payload) => {
 
         const workflows = await Workflow.find(query).lean();
 
-        if (!workflows || workflows.length === 0) return;
+        // AUDIT BUG-20: this is the branch MOST calls take — a tenant with no workflow
+        // for this trigger — and it was the one returning undefined.
+        if (!workflows || workflows.length === 0) return [];
 
         const queue = getQueue();
         const createdExecutionIds = [];
@@ -973,40 +1029,22 @@ const fireTrigger = async (triggerType, payload) => {
             // Skip workflows whose configured filter (stage / tag / source / field /
             // campaign) does not match this concrete event. An empty filter is a
             // wildcard, so unconfigured workflows behave exactly as before.
-            if (!matchesTriggerConfig(triggerType, workflow.triggerConfig, payload, lead)) {
-                continue;
-            }
-
-            // ── H5 FIX: charge the burst limit per EXECUTION, after matching ──────
-            // C10 FIX retained: never let a degraded Redis stall the trigger path —
-            // a rate limit is a safety valve, not something worth hanging on.
-            const rateCheck = await Promise.race([
-                checkWorkflowExecutionRate(tenantId.toString()),
-                new Promise(r => setTimeout(() => r({ allowed: true, degraded: true, timedOut: true }), 2000))
-            ]);
-            if (rateCheck.timedOut) {
-                console.error(
-                    `[WorkflowEngine] Rate-limit check timed out for tenant ${tenantId}; ` +
-                    `proceeding WITHOUT burst limiting for ${triggerType}.`
-                );
-            }
-            if (!rateCheck.allowed) {
-                console.error(
-                    `[WorkflowEngine] Tenant ${tenantId} exceeded execution burst limit ` +
-                    `(${rateCheck.count}/${rateCheck.limit}). Dropping ${triggerType} for workflow "${workflow.name}".`
-                );
-                // Persist the drop: a console line is not a record. Without this the
-                // events were simply gone, with nothing to show the user or replay.
-                await WorkflowDropLog.create({
-                    tenantId,
-                    workflowId: workflow._id,
-                    leadId:     lead?._id || null,
-                    triggerType,
-                    reason:     'burst_limit',
-                    detail:     { count: rateCheck.count, limit: rateCheck.limit, workflowName: workflow.name }
-                }).catch(e => console.error('[WorkflowEngine] WorkflowDropLog write failed:', e.message));
-                // Try the remaining workflows rather than abandoning all of them —
-                // the limiter may admit the next one if this window is only just full.
+            //
+            // ── AUDIT BUG-11 FIX: a Test run is not a concrete event ────────────
+            // testWorkflow builds { lead, workflowId, startedBy:'test' } and nothing
+            // else, so the fields these filters read — addedTags, changedFields,
+            // toStage — are all absent. A TAG_ADDED workflow with any tag filter
+            // evaluated [].some(...) → false and was skipped; the endpoint still
+            // answered 200 "Test run started" with executionId null, so the builder
+            // showed a success toast for a run that was never created. The same held
+            // for LEAD_UPDATED with a field filter, and for STAGE_CHANGED unless the
+            // chosen lead already happened to sit in the target stage.
+            //
+            // The filter exists to decide WHICH workflows an event belongs to. A test
+            // already pins exactly one workflow by id, so there is nothing left to
+            // decide — applying the filter could only prevent the test from running.
+            if (payload.startedBy !== 'test' &&
+                !matchesTriggerConfig(triggerType, workflow.triggerConfig, payload, lead)) {
                 continue;
             }
 
@@ -1059,6 +1097,51 @@ const fireTrigger = async (triggerType, payload) => {
                     }).catch(e => console.error('[WorkflowEngine] WorkflowDropLog write failed:', e.message));
                     continue;
                 }
+            }
+
+            // ── H5 FIX: charge the burst limit per EXECUTION, after matching ──────
+            // C10 FIX retained: never let a degraded Redis stall the trigger path —
+            // a rate limit is a safety valve, not something worth hanging on.
+            //
+            // ── AUDIT BUG-18 FIX: charge it LAST, not before the cap ──────────────
+            // This used to sit above the start-node guard and the maxExecutionsPerLead
+            // check, so an execution that was about to be dropped anyway had already
+            // spent a slot in the tenant's 10-minute window. With the cap defaulting
+            // to 1, any lead already inside a drip campaign fails the cap on every
+            // subsequent event — and each of those failures was billed. A busy
+            // workspace where most events are correctly suppressed could still exhaust
+            // its global budget and start dropping the events that SHOULD have run.
+            // (With BUG-10 the two compounded: charged early, never released.)
+            // Everything above this point is free; only an execution we are actually
+            // going to create pays.
+            const rateCheck = await Promise.race([
+                checkWorkflowExecutionRate(tenantId.toString()),
+                new Promise(r => setTimeout(() => r({ allowed: true, degraded: true, timedOut: true }), 2000))
+            ]);
+            if (rateCheck.timedOut) {
+                console.error(
+                    `[WorkflowEngine] Rate-limit check timed out for tenant ${tenantId}; ` +
+                    `proceeding WITHOUT burst limiting for ${triggerType}.`
+                );
+            }
+            if (!rateCheck.allowed) {
+                console.error(
+                    `[WorkflowEngine] Tenant ${tenantId} exceeded execution burst limit ` +
+                    `(${rateCheck.count}/${rateCheck.limit}). Dropping ${triggerType} for workflow "${workflow.name}".`
+                );
+                // Persist the drop: a console line is not a record. Without this the
+                // events were simply gone, with nothing to show the user or replay.
+                await WorkflowDropLog.create({
+                    tenantId,
+                    workflowId: workflow._id,
+                    leadId:     lead?._id || null,
+                    triggerType,
+                    reason:     'burst_limit',
+                    detail:     { count: rateCheck.count, limit: rateCheck.limit, workflowName: workflow.name }
+                }).catch(e => console.error('[WorkflowEngine] WorkflowDropLog write failed:', e.message));
+                // Try the remaining workflows rather than abandoning all of them —
+                // the limiter may admit the next one if this window is only just full.
+                continue;
             }
 
             // Build initial variables
@@ -2306,5 +2389,10 @@ module.exports = {
     // Pure helpers, exported for tests. Everything above needs Mongo + Redis to
     // exercise; these are where a payload-shape bug would actually hide, so they are
     // worth testing for real rather than pinning with a regex.
-    __test__: { buildPayloadVariables, redactForHistory, connectionsFromPort }
+    // AUDIT: ExecutionContext + parseMaybeJson are exported so `context.env` can be
+    // tested against a REAL context instance. The whole tests/workflow/ suite is
+    // static source-text matching, which is why BUG-01 (a TypeError on every
+    // send_email run) sat behind 908 green tests — a regex proves the code still
+    // SAYS the right thing, never that it does it.
+    __test__: { buildPayloadVariables, redactForHistory, connectionsFromPort, ExecutionContext, parseMaybeJson }
 };

@@ -22,7 +22,15 @@ const AddTagNode = {
     },
     execute: async (context, data) => {
         const lead = context.getLead();
-        if (!lead) return { nextPort: 'output', output: {} };
+        // AUDIT BUG-16 FIX: record the no-contact skip instead of reporting a silent
+        // success. See the note in UpdateStageNode for why this stays on 'output'.
+        if (!lead) {
+            console.warn(`[AddTagNode] No contact on execution ${context.executionId} — tag not applied.`);
+            return {
+                nextPort: 'output',
+                output: { 'lead.tagSkipped': true, 'lead.tagSkipReason': 'no_contact_in_execution' }
+            };
+        }
         const tag = data.tag.trim();
         // Only fire TAG_ADDED when the tag is genuinely new — re-adding an existing
         // tag is a no-op and must not re-trigger tag-based workflows (loop guard).

@@ -1204,8 +1204,25 @@ const processIncomingMessage = async (message, contacts, userId, incomingPhoneNu
                         // object nests it at message.text.body, so a workflow branching on
                         // "did they say yes" had to know Meta's wire format — and before the
                         // trigger.* namespace existed it could not read the message at all.
+                        // ── AUDIT BUG-15 FIX: use the conversation's authoritative lead ──
+                        // This controller resolves TWO leads: `lead`, matched by phone
+                        // number, and `conversation.leadId`, which it goes to real
+                        // trouble to reconcile (including the staleLink path for links
+                        // pointing at a deleted lead). Lead scoring and sequence pausing
+                        // a few lines below use conversation.leadId; the workflow trigger
+                        // used the phone match. When they diverge — an edited phone
+                        // number, a manually relinked thread — the workflow ran against
+                        // one lead while the score and sequence updates landed on
+                        // another. The linked lead wins; the phone match is the fallback
+                        // for a thread that has no Lead yet.
+                        let triggerLead = lead;
+                        if (conversation.leadId && String(conversation.leadId) !== String(lead?._id || '')) {
+                            const linkedLead = await Lead.findById(conversation.leadId).lean();
+                            if (linkedLead) triggerLead = linkedLead;
+                        }
+
                         await WorkflowEngine.fireTrigger('WHATSAPP_REPLY', {
-                            lead,
+                            lead: triggerLead,
                             tenantId: conversation.userId,
                             messageText: messageDoc.content?.text || '',
                             messageType,
