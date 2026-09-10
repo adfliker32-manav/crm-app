@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Sequence = require('../models/Sequence');
 const SequenceEnrollment = require('../models/SequenceEnrollment');
 const Lead = require('../models/Lead');
@@ -18,7 +19,13 @@ const scheduleStepJob = async (enrollmentId, delayHours) => {
     const job = await globalAgendaInstance.schedule(fireAt, 'PROCESS_SEQUENCE_STEP', {
         enrollmentId: enrollmentId.toString()
     });
-    await SequenceEnrollment.findByIdAndUpdate(enrollmentId, { agendaJobId: job.attrs._id });
+    // job.attrs._id is minted by Agenda's bundled bson 4; Mongoose 9's bson 7
+    // serializer rejects any value not carrying its own version stamp. Re-mint it
+    // so what crosses into Mongoose is always native. The schema path is typed
+    // ObjectId and would cast it too — this keeps the boundary visible at the seam.
+    await SequenceEnrollment.findByIdAndUpdate(enrollmentId, {
+        agendaJobId: new mongoose.Types.ObjectId(String(job.attrs._id))
+    });
 };
 
 // ── Enroll a lead into all sequences matching the given trigger ───────────────
@@ -94,63 +101,21 @@ const executeStepAction = async (step, lead, sequenceName) => {
             return;
         }
 
-        const result = await sendWhatsAppMessage(
-            lead.phone, step.action.templateId, lead.userId.toString(), null, gate.template?.language, { skipConversationRecord: true }
-        );
-
-        // FIX: Sync to conversation DB so sequence WA sends appear in inbox
-        // (previously ghost messages — sent via Meta API but not recorded)
-        try {
-            const waMessageId = result?.messages?.[0]?.id;
-            if (waMessageId) {
-                const WhatsAppConversation = require('../models/WhatsAppConversation');
-                const WhatsAppMessage = require('../models/WhatsAppMessage');
-                const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
-
-                let conversation = await WhatsAppConversation.findOne({
-                    userId: lead.userId,
-                    waContactId: normalizedPhone
-                });
-
-                if (!conversation && normalizedPhone.length >= 10) {
-                    const phoneLastTen = normalizedPhone.slice(-10);
-                    conversation = await WhatsAppConversation.findOne({
-                        userId: lead.userId,
-                        waContactId: { $regex: phoneLastTen + '$' }
-                    });
-                }
-
-                if (conversation) {
-                    const messageRecord = new WhatsAppMessage({
-                        conversationId: conversation._id,
-                        userId: lead.userId,
-                        waMessageId: waMessageId,
-                        direction: 'outbound',
-                        type: 'template',
-                        content: { text: `[Auto] Sequence "${sequenceName}": ${step.action.templateId}`, templateName: step.action.templateId },
-                        status: 'sent',
-                        timestamp: new Date(),
-                        isAutomated: true,
-                        automationSource: 'sequence'
-                    });
-                    await messageRecord.save();
-
-                    await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
-                        $set: {
-                            lastMessage: `[Auto] Sequence: ${step.action.templateId}`,
-                            lastMessageAt: new Date(),
-                            lastMessageDirection: 'outbound'
-                        },
-                        $inc: {
-                            'metadata.totalMessages': 1,
-                            'metadata.totalOutbound': 1
-                        }
-                    });
-                }
+        // Recorded centrally by whatsappOutboundRecorder - note there is no
+        // skipConversationRecord here any more. The hand-rolled copy that used to
+        // live in this spot recorded nothing at all when the lead had no existing
+        // thread (the normal case for proactive outreach), never linked the lead,
+        // never derived assignedTo, and never pushed the socket events - so even a
+        // stored message did not show up in an inbox that was already open.
+        await sendWhatsAppMessage(
+            lead.phone, step.action.templateId, lead.userId.toString(), null, gate.template?.language,
+            {
+                lead,
+                isAutomated: true,
+                automationSource: 'sequence',
+                source: `Sequence: ${sequenceName}`
             }
-        } catch (syncErr) {
-            console.error(`⚠️ [Sequence] WA sent but DB sync failed for ${lead.phone}:`, syncErr.message);
-        }
+        );
 
         await Lead.findByIdAndUpdate(lead._id, {
             $push: {
@@ -162,8 +127,44 @@ const executeStepAction = async (step, lead, sequenceName) => {
         });
     } else if (step.action.type === 'SEND_EMAIL' && lead.email) {
         const { sendEmail } = require('./emailService');
-        const subject = resolveTemplate(step.action.subject || '', tplContext);
-        const body = resolveTemplate(step.action.body || '', tplContext);
+
+        // The builder snapshots the chosen template's subject/body onto the step.
+        // That snapshot goes stale the moment the template is edited, and is absent
+        // entirely when a sequence is created through the API. An empty subject then
+        // makes sendEmail throw on its FIRST line - before resolveSendPolicy and
+        // recordBlocked exist - so the failure left no EmailLog row, no Inbox entry
+        // and no lead history. Resolve the template live; fall back to the snapshot
+        // only when the template is gone.
+        let rawSubject = step.action.subject;
+        let rawBody = step.action.body;
+
+        if (step.action.emailTemplateId) {
+            const EmailTemplate = require('../models/EmailTemplate');
+            const tpl = await EmailTemplate.findOne({
+                _id: step.action.emailTemplateId,
+                userId: lead.userId   // tenant-scoped: never read another workspace's template
+            }).select('subject body').lean();
+
+            if (tpl) {
+                rawSubject = tpl.subject;
+                rawBody = tpl.body;
+            } else {
+                console.warn(
+                    `[Sequence] Email template ${step.action.emailTemplateId} not found for tenant ` +
+                    `${lead.userId} - falling back to the subject/body saved on the step.`
+                );
+            }
+        }
+
+        if (!rawSubject || !String(rawSubject).trim()) {
+            throw new Error(
+                `Sequence "${sequenceName}" step ${step.stepNumber}: the email has no subject ` +
+                `(emailTemplateId: ${step.action.emailTemplateId || 'none'}). Re-save the step in the builder.`
+            );
+        }
+
+        const subject = resolveTemplate(rawSubject, tplContext);
+        const body = resolveTemplate(rawBody || '', tplContext);
         await sendEmail({
             to: lead.email,
             subject,
@@ -222,7 +223,22 @@ const processSequenceStep = async (enrollmentId) => {
         await executeStepAction(step, lead, sequence.name);
     } catch (err) {
         console.error(`❌ [Sequence] Step ${enrollment.currentStep} failed for enrollment ${enrollmentId}:`, err.message);
-        // Continue to advance — don't retry indefinitely on a bad template name
+        // Continue to advance — don't retry indefinitely on a bad template name.
+        // The failure used to exist only in the server log, so a step that never
+        // reached the customer looked exactly like one that did. Put it on the lead.
+        await Lead.findByIdAndUpdate(lead._id, {
+            $push: {
+                history: {
+                    $each: [{
+                        type: step.action?.type === 'SEND_EMAIL' ? 'Email' : 'WhatsApp',
+                        subType: 'Auto',
+                        content: `Sequence "${sequence.name}" step ${enrollment.currentStep + 1} FAILED: ${err.message}`,
+                        date: new Date()
+                    }],
+                    $slice: -100
+                }
+            }
+        }).catch(() => {});
     }
 
     const nextStepIndex = enrollment.currentStep + 1;

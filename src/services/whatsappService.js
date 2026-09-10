@@ -112,10 +112,14 @@ const checkTemplateSendable = async (userId, templateName) => {
  * can forget. Callers that write a richer record themselves opt out with
  * `skipConversationRecord: true` — currently the inbox UI
  * (whatsappConversationController), the chatbot (chatbotEngineService +
- * chatbotFollowupService), broadcasts (broadcastQueueService), sequences
- * (sequenceService), the send queue (whatsappQueueService), lead automations
+ * chatbotFollowupService), broadcasts (broadcastQueueService), lead automations
  * (whatsappAutomationService) and the external CRM API (extApiController,
  * which passes the lead it was handed).
+ *
+ * Sequences (sequenceService) and the no-reply queue (whatsappQueueService) used
+ * to be on that list and are deliberately NOT any more: their hand-rolled records
+ * were silently rejected by the automationSource enum, so every message they sent
+ * was a ghost. They pass `automationSource`/`source` through here instead.
  *
  * Awaited, not fire-and-forget: a caller that reads the thread straight after
  * sending must not race the write. It never throws — see the recorder's header.
@@ -180,7 +184,8 @@ const sendWhatsAppMessage = async (to, templateName = 'hello_world', userId = nu
             templateName,
             waMessageId: response.data.messages?.[0]?.id || null,
             isAutomated: options?.isAutomated === true,
-            automationSource: options?.automationSource || null
+            automationSource: options?.automationSource || null,
+            source: options?.source || null
         });
 
         return response.data;

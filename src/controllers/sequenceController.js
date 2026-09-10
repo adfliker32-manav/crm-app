@@ -2,6 +2,24 @@ const Sequence = require('../models/Sequence');
 const SequenceEnrollment = require('../models/SequenceEnrollment');
 const mongoose = require('mongoose');
 
+// Only the builder used to check this, so a step saved through the API — or one
+// whose template lookup fell through in the browser — could be stored with no way
+// to send. That failure surfaces nowhere useful: enrollment succeeds, the job
+// fires, and sendEmail throws inside a catch, leaving no log row and no history.
+// Refuse it at the door instead.
+const validateSteps = (steps) => {
+    for (const [i, step] of (steps || []).entries()) {
+        const action = step?.action || {};
+        if (action.type === 'SEND_WHATSAPP' && !action.templateId) {
+            return `Step ${i + 1}: a WhatsApp step needs a template`;
+        }
+        if (action.type === 'SEND_EMAIL' && !action.emailTemplateId && !String(action.subject || '').trim()) {
+            return `Step ${i + 1}: an email step needs either a template or a subject`;
+        }
+    }
+    return null;
+};
+
 const getSequences = async (req, res) => {
     try {
         const sequences = await Sequence.find({ tenantId: req.tenantId }).sort({ createdAt: -1 }).lean();
@@ -17,6 +35,10 @@ const createSequence = async (req, res) => {
         if (!name || !trigger || !steps || steps.length === 0) {
             return res.status(400).json({ message: 'Name, trigger, and at least one step are required' });
         }
+
+        const stepError = validateSteps(steps);
+        if (stepError) return res.status(400).json({ message: stepError });
+
         const seq = await Sequence.create({
             tenantId: req.tenantId,
             name,
@@ -45,7 +67,11 @@ const updateSequence = async (req, res) => {
         if (trigger !== undefined) update.trigger = trigger;
         if (triggerStage !== undefined) update.triggerStage = triggerStage;
         if (stopOnReply !== undefined) update.stopOnReply = stopOnReply;
-        if (steps !== undefined) update.steps = steps;
+        if (steps !== undefined) {
+            const stepError = validateSteps(steps);
+            if (stepError) return res.status(400).json({ message: stepError });
+            update.steps = steps;
+        }
         if (isActive !== undefined) update.isActive = isActive;
 
         const seq = await Sequence.findOneAndUpdate(
@@ -164,8 +190,19 @@ const manualEnroll = async (req, res) => {
         // threw "scheduleStepJob is not a function" on every manual enrol. The 500 came
         // AFTER the enrollment row was written, leaving an active enrollment with no
         // scheduled job that also blocked the lead from ever auto-enrolling again.
+        // The row must exist before the job can be scheduled (scheduling needs its
+        // _id), so a throw here would otherwise strand an 'active' enrollment with no
+        // agendaJobId — uncancellable, uncounted, and a 409 on every retry. Roll it
+        // back so a manual enrol stays all-or-nothing. An Agenda job that was created
+        // before the throw is harmless: processSequenceStep no-ops when the
+        // enrollment is gone.
         const { scheduleStepJob } = require('../services/sequenceService');
-        await scheduleStepJob(enrollment._id, seq.steps[0]?.delayHours || 0);
+        try {
+            await scheduleStepJob(enrollment._id, seq.steps[0]?.delayHours || 0);
+        } catch (scheduleErr) {
+            await SequenceEnrollment.deleteOne({ _id: enrollment._id }).catch(() => {});
+            throw scheduleErr;
+        }
 
         // Increment enrollmentCount on the sequence
         await Sequence.updateOne({ _id: id }, { $inc: { enrollmentCount: 1 } });

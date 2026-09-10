@@ -10,9 +10,15 @@
  *
  * This is called centrally from whatsappService, so EVERY sender is covered by
  * construction rather than by remembering. Paths that write a richer record of
- * their own (the inbox UI, the chatbot, broadcasts, sequences, the queue, the
- * external API) pass `skipConversationRecord: true` and record themselves —
- * see _recordOutbound in whatsappService.js for that list.
+ * their own (the inbox UI, the chatbot, broadcasts, the external API) pass
+ * `skipConversationRecord: true` and record themselves — see _recordOutbound in
+ * whatsappService.js for that list.
+ *
+ * Opting out is a liability, not a feature: drip sequences and no-reply
+ * follow-ups both hand-rolled a copy of this that stamped an automationSource the
+ * WhatsAppMessage enum rejected, dropped the message entirely when the lead had
+ * no existing thread, and never pushed a socket event. Both now come through
+ * here. Prefer passing `automationSource` and `source` over opting out.
  *
  * Contract: this NEVER throws. It runs after Meta has already accepted the
  * message, so a bookkeeping failure must not turn a delivered message into an

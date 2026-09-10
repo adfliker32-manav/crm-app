@@ -184,56 +184,22 @@ const defineWhatsAppJobs = (agenda) => {
                     `"${watcher.ifNoReplyAction.sendTemplateId}" is ${noReplyGate.reason}.`
                 );
             } else if (watcher.ifNoReplyAction?.sendTemplateId && lead.phone) {
-                const result = await sendWhatsAppMessage(
+                // Recorded centrally by whatsappOutboundRecorder - no
+                // skipConversationRecord. The hand-rolled copy that used to live here
+                // wrote automationSource 'automation', a value the WhatsAppMessage enum
+                // rejected, so the save threw inside a catch that only warned: every
+                // no-reply follow-up reached the customer and vanished from the CRM.
+                await sendWhatsAppMessage(
                     lead.phone, watcher.ifNoReplyAction.sendTemplateId, watcher.tenantId.toString(),
-                    null, noReplyGate?.template?.language, { skipConversationRecord: true }
+                    null, noReplyGate?.template?.language,
+                    {
+                        lead,
+                        isAutomated: true,
+                        automationSource: 'automation',
+                        source: 'No-reply follow-up'
+                    }
                 );
                 console.log(`📤 [Timeout] No-reply follow-up template sent to ${lead.phone}`);
-
-                // FIX: Sync the no-reply template to conversation DB (was a ghost message)
-                try {
-                    const waMessageId = result?.messages?.[0]?.id;
-                    if (waMessageId) {
-                        const WhatsAppConversation = require('../models/WhatsAppConversation');
-                        const WhatsAppMessage = require('../models/WhatsAppMessage');
-                        const normalizedPhone = lead.phone.replace(/[^0-9]/g, '');
-
-                        let conversation = await WhatsAppConversation.findOne({
-                            userId: watcher.tenantId,
-                            waContactId: { $regex: normalizedPhone.slice(-10) + '$' }
-                        });
-
-                        if (conversation) {
-                            const messageRecord = new WhatsAppMessage({
-                                conversationId: conversation._id,
-                                userId: watcher.tenantId,
-                                waMessageId: waMessageId,
-                                direction: 'outbound',
-                                type: 'template',
-                                content: { text: `[Auto] No-reply follow-up: ${watcher.ifNoReplyAction.sendTemplateId}` },
-                                status: 'sent',
-                                timestamp: new Date(),
-                                isAutomated: true,
-                                automationSource: 'automation'
-                            });
-                            await messageRecord.save();
-
-                            await WhatsAppConversation.findByIdAndUpdate(conversation._id, {
-                                $set: {
-                                    lastMessage: `[Auto] No-reply follow-up`,
-                                    lastMessageAt: new Date(),
-                                    lastMessageDirection: 'outbound'
-                                },
-                                $inc: {
-                                    'metadata.totalMessages': 1,
-                                    'metadata.totalOutbound': 1
-                                }
-                            });
-                        }
-                    }
-                } catch (syncErr) {
-                    console.error(`⚠️ [Timeout] No-reply template sent but DB sync failed:`, syncErr.message);
-                }
             }
 
             // Release the per-(rule, lead) automation lock

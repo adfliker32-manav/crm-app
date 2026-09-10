@@ -109,7 +109,11 @@ const whatsAppMessageSchema = new mongoose.Schema({
     },
     automationSource: {
         type: String,
-        enum: ['template', 'chatbot', 'auto_reply', 'broadcast', 'ai_fallback', 'ai_rescue', null],
+        // 'sequence' and 'automation' were written by sequenceService and
+        // whatsappQueueService but were missing here, so every drip-sequence and
+        // no-reply follow-up threw a ValidationError inside a catch that only
+        // warned: the customer got the message and the CRM recorded nothing.
+        enum: ['template', 'chatbot', 'auto_reply', 'broadcast', 'ai_fallback', 'ai_rescue', 'sequence', 'automation', null],
         default: null
     },
     broadcastId: {
