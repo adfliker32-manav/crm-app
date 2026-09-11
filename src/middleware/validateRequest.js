@@ -127,7 +127,15 @@ const schemas = {
         tags:       Joi.array().items(Joi.string()).optional(),
         customData: Joi.object().optional(),
         assignedTo: Joi.string().hex().length(24).optional().allow('', null),
-        nextFollowUpDate: Joi.date().optional().allow('', null)
+        nextFollowUpDate: Joi.date().optional().allow('', null),
+        // The "Auto-send a message on this date" box in the Edit Lead modal sends
+        // these two. They were MISSING here, so stripUnknown deleted them on every
+        // request and updateLead's hasOwn() check never fired - the checkbox, the
+        // channel and the chosen template saved nothing at all, silently, with a
+        // success toast. Name carries a WhatsApp template NAME or an EmailTemplate
+        // _id depending on the type, so it stays a plain bounded string.
+        followUpTemplateType: Joi.string().valid('whatsapp', 'email').optional().allow('', null),
+        followUpTemplateName: Joi.string().trim().max(200).optional().allow('', null)
     }),
 
     // Agent creation

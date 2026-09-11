@@ -758,7 +758,31 @@ const runSubscriptionReconcile = async () => {
 // a scheduled template attached (followUpTemplateName set, followUpTemplateSent
 // false), then sends the WhatsApp or email template automatically.
 // ──────────────────────────────────────────────────────────────────────────────
-const runFollowUpTemplateSend = async () => {
+// The follow-up auto-send used to run ONCE a day, at 09:00, and only ever looked
+// at leads whose nextFollowUpDate was TODAY. Set a follow-up for today at any time
+// after 9am - which is the normal case, you are looking at the lead right now - and
+// that day's only run had already happened, while the next day's run would be
+// looking at the next day's date. The message was never sent at all, and nothing
+// said so.
+//
+// It now runs every 30 minutes, so a follow-up set for today goes out within half
+// an hour, and a day missed entirely (server restart, a lead set late yesterday)
+// is still caught. Two rules keep that from becoming a nuisance:
+//   - never before FOLLOW_UP_SEND_HOUR local time, so nothing fires at 00:30;
+//   - never further back than FOLLOW_UP_LOOKBACK_DAYS, so the first run after a
+//     deploy cannot blast months-old schedules at customers.
+const FOLLOW_UP_SEND_HOUR = 9;
+const FOLLOW_UP_LOOKBACK_DAYS = 3;
+
+// Ticks are 30 minutes apart; a large batch must not overlap itself and send twice.
+let followUpSendInFlight = false;
+
+const runFollowUpTemplateSend = async ({ ignoreSendHour = false } = {}) => {
+    if (followUpSendInFlight) {
+        console.log('[FollowUpTemplate] Previous run still in flight — skipping this tick');
+        return;
+    }
+    followUpSendInFlight = true;
     try {
         const Lead = require('../models/Lead');
         const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
@@ -771,13 +795,18 @@ const runFollowUpTemplateSend = async () => {
 
         if (await isFeatureDisabled('DISABLE_AUTOMATIONS')) return;
 
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date();
-        todayEnd.setHours(23, 59, 59, 999);
+        // Quiet hours: a follow-up dated for today waits for 9am; one set after 9am
+        // goes out on the next tick.
+        if (!ignoreSendHour && new Date().getHours() < FOLLOW_UP_SEND_HOUR) return;
+
+        const windowEnd = new Date();
+        windowEnd.setHours(23, 59, 59, 999);
+        const windowStart = new Date();
+        windowStart.setHours(0, 0, 0, 0);
+        windowStart.setDate(windowStart.getDate() - FOLLOW_UP_LOOKBACK_DAYS);
 
         const leads = await Lead.find({
-            nextFollowUpDate: { $gte: todayStart, $lte: todayEnd },
+            nextFollowUpDate: { $gte: windowStart, $lte: windowEnd },
             followUpTemplateName: { $ne: null },
             followUpTemplateSent: { $ne: true }
         }).select('_id name phone email status userId followUpTemplateType followUpTemplateName').lean();
@@ -889,6 +918,8 @@ const runFollowUpTemplateSend = async () => {
         }
     } catch (err) {
         console.error('❌ [FollowUpTemplate] Cron error:', err.message);
+    } finally {
+        followUpSendInFlight = false;
     }
 };
 
@@ -946,8 +977,10 @@ const startCronJobs = () => {
     console.log('[CronJobs] Appointment reminders scheduled (every 30 min)');
 
     // Follow-up template auto-send — daily at 09:00 AM
-    cron.schedule('0 9 * * *', runFollowUpTemplateSend);
-    console.log('[CronJobs] Follow-up template auto-send scheduled (daily 09:00)');
+    // Every 30 min, not once at 09:00 — see runFollowUpTemplateSend for why. The
+    // function enforces the 9am floor itself, so an early tick is a cheap no-op.
+    cron.schedule('*/30 * * * *', () => runFollowUpTemplateSend());
+    console.log('[CronJobs] Follow-up template auto-send scheduled (every 30 min, not before 09:00)');
 
     // Lost lead re-engagement — daily at 10:00 AM
     cron.schedule('0 10 * * *', runLostLeadRecovery);

@@ -110,6 +110,31 @@ const enrollLeadInSequences = async (lead, triggerType, triggerStage = null) => 
     }
 };
 
+// ── A step that sent nothing must say so on the lead ──────────────────────────
+// Every silent exit from executeStepAction goes through here. Until it did, a step
+// that never reached the customer was indistinguishable from one that did: the only
+// trace was a line in the server log, so "the email went out but the WhatsApp did
+// not" was invisible from the CRM.
+const recordStepSkipped = async (lead, step, sequenceName, why) => {
+    const isEmailStep = step.action?.type === 'SEND_EMAIL';
+    console.warn(
+        `[Sequence] "${sequenceName}" step ${step.stepNumber} skipped for lead ${lead._id} - ${why}`
+    );
+    await Lead.findByIdAndUpdate(lead._id, {
+        $push: {
+            history: {
+                $each: [{
+                    type: isEmailStep ? 'Email' : 'WhatsApp',
+                    subType: 'Auto',
+                    content: `Sequence "${sequenceName}" step ${step.stepNumber} skipped - ${why}`,
+                    date: new Date()
+                }],
+                $slice: -100
+            }
+        }
+    }).catch(() => {});
+};
+
 // ── Execute the action for a single step ─────────────────────────────────────
 const executeStepAction = async (step, lead, sequenceName) => {
     const user = await User.findById(lead.userId).select('name companyName').lean();
@@ -125,9 +150,14 @@ const executeStepAction = async (step, lead, sequenceName) => {
         // template was previously retried against the API on every enrolled lead.
         const gate = await checkTemplateSendable(lead.userId.toString(), step.action.templateId);
         if (!gate.ok) {
-            console.warn(
-                `[Sequence] Step skipped — template "${step.action.templateId}" is ${gate.reason} ` +
-                `(lead ${lead._id}). Get it approved in Meta, then re-enrol.`
+            // THE silent one. A template that is no longer APPROVED (Meta paused or
+            // rejected it after the step was built) stopped the send here and wrote
+            // nothing anywhere the user could see - the sequence just appeared to
+            // skip WhatsApp while the email steps went out normally.
+            await recordStepSkipped(
+                lead, step, sequenceName,
+                `the WhatsApp template "${step.action.templateId}" is ${String(gate.reason).replace('status_', '')} ` +
+                `in this workspace. Get it approved in Meta and re-sync templates, then re-enrol the lead.`
             );
             return;
         }
@@ -226,31 +256,11 @@ const executeStepAction = async (step, lead, sequenceName) => {
         });
     } else {
         // Neither branch could run - almost always a lead with no phone (WhatsApp
-        // step) or no email address (Email step). This used to fall out of the
-        // function silently: nothing logged, nothing on the lead, and the enrolment
-        // marched on to the next step, so a sequence that delivered nothing looked
-        // exactly like one that delivered everything. Say so on the lead.
-        const isEmailStep = step.action.type === 'SEND_EMAIL';
-        const why = isEmailStep
+        // step) or no email address (Email step).
+        const why = step.action.type === 'SEND_EMAIL'
             ? 'the lead has no email address'
             : (!lead.phone ? 'the lead has no phone number' : 'the step has no WhatsApp template');
-
-        console.warn(
-            `[Sequence] "${sequenceName}" step ${step.stepNumber} skipped for lead ${lead._id} - ${why}`
-        );
-        await Lead.findByIdAndUpdate(lead._id, {
-            $push: {
-                history: {
-                    $each: [{
-                        type: isEmailStep ? 'Email' : 'WhatsApp',
-                        subType: 'Auto',
-                        content: `Sequence "${sequenceName}" step ${step.stepNumber} skipped - ${why}`,
-                        date: new Date()
-                    }],
-                    $slice: -100
-                }
-            }
-        }).catch(() => {});
+        await recordStepSkipped(lead, step, sequenceName, why);
     }
 };
 

@@ -31,12 +31,18 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
                     : ''
             });
             setSelectedTags(lead.tags || []);
-            setSendTemplate(false);
-            setTemplateType('whatsapp');
-            setSelectedTemplate('');
+            // Read back what is actually scheduled. This used to reset to unchecked
+            // every time the modal opened, so a saved follow-up message looked like it
+            // had not saved - and worse, the next save sent followUpTemplateType: null
+            // and silently CLEARED it. (The cron nulls both fields once it has sent,
+            // so a completed follow-up correctly shows as nothing scheduled.)
+            const scheduled = !!(lead.followUpTemplateType && lead.followUpTemplateName);
+            setSendTemplate(scheduled);
+            setTemplateType(lead.followUpTemplateType || 'whatsapp');
+            setSelectedTemplate(lead.followUpTemplateName || '');
             setTemplates([]);
             setError(null);
-            fetchCustomFields(lead.customData || {});
+            fetchCustomFields(lead);
         }
     }, [isOpen, lead]);
 
@@ -45,7 +51,10 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
         if (!sendTemplate || !formData.nextFollowUpDate) return;
         const fetchTemplates = async () => {
             setLoadingTemplates(true);
-            setSelectedTemplate('');
+            // Deliberately does NOT clear the selection: this effect also runs when
+            // the modal opens with a template already scheduled, and clearing here
+            // wiped it before the user saw it. Switching channel clears it instead —
+            // that is the only case where the old pick is meaningless.
             try {
                 if (templateType === 'whatsapp') {
                     const res = await api.get('/whatsapp/templates?status=APPROVED');
@@ -62,13 +71,24 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
         fetchTemplates();
     }, [sendTemplate, templateType]);
 
-    const fetchCustomFields = async (existingData) => {
+    const fetchCustomFields = async (listRow) => {
         try {
-            const res = await api.get('/custom-fields');
-            setCustomFields(res.data || []);
+            // GET /leads returns rows with customData EXCLUDED (payload size), and
+            // that row is what this modal is handed. Every custom field therefore
+            // rendered blank on a lead that had values, and a REQUIRED one blocked
+            // the save outright - "City is required" on a lead whose city was
+            // already filled in. Read the full record for the values.
+            const [defsRes, fullRes] = await Promise.all([
+                api.get('/custom-fields'),
+                listRow?._id ? api.get(`/leads/${listRow._id}`).catch(() => null) : Promise.resolve(null)
+            ]);
+            const defs = defsRes.data || [];
+            setCustomFields(defs);
+
+            const stored = fullRes?.data?.customData ?? listRow?.customData ?? {};
             // Reads a stored value into the shape its type expects — a multi-select
             // saved before the field was converted still loads as an array.
-            setCustomData(initCustomData(res.data || [], existingData));
+            setCustomData(initCustomData(defs, stored));
         } catch (err) { console.error('Failed to fetch custom fields:', err); }
     };
 
@@ -82,6 +102,13 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
         const customError = validateCustomFields(customFields, customData);
         if (customError) {
             setError(customError);
+            setLoading(false);
+            return;
+        }
+        // The cron only looks at leads with a followUpTemplateName, so "auto-send,
+        // no template" is a schedule that silently never fires. Refuse it here.
+        if (sendTemplate && formData.nextFollowUpDate && !selectedTemplate) {
+            setError('Pick a template to auto-send, or switch off "Auto-send a message on this date"');
             setLoading(false);
             return;
         }
@@ -224,11 +251,11 @@ const EditLeadModal = ({ isOpen, onClose, lead, userTags = [], onSuccess }) => {
                                         <div className="mt-3 space-y-3">
                                             {/* Channel toggle */}
                                             <div className="inline-flex bg-white border border-indigo-200 p-1 rounded-lg gap-1">
-                                                <button type="button" onClick={() => setTemplateType('whatsapp')}
+                                                <button type="button" onClick={() => { setTemplateType('whatsapp'); setSelectedTemplate(''); }}
                                                     className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${templateType === 'whatsapp' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                                                     <i className="fa-brands fa-whatsapp"></i> WhatsApp
                                                 </button>
-                                                <button type="button" onClick={() => setTemplateType('email')}
+                                                <button type="button" onClick={() => { setTemplateType('email'); setSelectedTemplate(''); }}
                                                     className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${templateType === 'email' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                                                     <i className="fa-solid fa-envelope"></i> Email
                                                 </button>

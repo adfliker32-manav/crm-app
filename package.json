@@ -7,7 +7,7 @@
     "start": "node index.js",
     "build": "npm install && cd client && npm install && npm run build",
     "dev": "concurrently \"nodemon index.js\" \"cd client && npm run dev\"",
-    "test": "node --test tests/email/*.test.js tests/security/*.test.js tests/workflow/*.test.js tests/whatsapp/*.test.js tests/customFields/*.test.js tests/leadDocuments/*.test.js tests/tasks/*.test.js tests/sequences/*.test.js tests/partner/*.test.js tests/knowledgeBase/*.test.js tests/extApi/*.test.js tests/chatbot/*.test.js tests/static/*.test.js tests/billing/*.test.js",
+    "test": "node --test tests/email/*.test.js tests/security/*.test.js tests/workflow/*.test.js tests/whatsapp/*.test.js tests/customFields/*.test.js tests/leadDocuments/*.test.js tests/tasks/*.test.js tests/sequences/*.test.js tests/partner/*.test.js tests/knowledgeBase/*.test.js tests/extApi/*.test.js tests/chatbot/*.test.js tests/static/*.test.js tests/billing/*.test.js tests/followups/*.test.js",
     "test:email": "node --test tests/email/*.test.js",
     "test:security": "node --test tests/security/*.test.js",
     "test:leadDocuments": "node --test tests/leadDocuments/*.test.js",
@@ -19,7 +19,8 @@
     "test:knowledgeBase": "node --test tests/knowledgeBase/*.test.js",
     "test:extApi": "node --test tests/extApi/*.test.js",
     "test:chatbot": "node --test tests/chatbot/*.test.js",
-    "test:billing": "node --test tests/billing/*.test.js"
+    "test:billing": "node --test tests/billing/*.test.js",
+    "test:followups": "node --test tests/followups/*.test.js"
   },
   "engines": {
     "node": ">=18.0.0"

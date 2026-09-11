@@ -176,15 +176,39 @@ test('the send path gates the template lookup on emailMode, not on the id alone'
     );
 });
 
-test('a step that cannot reach the lead is written to the lead, not just skipped', () => {
+test('every silent exit from a step is written to the lead', () => {
     const src = readSrc('services', 'sequenceService.js');
     const start = src.indexOf('const executeStepAction');
     const body = src.slice(start, src.indexOf('\n};', start));
 
+    // 1 — the template gate. A template that is no longer APPROVED stopped the
+    // send with nothing but a server log, so a sequence whose email steps went out
+    // normally just appeared to skip WhatsApp for no reason.
     assert.ok(
-        /\} else \{[\s\S]*?skipped[\s\S]*?Lead\.findByIdAndUpdate/.test(body),
-        'a lead with no email (or no phone) used to make the step vanish silently — ' +
-        'no log, no history — while the enrolment advanced as if it had sent'
+        /if \(!gate\.ok\) \{[\s\S]{0,600}?await recordStepSkipped\(/.test(body),
+        'a blocked WhatsApp template must leave a trace on the lead, not only in the log'
+    );
+
+    // 2 — no phone / no email / no template.
+    assert.ok(
+        /\} else \{[\s\S]{0,500}?await recordStepSkipped\(/.test(body),
+        'a lead with no email (or no phone) must not make the step vanish silently ' +
+        'while the enrolment advances as if it had sent'
+    );
+
+    // Neither path may return before recording.
+    assert.ok(
+        !/if \(!gate\.ok\) \{\s*[\r\n]+\s*console\.warn\([\s\S]{0,300}?\s*return;/.test(body),
+        'the bare console.warn + return is the bug'
+    );
+
+    const recorder = src.slice(
+        src.indexOf('const recordStepSkipped'),
+        src.indexOf('\n};', src.indexOf('const recordStepSkipped'))
+    );
+    assert.ok(
+        /Lead\.findByIdAndUpdate\([\s\S]*?history:/.test(recorder) && /skipped - /.test(recorder),
+        'recordStepSkipped must actually write the lead history entry'
     );
 });
 
