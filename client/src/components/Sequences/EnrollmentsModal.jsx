@@ -1,4 +1,3 @@
-/* eslint-disable */
 import React, { useState, useEffect, useMemo } from 'react';
 import api from '../../services/api';
 
@@ -9,10 +8,36 @@ const STATUS_META = {
     cancelled: { label: 'Cancelled', color: 'bg-slate-100 text-slate-600 ring-slate-200',        dot: 'bg-slate-400' },
 };
 
+const PAUSE_REASON_LABEL = {
+    reply:             'paused — the lead replied',
+    sequence_inactive: 'held — the sequence was switched off',
+    manual:            'paused manually'
+};
+
 const EnrollmentsModal = ({ isOpen, onClose, sequence }) => {
     const [enrollments, setEnrollments] = useState([]);
     const [loading, setLoading] = useState(false);
     const [filter, setFilter] = useState('all');
+    const [resumingId, setResumingId] = useState(null);
+    const [resumeError, setResumeError] = useState(null);
+
+    // Paused used to be a dead end — nothing anywhere moved an enrollment back to
+    // active, and enrolment skips leads that are already paused, so a single reply
+    // removed that lead from the sequence permanently.
+    const resume = async (enrollmentId) => {
+        setResumingId(enrollmentId);
+        setResumeError(null);
+        try {
+            await api.post(`/sequences/enrollments/${enrollmentId}/resume`);
+            setEnrollments(prev => prev.map(e =>
+                e._id === enrollmentId ? { ...e, status: 'active', pauseReason: null } : e
+            ));
+        } catch (err) {
+            setResumeError(err.response?.data?.message || 'Could not resume this lead');
+        } finally {
+            setResumingId(null);
+        }
+    };
 
     useEffect(() => {
         if (!isOpen || !sequence?._id) return;
@@ -133,6 +158,9 @@ const EnrollmentsModal = ({ isOpen, onClose, sequence }) => {
                                             </div>
                                             <div className="text-[11px] text-slate-500 truncate">
                                                 {e.leadId?.phone || e.leadId?.email || '—'} · enrolled {formatDate(e.enrolledAt)}
+                                                {e.status === 'paused' && e.pauseReason && PAUSE_REASON_LABEL[e.pauseReason]
+                                                    ? ` · ${PAUSE_REASON_LABEL[e.pauseReason]}`
+                                                    : ''}
                                             </div>
                                             {totalSteps > 0 && (
                                                 <div className="mt-1.5 flex items-center gap-2">
@@ -148,6 +176,20 @@ const EnrollmentsModal = ({ isOpen, onClose, sequence }) => {
                                                 </div>
                                             )}
                                         </div>
+                                        {e.status === 'paused' && (
+                                            <button
+                                                type="button"
+                                                onClick={() => resume(e._id)}
+                                                disabled={resumingId === e._id}
+                                                title="Continue this lead from the step it stopped on"
+                                                className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-sm transition disabled:opacity-50 flex items-center gap-1.5"
+                                            >
+                                                {resumingId === e._id
+                                                    ? <><i className="fa-solid fa-spinner fa-spin"></i> Resuming…</>
+                                                    : <><i className="fa-solid fa-play text-[10px]"></i> Resume</>
+                                                }
+                                            </button>
+                                        )}
                                     </li>
                                 );
                             })}
@@ -156,6 +198,12 @@ const EnrollmentsModal = ({ isOpen, onClose, sequence }) => {
                 </div>
 
                 {/* Footer */}
+                {resumeError && (
+                    <div className="px-6 py-2 bg-rose-50 border-t border-rose-100 text-xs text-rose-700 font-medium shrink-0 flex items-center gap-2">
+                        <i className="fa-solid fa-triangle-exclamation"></i> {resumeError}
+                    </div>
+                )}
+
                 <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
                     <span className="text-xs text-slate-400">
                         Showing {filtered.length} of {enrollments.length} · max 200 per view

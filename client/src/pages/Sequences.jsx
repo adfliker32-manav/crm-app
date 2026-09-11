@@ -80,7 +80,14 @@ const Sequences = () => {
     const duplicateSequence = async (seq) => {
         try {
             const { _id, createdAt, updatedAt, enrollmentCount, __v, createdBy, tenantId, agencyId, deletedAt, ...rest } = seq;
-            const res = await api.post('/sequences', { ...rest, name: `${seq.name} (Copy)`, isActive: false });
+            const res = await api.post('/sequences', {
+                ...rest,
+                // Fresh step ids: a copy is its own sequence, and sharing ids with the
+                // original only invites confusion when either one is edited later.
+                steps: (seq.steps || []).map(({ stepId, ...step }) => step),
+                name: `${seq.name} (Copy)`,
+                isActive: false
+            });
             setSequences(prev => [res.data, ...prev]);
             showNotification('success', 'Sequence duplicated (inactive)');
         } catch {

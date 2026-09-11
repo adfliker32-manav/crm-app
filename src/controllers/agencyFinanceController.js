@@ -5,6 +5,16 @@ const GlobalSetting = require('../models/GlobalSetting');
 // ─── AGENCY BRANDING HELPER ────────────────────────────────────────────────────
 // Fetches agency branding from GlobalSetting collection.
 // Unified keys: company_name, company_address, company_gst, company_logo
+const { findClientById, resolveBillRecipient } = require('../utils/billRecipient');
+
+// Key under which the reusable default Terms & Conditions live in GlobalSetting.
+const BILLING_TERMS_KEY = 'billing_terms';
+
+const fetchDefaultTerms = async () => {
+    const row = await GlobalSetting.findOne({ key: BILLING_TERMS_KEY }).lean();
+    return typeof row?.value === 'string' ? row.value : '';
+};
+
 const fetchAgencyBranding = async () => {
     const keys = ['company_name', 'company_address', 'company_gst', 'company_logo'];
     const settings = await GlobalSetting.find({ key: { $in: keys } }).lean();
@@ -180,9 +190,9 @@ exports.getPayment = async (req, res) => {
         const fixSet = {};
 
         if (needsFix) {
-            const client = await AgencyClient.findById(payment.agencyClientId)
-                .select('billingAddress gstNumber serviceType name')
-                .lean();
+            // findClientById, not AgencyClient.findById: a custom bill has no
+            // agencyClientId, and findById(undefined) returns the first client row.
+            const client = await findClientById(payment.agencyClientId, 'billingAddress gstNumber serviceType name');
 
             if (client) {
                 // Fix billing address snapshot
@@ -260,11 +270,15 @@ exports.createPayment = async (req, res) => {
         const client = await AgencyClient.findById(agencyClientId).lean();
         if (!client) return res.status(404).json({ success: false, message: 'Agency client not found.' });
 
-        // BUG 4 FIX: Prevent duplicate invoices for same client + billing period
+        // BUG 4 FIX: Prevent duplicate invoices for same client + billing period.
+        // Custom bills are excluded: they are ad-hoc extras raised alongside the
+        // retainer, so raising one in September must not make that month's retainer
+        // invoice un-creatable. Only one recurring invoice per client + period.
         const existingBill = await AgencyPayment.exists({
             agencyClientId,
             billingMonth: Number(billingMonth),
-            billingYear: Number(billingYear)
+            billingYear: Number(billingYear),
+            isCustomBill: { $ne: true }
         });
         if (existingBill) {
             return res.status(409).json({
@@ -361,7 +375,11 @@ exports.createPayment = async (req, res) => {
 // Prevents injection of immutable fields like invoiceNumber, snapshots, etc.
 const PAYMENT_UPDATABLE_FIELDS = [
     'amount', 'dueDate', 'status', 'receivedDate', 'receivedAmount',
-    'paymentMethod', 'reference', 'notes'
+    'paymentMethod', 'reference', 'notes',
+    // Custom-bill fields. Safe to edit after the fact: none of them take part in
+    // invoice numbering or the branding snapshot.
+    'customServiceName', 'serviceValidityFrom', 'serviceValidityTo',
+    'termsAndConditions', 'clientEmail', 'clientPhone'
 ];
 
 exports.updatePayment = async (req, res) => {
@@ -400,7 +418,9 @@ exports.updatePayment = async (req, res) => {
         // Only fires if this is a real status change (not already received before).
         // Runs non-blocking so API responds instantly.
         if (payment.status === 'received' && prevPayment?.status !== 'received') {
-            const client = await AgencyClient.findById(payment.agencyClientId).lean();
+            // Falls back to the details typed on a one-off custom bill, so those
+            // customers get a receipt too.
+            const client = await resolveBillRecipient(payment);
             if (client) {
                 const callerUserId = req.user.userId || req.user.id;
                 const { sendPaymentReceipt } = require('../services/agencyBillingQueue');
@@ -445,8 +465,14 @@ exports.sendBillManually = async (req, res) => {
         const payment = await AgencyPayment.findById(req.params.id).lean();
         if (!payment) return res.status(404).json({ success: false, message: 'Payment not found.' });
 
-        const client = await AgencyClient.findById(payment.agencyClientId).lean();
+        const client = await resolveBillRecipient(payment);
         if (!client) return res.status(404).json({ success: false, message: 'Client not found.' });
+        if (!client.email && !client.phone) {
+            return res.status(400).json({
+                success: false,
+                message: 'This bill has no email or phone to send to. Add a contact on the bill first.'
+            });
+        }
 
         // Use the logged-in superadmin's credentials directly.
         // The route is protected by requireSuperAdmin, so req.user IS the superadmin
@@ -684,6 +710,225 @@ exports.getSummary = async (req, res) => {
 // ─── AGENCY BRANDING ─────────────────────────────────────────────────────────
 // GET /superadmin/agency-finance/branding
 // Returns current agency branding from GlobalSetting for invoice preview/download.
+
+// ─── CUSTOM BILLS ──────────────────────────────────────────────────────────────
+
+// GET  /superadmin/agency-finance/bill-defaults
+// The reusable Terms & Conditions the Custom Bill form prefills with.
+exports.getBillDefaults = async (req, res) => {
+    try {
+        res.json({ success: true, defaults: { termsAndConditions: await fetchDefaultTerms() } });
+    } catch (err) {
+        console.error('[AgencyFinance] getBillDefaults:', err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// Upsert helper shared by the settings endpoint and the "save as default" checkbox.
+const persistDefaultTerms = async (terms, userId) => {
+    await GlobalSetting.findOneAndUpdate(
+        { key: BILLING_TERMS_KEY },
+        {
+            $set: {
+                value: terms || '',
+                description: 'Default Terms & Conditions prefilled on new custom bills',
+                updatedBy: userId || null,
+                updatedAt: new Date()
+            }
+        },
+        { upsert: true }
+    );
+};
+
+// POST /superadmin/agency-finance/bill-defaults   { termsAndConditions }
+exports.saveBillDefaults = async (req, res) => {
+    try {
+        const terms = typeof req.body?.termsAndConditions === 'string' ? req.body.termsAndConditions : '';
+        await persistDefaultTerms(terms, req.user?.userId || req.user?.id);
+        res.json({ success: true, message: 'Default terms saved.' });
+    } catch (err) {
+        console.error('[AgencyFinance] saveBillDefaults:', err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// POST /superadmin/agency-finance/custom-bill
+//
+// A hand-composed invoice. Differs from createPayment in three ways:
+//   - the service is free text with an explicit validity window, rather than a
+//     fixed serviceType over a billing month;
+//   - the customer may be a one-off who is not a saved AgencyClient;
+//   - several may be raised for the same customer in one month, so the
+//     one-invoice-per-client-per-period rule deliberately does not apply.
+exports.createCustomBill = async (req, res) => {
+    try {
+        const {
+            agencyClientId,
+            clientName, clientCompany, clientEmail, clientPhone,
+            billingAddress, gstNumber,
+            serviceName, serviceValidityFrom, serviceValidityTo,
+            amount, receivedAmount,
+            billDate, generatedDate, dueDate,
+            paymentMethod, reference, notes,
+            termsAndConditions, saveTermsAsDefault
+        } = req.body;
+
+        if (!serviceName || !String(serviceName).trim()) {
+            return res.status(400).json({ success: false, message: 'Service name is required.' });
+        }
+
+        const total = Number(amount);
+        if (amount == null || isNaN(total) || total <= 0) {
+            return res.status(400).json({ success: false, message: 'Amount must be greater than zero.' });
+        }
+
+        const received = Number(receivedAmount || 0);
+        if (isNaN(received) || received < 0) {
+            return res.status(400).json({ success: false, message: 'Received amount cannot be negative.' });
+        }
+        if (received > total) {
+            return res.status(400).json({ success: false, message: 'Received amount cannot be more than the total.' });
+        }
+
+        // Either a saved client, or typed-in details for a one-off customer.
+        const client = agencyClientId ? await findClientById(agencyClientId) : null;
+        if (agencyClientId && !client) {
+            return res.status(404).json({ success: false, message: 'Agency client not found.' });
+        }
+        if (!client && !String(clientName || '').trim()) {
+            return res.status(400).json({ success: false, message: 'Pick a client, or type the customer name.' });
+        }
+
+        // undefined means "supplied but unparseable" — distinct from null ("absent").
+        const parseDate = (v) => {
+            if (!v) return null;
+            const d = new Date(v);
+            return isNaN(d.getTime()) ? undefined : d;
+        };
+
+        const validFrom       = parseDate(serviceValidityFrom);
+        const validTo         = parseDate(serviceValidityTo);
+        const billOn          = parseDate(billDate);
+        const generatedOn     = parseDate(generatedDate);
+        const resolvedDueDate = parseDate(dueDate);
+
+        if ([validFrom, validTo, billOn, generatedOn, resolvedDueDate].includes(undefined)) {
+            return res.status(400).json({ success: false, message: 'One of the dates on this bill is not a valid date.' });
+        }
+        if (validFrom && validTo && validTo < validFrom) {
+            return res.status(400).json({ success: false, message: 'Service validity end date cannot be before the start date.' });
+        }
+
+        // The chosen bill date drives the invoice-number series, so a bill backdated
+        // into last month files under last month.
+        const billDateFinal      = billOn      || new Date();
+        const generatedDateFinal = generatedOn || new Date();
+
+        // Derived from the money, never trusted from the request body.
+        const status = received >= total ? 'received' : received > 0 ? 'partial' : 'pending';
+
+        // UTC getters, deliberately. Joi turns a bare YYYY-MM-DD from <input type="date">
+        // into UTC midnight, so the local getters would read the PREVIOUS calendar day on
+        // any server west of UTC — filing a bill dated the 1st under the previous month,
+        // and numbering it in the wrong month's series. UTC getters return the date the
+        // user actually picked, whatever the server timezone.
+        const billingMonth = billDateFinal.getUTCMonth() + 1;
+        const billingYear  = billDateFinal.getUTCFullYear();
+
+        const branding = await fetchAgencyBranding();
+
+        const terms = typeof termsAndConditions === 'string' && termsAndConditions.trim()
+            ? termsAndConditions
+            : await fetchDefaultTerms();
+
+        // Same collision-retry shape as createPayment. The BILL- prefix keeps a
+        // hand-made bill visually distinct from an auto-generated INV- retainer.
+        const monthStr = String(billingMonth).padStart(2, '0');
+        let payment;
+        const MAX_RETRIES = 5;
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            const count = await AgencyPayment.countDocuments({ billingYear, billingMonth });
+            const seq = String(count + 1 + attempt).padStart(4, '0');
+            const invoiceNumber = `BILL-${billingYear}-${monthStr}-${seq}`;
+
+            try {
+                payment = await AgencyPayment.create({
+                    isCustomBill: true,
+                    agencyClientId: client?._id || null,
+
+                    clientName:    client?.name    || String(clientName    || '').trim(),
+                    clientCompany: client?.company || String(clientCompany || '').trim(),
+                    clientEmail:   client?.email   || String(clientEmail   || '').trim(),
+                    clientPhone:   client?.phone   || String(clientPhone   || '').trim(),
+                    clientServiceType: client?.serviceType || 'other',
+
+                    customServiceName:   String(serviceName).trim(),
+                    serviceValidityFrom: validFrom,
+                    serviceValidityTo:   validTo,
+                    termsAndConditions:  terms,
+
+                    amount: total,
+                    receivedAmount: received,
+                    status,
+                    receivedDate: received > 0 ? billDateFinal : null,
+
+                    billingMonth,
+                    billingYear,
+                    dueDate: resolvedDueDate,
+                    invoiceDate:          billDateFinal,
+                    invoiceGeneratedDate: generatedDateFinal,
+
+                    paymentMethod: paymentMethod || 'bank_transfer',
+                    reference: reference || '',
+                    notes: notes || '',
+
+                    invoiceNumber,
+                    billingAddressSnapshot: client?.billingAddress || String(billingAddress || '').trim(),
+                    gstNumberSnapshot:      client?.gstNumber      || String(gstNumber      || '').trim(),
+                    agencyNameSnapshot:     branding.agencyName,
+                    agencyAddressSnapshot:  branding.agencyAddress,
+                    agencyGstSnapshot:      branding.agencyGst,
+                    agencyLogoSnapshot:     branding.agencyLogo,
+
+                    recordedBy: req.user?.userId || req.user?.id || null
+                });
+                break;
+            } catch (createErr) {
+                if (createErr.code === 11000 && attempt < MAX_RETRIES - 1) {
+                    console.warn(`[AgencyFinance] Custom bill number collision on ${invoiceNumber}, retrying (attempt ${attempt + 1})…`);
+                    continue;
+                }
+                throw createErr;
+            }
+        }
+
+        // Opt-in, and only after the bill itself saved — a failed bill must not
+        // quietly rewrite the default terms for every future bill.
+        if (saveTermsAsDefault === true) {
+            try {
+                await persistDefaultTerms(terms, req.user?.userId || req.user?.id);
+            } catch (termsErr) {
+                console.error('[AgencyFinance] Could not save default terms:', termsErr.message);
+            }
+        }
+
+        // Only chase a bill that is actually outstanding AND has somewhere to chase.
+        if (payment.status === 'pending' && (payment.clientEmail || payment.clientPhone || payment.agencyClientId)) {
+            try {
+                const { scheduleAgencyBillFollowups } = require('../services/agencyBillingQueue');
+                payment.followUpJobs = await scheduleAgencyBillFollowups(payment);
+                await payment.save();
+            } catch (followUpErr) {
+                console.error('[AgencyFinance] Follow-up scheduling failed (bill still created):', followUpErr.message);
+            }
+        }
+
+        res.status(201).json({ success: true, payment, message: 'Custom bill created.' });
+    } catch (err) {
+        console.error('[AgencyFinance] createCustomBill:', err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
 
 exports.getAgencyBranding = async (req, res) => {
     try {

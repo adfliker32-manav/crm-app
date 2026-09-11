@@ -1,12 +1,38 @@
 const mongoose = require('mongoose');
 
 const agencyPaymentSchema = new mongoose.Schema({
+    // Null ONLY on a custom bill raised for a one-off customer who is not a saved
+    // AgencyClient. Everything that reads it must null-check first: this codebase
+    // has been bitten by findById(undefined) returning the FIRST document in the
+    // collection, which here would mean emailing a bill to an unrelated client.
     agencyClientId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'AgencyClient',
-        required: true,
+        required: function () { return !this.isCustomBill; },
+        default: null,
         index: true
     },
+
+    // ── Custom bill ─────────────────────────────────────────────────────────
+    // A hand-composed invoice: free-text service, an explicit validity window and
+    // its own terms, rather than the recurring month/year retainer shape above.
+    isCustomBill: { type: Boolean, default: false, index: true },
+
+    // Free-text service name. Overrides the clientServiceType label on the invoice
+    // so a bill is not limited to the fixed SEO/Ads/Social list.
+    customServiceName: { type: String, default: '', trim: true },
+
+    // The period the service actually covers, printed in place of the billing month.
+    serviceValidityFrom: { type: Date, default: null },
+    serviceValidityTo:   { type: Date, default: null },
+
+    // Printed at the foot of the invoice. Prefilled from the billing_terms global
+    // setting, then editable per bill, so one client's terms never rewrite another's.
+    termsAndConditions: { type: String, default: '' },
+
+    // Only used by a one-off custom bill; a saved client carries its own email.
+    clientEmail: { type: String, default: '', trim: true },
+    clientPhone: { type: String, default: '', trim: true },
     // Snapshotted so reports remain stable if client is renamed/deleted
     clientName:        { type: String, default: '' },
     clientCompany:     { type: String, default: '' },
@@ -19,7 +45,10 @@ const agencyPaymentSchema = new mongoose.Schema({
     dueDate:      { type: Date, default: null },
     status:       { type: String, enum: ['received', 'pending', 'partial'], default: 'pending', index: true },
     receivedDate: { type: Date, default: null },
-    receivedAmount: { type: Number, default: null }, // for partial
+    // Amount actually collected so far. Historically only set when status is
+    // 'partial'; custom bills always set it (0 when nothing is in yet) so Balance
+    // Due = amount - receivedAmount is printable without reading status.
+    receivedAmount: { type: Number, default: null },
 
     paymentMethod: {
         type: String,

@@ -232,6 +232,9 @@ const {
     deletePayment: agencyDeletePayment,
     sendBillManually: agencySendBillManually,
     getAgencyBranding: agencyGetBranding,
+    createCustomBill: agencyCreateCustomBill,
+    getBillDefaults: agencyGetBillDefaults,
+    saveBillDefaults: agencySaveBillDefaults,
 } = require('../controllers/agencyFinanceController');
 
 router.get('/agency-finance/summary', authMiddleware, requireSuperAdmin, agencySummary);
@@ -245,6 +248,13 @@ router.delete('/agency-finance/clients/:id', validateObjectId({ params: ['id'] }
 router.get('/agency-finance/payments', authMiddleware, requireSuperAdmin, agencyListPayments);
 router.get('/agency-finance/payments/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyGetPayment);
 router.post('/agency-finance/payments', authMiddleware, requireSuperAdmin, agencyCreatePayment);
+
+// Custom bills — a hand-composed invoice with a free-text service, its own
+// validity window and its own terms. Declared before the /payments/:id routes
+// purely for readability; the paths do not overlap.
+router.post('/agency-finance/custom-bill', authMiddleware, requireSuperAdmin, validate(schemas.createCustomBill), agencyCreateCustomBill);
+router.get('/agency-finance/bill-defaults', authMiddleware, requireSuperAdmin, agencyGetBillDefaults);
+router.post('/agency-finance/bill-defaults', authMiddleware, requireSuperAdmin, validate(schemas.saveBillDefaults), agencySaveBillDefaults);
 router.post('/agency-finance/payments/:id/send-bill', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencySendBillManually);
 router.put('/agency-finance/payments/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyUpdatePayment);
 router.delete('/agency-finance/payments/:id', validateObjectId({ params: ['id'] }), authMiddleware, requireSuperAdmin, agencyDeletePayment);

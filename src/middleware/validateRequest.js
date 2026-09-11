@@ -405,7 +405,51 @@ const schemas = {
         name:        Joi.string().trim().min(1).max(100).optional(),
         phone:       Joi.string().trim().max(20).optional().allow('', null),
         companyName: Joi.string().trim().max(150).optional().allow('', null)
-    }).min(1)
+    }).min(1),
+
+    // ── Agency custom bills ─────────────────────────────────────────────────
+
+    // agencyFinanceController.createCustomBill — a hand-composed invoice.
+    // EVERY field the controller reads must be listed here. validate() runs with
+    // stripUnknown, so an undeclared field is silently deleted before the handler
+    // sees it — which would produce a blank bill rather than an honest 400.
+    // Empty strings are allowed throughout because the form submits "" for any
+    // date or optional box the user left alone.
+    createCustomBill: Joi.object({
+        // A saved client, or blank when the bill is for a one-off customer.
+        agencyClientId: Joi.string().hex().length(24).optional().allow('', null),
+
+        clientName:     Joi.string().trim().max(150).optional().allow('', null),
+        clientCompany:  Joi.string().trim().max(150).optional().allow('', null),
+        clientEmail:    Joi.string().trim().email().max(200).optional().allow('', null),
+        clientPhone:    Joi.string().trim().max(20).optional().allow('', null),
+        billingAddress: Joi.string().trim().max(500).optional().allow('', null),
+        gstNumber:      Joi.string().trim().max(30).optional().allow('', null),
+
+        serviceName:         Joi.string().trim().min(1).max(200).required(),
+        serviceValidityFrom: Joi.date().iso().optional().allow('', null),
+        serviceValidityTo:   Joi.date().iso().optional().allow('', null),
+
+        amount:         Joi.number().positive().required(),
+        receivedAmount: Joi.number().min(0).optional().allow('', null),
+
+        billDate:      Joi.date().iso().optional().allow('', null),
+        generatedDate: Joi.date().iso().optional().allow('', null),
+        dueDate:       Joi.date().iso().optional().allow('', null),
+
+        paymentMethod: Joi.string().valid('bank_transfer', 'upi', 'cash', 'cheque', 'other').optional(),
+        reference:     Joi.string().trim().max(200).optional().allow('', null),
+        notes:         Joi.string().trim().max(2000).optional().allow('', null),
+
+        termsAndConditions: Joi.string().trim().max(5000).optional().allow('', null),
+        saveTermsAsDefault: Joi.boolean().optional()
+    }),
+
+    // agencyFinanceController.saveBillDefaults — the reusable terms.
+    // Empty is meaningful: it clears the default.
+    saveBillDefaults: Joi.object({
+        termsAndConditions: Joi.string().trim().max(5000).required().allow('')
+    })
 };
 
 module.exports = { validate, schemas };

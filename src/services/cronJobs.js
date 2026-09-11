@@ -1028,6 +1028,20 @@ const startCronJobs = () => {
         console.error('⚠️ [CronJobs] Failed to schedule Meta CAPI outbox drain:', e.message);
     }
 
+    // ── Stalled sequence enrollments — every 5 minutes ─────────────────────
+    // Agenda has no retry policy, so a step job that throws is just marked failed:
+    // the enrollment stays 'active' with its nextStepAt in the past and no job
+    // behind it, and nothing else would ever look at it again. Same story if the
+    // process dies mid-step. Re-firing is safe - a step already processed makes
+    // the job a no-op.
+    try {
+        const { recoverStalledEnrollments } = require('./sequenceService');
+        cron.schedule('*/5 * * * *', () => recoverStalledEnrollments());
+        console.log('[CronJobs] Stalled sequence enrollment sweep scheduled (every 5 min)');
+    } catch (e) {
+        console.error('⚠️ [CronJobs] Failed to schedule sequence stall sweep:', e.message);
+    }
+
     // ── Partner webhook outbox drain — every minute ────────────────────────
     // Retries partner webhook deliveries whose inline attempt failed
     // transiently. Runs more often than the CAPI drain because partners expect
@@ -1115,10 +1129,15 @@ const runAgencyClientBillingSweep = async () => {
                         : (clientBillingDay === currentDay);
 
                     if (dayMatches) {
+                        // isCustomBill excluded: a one-off custom bill raised for this
+                        // client this month is NOT the monthly retainer invoice. Counting
+                        // it here would silently skip the real invoice for that month —
+                        // billing that never happens and that nobody gets an error about.
                         const exists = await AgencyPayment.exists({
                             agencyClientId: client._id,
                             billingMonth: month,
-                            billingYear: year
+                            billingYear: year,
+                            isCustomBill: { $ne: true }
                         });
                         if (!exists) {
                             shouldBill = true;

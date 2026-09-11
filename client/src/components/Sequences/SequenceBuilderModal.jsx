@@ -15,6 +15,13 @@ const newStep = () => ({
     action: { type: 'SEND_WHATSAPP', templateId: '', emailTemplateId: '', useEmailTemplate: false, subject: '', body: '' }
 });
 
+// A step sends ONE channel (action.type) but holds the setup for both, so moving
+// between the WhatsApp and Email tabs never costs you what you already typed.
+// Which half is live:
+const hasWhatsAppSetup = (action) => !!action?.templateId;
+const hasEmailSetup = (action) =>
+    !!(action?.emailTemplateId || String(action?.subject || '').trim() || String(action?.body || '').trim());
+
 // ── Delay helpers ─────────────────────────────────────────────────────────────
 // We store delay as total hours internally (backend model uses delayHours).
 // The UI splits this into days + hours for user-friendliness.
@@ -51,13 +58,21 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                 triggerStage: editingSequence.triggerStage || '',
                 steps: (editingSequence.steps && editingSequence.steps.length)
                     ? editingSequence.steps.map((s, i) => ({
+                        // Carried through untouched: this id is how leads already
+                        // inside the sequence know which step they are on. Drop it
+                        // and every edit looks like "all steps deleted and replaced".
+                        stepId: s.stepId || null,
                         stepNumber: i + 1,
                         delayHours: s.delayHours || 0,
                         action: {
                             type: s.action?.type || 'SEND_WHATSAPP',
                             templateId:      s.action?.templateId      || '',
                             emailTemplateId: s.action?.emailTemplateId || '',
-                            useEmailTemplate: !!s.action?.emailTemplateId,
+                            // emailMode is authoritative; steps saved before it existed
+                            // fall back to the old "has an id = uses a template" rule.
+                            useEmailTemplate: s.action?.emailMode
+                                ? s.action.emailMode === 'template'
+                                : !!s.action?.emailTemplateId,
                             subject: s.action?.subject || '',
                             body:    s.action?.body    || ''
                         }
@@ -147,27 +162,30 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
 
         setLoading(true);
         try {
-            // Resolve email template subject/body from chosen template if applicable
-            const resolveEmailAction = (action) => {
-                if (action.type !== 'SEND_EMAIL') {
-                    return { type: action.type, templateId: action.templateId || null, subject: null, body: null, emailTemplateId: null };
-                }
-                if (action.useEmailTemplate && action.emailTemplateId) {
-                    const tpl = emailTemplates.find(t => t._id === action.emailTemplateId || t.id === action.emailTemplateId);
-                    return {
-                        type: 'SEND_EMAIL',
-                        templateId: null,
-                        emailTemplateId: action.emailTemplateId,
-                        subject: tpl?.subject || action.subject || null,
-                        body:    tpl?.body    || action.body    || null,
-                    };
-                }
+            // Both channels are written out, whichever one the step sends.
+            // This used to null out the half that action.type did not point at, so
+            // setting up WhatsApp, switching to the Email tab and hitting Save threw
+            // the WhatsApp template away without a word - and the same in reverse.
+            // Only the fields matching action.type are read at send time, so keeping
+            // the other half changes nothing about what goes out.
+            const resolveAction = (action) => {
+                const tpl = action.useEmailTemplate && action.emailTemplateId
+                    ? emailTemplates.find(t => t._id === action.emailTemplateId || t.id === action.emailTemplateId)
+                    : null;
                 return {
-                    type: 'SEND_EMAIL',
-                    templateId: null,
-                    emailTemplateId: null,
-                    subject: action.subject || null,
-                    body:    action.body    || null,
+                    type: action.type,
+                    // WhatsApp half
+                    templateId: action.templateId || null,
+                    // Email half. emailMode records which composer is in use, so the
+                    // template id can survive a switch to Custom without the server
+                    // mistaking the step for a template-backed one.
+                    emailMode: action.useEmailTemplate ? 'template' : 'custom',
+                    emailTemplateId: action.emailTemplateId || null,
+                    // In template mode subject/body are a snapshot the engine falls back
+                    // to only if the template has since been deleted; in custom mode they
+                    // are the message itself.
+                    subject: (tpl ? tpl.subject : action.subject) || null,
+                    body:    (tpl ? tpl.body    : action.body)    || null,
                 };
             };
 
@@ -178,9 +196,11 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                 stopOnReply: seq.stopOnReply,
                 isActive: seq.isActive,
                 steps: seq.steps.map((s, i) => ({
+                    // A new step has no id yet — the server mints one.
+                    ...(s.stepId ? { stepId: s.stepId } : {}),
                     stepNumber: i + 1,
                     delayHours: Number(s.delayHours) || 0,
-                    action: resolveEmailAction(s.action)
+                    action: resolveAction(s.action)
                 }))
             };
             if (editingSequence?._id) {
@@ -425,6 +445,13 @@ const StepCard = ({
         onUpdate({ delayHours: daysHoursToTotalHours(days, h) });
     };
 
+    // The step can be sitting on a template id it is not currently composing with
+    // (Custom mode keeps your pick), so the preview reads the template list rather
+    // than the saved subject — which is what the send path resolves too.
+    const selectedEmailTemplate = step.action.emailTemplateId
+        ? emailTemplates.find(t => (t._id || t.id) === step.action.emailTemplateId)
+        : null;
+
     // When an email template is selected, prefill subject/body for preview
     const handleEmailTemplateSelect = (e) => {
         const id = e.target.value;
@@ -450,6 +477,15 @@ const StepCard = ({
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                     {idx === 0 ? 'After enrollment' : 'After previous step'} · {formatDelay(step.delayHours)}
                 </span>
+                {/* A step holds both channels but sends only one — say which, out loud. */}
+                <span className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2 py-0.5 rounded-full ring-1 ${
+                    isWhatsApp
+                        ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                        : 'bg-blue-50 text-blue-700 ring-blue-200'
+                }`}>
+                    <i className={`${isWhatsApp ? 'fa-brands fa-whatsapp' : 'fa-solid fa-envelope'} text-[10px]`}></i>
+                    Sends {isWhatsApp ? 'WhatsApp' : 'Email'}
+                </span>
             </div>
 
             <div className="ml-12 bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition">
@@ -465,6 +501,10 @@ const StepCard = ({
                             }`}
                         >
                             <i className="fa-brands fa-whatsapp"></i> WhatsApp
+                            {!isWhatsApp && hasWhatsAppSetup(step.action) && (
+                                <span title="Saved — switch to this tab to send WhatsApp instead"
+                                    className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                            )}
                         </button>
                         <button
                             type="button"
@@ -474,6 +514,10 @@ const StepCard = ({
                             }`}
                         >
                             <i className="fa-solid fa-envelope"></i> Email
+                            {isWhatsApp && hasEmailSetup(step.action) && (
+                                <span title="Saved — switch to this tab to send Email instead"
+                                    className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                            )}
                         </button>
                     </div>
 
@@ -587,7 +631,10 @@ const StepCard = ({
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => onUpdateAction({ useEmailTemplate: false, emailTemplateId: '' })}
+                                    /* The template id is kept, not cleared - switching back to
+                                       Use Template restores your pick. emailMode is what tells
+                                       the server (and the send path) to ignore it for now. */
+                                    onClick={() => onUpdateAction({ useEmailTemplate: false })}
                                     className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${
                                         !step.action.useEmailTemplate
                                             ? 'bg-white text-blue-600 shadow-sm'
@@ -622,9 +669,9 @@ const StepCard = ({
                                         ))}
                                     </select>
                                     {/* Preview of selected template */}
-                                    {step.action.emailTemplateId && step.action.subject && (
+                                    {selectedEmailTemplate?.subject && (
                                         <div className="mt-2 bg-blue-50/70 border border-blue-100 rounded-lg px-3 py-2 text-xs text-blue-800">
-                                            <span className="font-semibold">Subject:</span> {step.action.subject}
+                                            <span className="font-semibold">Subject:</span> {selectedEmailTemplate.subject}
                                         </div>
                                     )}
                                 </div>

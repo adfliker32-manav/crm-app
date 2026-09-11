@@ -10,14 +10,41 @@ const mongoose = require('mongoose');
 const validateSteps = (steps) => {
     for (const [i, step] of (steps || []).entries()) {
         const action = step?.action || {};
+        // Only the channel this step SENDS is validated. A step now carries the setup
+        // for both channels so the builder never discards the tab you are not on, and
+        // the unused half is allowed to be blank, half-filled, or stale.
         if (action.type === 'SEND_WHATSAPP' && !action.templateId) {
             return `Step ${i + 1}: a WhatsApp step needs a template`;
         }
-        if (action.type === 'SEND_EMAIL' && !action.emailTemplateId && !String(action.subject || '').trim()) {
-            return `Step ${i + 1}: an email step needs either a template or a subject`;
+        if (action.type === 'SEND_EMAIL') {
+            // emailMode absent = a legacy row or an API client: fall back to the old
+            // derivation so nothing that used to save starts failing.
+            const usesTemplate = action.emailMode ? action.emailMode === 'template' : !!action.emailTemplateId;
+            if (usesTemplate && !action.emailTemplateId) {
+                return `Step ${i + 1}: an email step set to use a template needs one selected`;
+            }
+            if (!usesTemplate && !String(action.subject || '').trim()) {
+                return `Step ${i + 1}: an email step needs either a template or a subject`;
+            }
         }
     }
     return null;
+};
+
+// Every step carries a stable stepId so in-flight enrollments can be tracked by
+// identity instead of array position (editing a live sequence used to slide every
+// enrolled lead onto a different message). Ids that arrive from the builder are
+// preserved - that is what makes an edit an edit; anything missing or duplicated
+// gets a fresh one, so a hand-written API payload can never collapse two steps
+// into the same identity.
+const normalizeSteps = (steps) => {
+    const seen = new Set();
+    return (steps || []).map((step, i) => {
+        let stepId = typeof step?.stepId === 'string' ? step.stepId.trim() : '';
+        if (!stepId || seen.has(stepId)) stepId = new mongoose.Types.ObjectId().toString();
+        seen.add(stepId);
+        return { ...step, stepId, stepNumber: i + 1 };
+    });
 };
 
 const getSequences = async (req, res) => {
@@ -45,7 +72,7 @@ const createSequence = async (req, res) => {
             trigger,
             triggerStage: triggerStage || null,
             stopOnReply: stopOnReply !== undefined ? stopOnReply : true,
-            steps,
+            steps: normalizeSteps(steps),
             isActive: isActive !== undefined ? isActive : true,
             createdBy: req.user.userId || req.user.id
         });
@@ -70,9 +97,14 @@ const updateSequence = async (req, res) => {
         if (steps !== undefined) {
             const stepError = validateSteps(steps);
             if (stepError) return res.status(400).json({ message: stepError });
-            update.steps = steps;
+            update.steps = normalizeSteps(steps);
         }
         if (isActive !== undefined) update.isActive = isActive;
+
+        // Read the old flag BEFORE the write: switching a sequence back on has to
+        // release every enrollment that was held while it was off, or "pause" is
+        // still a one-way door for everyone who was mid-flight.
+        const previous = await Sequence.findOne({ _id: id, tenantId: req.tenantId }).select('isActive').lean();
 
         const seq = await Sequence.findOneAndUpdate(
             { _id: id, tenantId: req.tenantId },
@@ -80,6 +112,16 @@ const updateSequence = async (req, res) => {
             { returnDocument: 'after' }
         );
         if (!seq) return res.status(404).json({ message: 'Sequence not found' });
+
+        if (previous && previous.isActive === false && seq.isActive === true) {
+            const { resumeEnrollmentsForSequence } = require('../services/sequenceService');
+            // Best-effort: the sequence IS active either way, and the stall sweep
+            // picks up anything this misses.
+            resumeEnrollmentsForSequence(seq._id).catch(err =>
+                console.error('[Sequence] Resume-on-reactivate failed:', err.message)
+            );
+        }
+
         res.json(seq);
     } catch (err) {
         res.status(500).json({ message: 'Server error' });
@@ -94,15 +136,18 @@ const deleteSequence = async (req, res) => {
         const seq = await Sequence.findOneAndDelete({ _id: id, tenantId: req.tenantId });
         if (!seq) return res.status(404).json({ message: 'Sequence not found' });
 
-        // Cancel all active enrollments AND their pending Agenda jobs
+        // Cancel every live enrollment AND its pending Agenda job. Paused rows count
+        // as live now that they can be resumed - left behind, they would sit in the
+        // list forever pointing at a sequence that no longer exists.
+        const liveStatuses = ['active', 'paused'];
         const activeEnrollments = await SequenceEnrollment.find(
-            { sequenceId: id, status: 'active' },
+            { sequenceId: id, status: { $in: liveStatuses } },
             { agendaJobId: 1 }
         ).lean();
 
         await SequenceEnrollment.updateMany(
-            { sequenceId: id, status: 'active' },
-            { $set: { status: 'cancelled' } }
+            { sequenceId: id, status: { $in: liveStatuses } },
+            { $set: { status: 'cancelled', pauseReason: null, lastError: 'the sequence was deleted' } }
         );
 
         // Cancel scheduled Agenda step jobs so they don't fire after deletion
@@ -175,14 +220,24 @@ const manualEnroll = async (req, res) => {
         // enrollLeadInSequences is deliberately NOT reused here: it only enrolls leads
         // whose sequence matches a TRIGGER. A manual enrol must work regardless of
         // trigger, so the enrollment row is created directly and scheduled below.
-        const enrollment = await SequenceEnrollment.create({
-            tenantId: req.tenantId,
-            sequenceId: id,
-            leadId,
-            status: 'active',
-            currentStep: 0,
-            enrolledAt: new Date()
-        });
+        let enrollment;
+        try {
+            enrollment = await SequenceEnrollment.create({
+                tenantId: req.tenantId,
+                sequenceId: id,
+                leadId,
+                status: 'active',
+                currentStep: 0,
+                currentStepId: seq.steps[0]?.stepId || null,
+                enrolledAt: new Date()
+            });
+        } catch (createErr) {
+            // uniq_active_enrollment - the check above raced another enrolment.
+            if (createErr?.code === 11000) {
+                return res.status(409).json({ message: 'Lead is already enrolled in this sequence' });
+            }
+            throw createErr;
+        }
 
         // Schedule the first step immediately.
         // scheduleStepJob takes POSITIONAL (enrollmentId, delayHours) - it was being
@@ -214,5 +269,51 @@ const manualEnroll = async (req, res) => {
     }
 };
 
-module.exports = { getSequences, createSequence, updateSequence, deleteSequence, getEnrollments, manualEnroll };
+// Paused was a dead end: a lead who replied once was out of that sequence for
+// good, because enrolment skips leads already active, completed OR paused. This
+// is the way back in - the held step is scheduled immediately, since it was
+// already due when the pause happened.
+const resumeEnrollmentById = async (req, res) => {
+    try {
+        const { enrollmentId } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(enrollmentId)) {
+            return res.status(400).json({ message: 'Invalid enrollment ID' });
+        }
+
+        // Tenant-scoped: never touch another workspace's enrollment.
+        const existing = await SequenceEnrollment.findOne({
+            _id: enrollmentId,
+            tenantId: req.tenantId
+        }).lean();
+        if (!existing) return res.status(404).json({ message: 'Enrollment not found' });
+
+        const seq = await Sequence.findOne({ _id: existing.sequenceId, tenantId: req.tenantId })
+            .select('isActive name').lean();
+        if (!seq) return res.status(404).json({ message: 'Sequence not found' });
+        if (!seq.isActive) {
+            return res.status(400).json({ message: 'Sequence is inactive — activate it first' });
+        }
+
+        const { resumeEnrollment } = require('../services/sequenceService');
+        const result = await resumeEnrollment(enrollmentId);
+
+        if (!result.ok) {
+            const messages = {
+                not_found:        'Enrollment not found',
+                duplicate_active: 'This lead already has a live enrollment in this sequence',
+                schedule_failed:  `Could not schedule the next step: ${result.message || 'scheduler unavailable'}`
+            };
+            return res.status(result.reason === 'not_found' ? 404 : 409).json({
+                message: messages[result.reason] || `Enrollment is ${result.reason}, not paused`
+            });
+        }
+
+        res.json({ success: true, status: 'active' });
+    } catch (err) {
+        console.error('[resumeEnrollment]', err);
+        res.status(500).json({ message: err.message || 'Server error' });
+    }
+};
+
+module.exports = { getSequences, createSequence, updateSequence, deleteSequence, getEnrollments, manualEnroll, resumeEnrollmentById };
 

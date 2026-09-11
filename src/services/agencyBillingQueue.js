@@ -354,7 +354,11 @@ const processFollowUp = async (job, dayType) => {
         return;
     }
 
-    const client = await AgencyClient.findById(payment.agencyClientId).lean();
+    // resolveBillRecipient, not AgencyClient.findById: a custom bill has no
+    // agencyClientId, and findById(undefined) returns the FIRST client in the
+    // collection — which would chase an unrelated client over someone else's bill.
+    const { resolveBillRecipient } = require('../utils/billRecipient');
+    const client = await resolveBillRecipient(payment);
     if (!client) {
         console.warn(`⚠️ [BillingQueue] Client not found for payment ${paymentId} — skipping.`);
         return;

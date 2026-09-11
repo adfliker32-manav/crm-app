@@ -36,11 +36,27 @@ const fmtD = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric'
  * @returns {string} Full HTML document string
  */
 const buildInvoiceHtml = (payment, branding = {}, opts = {}) => {
-    const serviceLabel = SERVICE_LABELS_MAP[payment.clientServiceType] || 'Monthly Retainer — Services';
-    const period = `${MONTHS_FULL[(payment.billingMonth || 1) - 1]} ${payment.billingYear}`;
+    // A custom bill names its own service and its own validity window; a recurring
+    // retainer falls back to the fixed service list and the billing month.
+    const serviceLabel = String(payment.customServiceName || '').trim()
+        || SERVICE_LABELS_MAP[payment.clientServiceType]
+        || 'Monthly Retainer — Services';
 
-    // Always use current date as Invoice Date — so the PDF shows today's date when downloaded/viewed
-    const invoiceDate = new Date();
+    const hasValidity = !!(payment.serviceValidityFrom || payment.serviceValidityTo);
+    const period = hasValidity
+        ? `${fmtD(payment.serviceValidityFrom)} — ${fmtD(payment.serviceValidityTo)}`
+        : `${MONTHS_FULL[(payment.billingMonth || 1) - 1]} ${payment.billingYear}`;
+
+    // Honour the date stored on the bill. This was hardcoded to new Date(), which
+    // silently overrode the invoice date the user chose — a bill deliberately
+    // backdated to last month still printed as today.
+    const invoiceDate = payment.invoiceDate || payment.createdAt || new Date();
+
+    // Received is authoritative whenever it is present. It used to be read only for
+    // status 'partial', so a bill carrying a part-payment in any other state printed
+    // no balance at all.
+    const received = Number(payment.receivedAmount || 0);
+    const balance  = Math.max(0, Number(payment.amount || 0) - received);
 
     const statusColor = payment.status === 'received' ? '#10b981'
         : payment.status === 'partial' ? '#3b82f6' : '#f59e0b';
@@ -55,6 +71,24 @@ const buildInvoiceHtml = (payment, branding = {}, opts = {}) => {
 
     // Escape HTML in user data to prevent XSS
     const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+    // Gated on isCustomBill deliberately. `notes` predates this feature as an
+    // ADMIN-ONLY field — the client form labels it "Internal notes…" and it has never
+    // been rendered on an invoice or in a billing email. Printing it for every payment
+    // would publish years of internal remarks ("slow payer, chase hard") straight to
+    // customers, including through the public invoice link. A custom bill's note is
+    // typed into a box that says it goes on the bill, so only that one is shown.
+    const notesHtml = payment.isCustomBill && String(payment.notes || '').trim() ? `
+  <div class="notes-box">
+    <h3>Note</h3>
+    <p>${esc(payment.notes).replace(/\n/g, '<br/>')}</p>
+  </div>` : '';
+
+    const termsHtml = String(payment.termsAndConditions || '').trim() ? `
+  <div class="terms-box">
+    <h3>Terms &amp; Conditions</h3>
+    <p>${esc(payment.termsAndConditions).replace(/\n/g, '<br/>')}</p>
+  </div>` : '';
 
     const printScript = opts.autoPrint
         ? `<script>window.onload = () => { window.print(); window.onafterprint = () => window.close(); }<\/script>`
@@ -102,13 +136,20 @@ const buildInvoiceHtml = (payment, branding = {}, opts = {}) => {
     .total-box { width: 280px; }
     .total-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 14px; color: #475569; }
     .total-row.grand { border-top: 2px solid #e2e8f0; padding-top: 12px; margin-top: 4px; font-size: 18px; font-weight: 900; color: #1e293b; }
-    .footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
+    .notes-box { margin-top: 32px; background: #f8fafc; border-left: 4px solid #4f46e5; border-radius: 8px; padding: 16px 20px; }
+    .notes-box h3 { font-size: 11px; font-weight: 700; color: #4f46e5; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+    .notes-box p { font-size: 13px; color: #475569; line-height: 1.6; }
+    .terms-box { margin-top: 28px; padding-top: 20px; border-top: 1px solid #e2e8f0; }
+    .terms-box h3 { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .terms-box p { font-size: 11.5px; color: #64748b; line-height: 1.7; }
+    .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
     .footer p { font-size: 12px; color: #94a3b8; }
     @media print {
       @page { margin: 0; size: A4; }
       body { background: #fff; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .page { margin: 0; border-radius: 0; box-shadow: none; }
       .no-print { display: none !important; }
+      .notes-box, .terms-box { break-inside: avoid; }
     }
   </style>
 </head>
@@ -153,6 +194,7 @@ ${saveButton}
     <div class="meta-item"><label>Invoice Date</label><span>${fmtD(invoiceDate)}</span></div>
     <div class="meta-item"><label>Due Date</label><span>${fmtD(payment.dueDate)}</span></div>
     <div class="meta-item"><label>Payment Status</label><span style="color:${statusColor};font-weight:700">${statusLabel}</span></div>
+    ${hasValidity ? `<div class="meta-item"><label>Service Validity</label><span>${fmtD(payment.serviceValidityFrom)} — ${fmtD(payment.serviceValidityTo)}</span></div>` : ''}
   </div>
 
   <table>
@@ -175,13 +217,16 @@ ${saveButton}
   <div class="total-section">
     <div class="total-box">
       <div class="total-row"><span>Subtotal</span><span>${fmtCur(payment.amount)}</span></div>
-      ${payment.status === 'partial' ? `<div class="total-row" style="color:#10b981"><span>Received</span><span>− ${fmtCur(payment.receivedAmount)}</span></div>` : ''}
+      ${received > 0 ? `<div class="total-row" style="color:#10b981"><span>Payment Received</span><span>− ${fmtCur(received)}</span></div>` : ''}
       <div class="total-row grand">
-        <span>${payment.status === 'partial' ? 'Balance Due' : 'Total'}</span>
-        <span>${payment.status === 'partial' ? fmtCur(payment.amount - (payment.receivedAmount || 0)) : fmtCur(payment.amount)}</span>
+        <span>${received > 0 ? 'Balance Due' : 'Total'}</span>
+        <span>${fmtCur(received > 0 ? balance : payment.amount)}</span>
       </div>
     </div>
   </div>
+
+  ${notesHtml}
+  ${termsHtml}
 
   <div class="footer">
     <p>Thank you for your business!</p>

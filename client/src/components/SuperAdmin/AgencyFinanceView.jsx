@@ -6,6 +6,7 @@ import {
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import CustomBillModal from './CustomBillModal';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
@@ -283,9 +284,14 @@ const PaymentModal = ({ isOpen, onClose, onSuccess, clients, initial }) => {
 
     const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
+    // A custom bill raised for a one-off customer has no AgencyClient to point at.
+    // Without this, the required <select> below and the guard here made such a bill
+    // impossible to edit at all — it could only be deleted.
+    const isOneOffBill = !!(initial?.isCustomBill && !initial?.agencyClientId);
+
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!form.agencyClientId) return showError('Please select a client.');
+        if (!isOneOffBill && !form.agencyClientId) return showError('Please select a client.');
         if (!form.amount || isNaN(form.amount)) return showError('Amount is required.');
         setSaving(true);
         try {
@@ -320,15 +326,27 @@ const PaymentModal = ({ isOpen, onClose, onSuccess, clients, initial }) => {
                 <form onSubmit={handleSubmit} className="p-6 space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                         <div className="col-span-2">
-                            <label className="block text-xs font-bold text-slate-600 mb-1">Client *</label>
-                            <select value={form.agencyClientId} onChange={e => handleClientChange(e.target.value)}
-                                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                                required>
-                                <option value="">Select client…</option>
-                                {clients.map(c => (
-                                    <option key={c._id} value={c._id}>{c.name}{c.company ? ` — ${c.company}` : ''}</option>
-                                ))}
-                            </select>
+                            <label className="block text-xs font-bold text-slate-600 mb-1">
+                                {isOneOffBill ? 'Customer' : 'Client *'}
+                            </label>
+                            {isOneOffBill ? (
+                                <div className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm text-slate-600 flex items-center gap-2">
+                                    <span>
+                                        {initial.clientName || 'One-off customer'}
+                                        {initial.clientCompany ? ` — ${initial.clientCompany}` : ''}
+                                    </span>
+                                    <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 border border-indigo-100">CUSTOM</span>
+                                </div>
+                            ) : (
+                                <select value={form.agencyClientId} onChange={e => handleClientChange(e.target.value)}
+                                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                                    required>
+                                    <option value="">Select client…</option>
+                                    {clients.map(c => (
+                                        <option key={c._id} value={c._id}>{c.name}{c.company ? ` — ${c.company}` : ''}</option>
+                                    ))}
+                                </select>
+                            )}
                         </div>
                         <div>
                             <label className="block text-xs font-bold text-slate-600 mb-1">Billing Month *</label>
@@ -869,14 +887,42 @@ const printInvoice = (payment, globalBranding = null) => {
         'branding':     'Branding & Design',
         'other':        'Monthly Retainer'
     };
-    const serviceLabel = SERVICE_LABELS_MAP[payment.clientServiceType] || 'Monthly Retainer — Services';
+    // A custom bill names its own service; a retainer uses the fixed list.
+    const serviceLabel = String(payment.customServiceName || '').trim()
+        || SERVICE_LABELS_MAP[payment.clientServiceType]
+        || 'Monthly Retainer — Services';
 
     const fmtCur = (n) => `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
     const fmtD = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
 
-    const period = `${MONTHS_FULL[(payment.billingMonth || 1) - 1]} ${payment.billingYear}`;
-    // Always use current date as Invoice Date — so the PDF shows today's date when downloaded
-    const invoiceDate = new Date();
+    const hasValidity = !!(payment.serviceValidityFrom || payment.serviceValidityTo);
+    const period = hasValidity
+        ? `${fmtD(payment.serviceValidityFrom)} — ${fmtD(payment.serviceValidityTo)}`
+        : `${MONTHS_FULL[(payment.billingMonth || 1) - 1]} ${payment.billingYear}`;
+
+    // Honour the date stored on the bill. This was hardcoded to new Date(), which
+    // silently overrode the invoice date the user chose.
+    const invoiceDate = payment.invoiceDate || payment.createdAt || new Date();
+
+    // Received is authoritative whenever present, not only when status is partial.
+    const received = Number(payment.receivedAmount || 0);
+    const balance  = Math.max(0, Number(payment.amount || 0) - received);
+
+    // The rest of this template interpolates raw; at minimum escape the two new
+    // free-text blocks so a stray < in terms cannot break the print window.
+    const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Gated on isCustomBill deliberately. `notes` predates this feature as an
+    // ADMIN-ONLY field — the client form labels it "Internal notes…" and it has never
+    // been rendered on an invoice or in a billing email. Printing it for every payment
+    // would publish years of internal remarks ("slow payer, chase hard") straight to
+    // customers, including through the public invoice link. A custom bill's note is
+    // typed into a box that says it goes on the bill, so only that one is shown.
+    const notesHtml = payment.isCustomBill && String(payment.notes || '').trim()
+        ? `<div class="notes-box"><h3>Note</h3><p>${esc(payment.notes).replace(/\n/g, '<br/>')}</p></div>`
+        : '';
+    const termsHtml = String(payment.termsAndConditions || '').trim()
+        ? `<div class="terms-box"><h3>Terms &amp; Conditions</h3><p>${esc(payment.termsAndConditions).replace(/\n/g, '<br/>')}</p></div>`
+        : '';
     const statusColor = payment.status === 'received' ? '#10b981' : payment.status === 'partial' ? '#3b82f6' : '#f59e0b';
     const statusLabel = payment.status === 'received' ? 'PAID ✓ VERIFIED' : payment.status === 'partial' ? 'PARTIAL PAID' : 'OUTSTANDING';
     const isVerified  = payment.status === 'received';
@@ -919,7 +965,14 @@ const printInvoice = (payment, globalBranding = null) => {
     .total-box { width: 280px; }
     .total-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 14px; color: #475569; }
     .total-row.grand { border-top: 2px solid #e2e8f0; padding-top: 12px; margin-top: 4px; font-size: 18px; font-weight: 900; color: #1e293b; }
-    .footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
+    .notes-box { margin-top: 32px; background: #f8fafc; border-left: 4px solid #4f46e5; border-radius: 8px; padding: 16px 20px; }
+    .notes-box h3 { font-size: 11px; font-weight: 700; color: #4f46e5; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+    .notes-box p { font-size: 13px; color: #475569; line-height: 1.6; }
+    .terms-box { margin-top: 28px; padding-top: 20px; border-top: 1px solid #e2e8f0; }
+    .terms-box h3 { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .terms-box p { font-size: 11.5px; color: #64748b; line-height: 1.7; }
+    @media print { .notes-box, .terms-box { break-inside: avoid; } }
+    .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
     .footer p { font-size: 12px; color: #94a3b8; }
     @media print { @page { margin: 0; size: A4; } body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
   </style>
@@ -964,6 +1017,7 @@ const printInvoice = (payment, globalBranding = null) => {
     <div class="meta-item"><label>Invoice Date</label><span>${fmtD(invoiceDate)}</span></div>
     <div class="meta-item"><label>Due Date</label><span>${fmtD(payment.dueDate)}</span></div>
     <div class="meta-item"><label>Payment Status</label><span style="color:${statusColor};font-weight:700">${statusLabel}</span></div>
+    ${hasValidity ? `<div class="meta-item"><label>Service Validity</label><span>${fmtD(payment.serviceValidityFrom)} — ${fmtD(payment.serviceValidityTo)}</span></div>` : ''}
   </div>
 
   <table>
@@ -986,13 +1040,16 @@ const printInvoice = (payment, globalBranding = null) => {
   <div class="total-section">
     <div class="total-box">
       <div class="total-row"><span>Subtotal</span><span>${fmtCur(payment.amount)}</span></div>
-      ${payment.status === 'partial' ? `<div class="total-row" style="color:#10b981"><span>Received</span><span>− ${fmtCur(payment.receivedAmount)}</span></div>` : ''}
+      ${received > 0 ? `<div class="total-row" style="color:#10b981"><span>Payment Received</span><span>− ${fmtCur(received)}</span></div>` : ''}
       <div class="total-row grand">
-        <span>${payment.status === 'partial' ? 'Balance Due' : 'Total'}</span>
-        <span>${payment.status === 'partial' ? fmtCur(payment.amount - (payment.receivedAmount || 0)) : fmtCur(payment.amount)}</span>
+        <span>${received > 0 ? 'Balance Due' : 'Total'}</span>
+        <span>${fmtCur(received > 0 ? balance : payment.amount)}</span>
       </div>
     </div>
   </div>
+
+  ${notesHtml}
+  ${termsHtml}
 
   <div class="footer">
     <p>Thank you for your business!</p>
@@ -1008,7 +1065,7 @@ const printInvoice = (payment, globalBranding = null) => {
 
 // ─── PAYMENTS TAB ──────────────────────────────────────────────────────────────
 
-const PaymentsTab = ({ payments, clients, loading, onAdd, onEdit, onDelete, onMarkReceived, onDownload, onSendBill, downloading, sendingBill }) => {
+const PaymentsTab = ({ payments, clients, loading, onAdd, onAddCustom, onEdit, onDelete, onMarkReceived, onDownload, onSendBill, downloading, sendingBill }) => {
     const [filterClient, setFilterClient] = useState('');
     const [filterMonth, setFilterMonth] = useState('');
     const [filterYear, setFilterYear] = useState('');
@@ -1060,6 +1117,10 @@ const PaymentsTab = ({ payments, clients, loading, onAdd, onEdit, onDelete, onMa
                         <span className="font-bold text-emerald-600">{fmtINR(totalReceived)}</span> received ·{' '}
                         <span className="font-bold text-amber-600">{fmtINR(totalPending)}</span> pending
                     </div>
+                    <button onClick={onAddCustom}
+                        className="px-4 py-2 bg-white border border-indigo-200 hover:bg-indigo-50 text-indigo-700 font-bold rounded-xl text-sm flex items-center gap-2 shadow-sm">
+                        <i className="fa-solid fa-file-invoice text-xs" /> Custom Bill
+                    </button>
                     <button onClick={onAdd}
                         className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm flex items-center gap-2 shadow-md">
                         <i className="fa-solid fa-plus text-xs" /> Record Payment
@@ -1098,16 +1159,26 @@ const PaymentsTab = ({ payments, clients, loading, onAdd, onEdit, onDelete, onMa
                                 {filtered.map(p => (
                                     <tr key={p._id} className="border-b border-slate-50 hover:bg-slate-50/50 transition">
                                         <td className="px-4 py-3">
-                                            <div className="font-bold text-slate-800">{p.clientName}</div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-bold text-slate-800">{p.clientName}</span>
+                                                {p.isCustomBill && (
+                                                    <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 border border-indigo-100">CUSTOM</span>
+                                                )}
+                                            </div>
                                             {p.clientCompany && <div className="text-xs text-slate-400">{p.clientCompany}</div>}
+                                            {p.isCustomBill && p.customServiceName && (
+                                                <div className="text-[11px] text-slate-400 mt-0.5">{p.customServiceName}</div>
+                                            )}
                                         </td>
                                         <td className="px-4 py-3 text-center text-xs font-medium text-slate-600">
                                             {MONTHS[(p.billingMonth || 1) - 1].slice(0, 3)} {p.billingYear}
                                         </td>
                                         <td className="px-4 py-3 text-right">
                                             <div className="font-bold text-slate-800">{fmtINR(p.amount)}</div>
-                                            {p.status === 'partial' && (
-                                                <div className="text-xs text-emerald-600">Recv: {fmtINR(p.receivedAmount)}</div>
+                                            {(p.receivedAmount > 0 && p.receivedAmount < p.amount) && (
+                                                <div className="text-xs text-emerald-600">
+                                                    Recv: {fmtINR(p.receivedAmount)} · Bal: {fmtINR(p.amount - p.receivedAmount)}
+                                                </div>
                                             )}
                                         </td>
                                         <td className="px-4 py-3 text-center">
@@ -1181,6 +1252,7 @@ const AgencyFinanceView = () => {
 
     const [clientModal, setClientModal] = useState({ open: false, initial: null });
     const [payModal, setPayModal] = useState({ open: false, initial: null });
+    const [customBillOpen, setCustomBillOpen] = useState(false);
 
     const fetchSummary = useCallback(async (p) => {
         setLoading(true);
@@ -1280,6 +1352,13 @@ const AgencyFinanceView = () => {
         fetchSummary(period);
     };
 
+    const handleCustomBillSaved = () => {
+        showSuccess('Custom bill created.');
+        setCustomBillOpen(false);
+        fetchPayments();
+        fetchSummary(period);
+    };
+
     // ── Invoice PDF Download ───────────────────────────────────────────────────────────
     // ── Agency Global Branding ─────────────────────────────────────────────────────────
     const [globalBranding, setGlobalBranding] = useState(null);
@@ -1320,8 +1399,8 @@ const AgencyFinanceView = () => {
     const handleSendBill = async (p) => {
         setSendingBill(p._id);
         try {
-            await api.post(`/superadmin/agency-finance/payments/${p._id}/send-bill`);
-            showSuccess(`Invoice sent to ${p.clientName} via Email & WhatsApp!`);
+            const res = await api.post(`/superadmin/agency-finance/payments/${p._id}/send-bill`);
+            showSuccess(res.data?.message || `Invoice sent to ${p.clientName}.`);
         } catch (err) {
             showError(err.response?.data?.message || 'Failed to send invoice. Check email/WhatsApp settings.');
         } finally {
@@ -1408,6 +1487,7 @@ const AgencyFinanceView = () => {
                     clients={clients}
                     loading={tabLoading}
                     onAdd={() => setPayModal({ open: true, initial: null })}
+                    onAddCustom={() => setCustomBillOpen(true)}
                     onEdit={(p) => setPayModal({ open: true, initial: p })}
                     onDelete={handleDeletePayment}
                     onMarkReceived={handleMarkReceived}
@@ -1444,6 +1524,12 @@ const AgencyFinanceView = () => {
                 onSuccess={handlePaymentSaved}
                 clients={clients}
                 initial={payModal.initial}
+            />
+            <CustomBillModal
+                isOpen={customBillOpen}
+                onClose={() => setCustomBillOpen(false)}
+                onSuccess={handleCustomBillSaved}
+                clients={clients}
             />
         </div>
     );

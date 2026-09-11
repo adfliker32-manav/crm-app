@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getSequences, createSequence, updateSequence, deleteSequence, getEnrollments, manualEnroll } = require('../controllers/sequenceController');
+const { getSequences, createSequence, updateSequence, deleteSequence, getEnrollments, manualEnroll, resumeEnrollmentById } = require('../controllers/sequenceController');
 
 const { authMiddleware, requireFeature } = require('../middleware/authMiddleware');
+const { validate, schemas } = require('../middleware/validateRequest');
 const checkPermission = require('../middleware/checkPermission');
 const validateObjectId = require('../middleware/validateObjectId');
 
@@ -12,6 +13,12 @@ router.use(checkPermission('manageTeam'));
 
 // Static routes BEFORE dynamic /:id to prevent shadowing
 router.get('/enrollments', getEnrollments);
+// Reads nothing from the body — the enrollment id in the path is the whole
+// request, so noBody is the correct schema rather than a guessed field list.
+router.post('/enrollments/:enrollmentId/resume',
+    validateObjectId({ params: ['enrollmentId'] }),
+    validate(schemas.noBody),
+    resumeEnrollmentById);
 
 router.get('/', getSequences);
 router.post('/', createSequence);
