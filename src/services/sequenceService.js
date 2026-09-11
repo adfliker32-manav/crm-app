@@ -110,23 +110,50 @@ const enrollLeadInSequences = async (lead, triggerType, triggerStage = null) => 
     }
 };
 
-// ── A step that sent nothing must say so on the lead ──────────────────────────
-// Every silent exit from executeStepAction goes through here. Until it did, a step
-// that never reached the customer was indistinguishable from one that did: the only
-// trace was a line in the server log, so "the email went out but the WhatsApp did
-// not" was invisible from the CRM.
-const recordStepSkipped = async (lead, step, sequenceName, why) => {
-    const isEmailStep = step.action?.type === 'SEND_EMAIL';
-    console.warn(
-        `[Sequence] "${sequenceName}" step ${step.stepNumber} skipped for lead ${lead._id} - ${why}`
-    );
+// ── Which channels does this step send? ───────────────────────────────────────
+// A step STORES the setup for both channels and, since the sequence-level switches
+// exist, can SEND both at once. Content gates each side, so a two-channel sequence
+// whose step only has a WhatsApp template quietly sends only WhatsApp instead of
+// logging a missing-email complaint on every lead.
+//
+// Both switches null = a sequence saved before they existed. Its steps carry the
+// old one-channel-per-step meaning in action.type, and that is what it keeps doing
+// until someone opens the sequence and saves it.
+const resolveStepChannels = (sequence, step) => {
+    const action = step?.action || {};
+    const hasWhatsApp = !!action.templateId;
+    const hasEmail = !!(action.emailTemplateId || String(action.subject || '').trim());
+
+    const waSwitch = sequence?.sendWhatsApp;
+    const emailSwitch = sequence?.sendEmail;
+    const legacy = (waSwitch === null || waSwitch === undefined) &&
+                   (emailSwitch === null || emailSwitch === undefined);
+
+    if (legacy) {
+        return {
+            whatsapp: action.type === 'SEND_WHATSAPP' && hasWhatsApp,
+            email: action.type === 'SEND_EMAIL' && hasEmail,
+            legacy: true
+        };
+    }
+
+    return { whatsapp: !!waSwitch && hasWhatsApp, email: !!emailSwitch && hasEmail, legacy: false };
+};
+
+// ── What a step did, on the lead ──────────────────────────────────────────────
+// Every outcome that is not a plain successful send goes through here. Until it
+// did, a step that never reached the customer was indistinguishable from one that
+// did: the only trace was a line in the server log, so "the email went out but the
+// WhatsApp did not" was invisible from the CRM. The channel is explicit because a
+// step can now send two, and "which half failed" is the whole question.
+const recordStepOutcome = async (lead, step, sequenceName, channel, text) => {
     await Lead.findByIdAndUpdate(lead._id, {
         $push: {
             history: {
                 $each: [{
-                    type: isEmailStep ? 'Email' : 'WhatsApp',
+                    type: channel === 'Email' ? 'Email' : 'WhatsApp',
                     subType: 'Auto',
-                    content: `Sequence "${sequenceName}" step ${step.stepNumber} skipped - ${why}`,
+                    content: `Sequence "${sequenceName}" step ${step.stepNumber} (${channel}) ${text}`,
                     date: new Date()
                 }],
                 $slice: -100
@@ -135,134 +162,186 @@ const recordStepSkipped = async (lead, step, sequenceName, why) => {
     }).catch(() => {});
 };
 
+const recordStepSkipped = async (lead, step, sequenceName, why, channel) => {
+    const resolved = channel || (step.action?.type === 'SEND_EMAIL' ? 'Email' : 'WhatsApp');
+    console.warn(
+        `[Sequence] "${sequenceName}" step ${step.stepNumber} (${resolved}) skipped for lead ${lead._id} - ${why}`
+    );
+    await recordStepOutcome(lead, step, sequenceName, resolved, `skipped - ${why}`);
+};
+
+const recordStepFailed = async (lead, step, sequenceName, channel, message) => {
+    console.error(
+        `❌ [Sequence] "${sequenceName}" step ${step.stepNumber} (${channel}) failed for lead ${lead._id}: ${message}`
+    );
+    await recordStepOutcome(lead, step, sequenceName, channel, `FAILED: ${message}`);
+};
+
 // ── Execute the action for a single step ─────────────────────────────────────
-const executeStepAction = async (step, lead, sequenceName) => {
+// A step sends every channel the sequence has switched on and the step has content
+// for — both, if both are on. The two halves are independent on purpose: one
+// failing (a paused WhatsApp template, an SMTP outage) must never stop the other,
+// which is exactly what the old if/else-if chain did — it could only ever reach ONE
+// channel, so "the WhatsApp went but the email did not" had no way to be anything
+// else. Each half records its own outcome on the lead, named by channel.
+const executeStepAction = async (step, lead, sequenceName, sequence = null) => {
     const user = await User.findById(lead.userId).select('name companyName').lean();
     const tplContext = buildTemplateContext({
         lead,
         user
     });
 
-    if (step.action.type === 'SEND_WHATSAPP' && lead.phone && step.action.templateId) {
-        const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
+    const channels = resolveStepChannels(sequence, step);
 
-        // Meta rejects anything not APPROVED, so a rejected or quality-paused
-        // template was previously retried against the API on every enrolled lead.
-        const gate = await checkTemplateSendable(lead.userId.toString(), step.action.templateId);
-        if (!gate.ok) {
-            // THE silent one. A template that is no longer APPROVED (Meta paused or
-            // rejected it after the step was built) stopped the send here and wrote
-            // nothing anywhere the user could see - the sequence just appeared to
-            // skip WhatsApp while the email steps went out normally.
-            await recordStepSkipped(
-                lead, step, sequenceName,
-                `the WhatsApp template "${step.action.templateId}" is ${String(gate.reason).replace('status_', '')} ` +
-                `in this workspace. Get it approved in Meta and re-sync templates, then re-enrol the lead.`
-            );
-            return;
-        }
-
-        // Recorded centrally by whatsappOutboundRecorder - note there is no
-        // skipConversationRecord here any more. The hand-rolled copy that used to
-        // live in this spot recorded nothing at all when the lead had no existing
-        // thread (the normal case for proactive outreach), never linked the lead,
-        // never derived assignedTo, and never pushed the socket events - so even a
-        // stored message did not show up in an inbox that was already open.
-        await sendWhatsAppMessage(
-            lead.phone, step.action.templateId, lead.userId.toString(), null, gate.template?.language,
-            {
-                lead,
-                isAutomated: true,
-                automationSource: 'sequence',
-                source: `Sequence: ${sequenceName}`
-            }
+    if (!channels.whatsapp && !channels.email) {
+        const switchedOff = !channels.legacy && !sequence?.sendWhatsApp && !sequence?.sendEmail;
+        await recordStepSkipped(
+            lead, step, sequenceName,
+            switchedOff
+                ? 'no channel is switched on for this sequence'
+                : 'the step has nothing to send on the channels that are switched on'
         );
+        return;
+    }
 
-        await Lead.findByIdAndUpdate(lead._id, {
-            $push: {
-                history: {
-                    $each: [{ type: 'WhatsApp', subType: 'Auto', content: `Sequence "${sequenceName}": WhatsApp sent`, date: new Date() }],
-                    $slice: -100
-                }
-            }
-        });
-    } else if (step.action.type === 'SEND_EMAIL' && lead.email) {
-        const { sendEmail } = require('./emailService');
-
-        // The builder snapshots the chosen template's subject/body onto the step.
-        // That snapshot goes stale the moment the template is edited, and is absent
-        // entirely when a sequence is created through the API. An empty subject then
-        // makes sendEmail throw on its FIRST line - before resolveSendPolicy and
-        // recordBlocked exist - so the failure left no EmailLog row, no Inbox entry
-        // and no lead history. Resolve the template live; fall back to the snapshot
-        // only when the template is gone.
-        let rawSubject = step.action.subject;
-        let rawBody = step.action.body;
-
-        // A step keeps the setup for BOTH channels (see Sequence.StepSchema), and the
-        // email half keeps both composers, so emailTemplateId can still be present on
-        // a step whose email was last edited in Custom mode. emailMode is what decides.
-        // Only fall back to "a template id means template mode" for rows written
-        // before that field existed - which is exactly how they behaved when saved.
-        const usesEmailTemplate = step.action.emailMode
-            ? step.action.emailMode === 'template'
-            : !!step.action.emailTemplateId;
-
-        if (usesEmailTemplate && step.action.emailTemplateId) {
-            const EmailTemplate = require('../models/EmailTemplate');
-            const tpl = await EmailTemplate.findOne({
-                _id: step.action.emailTemplateId,
-                userId: lead.userId   // tenant-scoped: never read another workspace's template
-            }).select('subject body').lean();
-
-            if (tpl) {
-                rawSubject = tpl.subject;
-                rawBody = tpl.body;
+    // ── WhatsApp ─────────────────────────────────────────────────────────────
+    if (channels.whatsapp) {
+        try {
+            if (!lead.phone) {
+                await recordStepSkipped(lead, step, sequenceName, 'the lead has no phone number', 'WhatsApp');
             } else {
-                console.warn(
-                    `[Sequence] Email template ${step.action.emailTemplateId} not found for tenant ` +
-                    `${lead.userId} - falling back to the subject/body saved on the step.`
-                );
-            }
-        }
+                const { sendWhatsAppMessage, checkTemplateSendable } = require('./whatsappService');
 
-        if (!rawSubject || !String(rawSubject).trim()) {
-            throw new Error(
-                `Sequence "${sequenceName}" step ${step.stepNumber}: the email has no subject ` +
-                `(emailTemplateId: ${step.action.emailTemplateId || 'none'}). Re-save the step in the builder.`
-            );
-        }
+                // Meta rejects anything not APPROVED, so a rejected or quality-paused
+                // template was previously retried against the API on every enrolled lead.
+                const gate = await checkTemplateSendable(lead.userId.toString(), step.action.templateId);
+                if (!gate.ok) {
+                    // THE silent one. A template that is no longer APPROVED (Meta paused
+                    // or rejected it after the step was built) stopped the send here and
+                    // wrote nothing anywhere the user could see - the sequence just
+                    // appeared to skip WhatsApp while the email steps went out normally.
+                    await recordStepSkipped(
+                        lead, step, sequenceName,
+                        `the WhatsApp template "${step.action.templateId}" is ${String(gate.reason).replace('status_', '')} ` +
+                        `in this workspace. Get it approved in Meta and re-sync templates, then re-enrol the lead.`,
+                        'WhatsApp'
+                    );
+                } else {
+                    // Recorded centrally by whatsappOutboundRecorder - note there is no
+                    // skipConversationRecord here any more. The hand-rolled copy that used
+                    // to live in this spot recorded nothing at all when the lead had no
+                    // existing thread (the normal case for proactive outreach), never
+                    // linked the lead, never derived assignedTo, and never pushed the
+                    // socket events - so even a stored message did not show up in an inbox
+                    // that was already open.
+                    await sendWhatsAppMessage(
+                        lead.phone, step.action.templateId, lead.userId.toString(), null, gate.template?.language,
+                        {
+                            lead,
+                            isAutomated: true,
+                            automationSource: 'sequence',
+                            source: `Sequence: ${sequenceName}`
+                        }
+                    );
 
-        const subject = resolveTemplate(rawSubject, tplContext);
-        const body = resolveTemplate(rawBody || '', tplContext);
-        await sendEmail({
-            to: lead.email,
-            subject,
-            html: wrapEmailHtml(body),
-            bodyForInbox: body,
-            userId: lead.userId,
-            isAutomated: true,
-            triggerType: 'sequence',
-            leadId: lead._id,
-            maxRetries: 1 // FIX D6: background sends retry transient SMTP failures
-        });
-        await Lead.findByIdAndUpdate(lead._id, {
-            $push: {
-                history: {
-                    $each: [{ type: 'Email', subType: 'Auto', content: `Sequence "${sequenceName}": Email sent`, date: new Date() }],
-                    $slice: -100
+                    await Lead.findByIdAndUpdate(lead._id, {
+                        $push: {
+                            history: {
+                                $each: [{ type: 'WhatsApp', subType: 'Auto', content: `Sequence "${sequenceName}": WhatsApp sent`, date: new Date() }],
+                                $slice: -100
+                            }
+                        }
+                    });
                 }
             }
-        });
-    } else {
-        // Neither branch could run - almost always a lead with no phone (WhatsApp
-        // step) or no email address (Email step).
-        const why = step.action.type === 'SEND_EMAIL'
-            ? 'the lead has no email address'
-            : (!lead.phone ? 'the lead has no phone number' : 'the step has no WhatsApp template');
-        await recordStepSkipped(lead, step, sequenceName, why);
+        } catch (err) {
+            // Caught HERE, not by processSequenceStep: the email half below still has
+            // to run. processSequenceStep's catch stays as the backstop for anything
+            // thrown outside these two blocks.
+            await recordStepFailed(lead, step, sequenceName, 'WhatsApp', err.message);
+        }
+    }
+
+    // ── Email ────────────────────────────────────────────────────────────────
+    if (channels.email) {
+        try {
+            if (!lead.email) {
+                await recordStepSkipped(lead, step, sequenceName, 'the lead has no email address', 'Email');
+            } else {
+                const { sendEmail } = require('./emailService');
+
+                // The builder snapshots the chosen template's subject/body onto the step.
+                // That snapshot goes stale the moment the template is edited, and is absent
+                // entirely when a sequence is created through the API. An empty subject then
+                // makes sendEmail throw on its FIRST line - before resolveSendPolicy and
+                // recordBlocked exist - so the failure left no EmailLog row, no Inbox entry
+                // and no lead history. Resolve the template live; fall back to the snapshot
+                // only when the template is gone.
+                let rawSubject = step.action.subject;
+                let rawBody = step.action.body;
+
+                // A step keeps the setup for BOTH channels (see Sequence.StepSchema), and the
+                // email half keeps both composers, so emailTemplateId can still be present on
+                // a step whose email was last edited in Custom mode. emailMode is what decides.
+                // Only fall back to "a template id means template mode" for rows written
+                // before that field existed - which is exactly how they behaved when saved.
+                const usesEmailTemplate = step.action.emailMode
+                    ? step.action.emailMode === 'template'
+                    : !!step.action.emailTemplateId;
+
+                if (usesEmailTemplate && step.action.emailTemplateId) {
+                    const EmailTemplate = require('../models/EmailTemplate');
+                    const tpl = await EmailTemplate.findOne({
+                        _id: step.action.emailTemplateId,
+                        userId: lead.userId   // tenant-scoped: never read another workspace's template
+                    }).select('subject body').lean();
+
+                    if (tpl) {
+                        rawSubject = tpl.subject;
+                        rawBody = tpl.body;
+                    } else {
+                        console.warn(
+                            `[Sequence] Email template ${step.action.emailTemplateId} not found for tenant ` +
+                            `${lead.userId} - falling back to the subject/body saved on the step.`
+                        );
+                    }
+                }
+
+                if (!rawSubject || !String(rawSubject).trim()) {
+                    throw new Error(
+                        `Sequence "${sequenceName}" step ${step.stepNumber}: the email has no subject ` +
+                        `(emailTemplateId: ${step.action.emailTemplateId || 'none'}). Re-save the step in the builder.`
+                    );
+                }
+
+                const subject = resolveTemplate(rawSubject, tplContext);
+                const body = resolveTemplate(rawBody || '', tplContext);
+                await sendEmail({
+                    to: lead.email,
+                    subject,
+                    html: wrapEmailHtml(body),
+                    bodyForInbox: body,
+                    userId: lead.userId,
+                    isAutomated: true,
+                    triggerType: 'sequence',
+                    leadId: lead._id,
+                    maxRetries: 1 // FIX D6: background sends retry transient SMTP failures
+                });
+                await Lead.findByIdAndUpdate(lead._id, {
+                    $push: {
+                        history: {
+                            $each: [{ type: 'Email', subType: 'Auto', content: `Sequence "${sequenceName}": Email sent`, date: new Date() }],
+                            $slice: -100
+                        }
+                    }
+                });
+            }
+        } catch (err) {
+            await recordStepFailed(lead, step, sequenceName, 'Email', err.message);
+        }
     }
 };
+
 
 // ── Which step does this enrollment run right now? ────────────────────────────
 // The array index is re-derived from the step's stable id on every firing, so a
@@ -369,7 +448,9 @@ const processSequenceStep = async (enrollmentId) => {
     }
 
     try {
-        await executeStepAction(step, lead, sequence.name);
+        // The sequence itself is passed now: its channel switches decide which halves
+        // of the step actually send.
+        await executeStepAction(step, lead, sequence.name, sequence);
     } catch (err) {
         console.error(`❌ [Sequence] Step ${index} failed for enrollment ${enrollmentId}:`, err.message);
         // Continue to advance — don't retry indefinitely on a bad template name.
@@ -605,9 +686,11 @@ module.exports = {
     pauseLeadSequences,
     defineSequenceJobs,
     scheduleStepJob,
-    // resolveStepToRun is exported for its unit tests: it is the whole of the
-    // live-editing behaviour and is pure, so it can be tested without a database.
+    // Both of these are pure and carry the whole of their behaviour, so they are
+    // exported to be unit-tested without a database: resolveStepToRun decides WHICH
+    // step runs, resolveStepChannels decides which channels that step sends on.
     resolveStepToRun,
+    resolveStepChannels,
     resumeEnrollment,
     resumeEnrollmentsForSequence,
     recoverStalledEnrollments

@@ -44,6 +44,10 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
         triggerStage: '',
         stopOnReply: true,
         isActive: true,
+        // Both on by default: a sequence is a follow-up, and a follow-up that can use
+        // both channels is the point. Either can be switched off per sequence.
+        sendWhatsApp: true,
+        sendEmail: true,
         steps: [newStep()]
     };
     const [seq, setSeq] = useState(defaultSeq);
@@ -52,9 +56,20 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
         if (!isOpen) return;
         fetchContext();
         if (editingSequence) {
+            // A sequence saved before the channel switches existed has null on both.
+            // Derive them from what its steps were actually set to send, so opening it
+            // shows the truth - and saving it writes the switches explicitly.
+            const legacyChannels = editingSequence.sendWhatsApp === null || editingSequence.sendWhatsApp === undefined;
+            const stepTypes = (editingSequence.steps || []).map(s => s.action?.type);
             setSeq({
                 ...defaultSeq,
                 ...editingSequence,
+                sendWhatsApp: legacyChannels
+                    ? stepTypes.includes('SEND_WHATSAPP')
+                    : editingSequence.sendWhatsApp === true,
+                sendEmail: legacyChannels
+                    ? stepTypes.includes('SEND_EMAIL')
+                    : editingSequence.sendEmail === true,
                 triggerStage: editingSequence.triggerStage || '',
                 steps: (editingSequence.steps && editingSequence.steps.length)
                     ? editingSequence.steps.map((s, i) => ({
@@ -143,17 +158,27 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
         if (seq.trigger === 'STAGE_CHANGED' && !seq.triggerStage) {
             return showNotification('error', 'Pick a stage that triggers enrollment');
         }
+        if (!seq.sendWhatsApp && !seq.sendEmail) {
+            return showNotification('error', 'Switch on WhatsApp, email, or both — a sequence with no channel sends nothing');
+        }
+        // Mirrors validateSteps() on the server: a step must be able to send on at
+        // least one switched-on channel, and does not have to fill both.
         for (const [i, step] of seq.steps.entries()) {
-            if (step.action.type === 'SEND_WHATSAPP' && !step.action.templateId) {
+            const hasWhatsApp = !!step.action.templateId;
+            const hasEmail = step.action.useEmailTemplate
+                ? !!step.action.emailTemplateId
+                : !!(step.action.subject?.trim() && step.action.body?.trim());
+
+            if (seq.sendWhatsApp && !seq.sendEmail && !hasWhatsApp) {
                 return showNotification('error', `Step ${i + 1}: pick a WhatsApp template`);
             }
-            if (step.action.type === 'SEND_EMAIL') {
-                if (step.action.useEmailTemplate && !step.action.emailTemplateId) {
-                    return showNotification('error', `Step ${i + 1}: pick an email template`);
-                }
-                if (!step.action.useEmailTemplate && (!step.action.subject?.trim() || !step.action.body?.trim())) {
-                    return showNotification('error', `Step ${i + 1}: email subject and body are required`);
-                }
+            if (seq.sendEmail && !seq.sendWhatsApp && !hasEmail) {
+                return showNotification('error', step.action.useEmailTemplate
+                    ? `Step ${i + 1}: pick an email template`
+                    : `Step ${i + 1}: email subject and body are required`);
+            }
+            if (seq.sendWhatsApp && seq.sendEmail && !hasWhatsApp && !hasEmail) {
+                return showNotification('error', `Step ${i + 1}: add a WhatsApp template or an email — this step sends nothing`);
             }
             if (step.delayHours < 0) {
                 return showNotification('error', `Step ${i + 1}: delay cannot be negative`);
@@ -173,7 +198,10 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                     ? emailTemplates.find(t => t._id === action.emailTemplateId || t.id === action.emailTemplateId)
                     : null;
                 return {
-                    type: action.type,
+                    // Legacy field: the sequence's channel switches are what decide what
+                    // sends now. It stays required by the schema and is the fallback for
+                    // any reader that predates the switches, so keep it honest.
+                    type: seq.sendWhatsApp ? 'SEND_WHATSAPP' : 'SEND_EMAIL',
                     // WhatsApp half
                     templateId: action.templateId || null,
                     // Email half. emailMode records which composer is in use, so the
@@ -195,6 +223,8 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                 triggerStage: seq.trigger === 'STAGE_CHANGED' ? seq.triggerStage : null,
                 stopOnReply: seq.stopOnReply,
                 isActive: seq.isActive,
+                sendWhatsApp: seq.sendWhatsApp,
+                sendEmail: seq.sendEmail,
                 steps: seq.steps.map((s, i) => ({
                     // A new step has no id yet — the server mints one.
                     ...(s.stepId ? { stepId: s.stepId } : {}),
@@ -309,6 +339,36 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                         )}
                     </section>
 
+                    {/* Channels — what this sequence is allowed to send */}
+                    <section>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Channels</label>
+                        <div className="bg-slate-50/80 border border-slate-200/70 rounded-xl p-4 space-y-3">
+                            <ToggleRow
+                                checked={seq.sendWhatsApp}
+                                onChange={(v) => setSeq({ ...seq, sendWhatsApp: v })}
+                                title="Send WhatsApp"
+                                subtitle="Every step sends its WhatsApp template"
+                                icon="fa-whatsapp fa-brands"
+                            />
+                            <ToggleRow
+                                checked={seq.sendEmail}
+                                onChange={(v) => setSeq({ ...seq, sendEmail: v })}
+                                title="Send Email"
+                                subtitle="Every step sends its email"
+                                icon="fa-envelope"
+                            />
+                            <p className="text-[11px] text-slate-500 pt-1 border-t border-slate-200/70">
+                                {seq.sendWhatsApp && seq.sendEmail
+                                    ? 'Both are on: each step sends its WhatsApp template AND its email, together.'
+                                    : seq.sendWhatsApp
+                                        ? 'Only WhatsApp goes out. Email written on a step is kept, but not sent.'
+                                        : seq.sendEmail
+                                            ? 'Only email goes out. WhatsApp templates on a step are kept, but not sent.'
+                                            : 'Nothing will be sent — switch on at least one channel.'}
+                            </p>
+                        </div>
+                    </section>
+
                     {/* Settings */}
                     <section className="bg-slate-50/80 border border-slate-200/70 rounded-xl p-4 space-y-3">
                         <ToggleRow
@@ -347,6 +407,8 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                                         total={seq.steps.length}
                                         whatsappTemplates={whatsappTemplates}
                                         emailTemplates={emailTemplates}
+                                        sendWhatsApp={seq.sendWhatsApp}
+                                        sendEmail={seq.sendEmail}
                                         onUpdate={(patch) => updateStep(idx, patch)}
                                         onUpdateAction={(patch) => updateStepAction(idx, patch)}
                                         onRemove={() => removeStep(idx)}
@@ -428,10 +490,14 @@ const ToggleRow = ({ checked, onChange, title, subtitle, icon }) => (
 const StepCard = ({
     step, idx, total,
     whatsappTemplates, emailTemplates,
+    sendWhatsApp, sendEmail,
     onUpdate, onUpdateAction,
     onRemove, onMoveUp, onMoveDown, formatDelay
 }) => {
-    const isWhatsApp = step.action.type === 'SEND_WHATSAPP';
+    // What this step sends is decided by the SEQUENCE now, not by a tab on the card.
+    // Both on means both go out together, which is what the per-step tabs made
+    // impossible however the sequence was set up.
+    const bothChannels = sendWhatsApp && sendEmail;
 
     // Split delayHours into days + hours for the UI
     const { days, hours } = hoursToDaysHours(step.delayHours);
@@ -477,48 +543,39 @@ const StepCard = ({
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                     {idx === 0 ? 'After enrollment' : 'After previous step'} · {formatDelay(step.delayHours)}
                 </span>
-                {/* A step holds both channels but sends only one — say which, out loud. */}
+                {/* Say out loud what this step will actually send. */}
                 <span className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2 py-0.5 rounded-full ring-1 ${
-                    isWhatsApp
-                        ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-                        : 'bg-blue-50 text-blue-700 ring-blue-200'
+                    bothChannels
+                        ? 'bg-violet-50 text-violet-700 ring-violet-200'
+                        : sendWhatsApp
+                            ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                            : 'bg-blue-50 text-blue-700 ring-blue-200'
                 }`}>
-                    <i className={`${isWhatsApp ? 'fa-brands fa-whatsapp' : 'fa-solid fa-envelope'} text-[10px]`}></i>
-                    Sends {isWhatsApp ? 'WhatsApp' : 'Email'}
+                    {sendWhatsApp && <i className="fa-brands fa-whatsapp text-[10px]"></i>}
+                    {sendEmail && <i className="fa-solid fa-envelope text-[10px]"></i>}
+                    Sends {bothChannels ? 'WhatsApp + Email' : sendWhatsApp ? 'WhatsApp' : 'Email'}
                 </span>
             </div>
 
             <div className="ml-12 bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition">
 
-                {/* Action type tabs + controls */}
+                {/* Controls. The channel tabs that used to live here are gone: the
+                    sequence's own switches decide the channels, so a step no longer
+                    has a "selected" one that silently excluded the other. */}
                 <div className="flex items-center justify-between mb-3 gap-2">
-                    <div className="inline-flex bg-slate-100 p-1 rounded-lg">
-                        <button
-                            type="button"
-                            onClick={() => onUpdateAction({ type: 'SEND_WHATSAPP' })}
-                            className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${
-                                isWhatsApp ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                            }`}
-                        >
-                            <i className="fa-brands fa-whatsapp"></i> WhatsApp
-                            {!isWhatsApp && hasWhatsAppSetup(step.action) && (
-                                <span title="Saved — switch to this tab to send WhatsApp instead"
-                                    className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                            )}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => onUpdateAction({ type: 'SEND_EMAIL' })}
-                            className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${
-                                !isWhatsApp ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                            }`}
-                        >
-                            <i className="fa-solid fa-envelope"></i> Email
-                            {isWhatsApp && hasEmailSetup(step.action) && (
-                                <span title="Saved — switch to this tab to send Email instead"
-                                    className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                            )}
-                        </button>
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400 font-medium">
+                        {hasWhatsAppSetup(step.action) && !sendWhatsApp && (
+                            <span title="Kept, but this sequence has WhatsApp switched off"
+                                className="inline-flex items-center gap-1 text-slate-400">
+                                <i className="fa-brands fa-whatsapp"></i> saved, not sending
+                            </span>
+                        )}
+                        {hasEmailSetup(step.action) && !sendEmail && (
+                            <span title="Kept, but this sequence has Email switched off"
+                                className="inline-flex items-center gap-1 text-slate-400">
+                                <i className="fa-solid fa-envelope"></i> saved, not sending
+                            </span>
+                        )}
                     </div>
 
                     <div className="flex items-center gap-1">
@@ -588,11 +645,14 @@ const StepCard = ({
                     </div>
                 </div>
 
-                {/* ── Action body ────────────────────────────────────────────── */}
-                {isWhatsApp ? (
+                {/* ── Action body — one section per switched-on channel ───────── */}
+                <div className="space-y-4">
+                {sendWhatsApp && (
                     /* WhatsApp — unchanged template dropdown */
                     <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">WhatsApp Template</label>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                            <i className="fa-brands fa-whatsapp text-emerald-500 mr-1"></i> WhatsApp Template
+                        </label>
                         {whatsappTemplates.length === 0 ? (
                             <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center gap-2">
                                 <i className="fa-solid fa-triangle-exclamation"></i>
@@ -611,9 +671,14 @@ const StepCard = ({
                             </select>
                         )}
                     </div>
-                ) : (
+                )}
+
+                {sendEmail && (
                     /* Email — template picker OR custom compose */
                     <div className="space-y-3">
+                        <label className="block text-xs font-semibold text-slate-600">
+                            <i className="fa-solid fa-envelope text-blue-500 mr-1"></i> Email
+                        </label>
 
                         {/* Toggle: use template vs write custom */}
                         <div className="flex items-center gap-2">
@@ -706,6 +771,7 @@ const StepCard = ({
                         )}
                     </div>
                 )}
+                </div>
             </div>
         </div>
     );

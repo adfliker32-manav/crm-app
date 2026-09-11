@@ -188,7 +188,9 @@ test('createSequence and updateSequence both validate step content', () => {
         assert.notStrictEqual(start, -1, `${fn} not found — was it renamed?`);
         const body = src.slice(start, src.indexOf('\n};', start));
         assert.ok(
-            /validateSteps\(steps\)/.test(body),
+            // validateSteps now also takes the sequence's channel switches, so the
+            // rules it applies match what the sequence will actually send.
+            /validateSteps\(steps(,\s*\w+)?\)/.test(body),
             `${fn} must reject a step that has no way to send — the builder is the ` +
             'only other guard, and the API bypasses it'
         );

@@ -50,6 +50,17 @@ const SequenceSchema = new mongoose.Schema({
     // Pause/stop the sequence when the lead sends any WhatsApp reply
     stopOnReply: { type: Boolean, default: true },
 
+    // Which channels this sequence sends on. Both can be on: a step then sends its
+    // WhatsApp template AND its email, together, at that step's time.
+    //
+    // Before these existed each step sent exactly ONE channel - the tab that was
+    // selected in the builder - which meant a sequence could never do both at once
+    // no matter how it was set up. null on either flag = a sequence saved before
+    // this existed: fall back to the per-step action.type, so nothing that was
+    // running changes behaviour until it is opened and saved again.
+    sendWhatsApp: { type: Boolean, default: null },
+    sendEmail:    { type: Boolean, default: null },
+
     steps: [StepSchema],
 
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

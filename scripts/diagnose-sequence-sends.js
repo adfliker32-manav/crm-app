@@ -5,9 +5,10 @@
  *   "The email went out but the WhatsApp did not" has several causes that all
  *   look identical from the Sequences screen, and only one of them is a failure:
  *
- *     1. The step SENDS email. A step stores the setup for both channels but
- *        sends exactly one — whichever tab is selected. A step with a WhatsApp
- *        template saved on it still sends only email if its channel is Email.
+ *     1. The channel is switched off for that sequence, so its content is stored
+ *        but never sent. A sequence saved before the switches existed has them
+ *        unset, and each of its steps still sends only its own single type —
+ *        opening it in the builder and saving switches both channels on.
  *     2. The WhatsApp template is no longer APPROVED in this workspace, so the
  *        send is refused before it reaches Meta.
  *     3. The lead has no phone number.
@@ -95,9 +96,20 @@ async function main() {
             ? counts.map(c => `${c._id}: ${c.n}`).join(', ')
             : 'no enrollments yet';
 
+        const legacyChannels = seq.sendWhatsApp === null || seq.sendWhatsApp === undefined;
+        const waOn = legacyChannels ? null : seq.sendWhatsApp === true;
+        const emailOn = legacyChannels ? null : seq.sendEmail === true;
+
         console.log('─'.repeat(78));
         console.log(`${seq.name}   [${seq.isActive ? 'ACTIVE' : 'INACTIVE'}]  trigger: ${seq.trigger}`);
         console.log(`  enrollments — ${countLine}`);
+        console.log(legacyChannels
+            ? `${WARN} channels: not set (saved before the channel switches). Each step sends only `
+              + `its own type. Open the sequence and save it to switch both channels on.`
+            : `  channels — WhatsApp: ${waOn ? 'ON' : 'off'}, Email: ${emailOn ? 'ON' : 'off'}`);
+        if (!legacyChannels && !waOn && !emailOn) {
+            console.log(`${BAD} both channels are switched off - this sequence sends nothing at all`);
+        }
 
         if (!seq.isActive) {
             console.log(`${BAD} the sequence is switched off: due steps are held until it is switched back on`);
@@ -107,10 +119,22 @@ async function main() {
         for (let i = 0; i < steps.length; i++) {
             const step = steps[i];
             const action = step.action || {};
-            const sends = action.type === 'SEND_EMAIL' ? 'email' : 'whatsapp';
-            console.log(`\n  Step ${i + 1}  (wait ${step.delayHours || 0}h)  SENDS: ${sends.toUpperCase()}`);
+            const hasWa = !!action.templateId;
+            const hasEmail = !!(action.emailTemplateId || String(action.subject || '').trim());
 
-            if (sends === 'whatsapp') {
+            // The same rule the engine uses (resolveStepChannels): a switched-on
+            // channel sends only if the step has content for it, and a sequence saved
+            // before the switches falls back to the step's own type.
+            const sendsWa = legacyChannels ? (action.type === 'SEND_WHATSAPP' && hasWa) : (waOn && hasWa);
+            const sendsEmail = legacyChannels ? (action.type === 'SEND_EMAIL' && hasEmail) : (emailOn && hasEmail);
+            const label = [sendsWa && 'WHATSAPP', sendsEmail && 'EMAIL'].filter(Boolean).join(' + ') || 'NOTHING';
+
+            console.log(`\n  Step ${i + 1}  (wait ${step.delayHours || 0}h)  SENDS: ${label}`);
+            if (label === 'NOTHING') {
+                console.log(`${BAD} this step sends nothing - no content for any switched-on channel`);
+            }
+
+            if (sendsWa) {
                 const name = action.templateId;
                 if (!name) {
                     console.log(`${BAD} no WhatsApp template on this step - nothing can be sent`);
@@ -128,11 +152,15 @@ async function main() {
                     }
                 }
 
-                if (action.emailTemplateId || action.subject) {
-                    console.log(`${WARN} this step also has email content saved, but it SENDS WhatsApp.`);
-                    console.log(`       That is expected: a step keeps both, sends one. Add a second step for the email.`);
+                if (hasEmail && !sendsEmail) {
+                    console.log(`${WARN} this step has email content saved but is NOT sending it.`);
+                    console.log(`       ${legacyChannels
+                        ? 'Open the sequence and save it to switch the Email channel on.'
+                        : 'Switch on Email at the top of the sequence to send both together.'}`);
                 }
-            } else {
+            }
+
+            if (sendsEmail) {
                 if (action.emailMode === 'template' || (!action.emailMode && action.emailTemplateId)) {
                     const tpl = action.emailTemplateId
                         ? await EmailTemplate.findOne({ _id: action.emailTemplateId, userId: tenantId }).select('name subject').lean()
@@ -146,10 +174,11 @@ async function main() {
                     console.log(`${OK} custom email, subject "${String(action.subject).slice(0, 50)}"`);
                 }
 
-                if (action.templateId) {
-                    console.log(`${WARN} this step has the WhatsApp template "${action.templateId}" saved, but it SENDS EMAIL.`);
-                    console.log(`       >>> If you expected WhatsApp here, switch this step's tab to WhatsApp,`);
-                    console.log(`           or add a separate WhatsApp step (0h delay sends both at once).`);
+                if (hasWa && !sendsWa) {
+                    console.log(`${WARN} this step has the WhatsApp template "${action.templateId}" saved but is NOT sending it.`);
+                    console.log(`       ${legacyChannels
+                        ? 'Open the sequence and save it to switch the WhatsApp channel on.'
+                        : 'Switch on WhatsApp at the top of the sequence to send both together.'}`);
                 }
             }
         }

@@ -7,19 +7,51 @@ const mongoose = require('mongoose');
 // to send. That failure surfaces nowhere useful: enrollment succeeds, the job
 // fires, and sendEmail throws inside a catch, leaving no log row and no history.
 // Refuse it at the door instead.
-const validateSteps = (steps) => {
+// `channels` is the sequence's { sendWhatsApp, sendEmail } switches, or null for a
+// payload that does not carry them (an API client, or a sequence saved before they
+// existed) - those keep being judged by each step's own action.type.
+const validateSteps = (steps, channels = null) => {
+    const wantsWhatsApp = channels ? channels.sendWhatsApp === true : null;
+    const wantsEmail = channels ? channels.sendEmail === true : null;
+
+    if (channels && !wantsWhatsApp && !wantsEmail) {
+        return 'Switch on WhatsApp, email, or both — a sequence with no channel sends nothing';
+    }
+
     for (const [i, step] of (steps || []).entries()) {
         const action = step?.action || {};
-        // Only the channel this step SENDS is validated. A step now carries the setup
-        // for both channels so the builder never discards the tab you are not on, and
-        // the unused half is allowed to be blank, half-filled, or stale.
-        if (action.type === 'SEND_WHATSAPP' && !action.templateId) {
+        const hasWhatsApp = !!action.templateId;
+        // emailMode absent = a legacy row or an API client: fall back to the old
+        // derivation so nothing that used to save starts failing.
+        const usesTemplate = action.emailMode ? action.emailMode === 'template' : !!action.emailTemplateId;
+        const hasEmail = usesTemplate ? !!action.emailTemplateId : !!String(action.subject || '').trim();
+
+        if (channels) {
+            // A step must be able to send on at least one switched-on channel; it does
+            // NOT have to fill both. A two-channel sequence may hold a WhatsApp-only
+            // step, and that step simply sends WhatsApp.
+            if (wantsWhatsApp && !wantsEmail && !hasWhatsApp) {
+                return `Step ${i + 1}: pick a WhatsApp template`;
+            }
+            if (wantsEmail && !wantsWhatsApp && !hasEmail) {
+                return `Step ${i + 1}: an email step needs either a template or a subject`;
+            }
+            if (wantsWhatsApp && wantsEmail && !hasWhatsApp && !hasEmail) {
+                return `Step ${i + 1}: add a WhatsApp template or an email — this step sends nothing`;
+            }
+            // Half-configured email (template mode with nothing picked) is still a dud.
+            if (wantsEmail && action.emailMode === 'template' && !action.emailTemplateId
+                && String(action.subject || '').trim() === '' && !hasWhatsApp) {
+                return `Step ${i + 1}: an email step set to use a template needs one selected`;
+            }
+            continue;
+        }
+
+        // ── Legacy payload: the step's own type is the only signal ───────────
+        if (action.type === 'SEND_WHATSAPP' && !hasWhatsApp) {
             return `Step ${i + 1}: a WhatsApp step needs a template`;
         }
         if (action.type === 'SEND_EMAIL') {
-            // emailMode absent = a legacy row or an API client: fall back to the old
-            // derivation so nothing that used to save starts failing.
-            const usesTemplate = action.emailMode ? action.emailMode === 'template' : !!action.emailTemplateId;
             if (usesTemplate && !action.emailTemplateId) {
                 return `Step ${i + 1}: an email step set to use a template needs one selected`;
             }
@@ -30,6 +62,14 @@ const validateSteps = (steps) => {
     }
     return null;
 };
+
+// The two switches only count when the caller actually sent them - otherwise the
+// sequence keeps its per-step behaviour instead of being silently forced onto one.
+const channelsFromBody = (body) => (
+    body.sendWhatsApp === undefined && body.sendEmail === undefined
+        ? null
+        : { sendWhatsApp: body.sendWhatsApp === true, sendEmail: body.sendEmail === true }
+);
 
 // Every step carries a stable stepId so in-flight enrollments can be tracked by
 // identity instead of array position (editing a live sequence used to slide every
@@ -63,7 +103,8 @@ const createSequence = async (req, res) => {
             return res.status(400).json({ message: 'Name, trigger, and at least one step are required' });
         }
 
-        const stepError = validateSteps(steps);
+        const channels = channelsFromBody(req.body);
+        const stepError = validateSteps(steps, channels);
         if (stepError) return res.status(400).json({ message: stepError });
 
         const seq = await Sequence.create({
@@ -72,6 +113,10 @@ const createSequence = async (req, res) => {
             trigger,
             triggerStage: triggerStage || null,
             stopOnReply: stopOnReply !== undefined ? stopOnReply : true,
+            // null on both = the caller did not send them, so the sequence keeps the
+            // old one-channel-per-step meaning until it is saved from the builder.
+            sendWhatsApp: channels ? channels.sendWhatsApp : null,
+            sendEmail:    channels ? channels.sendEmail    : null,
             steps: normalizeSteps(steps),
             isActive: isActive !== undefined ? isActive : true,
             createdBy: req.user.userId || req.user.id
@@ -94,8 +139,23 @@ const updateSequence = async (req, res) => {
         if (trigger !== undefined) update.trigger = trigger;
         if (triggerStage !== undefined) update.triggerStage = triggerStage;
         if (stopOnReply !== undefined) update.stopOnReply = stopOnReply;
+        const channels = channelsFromBody(req.body);
+        if (channels) {
+            update.sendWhatsApp = channels.sendWhatsApp;
+            update.sendEmail = channels.sendEmail;
+        }
         if (steps !== undefined) {
-            const stepError = validateSteps(steps);
+            // Judged against the switches in THIS request when it carries them; against
+            // the ones already stored otherwise, so a rename cannot smuggle steps past
+            // the channel rules.
+            const existing = channels
+                ? channels
+                : await Sequence.findOne({ _id: id, tenantId: req.tenantId })
+                    .select('sendWhatsApp sendEmail').lean()
+                    .then(s => (s && (s.sendWhatsApp !== null || s.sendEmail !== null))
+                        ? { sendWhatsApp: s.sendWhatsApp === true, sendEmail: s.sendEmail === true }
+                        : null);
+            const stepError = validateSteps(steps, existing);
             if (stepError) return res.status(400).json({ message: stepError });
             update.steps = normalizeSteps(steps);
         }

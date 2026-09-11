@@ -189,11 +189,20 @@ test('every silent exit from a step is written to the lead', () => {
         'a blocked WhatsApp template must leave a trace on the lead, not only in the log'
     );
 
-    // 2 — no phone / no email / no template.
+    // 2 — no phone / no email, named by channel so "which half failed" is answerable.
     assert.ok(
-        /\} else \{[\s\S]{0,500}?await recordStepSkipped\(/.test(body),
-        'a lead with no email (or no phone) must not make the step vanish silently ' +
-        'while the enrolment advances as if it had sent'
+        /if \(!lead\.phone\) \{\s*[\r\n]+\s*await recordStepSkipped\([\s\S]{0,160}?'WhatsApp'\)/.test(body),
+        'a lead with no phone must not make the WhatsApp half vanish silently'
+    );
+    assert.ok(
+        /if \(!lead\.email\) \{\s*[\r\n]+\s*await recordStepSkipped\([\s\S]{0,160}?'Email'\)/.test(body),
+        'a lead with no email must not make the email half vanish silently'
+    );
+
+    // 3 — a step with nothing to send on the enabled channels.
+    assert.ok(
+        /if \(!channels\.whatsapp && !channels\.email\) \{[\s\S]{0,400}?await recordStepSkipped\(/.test(body),
+        'a step that matches no switched-on channel must say so'
     );
 
     // Neither path may return before recording.
@@ -202,14 +211,32 @@ test('every silent exit from a step is written to the lead', () => {
         'the bare console.warn + return is the bug'
     );
 
-    const recorder = src.slice(
+    // Both recorders funnel into one writer, so a skip and a per-channel failure are
+    // recorded the same way and neither can quietly stop writing.
+    const writer = src.slice(
+        src.indexOf('const recordStepOutcome'),
+        src.indexOf('\n};', src.indexOf('const recordStepOutcome'))
+    );
+    assert.ok(
+        /Lead\.findByIdAndUpdate\([\s\S]*?history:/.test(writer),
+        'recordStepOutcome must actually write the lead history entry'
+    );
+    assert.ok(
+        /type: channel === 'Email' \? 'Email' : 'WhatsApp'/.test(writer),
+        'the entry must be filed under the channel that failed, not the step type'
+    );
+
+    const skipped = src.slice(
         src.indexOf('const recordStepSkipped'),
         src.indexOf('\n};', src.indexOf('const recordStepSkipped'))
     );
-    assert.ok(
-        /Lead\.findByIdAndUpdate\([\s\S]*?history:/.test(recorder) && /skipped - /.test(recorder),
-        'recordStepSkipped must actually write the lead history entry'
+    assert.ok(/recordStepOutcome\([\s\S]*?skipped - /.test(skipped), 'a skip must reach the writer');
+
+    const failed = src.slice(
+        src.indexOf('const recordStepFailed'),
+        src.indexOf('\n};', src.indexOf('const recordStepFailed'))
     );
+    assert.ok(/recordStepOutcome\([\s\S]*?FAILED: /.test(failed), 'a per-channel failure must reach the writer');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
