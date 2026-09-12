@@ -367,6 +367,20 @@ describe('§6.1 POST /leads', () => {
         assert.strictEqual(res.code, 201);
         assert.strictEqual(S(DB.leads[0].assignedTo), AGENT_A);
     });
+
+    // The partner holds emails, not our ObjectIds — an id-only assignment left
+    // them with no key they could actually supply.
+    test('assignedToEmail assigns the lead at creation', async () => {
+        const res = await call('createLead', { body: { name: 'X', assignedToEmail: 'amit@company.com' } });
+        assert.strictEqual(res.code, 201);
+        assert.strictEqual(S(DB.leads[0].assignedTo), AGENT_A);
+    });
+
+    test("assignedToEmail cannot reach another workspace's user", async () => {
+        const res = await call('createLead', { body: { name: 'X', assignedToEmail: 'eve@rival.com' } });
+        assert.strictEqual(res.code, 400);
+        assert.match(res.payload.message, /does not match any user in this workspace/);
+    });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -475,6 +489,67 @@ describe('§6.4 PUT /leads/:id', () => {
         assert.strictEqual((await call('updateLead', { params: { id: theirs._id }, body: { status: 'Won' } })).code, 404);
         assert.strictEqual((await call('updateLead', { params: { id: mine._id }, body: { name: '  ' } })).code, 400);
     });
+
+    // This handler destructured every field BUT assignedTo, so a partner
+    // mirroring their own "lead assigned to Amit" event got 200 / success:true
+    // and nothing moved — a silent no-op, the worst answer for an integration.
+    describe('assignment', () => {
+        test('assigns by email and mirrors it onto the WhatsApp thread', async () => {
+            const l = seedLead();
+            const res = await call('updateLead', {
+                params: { id: l._id }, body: { assignedToEmail: 'amit@company.com' }
+            });
+            assert.strictEqual(res.code, 200);
+            assert.strictEqual(S(l.assignedTo), AGENT_A, 'the lead must actually change owner');
+            assert.strictEqual(S(res.payload.data.assignedTo), AGENT_A);
+            assert.strictEqual(calls.assign.length, 1, 'the chat has to follow the lead');
+            assert.match(l.history.at(-1).content, /Assigned to Amit via External API/);
+        });
+
+        test('assigns by our user id too', async () => {
+            const l = seedLead();
+            const res = await call('updateLead', { params: { id: l._id }, body: { assignedTo: AGENT_A } });
+            assert.strictEqual(res.code, 200);
+            assert.strictEqual(S(l.assignedTo), AGENT_A);
+        });
+
+        test('an explicit null unassigns', async () => {
+            const l = seedLead({ assignedTo: AGENT_A });
+            const res = await call('updateLead', { params: { id: l._id }, body: { assignedToEmail: null } });
+            assert.strictEqual(res.code, 200);
+            assert.strictEqual(l.assignedTo ?? null, null);
+            assert.strictEqual(calls.assign.length, 1);
+            assert.match(l.history.at(-1).content, /Unassigned via External API/);
+        });
+
+        test('an ordinary field update leaves the owner alone', async () => {
+            const l = seedLead({ assignedTo: AGENT_A });
+            await call('updateLead', { params: { id: l._id }, body: { dealValue: 500 } });
+            assert.strictEqual(S(l.assignedTo), AGENT_A);
+            assert.strictEqual(calls.assign.length, 0);
+        });
+
+        test('re-assigning to the same agent does not re-fire the mirror', async () => {
+            const l = seedLead({ assignedTo: AGENT_A });
+            await call('updateLead', { params: { id: l._id }, body: { assignedToEmail: 'amit@company.com' } });
+            assert.strictEqual(calls.assign.length, 0, 'an idempotent CRM push must stay quiet');
+        });
+
+        test("a user in another workspace is rejected, not silently ignored", async () => {
+            const l = seedLead();
+            for (const body of [{ assignedToEmail: 'eve@rival.com' }, { assignedTo: OUTSIDER }]) {
+                const res = await call('updateLead', { params: { id: l._id }, body });
+                assert.strictEqual(res.code, 400, `accepted an outsider via ${Object.keys(body)[0]}`);
+                assert.strictEqual(l.assignedTo ?? null, null);
+            }
+        });
+
+        test('an unknown email and a malformed id are both 400', async () => {
+            const l = seedLead();
+            assert.strictEqual((await call('updateLead', { params: { id: l._id }, body: { assignedToEmail: 'nobody@nowhere.com' } })).code, 400);
+            assert.strictEqual((await call('updateLead', { params: { id: l._id }, body: { assignedTo: 'not-an-id' } })).code, 400);
+        });
+    });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -577,10 +652,33 @@ describe('§4.1 POST /whatsapp/template — the follow-up automation flow', () =
     });
 
     test('languageCode defaults to the stored template language', async () => {
-        await call('sendWhatsAppTemplate', { body: { phone: '91987', templateName: 'follow_up_pricing' } });
+        const res = await call('sendWhatsAppTemplate', { body: { phone: '91987', templateName: 'follow_up_pricing' } });
         assert.strictEqual(calls.waTemplate[0].languageCode, 'en');
-        await call('sendWhatsAppTemplate', { body: { phone: '91987', templateName: 'follow_up_pricing', languageCode: 'en_US' } });
-        assert.strictEqual(calls.waTemplate[1].languageCode, 'en_US');
+        assert.strictEqual(res.payload.language, 'en');
+        assert.strictEqual(res.payload.warning, undefined, 'nothing to warn about when the caller said nothing');
+    });
+
+    // To Meta, (name, language) IS the template's identity — one approved as
+    // 'en' does not exist as 'en_US'. Passing the caller's value through meant
+    // our own docs example ("languageCode": "en_US") produced Meta error 132001
+    // wrapped in a 500, and every template send from the partner failed.
+    test('a languageCode that disagrees with the approved template does not go to Meta', async () => {
+        const res = await call('sendWhatsAppTemplate', {
+            body: { phone: '91987', templateName: 'follow_up_pricing', languageCode: 'en_US' }
+        });
+        assert.strictEqual(res.code, 200);
+        assert.strictEqual(calls.waTemplate[0].languageCode, 'en',
+            'the approved language wins over a mismatched caller value');
+        assert.strictEqual(res.payload.language, 'en');
+        assert.match(res.payload.warning, /approved in "en", not "en_US"/);
+    });
+
+    test('a matching languageCode is honoured without a warning', async () => {
+        const res = await call('sendWhatsAppTemplate', {
+            body: { phone: '91987', templateName: 'follow_up_pricing', languageCode: 'en' }
+        });
+        assert.strictEqual(calls.waTemplate[0].languageCode, 'en');
+        assert.strictEqual(res.payload.warning, undefined);
     });
 
     test('400 without templateName and without a recipient', async () => {

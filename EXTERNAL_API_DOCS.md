@@ -121,6 +121,26 @@ Update specific fields or move a lead to a new stage.
 }
 ```
 
+**Assigning the lead to an agent**
+
+Send `assignedToEmail` (or `assignedTo`, if you happen to hold our user id). Use
+the email — it is the key your own CRM already has.
+
+```json
+{
+  "assignedToEmail": "raj@yourcompany.com"
+}
+```
+
+Send `"assignedToEmail": null` to unassign. Omit the key entirely and the current
+owner is left alone, so an ordinary field update never moves a lead.
+
+The same two fields also work on `POST /leads`, so a lead can arrive already
+assigned.
+
+If **Settings → Lead Assignment → "WhatsApp follows lead assignment"** is on, the
+lead's WhatsApp thread moves to the new agent's inbox as well.
+
 ### 5. Send WhatsApp Message (Text)
 Send a direct WhatsApp text message to a lead or a specific phone number.
 
@@ -144,11 +164,16 @@ Send an approved Meta WhatsApp template.
 ```json
 {
   "phone": "+1234567890",
-  "templateName": "appointment_reminder",
-  "languageCode": "en_US"
+  "templateName": "appointment_reminder"
 }
 ```
 *(Variables in the template will be automatically resolved if you provide a `leadId` instead of just a `phone`)*
+
+**Leave `languageCode` out.** To Meta, a template's name *and* its language
+together are its identity: a template approved as `en` does not exist as `en_US`.
+We already know which language Meta approved, so omitting the field is always
+correct. If you do send a `languageCode` that disagrees, the message goes out in
+the approved language and the response carries a `warning` saying so.
 
 ### 7. Assign a WhatsApp Chat to an Agent
 Hand the WhatsApp conversation for a phone number to one of your agents. Use this

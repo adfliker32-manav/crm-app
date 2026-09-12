@@ -103,6 +103,48 @@ const describeAssignee = (assignedTo) => {
     return { assignedTo, assignedToName: null, assignedToEmail: null };
 };
 
+/**
+ * Resolve an assignment target, scoped to this workspace.
+ *
+ * Accepts `assignedToEmail` as well as `assignedTo`: a third-party CRM knows its
+ * users by email, not by our ObjectIds, and /whatsapp/assign-agent already
+ * speaks email — an id-only assignment left partners with no usable key.
+ *
+ * The scope check is the same one createLead has always done: an email or an id
+ * alone must never reach a user in someone else's account.
+ *
+ * @returns {{ok: false, message: string}}
+ *        | {{ok: true, userId: ObjectId|null, user: object|null}}
+ *          — userId null is an explicit unassign.
+ */
+const resolveAssignee = async (tenantId, { assignedTo, assignedToEmail } = {}) => {
+    const scope = { $or: [{ _id: tenantId }, { parentId: tenantId }] };
+
+    // Email wins when both are sent — it is the form the partner controls.
+    if (assignedToEmail !== undefined && assignedToEmail !== null && String(assignedToEmail).trim() !== '') {
+        const user = await User.findOne({ email: String(assignedToEmail).toLowerCase().trim(), ...scope })
+            .select('_id name email').lean();
+        if (!user) {
+            return { ok: false, message: '`assignedToEmail` does not match any user in this workspace.' };
+        }
+        return { ok: true, userId: user._id, user };
+    }
+
+    if (assignedTo !== undefined && assignedTo !== null && assignedTo !== '') {
+        if (!isValidId(assignedTo)) {
+            return { ok: false, message: 'Invalid `assignedTo` user ID.' };
+        }
+        const user = await User.findOne({ _id: assignedTo, ...scope }).select('_id name email').lean();
+        if (!user) {
+            return { ok: false, message: '`assignedTo` is not a member of this workspace.' };
+        }
+        return { ok: true, userId: user._id, user };
+    }
+
+    // An explicit null or '' on either key means "unassign".
+    return { ok: true, userId: null, user: null };
+};
+
 // Template names are Meta's, not ours: lowercase letters, digits and
 // underscores. Checking it here turns a caller's typo into a 400 that names the
 // problem instead of a 404 that reads as "you have no such template".
@@ -208,20 +250,15 @@ exports.createLead = async (req, res) => {
         if (email)       leadData.email      = String(email).slice(0, 200).toLowerCase();
 
         // `assignedTo` was accepted on nothing but ObjectId shape, so a caller
-        // could hand a lead to a user in a DIFFERENT workspace. Confirm the target
-        // is this tenant's owner or one of their agents before writing it.
-        if (assignedTo !== undefined && assignedTo !== null && assignedTo !== '') {
-            if (!isValidId(assignedTo)) {
-                return res.status(400).json({ success: false, message: 'Invalid `assignedTo` user ID.' });
+        // could hand a lead to a user in a DIFFERENT workspace. resolveAssignee
+        // confirms the target is this tenant's owner or one of their agents, and
+        // takes `assignedToEmail` too so a partner can assign by the key it has.
+        if (assignedTo !== undefined || req.body.assignedToEmail !== undefined) {
+            const resolved = await resolveAssignee(req.tenantId, req.body);
+            if (!resolved.ok) {
+                return res.status(400).json({ success: false, message: resolved.message });
             }
-            const assignee = await User.findOne({
-                _id: assignedTo,
-                $or: [{ _id: req.tenantId }, { parentId: req.tenantId }]
-            }).select('_id').lean();
-            if (!assignee) {
-                return res.status(400).json({ success: false, message: '`assignedTo` is not a member of this workspace.' });
-            }
-            leadData.assignedTo = assignee._id;
+            if (resolved.userId) leadData.assignedTo = resolved.userId;
         }
         if (customData && typeof customData === 'object' && !Array.isArray(customData)) {
             const safeCustom = {};
@@ -471,11 +508,48 @@ exports.updateLead = async (req, res) => {
             });
         }
 
+        // ── Assignment ────────────────────────────────────────────────────────
+        // This handler used to destructure everything BUT assignedTo, so a
+        // partner mirroring their own "lead assigned to Raj" event got a 200
+        // with success: true and nothing changed — a silent no-op, the worst
+        // possible answer for an integration. By id or by email; an explicit
+        // null unassigns. Absent on both keys ⇒ untouched, so an ordinary field
+        // update never disturbs the owner.
+        const assignmentRequested =
+            req.body.assignedTo !== undefined || req.body.assignedToEmail !== undefined;
+        let assignmentChanged = false;
+
+        if (assignmentRequested) {
+            const resolved = await resolveAssignee(req.tenantId, req.body);
+            if (!resolved.ok) {
+                return res.status(400).json({ success: false, message: resolved.message });
+            }
+            if (String(lead.assignedTo || '') !== String(resolved.userId || '')) {
+                lead.assignedTo = resolved.userId;
+                assignmentChanged = true;
+                lead.history.push({
+                    type:    'System',
+                    subType: 'Assignment',
+                    content: resolved.user
+                        ? `Assigned to ${resolved.user.name} via External API`
+                        : 'Unassigned via External API',
+                    date: new Date()
+                });
+            }
+        }
+
         await lead.save();
 
         // Fire stage-change automations if stage changed
         if (status && status !== prevStatus) {
             queueLeadStageChangeEffects(lead, prevStatus, { startedBy: 'api' });
+        }
+
+        // The WhatsApp thread is a DERIVED mirror of Lead.assignedTo. Without
+        // this the lead moved to the new agent and the chat stayed sitting in
+        // the old one's inbox — the same hub /whatsapp/assign-agent calls.
+        if (assignmentChanged) {
+            queueLeadAssignmentEffects(lead, req.tenantId.toString());
         }
 
         res.json({
@@ -486,6 +560,7 @@ exports.updateLead = async (req, res) => {
                 status:    lead.status,
                 dealValue: lead.dealValue,
                 tags:      lead.tags,
+                assignedTo: lead.assignedTo || null,
                 updatedAt: lead.updatedAt
             }
         });
@@ -655,12 +730,26 @@ exports.sendWhatsAppTemplate = async (req, res) => {
             system: { customData: { media } }
         });
         const components = buildMetaComponents(template.components || [], template.variableMapping, tplContext);
+
+        // To Meta, (name, language) IS the identity of a template — a template
+        // approved as "en" does not exist as "en_US". The stored row is synced
+        // from Meta, so its language is the approved one, and we already refused
+        // to send unless that row says APPROVED. Passing the caller's value
+        // straight through meant a mismatched `languageCode` (our own docs
+        // example said "en_US") came back as Meta error 132001 wrapped in an
+        // opaque 500. Honouring a value we know is wrong has no upside: the
+        // approved language wins, and the response says that it did.
+        const requestedLanguage  = languageCode ? String(languageCode).trim() : null;
+        const effectiveLanguage  = template.language || requestedLanguage;
+        const languageOverridden = !!(requestedLanguage && effectiveLanguage &&
+                                      requestedLanguage !== effectiveLanguage);
+
         const result = await sendWhatsAppMessage(
             toPhone,
             templateName,
             req.tenantId,
             components,
-            languageCode || template.language,
+            effectiveLanguage,
             // Recorded below instead, with the lead the partner actually named —
             // richer than the phone-number lookup the central path would do.
             { skipConversationRecord: true }
@@ -683,10 +772,29 @@ exports.sendWhatsAppTemplate = async (req, res) => {
             success: true,
             messageId: waMessageId,
             template: templateName,
+            language: effectiveLanguage,
             to: toPhone,
-            sentAt: new Date().toISOString()
+            sentAt: new Date().toISOString(),
+            ...(languageOverridden ? {
+                warning: `Template "${templateName}" is approved in "${effectiveLanguage}", not "${requestedLanguage}". ` +
+                         `It was sent in the approved language — drop \`languageCode\` from your request to silence this.`
+            } : {})
         });
     } catch (err) {
+        // A Meta rejection is the caller's problem to fix, not a server fault:
+        // returning 500 told the partner's client to retry a send that can only
+        // fail again, and hid the one field Meta actually named.
+        const metaError = err.response?.data?.error;
+        if (metaError) {
+            console.error('[ExtAPI] sendWhatsAppTemplate rejected by Meta:',
+                metaError.code, metaError.message);
+            return res.status(422).json({
+                success: false,
+                error:   'whatsapp_send_failed',
+                message: metaError.error_user_msg || metaError.message || 'WhatsApp rejected this template send.',
+                metaCode: metaError.code || null
+            });
+        }
         console.error('[ExtAPI] sendWhatsAppTemplate error:', err.message);
         res.status(500).json({ success: false, message: err.message || 'Failed to send template.' });
     }

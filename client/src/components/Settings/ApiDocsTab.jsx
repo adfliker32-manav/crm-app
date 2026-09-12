@@ -116,10 +116,11 @@ const ApiDocsTab = ({ apiKey }) => {
                 method="PUT"
                 path="/leads/:id"
                 title="Update a Lead"
-                description="Update specific fields or move a lead to a new stage in your pipeline."
+                description="Update specific fields, move a lead to a new stage, or hand it to an agent. Assign with assignedToEmail (or assignedTo, if you hold the user id) — send null to unassign, omit the key to leave the current owner alone. The same fields work on POST /leads. With 'WhatsApp follows lead assignment' on, the lead's chat moves to that agent's inbox too."
                 body={`{
   "status": "Follow Up",
-  "dealValue": 2000
+  "dealValue": 2000,
+  "assignedToEmail": "raj@yourcompany.com"
 }`}
             />
 
@@ -138,11 +139,10 @@ const ApiDocsTab = ({ apiKey }) => {
                 method="POST"
                 path="/whatsapp/template"
                 title="Send WhatsApp Template"
-                description="Send a pre-approved Meta WhatsApp template. Variables are auto-resolved if you provide a leadId."
+                description="Send a pre-approved Meta WhatsApp template. Variables are auto-resolved if you provide a leadId. Leave languageCode out — to Meta a template's name and language together are its identity (one approved as 'en' does not exist as 'en_US'), and we already know the approved language. Send a languageCode that disagrees and the message goes out in the approved language with a warning in the response."
                 body={`{
   "phone": "+1234567890",
-  "templateName": "appointment_reminder",
-  "languageCode": "en_US"
+  "templateName": "appointment_reminder"
 }`}
             />
 

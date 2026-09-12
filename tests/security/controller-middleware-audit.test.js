@@ -381,14 +381,30 @@ test('M5: ticket creation is rate limited', () => {
 
 test('M6: assignedTo must belong to the calling tenant', () => {
     const src = read('controllers', 'extApiController.js');
-    const createLead = src.slice(src.indexOf('exports.createLead'), src.indexOf('exports.listLeads'));
 
-    assert.match(createLead, /parentId: req\.tenantId/,
+    // The scope check lives in one shared helper now that BOTH createLead and
+    // updateLead assign (and both accept an email as well as an id) — checking
+    // it once here is what keeps the two paths from drifting apart.
+    const resolver = src.slice(src.indexOf('const resolveAssignee'), src.indexOf('const TEMPLATE_NAME_RE'));
+    assert.ok(resolver, 'resolveAssignee is the single scoping point for assignment');
+    assert.match(resolver, /parentId: tenantId/,
         'assignedTo must be verified against this workspace, not just checked for ObjectId shape');
-    assert.ok(
-        !/if \(assignedTo && isValidId\(assignedTo\)\) leadData\.assignedTo = assignedTo;/.test(createLead),
-        'the shape-only check must be gone'
-    );
+    assert.match(resolver, /isValidId\(assignedTo\)/,
+        'an id must still be shape-checked before it reaches the query');
+
+    // Every assigning handler has to go THROUGH the resolver rather than
+    // writing req.body straight onto the lead.
+    for (const [handler, end] of [
+        ['exports.createLead', 'exports.listLeads'],
+        ['exports.updateLead', 'exports.addNote']
+    ]) {
+        const body = src.slice(src.indexOf(handler), src.indexOf(end));
+        assert.match(body, /resolveAssignee\(req\.tenantId/, `${handler} must scope its assignment`);
+        assert.ok(
+            !/(leadData|lead)\.assignedTo\s*=\s*(req\.body\.)?assignedTo\b/.test(body),
+            `${handler}: an unverified assignedTo must never be written straight through`
+        );
+    }
 });
 
 test('M7: the External API checks for a slot conflict before booking', () => {
