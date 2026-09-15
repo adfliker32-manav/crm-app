@@ -17,6 +17,7 @@
 const axios = require('axios');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const storage = require('./storageService');
+const { tenantKey, AREAS } = require('./storageKeys');
 
 const META_GRAPH_URL = 'https://graph.facebook.com/v26.0';
 const META_API_TIMEOUT = 30000;          // media downloads are slower than API calls
@@ -54,11 +55,12 @@ function extFor(mimeType) {
  * @param {Object}  params
  * @param {string}  params.mediaId    Meta media id from the webhook payload
  * @param {string}  params.userId     Tenant that owns the conversation
+ * @param {string} [params.tenantId]  Workspace owner, for the storage folder (defaults to userId)
  * @param {string} [params.mimeType]  MIME from the webhook (re-read from Meta if absent)
  * @param {string} [params.waMessageId] Message to stamp; falls back to matching on mediaId
  * @returns {Promise<{ok: boolean, storageKey?: string, reason?: string}>}
  */
-async function mirrorInboundMedia({ mediaId, userId, mimeType, waMessageId }) {
+async function mirrorInboundMedia({ mediaId, userId, tenantId, mimeType, waMessageId }) {
     try {
         if (!mediaId || !userId) return { ok: false, reason: 'missing mediaId/userId' };
 
@@ -103,7 +105,8 @@ async function mirrorInboundMedia({ mediaId, userId, mimeType, waMessageId }) {
         });
 
         const contentLength = size || Number(download.headers['content-length']) || undefined;
-        const storageKey = `wa-inbound/${userId}/${mediaId}.${extFor(resolvedMime)}`;
+        // mediaId is Meta's numeric id — digits only, so it is a safe key segment.
+        const storageKey = tenantKey(tenantId || userId, AREAS.WHATSAPP_INBOUND, `${String(mediaId).replace(/\D/g, '')}.${extFor(resolvedMime)}`);
 
         await storage.putObject(storageKey, download.data, resolvedMime, { contentLength });
 
@@ -128,4 +131,34 @@ async function mirrorInboundMedia({ mediaId, userId, mimeType, waMessageId }) {
     }
 }
 
-module.exports = { mirrorInboundMedia, MAX_MEDIA_BYTES, extFor };
+/**
+ * Keep a durable copy of media WE send from the inbox.
+ *
+ * Outbound media used to live only on Meta, which deletes it after ~30 days —
+ * so a quotation PDF an agent sent disappeared from the chat history unless
+ * someone happened to open it in time. The bytes are already in memory at send
+ * time, so storing them costs one PUT.
+ *
+ * Best-effort: a storage failure must never fail a message the customer has
+ * already received. Returns the key, or null.
+ *
+ * @param {Object} params
+ * @param {string} params.tenantId  workspace owner (req.tenantId — never an agent id)
+ * @param {Buffer} params.buffer    the exact bytes sent to Meta
+ * @param {string} params.mimeType
+ * @returns {Promise<string|null>}
+ */
+async function storeOutboundMedia({ tenantId, buffer, mimeType }) {
+    try {
+        if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > MAX_MEDIA_BYTES) return null;
+        const { randomUUID } = require('crypto');
+        const key = tenantKey(tenantId, AREAS.WHATSAPP_OUTBOUND, `${randomUUID()}.${extFor(mimeType)}`);
+        await storage.putObject(key, buffer, mimeType || 'application/octet-stream', { contentLength: buffer.length });
+        return key;
+    } catch (err) {
+        console.error('[OutboundMedia] Could not store a copy of sent media:', err.message);
+        return null;
+    }
+}
+
+module.exports = { mirrorInboundMedia, storeOutboundMedia, MAX_MEDIA_BYTES, extFor };

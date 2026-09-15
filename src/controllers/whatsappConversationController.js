@@ -15,6 +15,7 @@ const mongoose = require('mongoose');
 const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
 const { escapeRegex } = require('../utils/controllerHelpers');
 const { collectMediaKeys, deleteMediaKeys, deleteConversations } = require('../services/whatsappConversationDeletion');
+const { storeOutboundMedia } = require('../services/inboundMediaService');
 
 const { getUserWhatsAppCredentials, getCompanyUserIds } = require('../utils/whatsappUtils');
 const { parseMetaError } = require('../utils/metaErrorUtils');
@@ -885,6 +886,9 @@ exports.sendMediaMessage = async (req, res) => {
         const waMessageId = sendRes.data.messages?.[0]?.id;
         console.log(`✅ Media message sent (${mediaType}):`, waMessageId);
 
+        // Durable copy — Meta deletes the media after ~30 days.
+        const storageKey = await storeOutboundMedia({ tenantId: req.tenantId, buffer, mimeType: mimetype });
+
         // Step 3: Save message record
         const message = new WhatsAppMessage({
             conversationId: conversation._id,
@@ -894,6 +898,7 @@ exports.sendMediaMessage = async (req, res) => {
             type: mediaType,
             content: {
                 mediaId: mediaId,
+                ...(storageKey ? { storageKey, storedAt: new Date(), fileSize: size } : {}),
                 caption: caption || undefined,
                 fileName: originalname,
                 mimeType: mimetype,
@@ -1062,6 +1067,11 @@ exports.sendMediaFromLibrary = async (req, res) => {
         const waMessageId = sendRes.data.messages?.[0]?.id;
         console.log(`✅ [MediaLibrary] Media message sent (${mediaType}):`, waMessageId);
 
+        // The chat keeps its OWN copy rather than pointing at the library file:
+        // deleting or replacing the asset later must not blank the chat history,
+        // and deleting the chat must never touch the library.
+        const storageKey = await storeOutboundMedia({ tenantId: req.tenantId, buffer, mimeType: mimetype });
+
         // Save message record
         const message = new WhatsAppMessage({
             conversationId: conversation._id,
@@ -1071,6 +1081,7 @@ exports.sendMediaFromLibrary = async (req, res) => {
             type: mediaType,
             content: {
                 mediaId: metaMediaId,
+                ...(storageKey ? { storageKey, storedAt: new Date(), fileSize: size } : {}),
                 caption: caption || undefined,
                 fileName: originalname,
                 mimeType: mimetype,
@@ -1153,7 +1164,7 @@ exports.downloadMediaProxy = async (req, res) => {
         // gate stays exactly where it was, before any bytes are fetched.
         const owningMsg = await WhatsAppMessage.findOne(
             { 'content.mediaId': String(mediaId), userId: { $in: companyUserIds } },
-            { 'content.storageKey': 1, 'content.mimeType': 1, conversationId: 1 }
+            { 'content.storageKey': 1, 'content.mimeType': 1, conversationId: 1, userId: 1, waMessageId: 1 }
         ).lean();
         if (!owningMsg) {
             console.warn(`🛑 [Media] Denied: user ${userId} -> mediaId ${mediaId}`);
@@ -1171,32 +1182,76 @@ exports.downloadMediaProxy = async (req, res) => {
             return res.status(404).json({ message: 'Media not found' });
         }
 
-        // Prefer the durable mirror in object storage. Meta purges media after
+        // Everything below runs only AFTER the two authorization checks above.
+        const wantsDownload = !!req.query.download;
+        const safeName = String(req.query.name || 'file').replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'file';
+        const storedMime = owningMsg.content?.mimeType || 'application/octet-stream';
+
+        // Prefer the durable copy in object storage. Meta purges media after
         // ~30 days, so for anything older this is the ONLY surviving copy.
-        // Messages that predate the mirror fall through to the Meta fetch.
-        let result = null;
         const storageKey = owningMsg.content?.storageKey;
         if (storageKey) {
+            const storage = require('../services/storageService');
+
+            // (1) R2: hand the browser a 5-minute signed link. Bytes go straight
+            // from storage to the viewer — no server memory, native range
+            // support for video seeking, and the bucket itself stays private.
             try {
-                const storage = require('../services/storageService');
-                const data = await storage.getBuffer(storageKey);
-                result = { data, mimeType: owningMsg.content?.mimeType || 'application/octet-stream' };
+                const signed = await storage.getSignedUrl(storageKey, {
+                    expiresIn: 300,
+                    contentType: storedMime,
+                    disposition: wantsDownload ? 'attachment' : 'inline',
+                    fileName: wantsDownload ? safeName : undefined
+                });
+                if (signed) {
+                    res.set('Cache-Control', 'private, max-age=240');
+                    res.set('Referrer-Policy', 'no-referrer');
+                    return res.redirect(302, signed);
+                }
+            } catch (signErr) {
+                console.warn(`[Media] Could not sign ${storageKey}, streaming instead:`, signErr.message);
+            }
+
+            // (2) No signing available (local driver) — stream it, never buffer.
+            try {
+                const obj = await storage.getObjectStream(storageKey, { range: req.headers.range });
+                res.set('Content-Type', storedMime);
+                res.set('X-Content-Type-Options', 'nosniff');
+                res.set('Cache-Control', 'private, max-age=86400, immutable');
+                res.set('Accept-Ranges', 'bytes');
+                if (wantsDownload) res.set('Content-Disposition', `attachment; filename="${safeName}"`);
+                if (obj.contentLength != null) res.set('Content-Length', String(obj.contentLength));
+                if (obj.partial && obj.contentRange) {
+                    res.status(206);
+                    res.set('Content-Range', obj.contentRange);
+                }
+                obj.stream.on('error', (e) => {
+                    console.error('[Media] storage stream error:', e.message);
+                    if (!res.headersSent) res.status(500).end(); else res.destroy();
+                });
+                return obj.stream.pipe(res);
             } catch (storageErr) {
                 console.warn(`[Media] Storage read failed for ${storageKey}, falling back to Meta:`, storageErr.message);
             }
         }
 
-        if (!result) {
-            const { downloadMedia } = require('../services/whatsappService');
-            result = await downloadMedia(mediaId, userId);
+        // (3) Legacy messages from before the mirror: fetch from Meta while it
+        // still has the file, and persist it now so it survives the 30 days.
+        const { downloadMedia } = require('../services/whatsappService');
+        const result = await downloadMedia(mediaId, userId);
 
-            // Backfill on demand: an un-mirrored media that is still fetchable
-            // gets persisted now, so it survives Meta's retention window.
-            if (!storageKey) {
-                const { mirrorInboundMedia } = require('../services/inboundMediaService');
-                mirrorInboundMedia({ mediaId, userId, mimeType: result.mimeType })
-                    .catch(err => console.error('[Media] Lazy mirror failed:', err.message));
-            }
+        if (!storageKey) {
+            const { mirrorInboundMedia } = require('../services/inboundMediaService');
+            // The MESSAGE's own userId + waMessageId: the stamp query must match
+            // the row. Passing the viewer's id (an agent) stored the bytes but
+            // never linked them to the message, orphaning them in storage.
+            mirrorInboundMedia({
+                mediaId,
+                userId: owningMsg.userId,
+                tenantId: req.tenantId,
+                waMessageId: owningMsg.waMessageId,
+                mimeType: result.mimeType
+            }).catch(err => console.error('[Media] Lazy mirror failed:', err.message));
         }
 
         const buffer = Buffer.from(result.data);
@@ -1204,6 +1259,7 @@ exports.downloadMediaProxy = async (req, res) => {
 
         // WhatsApp media is immutable per media ID — safe to cache aggressively.
         res.set('Content-Type', result.mimeType);
+        res.set('X-Content-Type-Options', 'nosniff');
         res.set('Cache-Control', 'private, max-age=86400, immutable');
         res.set('Accept-Ranges', 'bytes');
 

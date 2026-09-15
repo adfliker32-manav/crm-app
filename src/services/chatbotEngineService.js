@@ -2593,7 +2593,14 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                         const storage = require('./storageService');
                         const { getUserWhatsAppCredentials } = require('../utils/whatsappUtils');
                         
-                        resolvedAsset = await MediaAsset.findOne({ _id: node.data.mediaAssetId });
+                        // Scoped to this workspace. A flow is tenant-editable JSON, so an
+                        // unscoped lookup let a node name ANOTHER tenant's asset id and
+                        // send that tenant's file to its own customers.
+                        const assetOwners = await getCompanyUserIds(session.userId);
+                        resolvedAsset = await MediaAsset.findOne({
+                            _id: node.data.mediaAssetId,
+                            userId: { $in: assetOwners }
+                        });
                         if (resolvedAsset) {
                             let buffer = await storage.getBuffer(resolvedAsset.storageKey);
                             let mimetype = resolvedAsset.mimeType;
@@ -2641,21 +2648,26 @@ const executeNode = async (session, flow, nodeId, conversation = null, depth = 0
                     } catch (err) {
                         console.error(`⚠️ [Chatbot] Failed to upload MediaAsset ${node.data.mediaAssetId} to Meta:`, err.message);
                         // FIX #2: If the binary upload failed but mediaIdentifier is still
-                        // unset (no fallback mediaId/mediaUrl on the node), try the public
-                        // R2/storage URL so Meta can download the file itself.
+                        // unset (no fallback mediaId/mediaUrl on the node), give Meta a
+                        // short-lived signed link so it can download the file itself.
+                        // The bucket is private — there is no permanent public URL.
                         if (!mediaIdentifier && resolvedAsset?.storageKey) {
                             try {
                                 const storageFallback = require('./storageService');
-                                const publicUrl = storageFallback.getPublicUrl(resolvedAsset.storageKey);
-                                if (publicUrl) {
-                                    mediaIdentifier = publicUrl;
+                                const signedUrl = await storageFallback.getSignedUrl(resolvedAsset.storageKey, {
+                                    expiresIn: 60 * 60,
+                                    contentType: resolvedAsset.mimeType
+                                });
+                                if (signedUrl) {
+                                    mediaIdentifier = signedUrl;
                                     mediaAssetOriginalName = mediaAssetOriginalName || resolvedAsset.fileName;
-                                    console.warn(`⚠️ [Chatbot] Falling back to public URL for MediaAsset ${node.data.mediaAssetId}: ${publicUrl}`);
+                                    // Never log the URL itself — it is a bearer credential until it expires.
+                                    console.warn(`⚠️ [Chatbot] Falling back to a signed link for MediaAsset ${node.data.mediaAssetId}`);
                                 } else {
-                                    console.error(`❌ [Chatbot] No public URL available for MediaAsset ${node.data.mediaAssetId}. Media will not be sent.`);
+                                    console.error(`❌ [Chatbot] No signed link available for MediaAsset ${node.data.mediaAssetId}. Media will not be sent.`);
                                 }
                             } catch (urlErr) {
-                                console.error(`❌ [Chatbot] Public URL fallback also failed for MediaAsset ${node.data.mediaAssetId}:`, urlErr.message);
+                                console.error(`❌ [Chatbot] Signed link fallback also failed for MediaAsset ${node.data.mediaAssetId}:`, urlErr.message);
                             }
                         }
                     }

@@ -159,8 +159,9 @@ exports.downloadAttachment = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Attachment not found' });
         }
 
-        const expectedPrefix = `email-inbound/${userId}/`;
-        if (!String(att.storageKey).startsWith(expectedPrefix)) {
+        // Current (tenants/<t>/email-inbound/) or legacy layout.
+        const { isOwnedKey, AREAS } = require('../services/storageKeys');
+        if (!isOwnedKey(String(att.storageKey), userId, AREAS.EMAIL_INBOUND)) {
             console.warn(`[EmailAttachments] Refusing cross-tenant key ${att.storageKey} for tenant ${userId}`);
             return res.status(404).json({ success: false, message: 'Attachment not found' });
         }

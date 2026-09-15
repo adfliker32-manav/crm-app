@@ -40,6 +40,7 @@ const MediaAsset = require('../models/MediaAsset');
 const LeadDocument = require('../models/LeadDocument');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const storage = require('./storageService');
+const { tenantKey, AREAS } = require('./storageKeys');
 const parser = require('./documentParserService');
 const embeddings = require('./embeddingService');
 const aiCreditService = require('./aiCreditService');
@@ -404,7 +405,7 @@ async function createDocument(tenantId, { filePath, mimeType, originalName, size
     }
 
     // Unguessable, traversal-proof key — never derived from the client filename.
-    const storageKey = `knowledge-base/${tenantId}/${uuidv4()}${type.ext}`;
+    const storageKey = tenantKey(tenantId, AREAS.KNOWLEDGE_BASE, `${uuidv4()}${type.ext}`);
     const checksum = await sha256File(filePath);
 
     await storage.putObject(storageKey, fs.createReadStream(filePath), normalizeMime(mimeType) || 'application/octet-stream', {

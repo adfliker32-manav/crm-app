@@ -27,6 +27,7 @@ const WorkspaceSettings = require('../models/WorkspaceSettings');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const AgencySettings = require('../models/AgencySettings');
 const { OAuthGrant, OAuthAuthCode } = require('../models/OAuthClient');
+const { allTenantPrefixes } = require('./storageKeys');
 
 const USER_OWNED_MODELS = [
     Lead,
@@ -156,18 +157,20 @@ const purgeTenantStorage = async (userIds) => {
     }
 
     // ── Pass 2: sweep the prefixes that embed the tenant id ──────────────────
-    // Mirrors the layouts in mediaLibraryController, inboundMediaService,
-    // knowledgeBaseService, emailTemplateController and leadDocumentService.
+    // storageKeys.allTenantPrefixes() is the single list: tenants/<t>/ (the
+    // current layout — one prefix covers every area) plus every legacy prefix.
+    // The hand-maintained list this replaced had silently missed email-inbound/.
     for (const id of ids) {
         if (!id) continue;
-        const tenant = String(id);
-        for (const prefix of [
-            `${tenant}/`,                    // media library
-            `wa-inbound/${tenant}/`,         // inbound WhatsApp media
-            `knowledge-base/${tenant}/`,     // RAG documents
-            `email-attachments/${tenant}/`,  // email template attachments
-            `lead-docs/${tenant}/`           // lead file attachments
-        ]) {
+        let prefixes;
+        try {
+            prefixes = allTenantPrefixes(id);
+        } catch (err) {
+            console.error(`[Cleanup] Skipping prefix sweep for invalid tenant id "${id}":`, err.message);
+            failed++;
+            continue;
+        }
+        for (const prefix of prefixes) {
             try {
                 const res = await storage.deleteByPrefix(prefix);
                 deleted += res.deleted;

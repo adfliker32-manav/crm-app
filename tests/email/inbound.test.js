@@ -431,7 +431,7 @@ describe('inbound email — attachments are kept', () => {
         ]));
 
         assert.equal(puts.length, 1, 'the bytes must reach object storage');
-        assert.ok(puts[0].key.startsWith(`email-inbound/${TENANT}/`),
+        assert.ok(puts[0].key.startsWith(`tenants/${TENANT}/email-inbound/`),
             `key must be tenant-scoped, got ${puts[0].key}`);
 
         const [msg] = EmailMessage.__store;
@@ -458,7 +458,7 @@ describe('inbound email — attachments are kept', () => {
         ]));
 
         const key = puts[0].key;
-        assert.ok(key.startsWith(`email-inbound/${TENANT}/`), `got ${key}`);
+        assert.ok(key.startsWith(`tenants/${TENANT}/email-inbound/`), `got ${key}`);
         assert.ok(!key.includes('..'), `key must not contain traversal segments: ${key}`);
     });
 
@@ -468,7 +468,7 @@ describe('inbound email — attachments are kept', () => {
         ], '<../../../../evil@x>'));
 
         const key = puts[0].key;
-        assert.ok(key.startsWith(`email-inbound/${TENANT}/`), `got ${key}`);
+        assert.ok(key.startsWith(`tenants/${TENANT}/email-inbound/`), `got ${key}`);
         assert.ok(!key.includes('..'), `key must not contain traversal segments: ${key}`);
     });
 

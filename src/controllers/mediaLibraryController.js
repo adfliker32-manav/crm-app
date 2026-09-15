@@ -16,6 +16,7 @@ const MediaAsset = require('../models/MediaAsset');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const storage = require('../services/storageService');
+const { tenantKey, AREAS } = require('../services/storageKeys');
 
 // Per-type ceilings from Meta's Cloud API media limits.
 const MB = 1024 * 1024;
@@ -90,7 +91,9 @@ const toDto = (a) => ({
     mimeType:   a.mimeType,
     mediaType:  a.mediaType,
     size:       a.size,
-    url:        a.publicUrl,
+    // The bucket is private: permanent URLs are gone. Previews load through the
+    // authorized GET /:id/raw route, which hands back a short-lived signed link.
+    url:        null,
     folder:     a.folder,
     usageCount: a.usageCount,
     lastUsedAt: a.lastUsedAt,
@@ -186,9 +189,9 @@ exports.uploadAsset = async (req, res) => {
 
         // ── Push to object storage ───────────────────────────────────────
         const ext = rule.ext[mimetype] || path.extname(originalname).slice(0, 10) || '.bin';
-        const storageKey = `${req.tenantId}/${uuidv4()}${ext}`;
+        const storageKey = tenantKey(req.tenantId, AREAS.MEDIA_LIBRARY, `${uuidv4()}${ext}`);
         const stream = fs.createReadStream(tempPath);
-        const { url } = await storage.putObject(storageKey, stream, mimetype, { contentLength: size });
+        await storage.putObject(storageKey, stream, mimetype, { contentLength: size });
 
         const asset = await MediaAsset.create({
             userId:     req.tenantId,
@@ -200,7 +203,9 @@ exports.uploadAsset = async (req, res) => {
             size,
             mediaType:  rule.mediaType,
             storageKey,
-            publicUrl:  url,
+            // Never set: the bucket is private. Kept on the model only so rows
+            // from before that change still load.
+            publicUrl:  null,
             sha256
         });
 
@@ -227,6 +232,22 @@ exports.streamAsset = async (req, res) => {
     try {
         const asset = await MediaAsset.findOne({ _id: req.params.id, userId: req.tenantId }).lean();
         if (!asset) return res.status(404).json({ success: false, message: 'Media not found' });
+
+        // Authorized above — now let the browser fetch the bytes straight from
+        // storage via a short-lived signed link instead of piping them through
+        // this server. Range requests (video seeking) work natively there.
+        const signed = await storage.getSignedUrl(asset.storageKey, {
+            expiresIn: 300,
+            contentType: asset.mimeType,
+            disposition: 'inline',
+            fileName: asset.fileName
+        });
+        if (signed) {
+            // Reuse the redirect briefly so a grid of thumbnails doesn't re-sign on every paint.
+            res.setHeader('Cache-Control', 'private, max-age=240');
+            res.setHeader('Referrer-Policy', 'no-referrer');
+            return res.redirect(302, signed);
+        }
 
         const stream = await storage.getStream(asset.storageKey);
 

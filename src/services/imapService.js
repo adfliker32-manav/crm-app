@@ -6,6 +6,7 @@ const EmailMessage = require('../models/EmailMessage');
 const EmailConversation = require('../models/EmailConversation');
 // FIX A2: Use shared decrypt from emailUtils instead of duplicating it
 const { decrypt } = require('../utils/emailUtils');
+const { tenantKey, AREAS } = require('./storageKeys');
 
 /**
  * FIX L8: cheap duplicate check that runs BEFORE simpleParser.
@@ -282,7 +283,7 @@ async function storeInboundAttachments(parsedMail, tenantId, messageId) {
         // The Message-ID is sender-supplied, so it is sanitised the same way
         // before being used as a key segment.
         const idSegment = safeFileName(messageId, 0);
-        const key = `email-inbound/${tenantId}/${idSegment}/${i}-${name}`;
+        const key = tenantKey(tenantId, AREAS.EMAIL_INBOUND, idSegment, `${i}-${name}`);
 
         try {
             await storage.putObject(key, content, att.contentType || 'application/octet-stream', {

@@ -184,7 +184,9 @@ const persistAttachments = async (req, ticketId) => {
     const out = [];
 
     for (const f of req.files) {
-        const storageKey = `support/${ticketId}/${f.filename}`;
+        // Platform-owned: a support thread is a record of a dispute and
+        // deliberately outlives the tenant (see storageKeys.js).
+        const storageKey = require('../services/storageKeys').supportKey(ticketId, f.filename);
         try {
             const stream = fs.createReadStream(f.path);
             await storage.putObject(storageKey, stream, f.mimetype, { contentLength: f.size });

@@ -292,7 +292,7 @@ describe('call sites are classified correctly', () => {
 describe('inbound attachments are stored privately', () => {
     test('ingest writes into a tenant-scoped key namespace', () => {
         const src = readSrc('services', 'imapService.js');
-        assert.match(src, /email-inbound\/\$\{tenantId\}\//,
+        assert.match(src, /tenantKey\(tenantId, AREAS\.EMAIL_INBOUND/,
             'the key must carry the owning tenant, so the download route can prove ownership from it');
         assert.match(src, /\\\.\{2,\}/,
             'sender-supplied names must have dot runs collapsed — no key may contain ".."');
@@ -304,7 +304,7 @@ describe('inbound attachments are stored privately', () => {
 
         assert.match(fn, /EmailMessage\.findOne\(\{[^}]*userId/,
             'the message itself must belong to the caller tenant');
-        assert.match(fn, /startsWith\(expectedPrefix\)/,
+        assert.match(fn, /isOwnedKey\(String\(att\.storageKey\), userId, AREAS\.EMAIL_INBOUND\)/,
             'and the stored key must sit inside that tenant namespace — a tampered row must not reach another tenant');
         assert.match(fn, /nosniff/,
             'sender-supplied bytes must never be sniffed into something executable');

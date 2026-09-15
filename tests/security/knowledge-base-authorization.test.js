@@ -262,7 +262,7 @@ describe('5. uploads are validated as files, not as claims', () => {
         assert.match(key, /uuidv4\(\)/, 'keys must be unguessable');
         assert.ok(!/originalName/.test(key),
             'a key derived from the client filename invites path traversal');
-        assert.match(key, /\$\{tenantId\}/, 'objects must be namespaced per tenant');
+        assert.match(key, /tenantKey\(tenantId, AREAS\.KNOWLEDGE_BASE/, 'objects must be namespaced per tenant');
     });
 
     test('quota, plan and credit checks all run before the file is stored', () => {

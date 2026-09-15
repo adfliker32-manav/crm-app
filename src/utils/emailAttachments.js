@@ -26,7 +26,7 @@ async function resolveAttachments(attachments, tenantId) {
     if (!Array.isArray(attachments) || attachments.length === 0) return [];
 
     const storage = require('../services/storageService');
-    const expectedPrefix = `email-attachments/${tenantId}/`;
+    const { isOwnedKey, AREAS } = require('../services/storageKeys');
     const out = [];
 
     for (const att of attachments) {
@@ -35,7 +35,8 @@ async function resolveAttachments(attachments, tenantId) {
         if (att.storageKey) {
             // Never fetch a key outside this tenant's namespace, however the
             // row came to hold it.
-            if (!String(att.storageKey).startsWith(expectedPrefix)) {
+            // Current (tenants/<t>/email-attachments/) or legacy layout.
+            if (!isOwnedKey(String(att.storageKey), tenantId, AREAS.EMAIL_ATTACHMENTS)) {
                 console.warn(`[EmailAttachments] Refusing cross-tenant key ${att.storageKey} for tenant ${tenantId}`);
                 continue;
             }

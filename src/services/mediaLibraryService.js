@@ -88,12 +88,15 @@ async function resolveForSend(assetId, userId) {
         return { type: asset.mediaType, media_id: mediaId, filename: asset.fileName };
     }
 
-    // Fallback: let Meta fetch it directly (only possible with a public URL).
-    if (asset.publicUrl) {
-        return { type: asset.mediaType, link: asset.publicUrl, filename: asset.fileName };
+    // Fallback: let Meta fetch it directly through a short-lived signed link.
+    // The bucket is private, so the old stored publicUrl no longer works. An
+    // hour covers a queued send; a broadcast resolves media per batch.
+    const link = await storage.getSignedUrl(asset.storageKey, { expiresIn: 60 * 60, contentType: asset.mimeType });
+    if (link) {
+        return { type: asset.mediaType, link, filename: asset.fileName };
     }
 
-    console.warn(`[MediaLibrary] Asset ${asset._id} is unusable for sending (no Meta id, no public URL).`);
+    console.warn(`[MediaLibrary] Asset ${asset._id} is unusable for sending (no Meta id, no signed link).`);
     return null;
 }
 

@@ -18,22 +18,22 @@ const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const ChatbotSession = require('../models/ChatbotSession');
 const LeadAutomationWatcher = require('../models/LeadAutomationWatcher');
+const { isOwnedKey, AREAS } = require('./storageKeys');
 
 const MAX_BULK_DELETE = 200;
 
 /**
- * Storage keys of media mirrored for these conversations.
+ * Storage keys of the chat's own media copies for these conversations.
  *
- * Only keys under `wa-inbound/<company user id>/` are returned. That is the one
- * layout inboundMediaService writes for chat media. Outbound media is sent from
- * the Media Library and is NOT copied — so a key outside that prefix would be a
- * library file (or another tenant's), and deleting it would break things this
- * chat does not own.
+ * Only keys in the company's WhatsApp areas are returned — inbound mirrors and
+ * outbound copies, in the current (tenants/<t>/whatsapp/…) or legacy
+ * (wa-inbound/<t>/…) layout. Chats keep their OWN copies, so a key anywhere else
+ * would be a Media Library file (or another tenant's), and deleting it would
+ * break things this chat does not own.
  */
 async function collectMediaKeys(conversationIds, companyUserIds) {
     if (!conversationIds.length) return [];
-    const prefixes = (companyUserIds || []).map(id => `wa-inbound/${String(id)}/`);
-    if (!prefixes.length) return [];
+    if (!companyUserIds || !companyUserIds.length) return [];
 
     const rows = await WhatsAppMessage.find({
         conversationId: { $in: conversationIds },
@@ -43,7 +43,10 @@ async function collectMediaKeys(conversationIds, companyUserIds) {
     const keys = new Set();
     for (const row of rows) {
         const key = row.content?.storageKey;
-        if (typeof key === 'string' && prefixes.some(p => key.startsWith(p))) keys.add(key);
+        if (isOwnedKey(key, companyUserIds, AREAS.WHATSAPP_INBOUND)
+            || isOwnedKey(key, companyUserIds, AREAS.WHATSAPP_OUTBOUND)) {
+            keys.add(key);
+        }
     }
     return [...keys];
 }

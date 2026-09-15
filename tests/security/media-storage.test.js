@@ -43,10 +43,17 @@ test('the media proxy prefers the durable copy and still checks ownership first'
     const fn = ctrl.slice(ctrl.indexOf('exports.downloadMediaProxy'));
 
     const ownerIdx = fn.indexOf('companyUserIds');
-    const fetchIdx = fn.indexOf('getBuffer');
-    assert.ok(ownerIdx > -1 && fetchIdx > -1, 'both the ownership check and the storage read must exist');
-    assert.ok(ownerIdx < fetchIdx,
-        'ownership must be proven BEFORE any bytes are fetched');
+    const scopeIdx = fn.indexOf('conversationScope(req)');
+    // Every way bytes can leave: a signed link, a stream, or the Meta fetch.
+    const byteAccess = ['getSignedUrl', 'getObjectStream', 'downloadMedia('].map(s => fn.indexOf(s));
+    assert.ok(ownerIdx > -1 && scopeIdx > -1 && byteAccess.every(i => i > -1),
+        'the ownership checks and every byte path must exist');
+    for (const idx of byteAccess) {
+        assert.ok(ownerIdx < idx && scopeIdx < idx,
+            'ownership AND conversation scope must be proven BEFORE any bytes (or a signed link) go out');
+    }
+    assert.ok(!/getBuffer\(storageKey\)/.test(fn),
+        'the stored copy must be streamed or redirected, never loaded whole into memory');
 
     assert.match(fn, /content\.storageKey/,
         'the proxy must resolve the mirrored object, not only the Meta media id');
@@ -91,9 +98,7 @@ test('email template attachments go to object storage with a MIME-derived extens
 
 test('attachment keys are confined to the owning tenant', () => {
     const util = read('utils', 'emailAttachments.js');
-    assert.match(util, /email-attachments\/\$\{tenantId\}\//,
-        'the expected key prefix must be tenant-scoped');
-    assert.match(util, /startsWith\(expectedPrefix\)/,
+    assert.match(util, /isOwnedKey\(String\(att\.storageKey\), tenantId, AREAS\.EMAIL_ATTACHMENTS\)/,
         'a tampered attachment row must not be able to read another tenant\'s object');
 });
 

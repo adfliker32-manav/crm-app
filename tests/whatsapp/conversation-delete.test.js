@@ -40,7 +40,12 @@ const reset = () => {
         { content: { storageKey: `wa-inbound/${AGENT}/m2.pdf` } },        // company member
         { content: { storageKey: `${TENANT}/library/brochure.pdf` } },    // Media Library — NOT the chat's
         { content: { storageKey: `wa-inbound/${OTHER_TENANT}/x.jpg` } },  // another tenant
-        { content: {} }
+        { content: {} },
+        // Current layout
+        { content: { storageKey: `tenants/${TENANT}/whatsapp/inbound/9.jpg` } },
+        { content: { storageKey: `tenants/${TENANT}/whatsapp/outbound/sent.pdf` } },
+        { content: { storageKey: `tenants/${TENANT}/media-library/logo.png` } },       // library — NOT the chat's
+        { content: { storageKey: `tenants/${OTHER_TENANT}/whatsapp/inbound/1.jpg` } }  // another tenant
     ];
 };
 reset();
@@ -77,15 +82,18 @@ describe('1. only the chat\'s own media is deleted', () => {
         const keys = await collectMediaKeys(['c1'], company);
         assert.deepStrictEqual(keys.sort(), [
             `wa-inbound/${AGENT}/m2.pdf`,
-            `wa-inbound/${TENANT}/m1.jpg`
+            `wa-inbound/${TENANT}/m1.jpg`,
+            `tenants/${TENANT}/whatsapp/inbound/9.jpg`,
+            `tenants/${TENANT}/whatsapp/outbound/sent.pdf`
         ].sort());
     });
 
     test('the purge deletes exactly those keys', async () => {
         await deleteConversations({ conversations: [conv('c1')], companyUserIds: company });
         assert.ok(!storageDeleted.includes(`${TENANT}/library/brochure.pdf`), 'a library file was deleted');
+        assert.ok(!storageDeleted.includes(`tenants/${TENANT}/media-library/logo.png`), 'a library file was deleted');
         assert.ok(!storageDeleted.some(k => k.includes(OTHER_TENANT)), 'another tenant\'s file was deleted');
-        assert.strictEqual(storageDeleted.length, 2);
+        assert.strictEqual(storageDeleted.length, 4);
     });
 });
 
@@ -137,7 +145,7 @@ describe('3. nothing keeps messaging a deleted chat', () => {
         storageThrows = true;
         const r = await deleteConversations({ conversations: [conv('c1')], companyUserIds: company });
         assert.deepStrictEqual(r.deletedIds, ['c1']);
-        assert.strictEqual(r.media.failed, 2);
+        assert.strictEqual(r.media.failed, 4);
     });
 });
 

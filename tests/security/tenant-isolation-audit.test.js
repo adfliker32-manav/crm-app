@@ -89,10 +89,11 @@ test('M-1: downloadMediaProxy proves the media belongs to the caller before fetc
     );
     // …and it must gate the fetch, not merely exist somewhere in the file.
     const fn = c.slice(c.indexOf('exports.downloadMediaProxy'));
-    assert.ok(
-        fn.indexOf('companyUserIds') < fn.indexOf('getBuffer'),
-        'the ownership check must run before any media bytes are read'
-    );
+    for (const byteAccess of ['getSignedUrl', 'getObjectStream', 'downloadMedia(']) {
+        const at = fn.indexOf(byteAccess);
+        assert.ok(at > -1 && fn.indexOf('companyUserIds') < at,
+            `the ownership check must run before any media bytes are read (${byteAccess})`);
+    }
 });
 
 // ─── M-2: the open-tracking pixel must be signed ────────────────────────────

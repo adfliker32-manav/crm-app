@@ -3,6 +3,7 @@ const { sendEmail } = require('../services/emailService');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { tenantKey, AREAS } = require('../services/storageKeys');
 
 // SECURITY FIX: Define allowed file types for email attachments.
 // The map is also the single source of the stored extension — see below.
@@ -29,8 +30,8 @@ const storage = multer.diskStorage({
         // The extension comes from the ACCEPTED MIME type, never from the
         // client's filename. `payload.html` sent as image/png used to be stored
         // as .html here — the sibling upload middlewares already fixed this.
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + (EXT_FOR_MIME[file.mimetype] || '.bin'));
+        // Random UUID rather than a timestamp: this name becomes the object key.
+        cb(null, require('crypto').randomUUID() + (EXT_FOR_MIME[file.mimetype] || '.bin'));
     }
 });
 
@@ -190,7 +191,7 @@ exports.uploadAttachment = [
         for (const file of req.files) {
             // Keyed by the template's OWNER (the same id the lookup above used),
             // because that is the id the send path validates the prefix against.
-            const storageKey = `email-attachments/${userId}/${file.filename}`;
+            const storageKey = tenantKey(userId, AREAS.EMAIL_ATTACHMENTS, file.filename);
             try {
                 const stream = fs.createReadStream(file.path);
                 await objectStore.putObject(storageKey, stream, file.mimetype, { contentLength: file.size });

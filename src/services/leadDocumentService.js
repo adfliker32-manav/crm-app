@@ -30,6 +30,7 @@ const LeadDocument = require('../models/LeadDocument');
 const MediaAsset = require('../models/MediaAsset');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const storage = require('./storageService');
+const { tenantKey, AREAS } = require('./storageKeys');
 
 const MB = 1024 * 1024;
 
@@ -158,7 +159,7 @@ function sha256File(filePath) {
 
 /** Unguessable, traversal-proof key. Never derived from the client filename. */
 function buildStorageKey(tenantId, leadId, ext) {
-    return `lead-docs/${tenantId}/${leadId}/${uuidv4()}${ext}`;
+    return tenantKey(tenantId, AREAS.LEAD_DOCS, String(leadId), `${uuidv4()}${ext}`);
 }
 
 // ⚠️ aggregate() does not cast $match values the way find() does, and tenantId
