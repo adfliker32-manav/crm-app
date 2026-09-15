@@ -14,6 +14,7 @@ const mongoose = require('mongoose');
 
 const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
 const { escapeRegex } = require('../utils/controllerHelpers');
+const { collectMediaKeys, deleteMediaKeys, deleteConversations } = require('../services/whatsappConversationDeletion');
 
 const { getUserWhatsAppCredentials, getCompanyUserIds } = require('../utils/whatsappUtils');
 const { parseMetaError } = require('../utils/metaErrorUtils');
@@ -369,7 +370,11 @@ exports.clearConversationMessages = async (req, res) => {
             return res.status(404).json({ message: 'Conversation not found' });
         }
 
+        // Collected before the rows go — afterwards nothing names these files and
+        // they would sit in object storage forever.
+        const mediaKeys = await collectMediaKeys([conversation._id], companyUserIds);
         await WhatsAppMessage.deleteMany({ conversationId: conversation._id });
+        await deleteMediaKeys(mediaKeys);
 
         const updates = {
             lastMessage: '',
@@ -415,6 +420,82 @@ exports.clearConversationMessages = async (req, res) => {
     } catch (error) {
         console.error('Error clearing conversation messages:', error);
         res.status(500).json({ message: 'Error clearing chat history', error: 'Server error' });
+    }
+};
+
+// ── Delete chats ─────────────────────────────────────────────────────────────
+// Unlike "clear", this removes the chat from the inbox entirely. The linked lead
+// stays. Gated on the deleteWhatsAppChats permission at the route; the scope
+// below still decides WHICH chats this caller may touch — a restricted agent
+// can only delete chats they can see, and anything else reads as not found.
+
+const announceDeleted = (req, companyUserIds, conversations) =>
+    Promise.all(conversations.map(c => broadcastConversationEvent({
+        tenantId: req.tenantId,
+        companyUserIds,
+        conversationId: c._id,
+        assignedTo: c.assignedTo,
+        events: [{ event: 'whatsapp:conversationDeleted', data: { conversationId: c._id } }]
+    })));
+
+exports.deleteConversation = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const scope = await conversationScope(req);
+        const companyUserIds = await getCompanyUserIds(userId);
+
+        const conversation = await WhatsAppConversation.findOne({ _id: req.params.id, ...scope })
+            .select('_id assignedTo phone')
+            .lean();
+        if (!conversation) {
+            return res.status(404).json({ message: 'Conversation not found' });
+        }
+
+        const result = await deleteConversations({ conversations: [conversation], companyUserIds });
+        await announceDeleted(req, companyUserIds, [conversation]);
+
+        console.log(`🗑️ [WhatsApp] Chat ${conversation._id} deleted by ${userId} (${result.messagesDeleted} messages, ${result.media.deleted} media files)`);
+        res.json({
+            success: true,
+            message: 'Chat deleted',
+            deleted: result.deletedIds.length,
+            messagesDeleted: result.messagesDeleted
+        });
+    } catch (error) {
+        console.error('Error deleting conversation:', error);
+        res.status(500).json({ message: 'Error deleting chat', error: 'Server error' });
+    }
+};
+
+exports.bulkDeleteConversations = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const ids = [...new Set(req.body.conversationIds.map(String))];
+
+        const scope = await conversationScope(req);
+        const companyUserIds = await getCompanyUserIds(userId);
+
+        const conversations = await WhatsAppConversation.find({ _id: { $in: ids }, ...scope })
+            .select('_id assignedTo')
+            .lean();
+
+        const result = await deleteConversations({ conversations, companyUserIds });
+        await announceDeleted(req, companyUserIds, conversations);
+
+        console.log(`🗑️ [WhatsApp] ${result.deletedIds.length} chats bulk-deleted by ${userId} (${result.messagesDeleted} messages, ${result.media.deleted} media files)`);
+        res.json({
+            success: true,
+            message: `${result.deletedIds.length} chat${result.deletedIds.length === 1 ? '' : 's'} deleted`,
+            deleted: result.deletedIds.length,
+            deletedIds: result.deletedIds,
+            // Ids that don't exist or are outside this caller's scope. Reported as
+            // one number, not per id, so it can't be used to probe other chats.
+            notFound: ids.length - result.deletedIds.length,
+            messagesDeleted: result.messagesDeleted
+        });
+    } catch (error) {
+        console.error('Error bulk-deleting conversations:', error);
+        res.status(500).json({ message: 'Error deleting chats', error: 'Server error' });
     }
 };
 

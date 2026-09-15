@@ -24,6 +24,7 @@ const PRESETS = {
         sendWhatsApp: false,
         sendBulkWhatsApp: false,
         manageWhatsAppTemplates: false,
+        deleteWhatsAppChats: false,
         viewNotes: true,
         createNotes: false,
         editNotes: false,
@@ -61,6 +62,7 @@ const PRESETS = {
         sendWhatsApp: true,
         sendBulkWhatsApp: false,
         manageWhatsAppTemplates: false,
+        deleteWhatsAppChats: false,
         viewNotes: false,
         createNotes: true,
         editNotes: false,
@@ -98,6 +100,7 @@ const PRESETS = {
         sendWhatsApp: true,
         sendBulkWhatsApp: true,
         manageWhatsAppTemplates: true,
+        deleteWhatsAppChats: false,
         viewNotes: true,
         createNotes: true,
         editNotes: true,
@@ -242,7 +245,8 @@ const EditAgentModal = ({ isOpen, onClose, onSuccess, agent }) => {
                 { key: 'viewAllWhatsApp', label: 'View ALL WhatsApp Conversations (not just assigned)', highlight: true },
                 { key: 'sendWhatsApp', label: 'Send Individual Messages' },
                 { key: 'sendBulkWhatsApp', label: 'Send Bulk Messages' },
-                { key: 'manageWhatsAppTemplates', label: 'Manage Templates' }
+                { key: 'manageWhatsAppTemplates', label: 'Manage Templates' },
+                { key: 'deleteWhatsAppChats', label: 'Delete Chats (permanent)', highlight: true }
             ]
         },
         {

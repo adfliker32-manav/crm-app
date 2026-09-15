@@ -176,6 +176,9 @@ const userSchema = new mongoose.Schema({
         sendWhatsApp: { type: Boolean, default: true },
         sendBulkWhatsApp: { type: Boolean, default: false },
         manageWhatsAppTemplates: { type: Boolean, default: false },
+        // Permanently delete inbox chats (conversation + messages + media).
+        // Default off: irreversible, so an owner opts each agent in.
+        deleteWhatsAppChats: { type: Boolean, default: false },
 
         // Notes
         viewNotes: { type: Boolean, default: false },

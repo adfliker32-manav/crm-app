@@ -19,6 +19,9 @@ const checkPermission = require('../middleware/checkPermission');
 // viewWhatsApp defaults to FALSE, so without that grant this would lock out
 // every existing agent.
 const canViewWhatsApp = checkPermission('viewWhatsApp');
+// Deleting a chat is irreversible, so it is its own permission (default off for
+// agents) rather than riding on viewWhatsApp like "clear history" does.
+const canDeleteWhatsAppChats = checkPermission('deleteWhatsAppChats');
 const { meterUsage } = require('../middleware/usageMeter');
 const multer = require('multer');
 
@@ -63,13 +66,20 @@ router.get('/conversations', authMiddleware, requireModule('whatsapp'), canViewW
 router.get('/conversations/unread', authMiddleware, requireModule('whatsapp'), canViewWhatsApp, requireFeature('whatsapp.inbox'), whatsappConversationController.getUnreadCount);
 
 // Start new conversation
-router.post('/conversations/new', authMiddleware, requireModule('whatsapp'), canViewWhatsApp, requireFeature('whatsapp.inbox'), validateObjectId({ body: ['leadId'] }), whatsappConversationController.startConversation);
+// Delete several chats at once (max 200). Only chats inside the caller's inbox
+// scope are removed; the rest are reported back as notFound.
+router.post('/conversations/bulk-delete', authMiddleware, requireModule('whatsapp'), canViewWhatsApp, canDeleteWhatsAppChats, requireFeature('whatsapp.inbox'), validate(schemas.whatsappBulkDeleteConversations), whatsappConversationController.bulkDeleteConversations);
+
+router.post('/conversations/new',authMiddleware, requireModule('whatsapp'), canViewWhatsApp, requireFeature('whatsapp.inbox'), validateObjectId({ body: ['leadId'] }), whatsappConversationController.startConversation);
 
 // Get single conversation with messages
 router.get('/conversations/:id', authMiddleware, requireModule('whatsapp'), canViewWhatsApp, requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.getConversation);
 
 // Clear all stored messages in a conversation
-router.delete('/conversations/:id/messages', authMiddleware, requireModule('whatsapp'), canViewWhatsApp, requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.clearConversationMessages);
+// Delete a chat from the inbox entirely (conversation + messages + mirrored media; the lead stays)
+router.delete('/conversations/:id', authMiddleware, requireModule('whatsapp'), canViewWhatsApp, canDeleteWhatsAppChats, requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.deleteConversation);
+
+router.delete('/conversations/:id/messages',authMiddleware, requireModule('whatsapp'), canViewWhatsApp, requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.clearConversationMessages);
 
 // Send message in conversation
 router.post('/conversations/:id/send', authMiddleware, requireModule('whatsapp'), canViewWhatsApp, requireFeature('whatsapp.inbox'), validateObjectId('id'), whatsappConversationController.sendMessage);

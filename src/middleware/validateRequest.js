@@ -77,6 +77,14 @@ const schemas = {
         client_secret:   Joi.string().allow('').max(500)
     }),
 
+    // WhatsApp inbox -> POST /api/whatsapp/conversations/bulk-delete.
+    // Cap mirrors MAX_BULK_DELETE in services/whatsappConversationDeletion.js.
+    whatsappBulkDeleteConversations: Joi.object({
+        conversationIds: Joi.array()
+            .items(Joi.string().pattern(/^[a-f\d]{24}$/i).message('conversationIds must be valid ids'))
+            .min(1).max(200).required()
+    }),
+
     // External CRM API -> POST /api/v1/whatsapp/assign-agent.
     // `agentEmail` is REQUIRED but nullable, deliberately. Sending null is how a
     // partner unassigns, so if the key were merely optional, stripUnknown would

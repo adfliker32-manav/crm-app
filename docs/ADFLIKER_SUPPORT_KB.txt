@@ -208,6 +208,16 @@ Images, video, audio and documents. Outgoing media is capped at **16 MB** (Whats
 ### Can an agent take over from the bot?
 Yes. When an agent replies, the chatbot pauses for that conversation for 24 hours and will not interrupt. Keyword triggers, template replies and click-to-WhatsApp ad entries no longer barge in during a takeover.
 
+### How do I delete a WhatsApp chat?
+In the WhatsApp inbox, open the chat and click the **trash** icon in the chat header. To delete several at once, click the **select** icon (checkbox) at the top of the chat list, tick the chats (or **Select all**), then click **Delete**.
+- Deleting removes the chat, all its messages and its media from the CRM **permanently**. It cannot be undone.
+- The linked **lead is kept**, and any running chatbot flow or "no reply" automation for that chat is stopped.
+- It does **not** delete anything from the customer's phone — WhatsApp does not allow that. If the customer messages again, a new chat appears.
+- The **eraser** icon is different: it only clears the messages and keeps the chat in the inbox.
+
+### Who can delete WhatsApp chats?
+The account Manager always can. Agents can only if the Manager turns on **Delete Chats (permanent)** under Team → edit agent → WhatsApp permissions. It is off by default. An agent can only delete chats they can see.
+
 ---
 
 ## 8. WhatsApp chatbot and AI

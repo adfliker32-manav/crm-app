@@ -213,6 +213,16 @@ const WhatsAppInbox = () => {
         || user?.role === 'manager'
         || user?.permissions?.assignLeads === true;
 
+    // Mirrors checkPermission('deleteWhatsAppChats') on the delete routes.
+    const canDeleteChats = user?.role === 'superadmin'
+        || user?.role === 'manager'
+        || user?.permissions?.deleteWhatsAppChats === true;
+
+    // ── Multi-select delete ──
+    const [selectMode, setSelectMode] = useState(false);
+    const [selectedIds, setSelectedIds] = useState(() => new Set());
+    const [deleting, setDeleting] = useState(false);
+
     // Team roster + whether this workspace mirrors assignment. Fetched once, and
     // only for someone who can actually assign.
     useEffect(() => {
@@ -575,6 +585,22 @@ const WhatsAppInbox = () => {
             }
         };
 
+        // --- A teammate (or another tab) deleted a chat ---
+        const handleConversationDeleted = ({ conversationId }) => {
+            const convId = String(conversationId);
+            setConversations(prev => prev.filter(c => c._id !== convId));
+            setSelectedIds(prev => {
+                if (!prev.has(convId)) return prev;
+                const next = new Set(prev);
+                next.delete(convId);
+                return next;
+            });
+            if (selectedChatRef.current?._id === convId) {
+                setSelectedChat(null);
+                setMessages([]);
+            }
+        };
+
         // --- Lead reassignment moved this conversation ---
         // Emitted by the server when a Lead's owner changes and lead-based
         // WhatsApp assignment is enabled. `revoked` means THIS user just lost
@@ -635,8 +661,10 @@ const WhatsAppInbox = () => {
         socket.on('whatsapp:statusUpdate', handleStatusUpdate);
         socket.on('whatsapp:conversationCleared', handleConversationCleared);
         socket.on('whatsapp:conversationAssigned', handleConversationAssigned);
+        socket.on('whatsapp:conversationDeleted', handleConversationDeleted);
 
         return () => {
+            socket.off('whatsapp:conversationDeleted', handleConversationDeleted);
             socket.off('whatsapp:newMessage', handleNewMessage);
             socket.off('whatsapp:conversationUpdate', handleConversationUpdate);
             socket.off('whatsapp:statusUpdate', handleStatusUpdate);
@@ -1042,6 +1070,72 @@ const WhatsAppInbox = () => {
         }
     };
 
+    const removeChatsLocally = (ids) => {
+        const gone = new Set(ids.map(String));
+        setConversations(prev => prev.filter(c => !gone.has(c._id)));
+        if (selectedChat && gone.has(selectedChat._id)) {
+            setSelectedChat(null);
+            setMessages([]);
+        }
+    };
+
+    const handleDeleteChat = async (chat) => {
+        const confirmed = await showDanger(
+            `Delete the chat with ${chat.displayName || chat.phone}? All its messages and media are permanently removed from the CRM. The linked lead stays, and the customer's own WhatsApp is not affected. If they message again, a new chat will appear.`,
+            'Delete Chat'
+        );
+        if (!confirmed) return;
+
+        try {
+            await api.delete(`/whatsapp/conversations/${chat._id}`);
+            removeChatsLocally([chat._id]);
+            showSuccess('Chat deleted');
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to delete chat');
+        }
+    };
+
+    const exitSelectMode = () => {
+        setSelectMode(false);
+        setSelectedIds(new Set());
+    };
+
+    const toggleSelected = (chatId) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(chatId)) next.delete(chatId); else next.add(chatId);
+            return next;
+        });
+    };
+
+    const handleBulkDelete = async () => {
+        const ids = [...selectedIds];
+        if (!ids.length) return;
+        const count = ids.length;
+        const confirmed = await showDanger(
+            `Delete ${count} chat${count === 1 ? '' : 's'}? All their messages and media are permanently removed from the CRM. Linked leads stay.`,
+            'Delete Chats'
+        );
+        if (!confirmed) return;
+
+        setDeleting(true);
+        try {
+            // The server accepts at most 200 ids per request.
+            let deleted = 0;
+            for (let i = 0; i < ids.length; i += 200) {
+                const res = await api.post('/whatsapp/conversations/bulk-delete', { conversationIds: ids.slice(i, i + 200) });
+                deleted += res.data.deleted || 0;
+                removeChatsLocally(res.data.deletedIds || []);
+            }
+            exitSelectMode();
+            showSuccess(`${deleted} chat${deleted === 1 ? '' : 's'} deleted`);
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to delete chats');
+        } finally {
+            setDeleting(false);
+        }
+    };
+
     const handleSelectChat = (chat) => {
         setSelectedChat(chat);
         fetchMessages(chat._id, 1, true); // initial load
@@ -1292,6 +1386,15 @@ const WhatsAppInbox = () => {
                         </div>
                     </div>
                     <div className="flex items-center gap-1">
+                        {canDeleteChats && (
+                            <button
+                                onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+                                className={`w-9 h-9 rounded-full flex items-center justify-center transition ${selectMode ? 'bg-[#e7fce3] text-[#008069]' : 'hover:bg-slate-200 text-[#54656f]'}`}
+                                title={selectMode ? 'Cancel selection' : 'Select chats to delete'}
+                            >
+                                <i className="fa-regular fa-square-check text-lg"></i>
+                            </button>
+                        )}
                         <button
                             onClick={() => setShowNewChatModal(true)}
                             className="w-9 h-9 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition"
@@ -1339,17 +1442,67 @@ const WhatsAppInbox = () => {
                     ))}
                 </div>
 
+                {/* Selection bar (multi-delete) */}
+                {selectMode && (() => {
+                    const allVisibleSelected = filteredConversations.length > 0
+                        && filteredConversations.every(c => selectedIds.has(c._id));
+                    return (
+                        <div className="px-3 py-2 bg-[#f0f2f5] border-y border-[#e9edef] flex items-center gap-2">
+                            <span className="text-xs font-semibold text-[#111b21] flex-1">
+                                {selectedIds.size} selected
+                            </span>
+                            <button
+                                onClick={() => setSelectedIds(allVisibleSelected
+                                    ? new Set()
+                                    : new Set(filteredConversations.map(c => c._id)))}
+                                className="px-2.5 py-1 rounded-full text-xs font-medium bg-white text-[#54656f] hover:bg-slate-200 transition"
+                            >
+                                {allVisibleSelected ? 'Unselect all' : 'Select all'}
+                            </button>
+                            <button
+                                onClick={handleBulkDelete}
+                                disabled={selectedIds.size === 0 || deleting}
+                                className="px-2.5 py-1 rounded-full text-xs font-bold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                            >
+                                {deleting
+                                    ? <><i className="fa-solid fa-spinner fa-spin"></i> Deleting…</>
+                                    : <><i className="fa-solid fa-trash-can"></i> Delete</>}
+                            </button>
+                            <button
+                                onClick={exitSelectMode}
+                                disabled={deleting}
+                                className="px-2.5 py-1 rounded-full text-xs font-medium text-[#54656f] hover:bg-slate-200 transition"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    );
+                })()}
+
                 {/* Conversations List */}
                 <div className="flex-1 overflow-y-auto" onScroll={handleConvListScroll}>
                     {filteredConversations.map(chat => (
                         <div
                             key={chat._id}
-                            onClick={() => handleSelectChat(chat)}
-                            className={`px-4 py-3 border-b border-[#f0f2f5] cursor-pointer transition-colors ${selectedChat?._id === chat._id
-                                ? 'bg-[#f0f2f5]'
+                            onClick={() => (selectMode ? toggleSelected(chat._id) : handleSelectChat(chat))}
+                            className={`px-4 py-3 border-b border-[#f0f2f5] cursor-pointer transition-colors ${
+                                selectMode && selectedIds.has(chat._id) ? 'bg-[#e7fce3]'
+                                : selectedChat?._id === chat._id ? 'bg-[#f0f2f5]'
                                 : 'hover:bg-[#f5f6f6]'}`}
                         >
                             <div className="flex gap-3">
+                                {selectMode && (
+                                    <div className="flex items-center flex-shrink-0">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedIds.has(chat._id)}
+                                            onChange={() => toggleSelected(chat._id)}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="w-4 h-4 accent-[#00a884] cursor-pointer"
+                                            aria-label={`Select chat with ${chat.displayName || chat.phone}`}
+                                        />
+                                    </div>
+                                )}
                                 <div className="flex-shrink-0">
                                     <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-semibold ${chat.unreadCount > 0 ? 'bg-gradient-to-br from-[#00a884] to-[#25d366]' : 'bg-[#dfe5e7]'}`}>
                                         {chat.displayName ? chat.displayName.charAt(0).toUpperCase() : <i className="fa-solid fa-user text-[#8696a0]"></i>}
@@ -1436,9 +1589,14 @@ const WhatsAppInbox = () => {
                                 <button onClick={() => setShowContactPanel(!showContactPanel)} className="w-9 h-9 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition">
                                     <i className="fa-solid fa-user-circle text-xl"></i>
                                 </button>
-                                <button onClick={() => handleClearChat(selectedChat._id)} className="w-9 h-9 rounded-full hover:bg-red-50 flex items-center justify-center text-[#54656f] hover:text-red-500 transition" title="Clear chat history">
-                                    <i className="fa-solid fa-trash-can"></i>
+                                <button onClick={() => handleClearChat(selectedChat._id)} className="w-9 h-9 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition" title="Clear messages (keep the chat)">
+                                    <i className="fa-solid fa-eraser"></i>
                                 </button>
+                                {canDeleteChats && (
+                                    <button onClick={() => handleDeleteChat(selectedChat)} className="w-9 h-9 rounded-full hover:bg-red-50 flex items-center justify-center text-[#54656f] hover:text-red-500 transition" title="Delete chat">
+                                        <i className="fa-solid fa-trash-can"></i>
+                                    </button>
+                                )}
                                 <button onClick={() => handleArchive(selectedChat._id, selectedChat.status === 'archived' ? 'active' : 'archived')} className="w-9 h-9 rounded-full hover:bg-slate-200 flex items-center justify-center text-[#54656f] transition" title={selectedChat.status === 'archived' ? 'Unarchive' : 'Archive'}>
                                     <i className={`fa-solid ${selectedChat.status === 'archived' ? 'fa-box-open' : 'fa-box-archive'}`}></i>
                                 </button>
