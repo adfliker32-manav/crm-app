@@ -31,8 +31,10 @@ const TEMPLATE_VARIABLES = {
 /**
  * A searchable dropdown for inserting template variables.
  * @param {function} onInsert - Called with the formatted variable string e.g. '{{lead.name}}'
+ * @param {'bottom'|'top'} placement - Open below (default) or above the button;
+ *   use 'top' when the selector sits near the bottom of a clipped container.
  */
-const VariableSelector = ({ onInsert, className = '' }) => {
+const VariableSelector = ({ onInsert, className = '', placement = 'bottom' }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
     const dropdownRef = useRef(null);
@@ -76,7 +78,7 @@ const VariableSelector = ({ onInsert, className = '' }) => {
             </button>
 
             {isOpen && (
-                <div className="origin-top-right absolute right-0 mt-2 w-64 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-50 focus:outline-none">
+                <div className={`absolute right-0 w-64 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-50 focus:outline-none ${placement === 'top' ? 'origin-bottom-right bottom-full mb-2' : 'origin-top-right mt-2'}`}>
                     <div className="p-2 border-b border-slate-100">
                         <input
                             type="text"

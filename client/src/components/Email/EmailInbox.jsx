@@ -28,6 +28,28 @@ const formatBytes = (bytes) => {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+// A stable per-contact avatar tint makes a long thread list scannable.
+const AVATAR_COLORS = [
+    'bg-blue-100 text-blue-700',
+    'bg-emerald-100 text-emerald-700',
+    'bg-amber-100 text-amber-700',
+    'bg-violet-100 text-violet-700',
+    'bg-rose-100 text-rose-700',
+    'bg-cyan-100 text-cyan-700'
+];
+const avatarColor = (value) => {
+    const seed = String(value || '');
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+    return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+};
+const initialOf = (chat) => (chat?.displayName || chat?.email || '?').charAt(0).toUpperCase();
+const nameOf = (chat) => chat?.displayName || (chat?.email || '').split('@')[0] || 'Unknown';
+
+const inputCls = 'w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-50 disabled:text-slate-400';
+const labelCls = 'block text-sm font-medium text-slate-700 mb-1.5';
+const iconBtnCls = 'w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors disabled:opacity-40';
+
 const EmailInbox = () => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
@@ -77,6 +99,7 @@ const EmailInbox = () => {
     const [composeFiles, setComposeFiles] = useState([]);
     const [composeTemplates, setComposeTemplates] = useState([]);
     const [composeTemplateId, setComposeTemplateId] = useState('');
+    const [showCcBcc, setShowCcBcc] = useState(false);
 
     const scrollRef = useRef(null);
     const replyFileInput = useRef(null);
@@ -327,6 +350,7 @@ const EmailInbox = () => {
         setComposeEmail(''); setComposeSubject(''); setComposeMessage('');
         setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); setComposeFiles([]);
         setComposeTemplateId('');
+        setShowCcBcc(false);
         setDraftId(null);
         if (composeFileInput.current) composeFileInput.current.value = '';
     };
@@ -530,207 +554,203 @@ const EmailInbox = () => {
 
     if (loading) {
         return (
-            <div className="flex flex-col items-center justify-center h-full bg-slate-50/50">
-                <div className="relative">
-                    <div className="w-12 h-12 border-4 border-blue-100 rounded-full animate-spin"></div>
-                    <div className="w-12 h-12 border-4 border-transparent border-t-blue-600 rounded-full animate-spin absolute top-0 left-0"></div>
-                </div>
-                <p className="text-slate-500 font-semibold text-xs mt-4 tracking-wide">Loading premium inbox...</p>
+            <div className="flex flex-col items-center justify-center h-full bg-slate-50 gap-3">
+                <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                <p className="text-sm text-slate-500">Loading inbox...</p>
             </div>
         );
     }
 
+    const emptyListCopy = debouncedSearch
+        ? { title: 'No matches', hint: 'Try a different name or email address.' }
+        : filter === 'unread'
+            ? { title: "You're all caught up", hint: 'No unread conversations.' }
+            : filter === 'archived'
+                ? { title: 'No archived conversations', hint: 'Archived threads will show up here.' }
+                : { title: 'No conversations yet', hint: canSend ? 'Compose an email to start one.' : 'New email threads will appear here.' };
+
+    const closeThread = () => { setSelectedChat(null); setMessages([]); setShowContactPanel(false); };
+
     return (
-        <div className="flex h-full bg-slate-50 w-full font-sans select-none overflow-hidden animate-fade-in">
-            {/* ═══════════ LEFT SIDEBAR ═══════════ */}
-            <div className="w-[360px] bg-white border-r border-slate-200/60 flex flex-col flex-shrink-0 z-10 shadow-sm">
-                {/* Sidebar Header */}
-                <div className="px-5 py-5 bg-white flex items-center justify-between border-b border-slate-200/60">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-sm shadow-blue-600/20">
-                            <i className="fa-solid fa-envelope text-base"></i>
-                        </div>
-                        <div>
-                            <span className="font-semibold text-slate-900 text-[15px] tracking-tight">Email Inbox</span>
+        <div className="flex h-full w-full bg-white font-sans overflow-hidden">
+            {/* ═══════════ CONVERSATION LIST ═══════════ */}
+            <aside className={`${selectedChat ? 'hidden md:flex' : 'flex'} w-full md:w-[340px] lg:w-[360px] flex-col flex-shrink-0 bg-white border-r border-slate-200`}>
+                <div className="px-4 pt-4 pb-3 space-y-3 border-b border-slate-200">
+                    <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                            <h2 className="text-base font-semibold text-slate-900">Inbox</h2>
                             {totalUnread > 0 && (
-                                <span className="ml-2 bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{totalUnread}</span>
+                                <span className="text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">{totalUnread}</span>
                             )}
                         </div>
+                        {canSend && (
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                                <button onClick={loadDrafts} className={iconBtnCls} title="Drafts">
+                                    <i className="fa-solid fa-file-pen text-[14px]"></i>
+                                </button>
+                                <button onClick={loadScheduled} className={iconBtnCls} title="Scheduled emails">
+                                    <i className="fa-regular fa-clock text-[14px]"></i>
+                                </button>
+                                <button
+                                    onClick={openCompose}
+                                    className="ml-1 h-9 px-3.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors"
+                                >
+                                    <i className="fa-solid fa-pen-to-square text-[13px]"></i>
+                                    Compose
+                                </button>
+                            </div>
+                        )}
                     </div>
-                    {canSend && (
-                        <div className="flex items-center gap-1.5">
-                            <button
-                                onClick={loadDrafts}
-                                className="w-10 h-10 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-500 flex items-center justify-center transition-all duration-200 active:scale-95 border border-slate-200/60"
-                                title="Drafts"
-                            >
-                                <i className="fa-solid fa-file-pen text-[14px]"></i>
-                            </button>
-                            <button
-                                onClick={loadScheduled}
-                                className="w-10 h-10 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-500 flex items-center justify-center transition-all duration-200 active:scale-95 border border-slate-200/60"
-                                title="Scheduled emails"
-                            >
-                                <i className="fa-solid fa-clock text-[14px]"></i>
-                            </button>
-                            <button
-                                onClick={openCompose}
-                                className="w-10 h-10 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-all duration-200 active:scale-95 border border-blue-100"
-                                title="Compose Email"
-                            >
-                                <i className="fa-solid fa-pen-to-square text-[14px]"></i>
-                            </button>
-                        </div>
-                    )}
-                </div>
 
-                {/* Search */}
-                <div className="px-5 pt-4 pb-3 bg-white">
                     <div className="relative">
-                        <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]"></i>
+                        <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[13px]"></i>
                         <input
                             type="text"
-                            placeholder="Search emails or contacts..."
+                            placeholder="Search name or email"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2.5 bg-slate-100/70 border border-slate-200/60 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 rounded-xl text-[13px] transition duration-200 outline-none placeholder:text-slate-400 text-slate-700 font-medium"
+                            className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
                         />
+                    </div>
+
+                    <div className="flex p-1 bg-slate-100 rounded-lg">
+                        {[
+                            { id: 'all', label: 'All' },
+                            { id: 'unread', label: 'Unread', count: totalUnread },
+                            { id: 'archived', label: 'Archived' }
+                        ].map(tab => (
+                            <button
+                                key={tab.id}
+                                onClick={() => { setFilter(tab.id); closeThread(); }}
+                                className={`flex-1 py-1.5 rounded-md text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${filter === tab.id
+                                    ? 'bg-white text-slate-900 shadow-sm'
+                                    : 'text-slate-500 hover:text-slate-800'}`}
+                            >
+                                {tab.label}
+                                {tab.count > 0 && (
+                                    <span className="text-[10px] min-w-[18px] px-1.5 py-px rounded-full bg-blue-600 text-white font-bold">{tab.count}</span>
+                                )}
+                            </button>
+                        ))}
                     </div>
                 </div>
 
-                {/* Filter Tabs */}
-                <div className="px-5 pb-4 bg-white border-b border-slate-200/60 flex gap-1.5">
-                    {[
-                        { id: 'all', label: 'All' },
-                        { id: 'unread', label: 'Unread', count: totalUnread },
-                        { id: 'archived', label: 'Archived' }
-                    ].map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => { setFilter(tab.id); setSelectedChat(null); setMessages([]); }}
-                            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition duration-200 active:scale-95 flex items-center ${filter === tab.id
-                                ? 'bg-blue-600 text-white shadow-sm'
-                                : 'bg-slate-100/70 text-slate-500 hover:bg-slate-100 border border-transparent'}`}
-                        >
-                            {tab.label}
-                            {tab.count > 0 && <span className={`ml-1.5 text-[9px] px-1.5 py-0.5 rounded-full font-bold ${filter === tab.id ? 'bg-white text-blue-600' : 'bg-blue-600 text-white'}`}>{tab.count}</span>}
-                        </button>
-                    ))}
-                </div>
-
-                {/* Conversations List */}
-                <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50 p-3 space-y-1">
-                    {conversations.map(chat => (
-                        <div
-                            key={chat._id}
-                            onClick={() => handleSelectChat(chat)}
-                            className={`p-3.5 rounded-xl cursor-pointer transition-all duration-200 border flex flex-col gap-1.5 ${selectedChat?._id === chat._id
-                                ? 'bg-white border-blue-200 ring-1 ring-blue-100 shadow-sm'
-                                : 'bg-white border-slate-200/60 hover:border-slate-200 hover:shadow-sm'}`}
-                        >
-                            <div className="flex gap-3">
-                                <div className="flex-shrink-0">
-                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-[14px] ${chat.unreadCount > 0 ? 'bg-blue-600' : 'bg-slate-200 text-slate-500'}`}>
-                                        {(chat.displayName || chat.email).charAt(0).toUpperCase()}
-                                    </div>
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                    {conversations.map(chat => {
+                        const active = selectedChat?._id === chat._id;
+                        const unread = chat.unreadCount > 0;
+                        return (
+                            <button
+                                type="button"
+                                key={chat._id}
+                                onClick={() => handleSelectChat(chat)}
+                                className={`relative w-full text-left flex gap-3 px-4 py-3.5 border-b border-slate-100 transition-colors ${active ? 'bg-blue-50/70' : 'hover:bg-slate-50'}`}
+                            >
+                                {active && <span className="absolute left-0 inset-y-0 w-[3px] bg-blue-600 rounded-r"></span>}
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm flex-shrink-0 ${avatarColor(chat.email)}`}>
+                                    {initialOf(chat)}
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                    <div className="flex justify-between items-baseline mb-0.5">
-                                        <h3 className={`text-[13px] truncate w-[70%] ${chat.unreadCount > 0 ? 'font-bold text-slate-900' : 'font-semibold text-slate-700'}`}>
-                                            {chat.displayName || chat.email.split('@')[0]}
+                                    <div className="flex items-baseline justify-between gap-2">
+                                        <h3 className={`text-sm truncate ${unread ? 'font-semibold text-slate-900' : 'font-medium text-slate-700'}`}>
+                                            {nameOf(chat)}
                                         </h3>
-                                        <span className={`text-[10px] flex-shrink-0 ${chat.unreadCount > 0 ? 'text-blue-600 font-bold' : 'text-slate-400 font-medium'}`}>
+                                        <span className={`text-xs flex-shrink-0 ${unread ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>
                                             {formatTime(chat.lastMessageAt)}
                                         </span>
                                     </div>
-                                    <div className="flex justify-between items-center">
-                                        <p className={`text-xs truncate max-w-[85%] leading-relaxed ${chat.unreadCount > 0 ? 'text-slate-800 font-semibold' : 'text-slate-500 font-medium'}`}>
-                                            {chat.lastMessageDirection === 'outbound' && (
-                                                <i className="fa-solid fa-reply text-[9px] mr-1.5 text-slate-400"></i>
-                                            )}
+                                    <div className="flex items-center justify-between gap-2 mt-1">
+                                        <p className={`text-[13px] truncate ${unread ? 'text-slate-700 font-medium' : 'text-slate-500'}`}>
+                                            {chat.lastMessageDirection === 'outbound' && <span className="text-slate-400 font-normal">You: </span>}
                                             {chat.lastMessage || 'No messages'}
                                         </p>
-                                        {chat.unreadCount > 0 && (
-                                            <span className="bg-blue-600 text-white text-[9.5px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center flex-shrink-0 ml-2">
+                                        {unread && (
+                                            <span className="bg-blue-600 text-white text-[10px] font-bold min-w-[20px] h-5 px-1.5 rounded-full flex items-center justify-center flex-shrink-0">
                                                 {chat.unreadCount}
                                             </span>
                                         )}
                                     </div>
                                 </div>
-                            </div>
-                        </div>
-                    ))}
+                            </button>
+                        );
+                    })}
 
                     {/* Pagination — conversations past the first 30 used to be unreachable */}
                     {hasMoreConversations && (
-                        <button
-                            onClick={async () => {
-                                setLoadingMore(true);
-                                await fetchConversations({ silent: true, pageOverride: page + 1 });
-                                setLoadingMore(false);
-                            }}
-                            disabled={loadingMore}
-                            className="w-full py-2.5 mt-2 rounded-xl text-xs font-bold text-blue-600 bg-white border border-blue-100 hover:bg-blue-50 transition disabled:opacity-50"
-                        >
-                            {loadingMore ? <><i className="fa-solid fa-spinner fa-spin mr-1.5"></i>Loading...</> : 'Load more conversations'}
-                        </button>
+                        <div className="p-3">
+                            <button
+                                onClick={async () => {
+                                    setLoadingMore(true);
+                                    await fetchConversations({ silent: true, pageOverride: page + 1 });
+                                    setLoadingMore(false);
+                                }}
+                                disabled={loadingMore}
+                                className="w-full py-2.5 rounded-lg text-sm font-medium text-blue-600 bg-white border border-slate-200 hover:bg-blue-50 hover:border-blue-200 transition disabled:opacity-50"
+                            >
+                                {loadingMore ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>Loading...</> : 'Load more conversations'}
+                            </button>
+                        </div>
                     )}
 
                     {conversations.length === 0 && (
-                        <div className="p-12 text-center flex flex-col items-center justify-center h-full">
-                            <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center mb-4 border border-slate-100 shadow-sm">
-                                <i className="fa-solid fa-envelope-open text-xl text-slate-300"></i>
+                        <div className="px-6 py-16 text-center">
+                            <div className="w-12 h-12 mx-auto rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mb-3">
+                                <i className="fa-solid fa-envelope-open"></i>
                             </div>
-                            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">No conversations</p>
+                            <p className="text-sm font-medium text-slate-700">{emptyListCopy.title}</p>
+                            <p className="text-sm text-slate-400 mt-1">{emptyListCopy.hint}</p>
                         </div>
                     )}
                 </div>
-            </div>
+            </aside>
 
-            {/* ═══════════ CHAT WINDOW ═══════════ */}
-            <div className="flex-1 flex min-w-0 bg-white relative overflow-hidden h-full">
+            {/* ═══════════ THREAD ═══════════ */}
+            <section className={`${selectedChat ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 relative overflow-hidden h-full`}>
                 {selectedChat ? (
                     <>
-                        {/* Main thread column */}
                         <div className="flex-1 flex flex-col min-w-0 h-full">
-                            {/* Chat Header */}
-                            <div className="h-[72px] px-8 bg-white border-b border-slate-200/60 flex items-center justify-between flex-shrink-0 z-10">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-                                        {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
+                            {/* Thread header */}
+                            <div className="h-16 px-4 md:px-6 bg-white border-b border-slate-200 flex items-center justify-between gap-3 flex-shrink-0">
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <button onClick={closeThread} className={`${iconBtnCls} md:hidden -ml-1`} title="Back to conversations">
+                                        <i className="fa-solid fa-arrow-left"></i>
+                                    </button>
+                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm flex-shrink-0 ${avatarColor(selectedChat.email)}`}>
+                                        {initialOf(selectedChat)}
                                     </div>
-                                    <div>
-                                        <h3 className="font-semibold text-[15px] text-slate-900 leading-tight">{selectedChat.displayName || selectedChat.email}</h3>
-                                        <p className="text-[11px] text-slate-400 font-medium mt-0.5">{selectedChat.email}</p>
+                                    <div className="min-w-0">
+                                        <h3 className="text-base font-semibold text-slate-900 truncate leading-tight">{selectedChat.displayName || selectedChat.email}</h3>
+                                        <p className="text-xs text-slate-500 truncate mt-0.5">{selectedChat.email}</p>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1 flex-shrink-0">
                                     {selectedChat.metadata?.totalMessages > 0 && (
-                                        <span className="text-[11px] text-slate-500 font-semibold bg-slate-100/70 px-2.5 py-1 rounded-full border border-slate-200/60">
+                                        <span className="hidden lg:inline-flex text-xs text-slate-500 font-medium bg-slate-100 px-2.5 py-1 rounded-full mr-2">
                                             {selectedChat.metadata.totalMessages} messages
                                         </span>
                                     )}
                                     <button
                                         onClick={handleToggleArchive}
-                                        className="w-10 h-10 rounded-xl flex items-center justify-center text-sm transition-all duration-200 active:scale-95 border border-transparent hover:bg-slate-50 text-slate-400"
+                                        className={iconBtnCls}
                                         title={selectedChat.status === 'archived' ? 'Restore conversation' : 'Archive conversation'}
                                     >
                                         <i className={`fa-solid ${selectedChat.status === 'archived' ? 'fa-box-open' : 'fa-box-archive'}`}></i>
                                     </button>
                                     <button
                                         onClick={() => setShowContactPanel(v => !v)}
-                                        className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm transition-all duration-200 active:scale-95 border
-                                            ${showContactPanel ? 'bg-blue-50 text-blue-600 border-blue-100/50' : 'hover:bg-slate-50 text-slate-400 border-transparent bg-transparent'}`}
-                                        title="Contact Info"
+                                        className={showContactPanel
+                                            ? 'w-9 h-9 rounded-lg flex items-center justify-center bg-blue-50 text-blue-600 transition-colors'
+                                            : iconBtnCls}
+                                        title="Contact details"
                                     >
                                         <i className="fa-solid fa-circle-info"></i>
                                     </button>
                                 </div>
                             </div>
 
-                            {/* Messages Area */}
-                            <div className="flex-1 overflow-y-auto px-8 py-8 bg-slate-50 custom-scrollbar" ref={scrollRef}>
-                                <div className="space-y-5 max-w-3xl mx-auto">
+                            {/* Messages */}
+                            <div className="flex-1 overflow-y-auto bg-slate-50 custom-scrollbar" ref={scrollRef}>
+                                <div className="max-w-4xl mx-auto px-4 md:px-8 py-6 space-y-4">
                                     {/* Older history — the thread now loads newest-first, so the
                                         start of a long conversation is reached by paging back. */}
                                     {olderCursor && (
@@ -738,7 +758,7 @@ const EmailInbox = () => {
                                             <button
                                                 onClick={loadOlderMessages}
                                                 disabled={loadingOlder}
-                                                className="px-4 py-2 rounded-full text-[11px] font-bold text-slate-500 bg-white border border-slate-200 hover:bg-slate-50 transition disabled:opacity-50"
+                                                className="px-4 py-2 rounded-full text-xs font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition disabled:opacity-50"
                                             >
                                                 {loadingOlder
                                                     ? <><i className="fa-solid fa-spinner fa-spin mr-1.5"></i>Loading...</>
@@ -749,54 +769,81 @@ const EmailInbox = () => {
 
                                     {messages.length === 0 && (
                                         <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
-                                            <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-sm border border-slate-100">
-                                                <i className="fa-solid fa-envelope-open text-lg text-slate-300"></i>
+                                            <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center border border-slate-200 text-slate-400">
+                                                <i className="fa-solid fa-envelope-open"></i>
                                             </div>
-                                            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">No messages yet in this thread</p>
+                                            <p className="text-sm text-slate-500">No messages in this thread yet</p>
                                         </div>
                                     )}
+
                                     {messages.map((msg, index) => {
                                         const showDate = index === 0 ||
                                             new Date(msg.timestamp).toDateString() !== new Date(messages[index - 1].timestamp).toDateString();
                                         const isOut = msg.direction === 'outbound';
                                         const failed = msg.status === 'failed';
+                                        const sender = isOut
+                                            ? (msg.isAutomated ? 'Automation' : 'You')
+                                            : nameOf(selectedChat);
 
                                         return (
                                             <React.Fragment key={msg._id}>
                                                 {showDate && (
-                                                    <div className="flex justify-center my-4">
-                                                        <span className="bg-white/80 text-slate-400 text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-full border border-slate-200/60">
+                                                    <div className="flex items-center gap-3 pt-2">
+                                                        <div className="flex-1 h-px bg-slate-200"></div>
+                                                        <span className="text-xs font-medium text-slate-400">
                                                             {new Date(msg.timestamp).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
                                                         </span>
+                                                        <div className="flex-1 h-px bg-slate-200"></div>
                                                     </div>
                                                 )}
-                                                <div className={`flex items-end gap-2.5 ${isOut ? 'justify-end' : 'justify-start'}`}>
-                                                    {!isOut && (
-                                                        <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 text-[11px] font-bold flex-shrink-0 mb-1">
-                                                            {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
+
+                                                <article className={`bg-white rounded-xl border shadow-sm overflow-hidden ${failed ? 'border-rose-200' : isOut ? 'border-blue-100' : 'border-slate-200'}`}>
+                                                    {/* Sender row */}
+                                                    <div className="flex items-start gap-3 px-5 pt-4 pb-3">
+                                                        <div className={`w-9 h-9 rounded-full flex items-center justify-center font-semibold text-sm flex-shrink-0 ${isOut
+                                                            ? 'bg-blue-600 text-white'
+                                                            : avatarColor(selectedChat.email)}`}>
+                                                            {isOut
+                                                                ? (msg.isAutomated
+                                                                    ? <i className="fa-solid fa-robot text-[13px]"></i>
+                                                                    : (user?.name || 'Y').charAt(0).toUpperCase())
+                                                                : initialOf(selectedChat)}
                                                         </div>
-                                                    )}
-                                                    <div className={`max-w-[80%] rounded-2xl overflow-hidden border flex flex-col bg-white shadow-sm
-                                                        ${failed ? 'border-rose-200 rounded-br-md' : isOut ? 'border-blue-200 rounded-br-md' : 'border-slate-200/70 rounded-bl-md'}`}>
-                                                        {/* Subject strip */}
-                                                        <div className={`px-5 pt-3 pb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider border-b
-                                                            ${failed ? 'text-rose-500 border-rose-50' : isOut ? 'text-blue-600 border-blue-50' : 'text-slate-400 border-slate-50'}`}>
-                                                            <i className={`fa-solid ${isOut ? 'fa-paper-plane' : 'fa-inbox'} text-[9px] flex-shrink-0`}></i>
-                                                            <span className="truncate">{msg.subject || '(No Subject)'}</span>
-                                                            {msg.isAutomated && (
-                                                                <span className="ml-auto flex items-center gap-1 text-[9px] text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                                                                    <i className="fa-solid fa-robot"></i> Auto
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                <span className="text-sm font-semibold text-slate-900">{sender}</span>
+                                                                <span className="text-xs text-slate-400 truncate">
+                                                                    {isOut ? `to ${selectedChat.email}` : selectedChat.email}
                                                                 </span>
+                                                                {msg.isAutomated && (
+                                                                    <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">Automated</span>
+                                                                )}
+                                                                {failed && (
+                                                                    <span className="text-[11px] font-medium text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">Failed</span>
+                                                                )}
+                                                            </div>
+                                                            <p className="text-sm text-slate-700 font-medium mt-0.5 break-words">{msg.subject || '(No subject)'}</p>
+                                                        </div>
+                                                        <div
+                                                            className="flex items-center gap-1.5 text-xs text-slate-400 flex-shrink-0 pt-0.5"
+                                                            title={msg.timestamp ? new Date(msg.timestamp).toLocaleString() : ''}
+                                                        >
+                                                            <span>{msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                                                            {isOut && (
+                                                                <i className={`fa-solid ${failed ? 'fa-circle-exclamation text-rose-500' : 'fa-check-double text-blue-500'}`}></i>
                                                             )}
                                                         </div>
-                                                        {/* Body */}
+                                                    </div>
+
+                                                    {/* Body — indented under the avatar on wider screens */}
+                                                    <div className="px-5 sm:pl-[68px] pb-4">
                                                         {msg.html ? (
                                                             <div
-                                                                className="px-5 py-3 text-[13px] leading-relaxed select-text text-slate-700 break-words [&_*]:max-w-full"
+                                                                className="text-sm leading-relaxed text-slate-700 break-words [&_*]:max-w-full [&_a]:text-blue-600 [&_a]:underline"
                                                                 dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(msg.html) }}
                                                             />
                                                         ) : (
-                                                            <div className="px-5 py-3 text-[13px] leading-relaxed select-text text-slate-700 break-words whitespace-pre-line">
+                                                            <div className="text-sm leading-relaxed text-slate-700 break-words whitespace-pre-line">
                                                                 {msg.text}
                                                             </div>
                                                         )}
@@ -805,19 +852,19 @@ const EmailInbox = () => {
                                                             downloadable; outbound rows record names only, since the
                                                             bytes were the caller's and are not stored. */}
                                                         {msg.attachments?.length > 0 && (
-                                                            <div className="px-5 pb-2 flex flex-wrap gap-1.5">
+                                                            <div className="mt-3 flex flex-wrap gap-2">
                                                                 {msg.attachments.map((att, i) => {
                                                                     const label = att.originalName || att.filename;
                                                                     const chip = (
                                                                         <>
-                                                                            <i className={`fa-solid ${att.storageKey ? 'fa-download' : 'fa-paperclip'} text-[9px]`}></i>
-                                                                            <span className="truncate max-w-[140px]">{label}</span>
-                                                                            {att.size > 0 && <span className="text-slate-300">{formatBytes(att.size)}</span>}
+                                                                            <i className={`fa-solid ${att.storageKey ? 'fa-download' : 'fa-paperclip'} text-[11px]`}></i>
+                                                                            <span className="truncate max-w-[180px]">{label}</span>
+                                                                            {att.size > 0 && <span className="text-slate-400 font-normal">{formatBytes(att.size)}</span>}
                                                                         </>
                                                                     );
                                                                     if (!att.storageKey) {
                                                                         return (
-                                                                            <span key={i} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 bg-slate-50 border border-slate-200/60 px-2 py-1 rounded-lg">
+                                                                            <span key={i} className="flex items-center gap-2 text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg">
                                                                                 {chip}
                                                                             </span>
                                                                         );
@@ -829,7 +876,7 @@ const EmailInbox = () => {
                                                                             disabled={downloadingAtt === `${msg._id}:${i}`}
                                                                             onClick={() => downloadAttachment(msg, i, label)}
                                                                             title={`Download ${label}`}
-                                                                            className="flex items-center gap-1.5 text-[10px] font-semibold text-blue-600 bg-blue-50 border border-blue-200/60 px-2 py-1 rounded-lg hover:bg-blue-100 transition disabled:opacity-50"
+                                                                            className="flex items-center gap-2 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition disabled:opacity-50"
                                                                         >
                                                                             {chip}
                                                                         </button>
@@ -840,164 +887,155 @@ const EmailInbox = () => {
 
                                                         {/* Failure reason */}
                                                         {failed && msg.error && (
-                                                            <div className="px-5 pb-2">
-                                                                <p className="text-[10px] text-rose-500 font-semibold bg-rose-50 border border-rose-100 rounded-lg px-2.5 py-1.5 break-words">
-                                                                    <i className="fa-solid fa-circle-exclamation mr-1"></i>{msg.error}
-                                                                </p>
-                                                            </div>
+                                                            <p className="mt-3 text-xs text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2 break-words">
+                                                                <i className="fa-solid fa-circle-exclamation mr-1.5"></i>{msg.error}
+                                                            </p>
                                                         )}
-
-                                                        {/* Timestamp */}
-                                                        <div className={`px-5 pb-2.5 flex items-center justify-end gap-1.5 text-[10px] font-semibold
-                                                            ${failed ? 'text-rose-400' : isOut ? 'text-blue-400' : 'text-slate-300'}`}>
-                                                            <span>{formatTime(msg.timestamp)}</span>
-                                                            {isOut && (
-                                                                <i className={`fa-solid text-[10px] ${failed ? 'fa-circle-exclamation text-rose-400' : 'fa-check-double text-blue-400'}`}></i>
-                                                            )}
-                                                        </div>
                                                     </div>
-                                                </div>
+                                                </article>
                                             </React.Fragment>
                                         );
                                     })}
                                 </div>
                             </div>
 
-                            {/* Compose Bar — read-only users get no send controls */}
+                            {/* Reply composer — read-only users get no send controls */}
                             {!canSend ? (
-                                <div className="bg-white border-t border-slate-200/60 px-8 py-5 flex-shrink-0 text-center">
-                                    <p className="text-xs text-slate-400 font-semibold">
-                                        <i className="fa-solid fa-lock mr-1.5"></i>
+                                <div className="bg-white border-t border-slate-200 px-6 py-4 flex-shrink-0 text-center">
+                                    <p className="text-sm text-slate-500">
+                                        <i className="fa-solid fa-lock mr-2 text-slate-400"></i>
                                         You have read-only access to this inbox.
                                     </p>
                                 </div>
                             ) : (
-                            <div className="bg-white border-t border-slate-200/60 px-8 py-5 flex-shrink-0">
-                                <form onSubmit={handleSendMessage}>
-                                    <input
-                                        type="text"
-                                        value={newSubject}
-                                        onChange={(e) => setNewSubject(e.target.value)}
-                                        placeholder="Subject line..."
-                                        className="w-full text-xs font-semibold text-slate-600 px-4 py-2.5 mb-2.5 bg-slate-50 border border-slate-200/60 rounded-xl focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 transition duration-200 outline-none"
-                                        disabled={sending}
-                                    />
-
-                                    {replyFiles.length > 0 && (
-                                        <div className="flex flex-wrap gap-1.5 mb-2.5">
-                                            {replyFiles.map((f, i) => (
-                                                <span key={i} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg">
-                                                    <i className="fa-solid fa-paperclip text-[9px]"></i>
-                                                    <span className="truncate max-w-[140px]">{f.name}</span>
-                                                    <span className="text-slate-400">{formatBytes(f.size)}</span>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setReplyFiles(prev => prev.filter((_, idx) => idx !== i))}
-                                                        className="text-slate-400 hover:text-rose-500 ml-0.5"
-                                                    >
-                                                        <i className="fa-solid fa-xmark"></i>
-                                                    </button>
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    <div className="flex items-end gap-3 bg-slate-50 border border-slate-200/60 rounded-2xl px-4 py-3 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:bg-white transition-all duration-200">
-                                        <div className="flex flex-col flex-1">
-                                            <div className="flex justify-end mb-1">
-                                                <VariableSelector onInsert={(v) => setNewMessage(prev => prev + v)} />
+                                <div className="bg-white border-t border-slate-200 px-4 md:px-8 py-4 flex-shrink-0">
+                                    <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto">
+                                        <div className="rounded-xl border border-slate-300 bg-white transition focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10">
+                                            <div className="flex items-center gap-3 px-4 py-2.5 border-b border-slate-100">
+                                                <span className="text-xs font-medium text-slate-400 flex-shrink-0">Subject</span>
+                                                <input
+                                                    type="text"
+                                                    value={newSubject}
+                                                    onChange={(e) => setNewSubject(e.target.value)}
+                                                    placeholder="Subject"
+                                                    className="flex-1 min-w-0 bg-transparent text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                                                    disabled={sending}
+                                                />
                                             </div>
+
                                             <textarea
                                                 value={newMessage}
                                                 onChange={(e) => setNewMessage(e.target.value)}
-                                                placeholder="Write your reply..."
-                                                rows={2}
-                                                className="w-full bg-transparent border-none focus:outline-none text-[13px] text-slate-800 font-medium resize-none min-h-[44px] max-h-[180px] custom-scrollbar"
+                                                placeholder={`Reply to ${nameOf(selectedChat)}...`}
+                                                rows={3}
+                                                className="block w-full px-4 py-3 bg-transparent text-sm text-slate-800 placeholder:text-slate-400 leading-relaxed outline-none resize-none min-h-[84px] max-h-[220px] custom-scrollbar"
                                                 disabled={sending}
                                                 onKeyDown={(e) => {
                                                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); }
                                                 }}
                                             />
+
+                                            {replyFiles.length > 0 && (
+                                                <div className="flex flex-wrap gap-2 px-4 pb-3">
+                                                    {replyFiles.map((f, i) => (
+                                                        <span key={i} className="flex items-center gap-2 text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 pl-3 pr-1.5 py-1 rounded-lg">
+                                                            <i className="fa-solid fa-paperclip text-[11px] text-slate-400"></i>
+                                                            <span className="truncate max-w-[160px]">{f.name}</span>
+                                                            <span className="text-slate-400 font-normal">{formatBytes(f.size)}</span>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setReplyFiles(prev => prev.filter((_, idx) => idx !== i))}
+                                                                className="w-5 h-5 rounded flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                                                title="Remove"
+                                                            >
+                                                                <i className="fa-solid fa-xmark text-[11px]"></i>
+                                                            </button>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="flex items-center justify-between gap-3 px-2.5 py-2 border-t border-slate-100 bg-slate-50/70 rounded-b-xl">
+                                                <div className="flex items-center gap-1.5">
+                                                    <input
+                                                        ref={replyFileInput}
+                                                        type="file"
+                                                        multiple
+                                                        className="hidden"
+                                                        onChange={(e) => setReplyFiles(Array.from(e.target.files || []).slice(0, 5))}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => replyFileInput.current?.click()}
+                                                        disabled={sending}
+                                                        title="Attach files (max 5, 10MB each)"
+                                                        className={iconBtnCls}
+                                                    >
+                                                        <i className="fa-solid fa-paperclip"></i>
+                                                    </button>
+                                                    <VariableSelector placement="top" onInsert={(v) => setNewMessage(prev => prev + v)} />
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <span className="hidden lg:inline text-xs text-slate-400">Enter to send · Shift+Enter for a new line</span>
+                                                    <button
+                                                        type="submit"
+                                                        disabled={!newMessage.trim() || sending}
+                                                        className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    >
+                                                        {sending
+                                                            ? <><i className="fa-solid fa-spinner fa-spin text-xs"></i> Sending</>
+                                                            : <><i className="fa-solid fa-paper-plane text-xs"></i> Send</>}
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <input
-                                            ref={replyFileInput}
-                                            type="file"
-                                            multiple
-                                            className="hidden"
-                                            onChange={(e) => setReplyFiles(Array.from(e.target.files || []).slice(0, 5))}
-                                        />
-                                        <button
-                                            type="button"
-                                            onClick={() => replyFileInput.current?.click()}
-                                            disabled={sending}
-                                            title="Attach files (max 5, 10MB each)"
-                                            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all duration-200 active:scale-95 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-40"
-                                        >
-                                            <i className="fa-solid fa-paperclip text-[13px]"></i>
-                                        </button>
-                                        <button
-                                            type="submit"
-                                            disabled={!newMessage.trim() || sending}
-                                            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all duration-200 active:scale-95
-                                                bg-blue-600 hover:bg-blue-700 text-white shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
-                                        >
-                                            {sending ? <i className="fa-solid fa-spinner fa-spin text-xs"></i> : <i className="fa-solid fa-paper-plane text-[13px]"></i>}
-                                        </button>
-                                    </div>
-                                    <p className="text-[10px] text-slate-400 text-right mt-2 font-medium">Enter to send · Shift+Enter new line</p>
-                                </form>
-                            </div>
+                                    </form>
+                                </div>
                             )}
                         </div>
 
-                        {/* ═══ Contact Panel (slide-in) ═══ */}
+                        {/* ═══ Contact panel ═══ */}
                         {showContactPanel && (
-                            <div className="w-68 flex-shrink-0 border-l border-slate-200/80 bg-white flex flex-col overflow-y-auto custom-scrollbar h-full shadow-sm">
-                                {/* Panel Header */}
-                                <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Contact Info</span>
-                                    <button onClick={() => setShowContactPanel(false)} className="text-slate-300 hover:text-slate-500 transition duration-200">
-                                        <i className="fa-solid fa-xmark text-base"></i>
+                            <div className="absolute xl:static inset-y-0 right-0 z-20 w-72 flex-shrink-0 border-l border-slate-200 bg-white flex flex-col overflow-y-auto custom-scrollbar h-full shadow-xl xl:shadow-none">
+                                <div className="h-16 px-5 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+                                    <span className="text-sm font-semibold text-slate-900">Contact details</span>
+                                    <button onClick={() => setShowContactPanel(false)} className={iconBtnCls} title="Close">
+                                        <i className="fa-solid fa-xmark"></i>
                                     </button>
                                 </div>
 
-                                {/* Avatar + name */}
-                                <div className="flex flex-col items-center gap-2 py-8 px-5 border-b border-slate-50 bg-slate-50/20">
-                                    <div className="w-16 h-16 bg-gradient-to-tr from-blue-500 via-blue-700 to-blue-600 rounded-2xl flex items-center justify-center text-white font-bold text-2xl shadow-md shadow-blue-500/10">
-                                        {(selectedChat.displayName || selectedChat.email).charAt(0).toUpperCase()}
+                                <div className="flex flex-col items-center gap-1 py-6 px-5 border-b border-slate-100 text-center">
+                                    <div className={`w-16 h-16 rounded-full flex items-center justify-center font-semibold text-2xl mb-2 ${avatarColor(selectedChat.email)}`}>
+                                        {initialOf(selectedChat)}
                                     </div>
-                                    <p className="text-sm font-bold text-slate-800 text-center leading-tight mt-3">
-                                        {selectedChat.displayName || selectedChat.email.split('@')[0]}
-                                    </p>
-                                    <p className="text-[11px] text-slate-400 font-semibold text-center break-all">{selectedChat.email}</p>
+                                    <p className="text-base font-semibold text-slate-900 leading-tight">{nameOf(selectedChat)}</p>
+                                    <p className="text-sm text-slate-500 break-all">{selectedChat.email}</p>
                                     {selectedChat.leadId?.status && (
-                                        <span className="mt-3 text-[9.5px] font-black uppercase tracking-widest px-3 py-1 rounded-full bg-blue-50 text-blue-600 border border-blue-100/50 shadow-sm">
+                                        <span className="mt-2 text-xs font-medium px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
                                             {selectedChat.leadId.status}
                                         </span>
                                     )}
                                 </div>
 
-                                {/* Stats */}
-                                <div className="px-5 py-5 space-y-4">
-                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Thread Stats</p>
-                                    {[
-                                        { icon: 'fa-envelope', label: 'Total Messages', value: selectedChat.metadata?.totalMessages ?? '—' },
-                                        { icon: 'fa-arrow-up', label: 'Sent', value: selectedChat.metadata?.totalOutbound ?? '—' },
-                                        { icon: 'fa-arrow-down', label: 'Received', value: selectedChat.metadata?.totalInbound ?? '—' },
-                                        { icon: 'fa-circle-dot', label: 'Unread', value: selectedChat.unreadCount ?? 0 },
-                                    ].map(row => (
-                                        <div key={row.label} className="flex items-center justify-between">
-                                            <span className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-                                                <i className={`fa-solid ${row.icon} text-slate-300 w-3`}></i>
-                                                {row.label}
-                                            </span>
-                                            <span className="text-xs font-bold text-slate-700">{row.value}</span>
-                                        </div>
-                                    ))}
+                                <div className="p-5 space-y-4">
+                                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Thread activity</p>
+                                    <div className="grid grid-cols-2 gap-2.5">
+                                        {[
+                                            { label: 'Messages', value: selectedChat.metadata?.totalMessages ?? '—' },
+                                            { label: 'Unread', value: selectedChat.unreadCount ?? 0 },
+                                            { label: 'Sent', value: selectedChat.metadata?.totalOutbound ?? '—' },
+                                            { label: 'Received', value: selectedChat.metadata?.totalInbound ?? '—' },
+                                        ].map(row => (
+                                            <div key={row.label} className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2.5">
+                                                <p className="text-lg font-semibold text-slate-900 leading-none">{row.value}</p>
+                                                <p className="text-xs text-slate-500 mt-1.5">{row.label}</p>
+                                            </div>
+                                        ))}
+                                    </div>
                                     {selectedChat.lastMessageAt && (
-                                        <div className="flex items-center justify-between pt-2.5 border-t border-slate-100">
-                                            <span className="text-[11px] font-bold text-slate-400">Last activity</span>
-                                            <span className="text-xs font-bold text-slate-500">{formatTime(selectedChat.lastMessageAt)}</span>
+                                        <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-sm">
+                                            <span className="text-slate-500">Last activity</span>
+                                            <span className="font-medium text-slate-700">{formatTime(selectedChat.lastMessageAt)}</span>
                                         </div>
                                     )}
                                 </div>
@@ -1005,69 +1043,69 @@ const EmailInbox = () => {
                         )}
                     </>
                 ) : (
-                    /* Empty State */
-                    <div className="flex-1 flex flex-col items-center justify-center bg-slate-50/20 gap-6 h-full p-6 text-center select-none">
-                        <div
-                            onClick={canSend ? openCompose : undefined}
-                            className={`w-24 h-24 bg-white rounded-[24px] shadow-lg shadow-slate-100 flex items-center justify-center border border-slate-100 transition-all duration-300 ${canSend ? 'cursor-pointer hover:shadow-xl hover:scale-105 active:scale-95' : ''}`}
-                        >
-                            <i className="fa-solid fa-envelope-open-text text-3xl text-blue-500"></i>
+                    /* Empty state */
+                    <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 gap-5 p-6 text-center">
+                        <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 text-blue-600 flex items-center justify-center">
+                            <i className="fa-solid fa-envelope-open-text text-2xl"></i>
                         </div>
                         <div>
-                            <h2 className="text-base font-black text-slate-800 mb-1">Select a conversation</h2>
-                            <p className="text-xs font-semibold text-slate-400 max-w-[280px] leading-relaxed mx-auto">
+                            <h2 className="text-lg font-semibold text-slate-900">Select a conversation</h2>
+                            <p className="text-sm text-slate-500 max-w-sm mt-1 leading-relaxed">
                                 {canSend
-                                    ? 'Pick a thread on the left, or create a brand new conversation to start emailing.'
-                                    : 'Pick a thread on the left to read it. You have read-only access.'}
+                                    ? 'Pick a thread from the list to read and reply, or compose a new email.'
+                                    : 'Pick a thread from the list to read it. You have read-only access.'}
                             </p>
                         </div>
                         {canSend && (
                             <button
                                 onClick={openCompose}
-                                className="flex items-center gap-2 px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition duration-200 shadow-md shadow-blue-100 active:scale-95"
+                                className="h-10 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors"
                             >
-                                <i className="fa-solid fa-pen-to-square"></i> Compose New Email
+                                <i className="fa-solid fa-pen-to-square"></i> Compose email
                             </button>
                         )}
                     </div>
                 )}
-            </div>
+            </section>
 
-            {/* Drafts modal */}
+            {/* ═══ Drafts modal ═══ */}
             {showDrafts && (
                 <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden animate-fade-in-up">
-                        <div className="px-6 py-4 bg-slate-800 flex justify-between items-center">
-                            <h3 className="font-bold text-white text-sm flex items-center gap-2">
-                                <i className="fa-solid fa-file-pen"></i> Drafts
-                            </h3>
-                            <button onClick={() => setShowDrafts(false)} className="text-white/80 hover:text-white transition duration-200">
-                                <i className="fa-solid fa-xmark text-base"></i>
+                        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
+                            <div>
+                                <h3 className="text-base font-semibold text-slate-900">Drafts</h3>
+                                <p className="text-sm text-slate-500">Pick up where you left off</p>
+                            </div>
+                            <button onClick={() => setShowDrafts(false)} className={iconBtnCls} title="Close">
+                                <i className="fa-solid fa-xmark"></i>
                             </button>
                         </div>
-                        <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                        <div className="p-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
                             {drafts.length === 0 ? (
-                                <div className="text-center py-10">
-                                    <i className="fa-solid fa-file-pen text-3xl text-slate-200 mb-3"></i>
-                                    <p className="text-sm text-slate-400 font-medium">No saved drafts</p>
-                                    <p className="text-xs text-slate-300 mt-1">Use “Save Draft” in the compose window</p>
+                                <div className="text-center py-12">
+                                    <div className="w-12 h-12 mx-auto rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mb-3">
+                                        <i className="fa-solid fa-file-pen"></i>
+                                    </div>
+                                    <p className="text-sm font-medium text-slate-700">No saved drafts</p>
+                                    <p className="text-sm text-slate-400 mt-1">Use “Save draft” in the compose window.</p>
                                 </div>
                             ) : (
-                                <div className="space-y-2">
+                                <div className="divide-y divide-slate-100">
                                     {drafts.map(d => (
-                                        <div key={d._id} className="flex items-center gap-3 p-3.5 bg-slate-50 border border-slate-200/60 rounded-xl">
-                                            <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-400 flex-shrink-0">
-                                                <i className="fa-solid fa-file-lines text-xs"></i>
+                                        <div key={d._id} className="flex items-center gap-3 px-2 py-3">
+                                            <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center text-slate-500 flex-shrink-0">
+                                                <i className="fa-solid fa-file-lines text-sm"></i>
                                             </div>
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-[13px] font-semibold text-slate-700 truncate">{d.subject || '(No subject)'}</p>
-                                                <p className="text-[11px] text-slate-400 truncate">
+                                                <p className="text-sm font-medium text-slate-800 truncate">{d.subject || '(No subject)'}</p>
+                                                <p className="text-xs text-slate-500 truncate mt-0.5">
                                                     {d.to || 'No recipient'} · {new Date(d.updatedAt).toLocaleString()}
                                                 </p>
                                             </div>
                                             <button
                                                 onClick={() => resumeDraft(d)}
-                                                className="text-[11px] font-bold px-3 py-1.5 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 transition flex-shrink-0"
+                                                className="h-8 px-3 rounded-lg text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 transition flex-shrink-0"
                                             >
                                                 Resume
                                             </button>
@@ -1087,40 +1125,43 @@ const EmailInbox = () => {
                 </div>
             )}
 
-            {/* Scheduled outbox modal */}
+            {/* ═══ Scheduled outbox modal ═══ */}
             {showScheduled && (
                 <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden animate-fade-in-up">
-                        <div className="px-6 py-4 bg-slate-800 flex justify-between items-center">
-                            <h3 className="font-bold text-white text-sm flex items-center gap-2">
-                                <i className="fa-solid fa-clock"></i> Scheduled Emails
-                            </h3>
-                            <button onClick={() => setShowScheduled(false)} className="text-white/80 hover:text-white transition duration-200">
-                                <i className="fa-solid fa-xmark text-base"></i>
+                        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
+                            <div>
+                                <h3 className="text-base font-semibold text-slate-900">Scheduled emails</h3>
+                                <p className="text-sm text-slate-500">Queued to send later</p>
+                            </div>
+                            <button onClick={() => setShowScheduled(false)} className={iconBtnCls} title="Close">
+                                <i className="fa-solid fa-xmark"></i>
                             </button>
                         </div>
-                        <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                        <div className="p-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
                             {scheduled.length === 0 ? (
-                                <div className="text-center py-10">
-                                    <i className="fa-solid fa-clock text-3xl text-slate-200 mb-3"></i>
-                                    <p className="text-sm text-slate-400 font-medium">No emails are scheduled</p>
+                                <div className="text-center py-12">
+                                    <div className="w-12 h-12 mx-auto rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mb-3">
+                                        <i className="fa-regular fa-clock"></i>
+                                    </div>
+                                    <p className="text-sm font-medium text-slate-700">No emails are scheduled</p>
                                 </div>
                             ) : (
-                                <div className="space-y-2">
+                                <div className="divide-y divide-slate-100">
                                     {scheduled.map(item => (
-                                        <div key={item.id} className="flex items-center gap-3 p-3.5 bg-slate-50 border border-slate-200/60 rounded-xl">
-                                            <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-400 flex-shrink-0">
-                                                <i className="fa-solid fa-paper-plane text-xs"></i>
+                                        <div key={item.id} className="flex items-center gap-3 px-2 py-3">
+                                            <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600 flex-shrink-0">
+                                                <i className="fa-solid fa-paper-plane text-sm"></i>
                                             </div>
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-[13px] font-semibold text-slate-700 truncate">{item.subject || '(No subject)'}</p>
-                                                <p className="text-[11px] text-slate-400 truncate">
+                                                <p className="text-sm font-medium text-slate-800 truncate">{item.subject || '(No subject)'}</p>
+                                                <p className="text-xs text-slate-500 truncate mt-0.5">
                                                     To {item.to} · {item.scheduledFor ? new Date(item.scheduledFor).toLocaleString() : 'pending'}
                                                 </p>
                                             </div>
                                             <button
                                                 onClick={() => cancelScheduled(item.id)}
-                                                className="text-[11px] font-bold px-3 py-1.5 rounded-lg text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-100 transition flex-shrink-0"
+                                                className="h-8 px-3 rounded-lg text-sm font-medium text-rose-600 bg-rose-50 hover:bg-rose-100 transition flex-shrink-0"
                                             >
                                                 Cancel
                                             </button>
@@ -1133,158 +1174,189 @@ const EmailInbox = () => {
                 </div>
             )}
 
-            {/* Compose New Email Modal — uses isolated compose state, never touches reply bar */}
+            {/* ═══ Compose modal — isolated compose state, never touches the reply bar ═══ */}
             {showNewChatModal && (
                 <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-fade-in-up max-h-[92vh] flex flex-col">
-                        <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 flex justify-between items-center flex-shrink-0">
-                            <h3 className="font-bold text-white text-sm flex items-center gap-2">
-                                <i className="fa-solid fa-pen-to-square"></i> Compose New Email
-                            </h3>
-                            <button onClick={() => setShowNewChatModal(false)} className="text-white/80 hover:text-white transition duration-200">
-                                <i className="fa-solid fa-xmark text-base"></i>
+                        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center flex-shrink-0">
+                            <div>
+                                <h3 className="text-base font-semibold text-slate-900">New email</h3>
+                                <p className="text-sm text-slate-500">{draftId ? 'Editing a saved draft' : 'Start a new conversation'}</p>
+                            </div>
+                            <button onClick={() => setShowNewChatModal(false)} className={iconBtnCls} title="Close">
+                                <i className="fa-solid fa-xmark"></i>
                             </button>
                         </div>
-                        <form onSubmit={handleStartNewChat} className="p-6 space-y-4 overflow-y-auto custom-scrollbar">
-                            <div className="grid grid-cols-2 gap-4">
+
+                        <form onSubmit={handleStartNewChat} className="flex flex-col flex-1 min-h-0">
+                            <div className="p-6 space-y-5 overflow-y-auto custom-scrollbar">
                                 <div>
-                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">To: Email Address <span className="text-red-500">*</span></label>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <label className="text-sm font-medium text-slate-700">To <span className="text-rose-500">*</span></label>
+                                        {!(showCcBcc || composeCc || composeBcc) && (
+                                            <button type="button" onClick={() => setShowCcBcc(true)} className="text-sm font-medium text-blue-600 hover:text-blue-700">
+                                                Add Cc / Bcc
+                                            </button>
+                                        )}
+                                    </div>
                                     <input
                                         type="email"
                                         required
                                         value={composeEmail}
                                         onChange={(e) => setComposeEmail(e.target.value)}
                                         placeholder="lead@example.com"
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-bold text-slate-700"
+                                        className={inputCls}
                                     />
                                 </div>
-                                <div>
-                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Schedule For (Optional)</label>
-                                    <input
-                                        type="datetime-local"
-                                        value={composeSchedule}
-                                        onChange={(e) => setComposeSchedule(e.target.value)}
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
-                                    />
+
+                                {(showCcBcc || composeCc || composeBcc) && (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className={labelCls}>Cc</label>
+                                            <input
+                                                type="text"
+                                                value={composeCc}
+                                                onChange={(e) => setComposeCc(e.target.value)}
+                                                placeholder="Comma-separated emails"
+                                                className={inputCls}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className={labelCls}>Bcc</label>
+                                            <input
+                                                type="text"
+                                                value={composeBcc}
+                                                onChange={(e) => setComposeBcc(e.target.value)}
+                                                placeholder="Comma-separated emails"
+                                                className={inputCls}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className={labelCls}>Template <span className="text-slate-400 font-normal">(optional)</span></label>
+                                        <select
+                                            value={composeTemplateId}
+                                            onChange={(e) => applyComposeTemplate(e.target.value)}
+                                            className={inputCls}
+                                        >
+                                            <option value="">Write from scratch</option>
+                                            {composeTemplates.filter(t => t.isActive).map(t => (
+                                                <option key={t._id} value={t._id}>{t.name}{t.attachments?.length > 0 ? ` (${t.attachments.length} attachment${t.attachments.length > 1 ? 's' : ''})` : ''}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className={labelCls}>Schedule for <span className="text-slate-400 font-normal">(optional)</span></label>
+                                        <input
+                                            type="datetime-local"
+                                            value={composeSchedule}
+                                            onChange={(e) => setComposeSchedule(e.target.value)}
+                                            className={inputCls}
+                                        />
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">CC (Optional)</label>
-                                    <input
-                                        type="text"
-                                        value={composeCc}
-                                        onChange={(e) => setComposeCc(e.target.value)}
-                                        placeholder="comma separated emails"
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">BCC (Optional)</label>
-                                    <input
-                                        type="text"
-                                        value={composeBcc}
-                                        onChange={(e) => setComposeBcc(e.target.value)}
-                                        placeholder="comma separated emails"
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
-                                    />
-                                </div>
-                            </div>
-                            {/* Template Picker */}
-                            <div>
-                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Use Template (Optional)</label>
-                                <select
-                                    value={composeTemplateId}
-                                    onChange={(e) => applyComposeTemplate(e.target.value)}
-                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-semibold text-slate-700"
-                                >
-                                    <option value="">— Write from scratch —</option>
-                                    {composeTemplates.filter(t => t.isActive).map(t => (
-                                        <option key={t._id} value={t._id}>{t.name}{t.attachments?.length > 0 ? ` (${t.attachments.length} attachment${t.attachments.length > 1 ? 's' : ''})` : ''}</option>
-                                    ))}
-                                </select>
                                 {composeTemplateId && (() => {
                                     const tpl = composeTemplates.find(t => t._id === composeTemplateId);
                                     return tpl?.attachments?.length > 0 ? (
-                                        <p className="text-[11px] text-blue-600 mt-1.5 font-semibold">
-                                            <i className="fa-solid fa-paperclip mr-1"></i>
+                                        <p className="-mt-2 text-sm text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+                                            <i className="fa-solid fa-paperclip mr-1.5"></i>
                                             {tpl.attachments.length} template attachment{tpl.attachments.length > 1 ? 's' : ''} will be included automatically.
                                         </p>
                                     ) : null;
                                 })()}
-                            </div>
-                            <div>
-                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Subject</label>
-                                <div className="flex items-center space-x-2">
+
+                                <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <label className="text-sm font-medium text-slate-700">Subject <span className="text-rose-500">*</span></label>
+                                        <VariableSelector onInsert={(v) => setComposeSubject(prev => prev + v)} />
+                                    </div>
                                     <input
                                         type="text"
                                         required
                                         value={composeSubject}
                                         onChange={(e) => setComposeSubject(e.target.value)}
-                                        placeholder="Enter subject..."
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none text-xs font-bold text-slate-700"
+                                        placeholder="What's this email about?"
+                                        className={inputCls}
                                     />
-                                    <VariableSelector onInsert={(v) => setComposeSubject(prev => prev + v)} />
                                 </div>
-                            </div>
-                            <div>
-                                <div className="flex justify-between items-center mb-1.5">
-                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Message</label>
-                                    <VariableSelector onInsert={(v) => setComposeMessage(prev => prev + v)} />
-                                </div>
-                                <textarea
-                                    required
-                                    value={composeMessage}
-                                    onChange={(e) => setComposeMessage(e.target.value)}
-                                    placeholder="Write your email here..."
-                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl transition-all duration-200 outline-none min-h-[150px] resize-y text-xs font-medium text-slate-700 leading-relaxed"
-                                ></textarea>
-                            </div>
 
-                            {/* Attachments */}
-                            <div>
-                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
-                                    Attachments {composeSchedule && <span className="text-slate-300 normal-case font-semibold">(not available for scheduled emails)</span>}
-                                </label>
-                                <input
-                                    ref={composeFileInput}
-                                    type="file"
-                                    multiple
-                                    disabled={!!composeSchedule}
-                                    onChange={(e) => setComposeFiles(Array.from(e.target.files || []).slice(0, 5))}
-                                    className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100 disabled:opacity-40"
-                                />
-                                {composeFiles.length > 0 && (
-                                    <div className="flex flex-wrap gap-1.5 mt-2">
-                                        {composeFiles.map((f, i) => (
-                                            <span key={i} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg">
-                                                <i className="fa-solid fa-paperclip text-[9px]"></i>
-                                                <span className="truncate max-w-[140px]">{f.name}</span>
-                                                <span className="text-slate-400">{formatBytes(f.size)}</span>
-                                            </span>
-                                        ))}
+                                <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <label className="text-sm font-medium text-slate-700">Message <span className="text-rose-500">*</span></label>
+                                        <VariableSelector onInsert={(v) => setComposeMessage(prev => prev + v)} />
                                     </div>
-                                )}
+                                    <textarea
+                                        required
+                                        value={composeMessage}
+                                        onChange={(e) => setComposeMessage(e.target.value)}
+                                        placeholder="Write your email here..."
+                                        className={`${inputCls} min-h-[200px] resize-y leading-relaxed`}
+                                    ></textarea>
+                                </div>
+
+                                {/* Attachments */}
+                                <div>
+                                    <label className={labelCls}>Attachments</label>
+                                    <input
+                                        ref={composeFileInput}
+                                        type="file"
+                                        multiple
+                                        className="hidden"
+                                        disabled={!!composeSchedule}
+                                        onChange={(e) => setComposeFiles(Array.from(e.target.files || []).slice(0, 5))}
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => composeFileInput.current?.click()}
+                                        disabled={!!composeSchedule}
+                                        className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-dashed border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-slate-300 disabled:hover:text-slate-600 disabled:hover:bg-transparent"
+                                    >
+                                        <i className="fa-solid fa-paperclip"></i>
+                                        {composeSchedule ? 'Attachments are not available for scheduled emails' : 'Add files (up to 5, 10MB each)'}
+                                    </button>
+                                    {composeFiles.length > 0 && (
+                                        <div className="flex flex-wrap gap-2 mt-2.5">
+                                            {composeFiles.map((f, i) => (
+                                                <span key={i} className="flex items-center gap-2 text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 pl-3 pr-1.5 py-1 rounded-lg">
+                                                    <i className="fa-solid fa-paperclip text-[11px] text-slate-400"></i>
+                                                    <span className="truncate max-w-[160px]">{f.name}</span>
+                                                    <span className="text-slate-400 font-normal">{formatBytes(f.size)}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setComposeFiles(prev => prev.filter((_, idx) => idx !== i))}
+                                                        className="w-5 h-5 rounded flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                                        title="Remove"
+                                                    >
+                                                        <i className="fa-solid fa-xmark text-[11px]"></i>
+                                                    </button>
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
 
-                            <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
-                                <button type="button" onClick={() => setShowNewChatModal(false)} className="px-5 py-2.5 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition text-xs">
+                            <div className="px-6 py-4 flex justify-end gap-2.5 border-t border-slate-200 bg-slate-50 flex-shrink-0">
+                                <button type="button" onClick={() => setShowNewChatModal(false)} className="h-10 px-4 text-sm font-medium text-slate-600 hover:bg-slate-200/60 rounded-lg transition">
                                     Cancel
                                 </button>
                                 <button
                                     type="button"
                                     onClick={handleSaveDraft}
                                     disabled={savingDraft}
-                                    className="px-5 py-2.5 text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 rounded-xl transition flex items-center gap-2 text-xs disabled:opacity-50"
+                                    className="h-10 px-4 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition flex items-center gap-2 disabled:opacity-50"
                                 >
                                     {savingDraft
                                         ? <><i className="fa-solid fa-spinner fa-spin"></i> Saving...</>
-                                        : <><i className="fa-solid fa-file-pen"></i> {draftId ? 'Update Draft' : 'Save Draft'}</>}
+                                        : <><i className="fa-solid fa-file-pen"></i> {draftId ? 'Update draft' : 'Save draft'}</>}
                                 </button>
-                                <button type="submit" disabled={sending} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition shadow-md shadow-blue-100 flex items-center gap-2 text-xs disabled:opacity-60">
+                                <button type="submit" disabled={sending} className="h-10 px-5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition shadow-sm flex items-center gap-2 disabled:opacity-60">
                                     {sending
                                         ? <><i className="fa-solid fa-spinner fa-spin"></i> Sending...</>
-                                        : <><i className={`fa-solid ${composeSchedule ? 'fa-clock' : 'fa-paper-plane'}`}></i> {composeSchedule ? 'Schedule Email' : 'Send Email'}</>}
+                                        : <><i className={`fa-solid ${composeSchedule ? 'fa-clock' : 'fa-paper-plane'}`}></i> {composeSchedule ? 'Schedule email' : 'Send email'}</>}
                                 </button>
                             </div>
                         </form>

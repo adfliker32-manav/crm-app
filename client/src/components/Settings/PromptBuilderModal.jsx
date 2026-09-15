@@ -81,18 +81,18 @@ const PromptBuilderModal = ({ isOpen, onClose, onApply }) => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                                 <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Business Name</label>
-                                <input type="text" value={businessName} onChange={(e) => setBusinessName(e.target.value)} placeholder="e.g. Madhavbaug Clinic" className="w-full p-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                                <input type="text" value={businessName} onChange={(e) => setBusinessName(e.target.value)} placeholder="e.g. Sunrise Dental Care" className="w-full p-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                             </div>
                             <div>
                                 <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Industry / What You Sell</label>
-                                <input type="text" value={industry} onChange={(e) => setIndustry(e.target.value)} placeholder="e.g. Ayurvedic heart clinic" className="w-full p-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                                <input type="text" value={industry} onChange={(e) => setIndustry(e.target.value)} placeholder="e.g. Dental clinic offering cleanings and implants" className="w-full p-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                             </div>
                         </div>
                     </div>
 
                     <div>
                         <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">What should the chatbot find out? (in order)</label>
-                        <textarea value={questions} onChange={(e) => setQuestions(e.target.value)} rows="3" placeholder="e.g. Name, city, which condition they want to treat, whether they've consulted before" className="w-full p-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                        <textarea value={questions} onChange={(e) => setQuestions(e.target.value)} rows="3" placeholder="e.g. Name, city, which service they need, preferred time for a call" className="w-full p-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -110,7 +110,7 @@ const PromptBuilderModal = ({ isOpen, onClose, onApply }) => {
 
                     <div>
                         <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Anything else the AI should know? (optional)</label>
-                        <textarea value={extra} onChange={(e) => setExtra(e.target.value)} rows="2" placeholder="e.g. Never quote exact prices, always mention the free first consultation" className="w-full p-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                        <textarea value={extra} onChange={(e) => setExtra(e.target.value)} rows="2" placeholder="e.g. Never quote exact prices, mention our weekend opening hours" className="w-full p-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                     </div>
 
                     {/* Step 2 — copy out */}
