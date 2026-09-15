@@ -65,6 +65,13 @@ for (const m of ['MediaAsset', 'LeadDocument', 'KnowledgeDocument', 'WhatsAppMes
     stub(`src/models/${m}.js`, fakeModel(m));
 }
 
+// One file, three models (MCP OAuth clients / codes / grants).
+stub('src/models/OAuthClient.js', {
+    OAuthClient: fakeModel('OAuthClient'),
+    OAuthAuthCode: fakeModel('OAuthAuthCode'),
+    OAuthGrant: fakeModel('OAuthGrant')
+});
+
 stub('src/services/storageService.js', {
     deleteObjects: async (keys) => {
         if (storageBehaviour === 'throw') throw new Error('R2 unreachable');

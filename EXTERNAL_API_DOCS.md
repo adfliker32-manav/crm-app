@@ -167,13 +167,127 @@ Send an approved Meta WhatsApp template.
   "templateName": "appointment_reminder"
 }
 ```
-*(Variables in the template will be automatically resolved if you provide a `leadId` instead of just a `phone`)*
+*(Alternatively, you can provide `leadId` instead of `phone` — the lead's own
+fields then fill the template's variables.)*
 
 **Leave `languageCode` out.** To Meta, a template's name *and* its language
 together are its identity: a template approved as `en` does not exist as `en_US`.
 We already know which language Meta approved, so omitting the field is always
 correct. If you do send a `languageCode` that disagrees, the message goes out in
 the approved language and the response carries a `warning` saying so.
+
+#### 6.1 Filling the template's variables
+
+A template body like `Hi {{1}}, your {{2}} is ready. Team {{3}}` has three
+placeholders. Each one is filled from **one** of two sources, and which source
+owns which placeholder is set per template in the CRM, under
+**WhatsApp → Templates → *(your template)* → Variable Mapping**:
+
+| Variable Mapping option | Who fills it | A value you send is |
+|---|---|---|
+| 🔌 **Filled by API (third-party)** | **you**, via `variables` | **used** |
+| *Auto (default by position)* | you, via `variables`; the lead's data if you send none | **used** |
+| Lead Name / Phone / Email / Stage, My Company Name, Agent Name | the workspace | ignored — reported back in `warnings` |
+| ✏️ Custom Static Text | the workspace | ignored — reported back in `warnings` |
+
+The rule is deliberate: a workspace's own wording (a brand name, a legal line)
+must not be replaceable from outside. To control a placeholder from your system,
+ask the workspace to set it to **🔌 Filled by API** once, in the template.
+
+**Sending values**
+
+Three shapes are accepted. Positional:
+
+```json
+{
+  "phone": "+919876543210",
+  "templateName": "order_ready",
+  "variables": ["Rahul", "invoice #A-1029", "Adfliker"]
+}
+```
+
+Keyed by variable number — clearer when you only fill some of them:
+
+```json
+{ "phone": "+919876543210", "templateName": "order_ready",
+  "variables": { "2": "invoice #A-1029" } }
+```
+
+Scoped, when the template also has a **text header** with its own `{{1}}`:
+
+```json
+{ "phone": "+919876543210", "templateName": "order_ready",
+  "variables": {
+    "header": { "1": "A-1029" },
+    "body":   { "1": "Rahul", "2": "invoice", "3": "Adfliker" }
+  } }
+```
+
+`variables` combines freely with `leadId` — send what only your system knows,
+and let the lead's record fill the rest.
+
+**Response**
+
+`variableSources` tells you exactly who filled each placeholder, so you never
+have to guess whether the value you sent reached the customer:
+
+```json
+{
+  "success": true,
+  "messageId": "wamid.HBgMOTE5...",
+  "template": "order_ready",
+  "language": "en",
+  "to": "+919876543210",
+  "sentAt": "2026-09-14T10:00:00.000Z",
+  "variableSources": {
+    "body.1": "crm:lead.name",
+    "body.2": "api",
+    "body.3": "fallback"
+  },
+  "warnings": [
+    "{{3}} (body) is set to \"Filled by API\" but no value was sent — the template's fallback text was used."
+  ]
+}
+```
+
+| `variableSources` value | Meaning |
+|---|---|
+| `api` | the value you sent |
+| `crm:<mapping>` | the workspace's mapping — your value for it, if any, was ignored |
+| `fallback` | the template's fallback text, because you sent no value |
+| `auto` | the positional default (lead name, stage, company, agent) |
+
+`warnings` is present only when there is something to say. The `warning` string
+documented above is still sent alongside it for the language case.
+
+**Errors**
+
+| HTTP | `error` | Cause |
+|---|---|---|
+| 400 | `invalid_variables` | A value is not text, is empty, is over 1024 characters, or names a `{{n}}` this template does not have. `details` lists every problem at once; `templateVariables` shows the numbers the template actually takes. |
+| 400 | `variables_required` | A placeholder is set to **Filled by API**, you sent no value, and the template has no fallback text. `required` and `example` name exactly what to add. Nothing is sent to the customer. |
+| 404 | — | Template not found or not approved. |
+| 422 | `whatsapp_send_failed` | Meta rejected the send; `metaCode` carries its error code. |
+
+```json
+{
+  "success": false,
+  "error": "variables_required",
+  "message": "Template \"order_ready\" expects you to supply {{2}} (body). Add them to `variables`, or give the template a fallback value in Template Builder → Variable Mapping.",
+  "required": [{ "scope": "body", "variable": 2 }],
+  "example": { "body": { "2": "your value" } },
+  "templateVariables": { "body": [1, 2, 3], "header": [] }
+}
+```
+
+**Notes**
+
+- Line breaks, tabs and runs of spaces inside a value are collapsed to single
+  spaces — WhatsApp rejects parameters containing them.
+- Numbers are accepted and sent as text (`1029` → `"1029"`).
+- Values are never stored on the template and never leak between requests: two
+  concurrent sends of the same template with different values are independent.
+- Sending `variables` adds no extra request against your rate limit.
 
 ### 7. Assign a WhatsApp Chat to an Agent
 Hand the WhatsApp conversation for a phone number to one of your agents. Use this

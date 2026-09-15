@@ -299,7 +299,7 @@ const GlobalSettingsView = () => {
                                 placeholder="AIzaSy..."
                                 className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition font-mono"
                             />
-                            <p className="text-xs text-slate-400 mt-1">Powers the "Gemini (Recommended)" model.</p>
+                            <p className="text-xs text-slate-400 mt-1">Powers Adfliker Smart and Adfliker Light.</p>
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">OpenAI API Key (ChatGPT)</label>
@@ -311,7 +311,7 @@ const GlobalSettingsView = () => {
                                 placeholder="sk-..."
                                 className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition font-mono"
                             />
-                            <p className="text-xs text-slate-400 mt-1">Powers the "ChatGPT" model.</p>
+                            <p className="text-xs text-slate-400 mt-1">Powers Adfliker Advance (the default for every client) and Adfliker Ultra. Without it, AI chatbots on the default model stop replying.</p>
                         </div>
                     </div>
                 </div>

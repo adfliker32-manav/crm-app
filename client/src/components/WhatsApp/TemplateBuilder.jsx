@@ -671,10 +671,20 @@ const TemplateBuilder = ({ templateId, onBack }) => {
                         {bodyComp?.text?.includes('{{') && (
                             <div className="mt-8 pt-8 border-t border-slate-100 animate-in fade-in zoom-in-95 duration-500">
                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Variable Mapping</p>
-                                <p className="text-[11px] text-slate-400 mb-5">Choose which CRM field each variable resolves to when sending messages automatically (workflows, broadcasts, automation).</p>
+                                <p className="text-[11px] text-slate-400 mb-2">Choose which CRM field each variable resolves to when sending messages automatically (workflows, broadcasts, automation).</p>
+                                <p className="text-[11px] text-slate-400 mb-5">
+                                    Pick <span className="font-bold text-slate-500">🔌 Filled by API</span> to let an outside system
+                                    send the value with <code className="px-1 py-0.5 bg-slate-100 rounded text-[10px]">POST /api/v1/whatsapp/template</code>.
+                                    Anything mapped to a CRM field stays under this workspace&apos;s control — a value sent by API for it is ignored.
+                                </p>
                                 <div className="space-y-4">
                                     {extractVariables(bodyComp.text).map((num) => {
-                                        const mappingValue = template.variableMapping?.[num.toString()] || '';
+                                        // Templates saved before the fix hold `lead.status`, which the
+                                        // resolver still aliases to `lead.stage`. Shown as-is the select
+                                        // would find no matching option and render blank, so a mapped
+                                        // variable would look unmapped.
+                                        const savedMapping = template.variableMapping?.[num.toString()] || '';
+                                        const mappingValue = savedMapping === 'lead.status' ? 'lead.stage' : savedMapping;
                                         const customValue = template.variableMapping?.[`${num}_custom`] || '';
                                         return (
                                             <div key={num} className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
@@ -691,7 +701,10 @@ const TemplateBuilder = ({ templateId, onBack }) => {
                                                                 variableMapping: {
                                                                     ...(prev.variableMapping || {}),
                                                                     [num.toString()]: val,
-                                                                    ...(val !== 'custom' ? { [`${num}_custom`]: '' } : {})
+                                                                    // 'api' keeps the text box too — there it holds the
+                                                                    // fallback used when the caller sends no value, and
+                                                                    // when the CRM itself sends this template.
+                                                                    ...(val !== 'custom' && val !== 'api' ? { [`${num}_custom`]: '' } : {})
                                                                 }
                                                             }));
                                                         }}
@@ -701,12 +714,42 @@ const TemplateBuilder = ({ templateId, onBack }) => {
                                                         <option value="lead.name">👤 Lead Name</option>
                                                         <option value="lead.phone">📱 Lead Phone</option>
                                                         <option value="lead.email">📧 Lead Email</option>
-                                                        <option value="lead.status">📋 Lead Stage</option>
-                                                        <option value="company.name">🏢 Company Name</option>
+                                                        <option value="lead.stage">📋 Lead Stage</option>
+                                                        <option value="lead.company">🏢 Lead&apos;s Company</option>
+                                                        <option value="company.name">🏛️ My Company Name</option>
                                                         <option value="user.name">🙋 User / Agent Name</option>
+                                                        <option value="api">🔌 Filled by API (third-party)</option>
                                                         <option value="custom">✏️ Custom Static Text</option>
                                                     </select>
                                                 </div>
+                                                {mappingValue === 'api' && (
+                                                    <div className="ml-10 space-y-2">
+                                                        <div className="flex items-start gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-xl">
+                                                            <i className="fa-solid fa-plug text-[10px] text-blue-500 mt-0.5"></i>
+                                                            <p className="text-[10px] font-medium text-blue-700 leading-relaxed">
+                                                                The caller supplies this one. Send it as
+                                                                <code className="mx-1 px-1 py-0.5 bg-white/70 rounded">{`"variables": { "${num}": "value" }`}</code>
+                                                                on <span className="font-bold">POST /api/v1/whatsapp/template</span>. Without a value and without the
+                                                                fallback below, that request is rejected instead of sending a wrong message.
+                                                            </p>
+                                                        </div>
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Fallback text — used when the API sends no value, and when the CRM sends this template itself"
+                                                            value={customValue}
+                                                            onChange={(e) => {
+                                                                setTemplate(prev => ({
+                                                                    ...prev,
+                                                                    variableMapping: {
+                                                                        ...(prev.variableMapping || {}),
+                                                                        [`${num}_custom`]: e.target.value
+                                                                    }
+                                                                }));
+                                                            }}
+                                                            className="w-full px-4 py-2.5 bg-white border-2 border-slate-200 focus:border-emerald-400 rounded-xl text-xs font-bold outline-none transition-colors"
+                                                        />
+                                                    </div>
+                                                )}
                                                 {mappingValue === 'custom' && (
                                                     <input
                                                         type="text"

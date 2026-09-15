@@ -14,8 +14,8 @@ const AISettings = () => {
     const [status, setStatus] = useState({ online: false, checking: true });
     
     // Config states
-    const [provider, setProvider] = useState('gemini');
-    const [model, setModel] = useState('gemini-2.5-flash');
+    const [provider, setProvider] = useState('openai');
+    const [model, setModel] = useState('gpt-4o-mini');
     const [agentName, setAgentName] = useState('AI Assistant');
     const [systemPrompt, setSystemPrompt] = useState('');
     const [aiEnabled, setAiEnabled] = useState(false);
@@ -70,8 +70,8 @@ const AISettings = () => {
     // automatically — customers only see the Adfliker tier names.
     const ADFLIKER_MODELS = [
         { id: 'gemini-2.5-flash-lite-preview-06-17', provider: 'gemini', name: 'Adfliker Light', desc: 'Fast & cost-effective' },
-        { id: 'gemini-2.5-flash', provider: 'gemini', name: 'Adfliker Smart', desc: 'Best balance — Recommended', recommended: true },
-        { id: 'gpt-4o-mini', provider: 'openai', name: 'Adfliker Advance', desc: 'Powerful reasoning, affordable' },
+        { id: 'gemini-2.5-flash', provider: 'gemini', name: 'Adfliker Smart', desc: 'Best balance' },
+        { id: 'gpt-4o-mini', provider: 'openai', name: 'Adfliker Advance', desc: 'Powerful reasoning, affordable — Recommended', recommended: true },
         { id: 'gpt-4o', provider: 'openai', name: 'Adfliker Ultra', desc: 'Maximum capability, premium' },
     ];
     // Lookup helper for mapping raw model IDs to Adfliker display names.
@@ -166,17 +166,17 @@ const AISettings = () => {
                 
                 // If the saved model is a legacy ID not in the current lineup,
                 // gracefully fall back to the recommended Adfliker model.
-                const loadedModel = data.model || 'gemini-2.5-flash';
+                const loadedModel = data.model || 'gpt-4o-mini';
                 const isKnown = ADFLIKER_MODELS.some(m => m.id === loadedModel);
-                const finalModel = isKnown ? loadedModel : 'gemini-2.5-flash';
+                const finalModel = isKnown ? loadedModel : 'gpt-4o-mini';
                 
                 setModel(finalModel);
                 
                 // Keep provider in sync with the model we just selected/fell back to
                 if (!isKnown) {
-                    setProvider('gemini');
+                    setProvider('openai');
                 } else {
-                    setProvider(data.provider || ADFLIKER_MODELS.find(m => m.id === finalModel)?.provider || 'gemini');
+                    setProvider(data.provider || ADFLIKER_MODELS.find(m => m.id === finalModel)?.provider || 'openai');
                 }
                 setAgentName(data.agentName || 'AI Assistant');
                 setSystemPrompt(data.systemPrompt || '');
@@ -250,7 +250,7 @@ const AISettings = () => {
     const handleModelChange = (modelId) => {
         setModel(modelId);
         const found = ADFLIKER_MODELS.find(m => m.id === modelId);
-        setProvider(found?.provider || 'gemini');
+        setProvider(found?.provider || 'openai');
     };
 
     // Save configuration

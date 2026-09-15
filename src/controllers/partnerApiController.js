@@ -19,6 +19,10 @@ const WhatsAppConversation = require('../models/WhatsAppConversation');
 const WhatsAppMessage = require('../models/WhatsAppMessage');
 const WhatsAppTemplate = require('../models/WhatsAppTemplate');
 const { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage: sendTemplateMessage } = require('../services/whatsappService');
+const {
+    buildMetaComponents, buildTemplateContext,
+    normalizeVariableInput, planTemplateVariables
+} = require('../utils/templateResolver');
 const { forwardIfPartnerAccount, clearCacheForTenant, clearCacheForPartner } = require('../services/partnerWebhookService');
 const { validateOutboundUrl } = require('../utils/ssrfGuard');
 const { clearTokenVersionCache } = require('../middleware/authMiddleware');
@@ -668,6 +672,16 @@ exports.sendWhatsApp = async (req, res) => {
 /**
  * POST /api/partner/v1/whatsapp/template
  * Send a WhatsApp template message.
+ *
+ * `variables` used to be handed to Meta as the template's `components` array
+ * verbatim, so the flat list our own guide documented — ["John", "3 PM"] — was
+ * rejected by Meta as a malformed component on every call. It now goes through
+ * the same plan the External API uses (templateResolver), which turns caller
+ * values into real parameters and settles, in one place, which placeholders a
+ * caller may fill and which belong to the workspace's own mapping.
+ *
+ * A partner that reverse-engineered the old behaviour and sends a ready-made
+ * Meta components array still works: that shape is detected and passed through.
  */
 exports.sendTemplate = async (req, res) => {
     try {
@@ -675,12 +689,174 @@ exports.sendTemplate = async (req, res) => {
         if (!phone || !templateName) {
             return res.status(400).json({ success: false, message: 'phone and templateName are required.' });
         }
+        if (typeof templateName !== 'string') {
+            return res.status(400).json({ success: false, message: '`templateName` must be a string.' });
+        }
+
+        const warnings = [];
+
+        // Pass-through for the undocumented-but-working raw shape: an array whose
+        // entries are Meta components ({ type: 'body', parameters: [...] }).
+        // Nothing else in this handler applies to it — the caller has already
+        // built what Meta will receive.
+        const isRawComponents = Array.isArray(variables) && variables.length > 0 &&
+            variables.every(v => v && typeof v === 'object' && !Array.isArray(v) && typeof v.type === 'string');
+
+        let normalized = { ok: true, value: {} };
+        if (!isRawComponents) {
+            normalized = normalizeVariableInput(variables);
+            if (!normalized.ok) {
+                return res.status(400).json({
+                    success: false,
+                    error:   'invalid_variables',
+                    message: normalized.errors[0],
+                    details: normalized.errors
+                });
+            }
+        }
+
+        const template = await WhatsAppTemplate.findOne({
+            userId: req.tenantId,
+            name:   templateName
+        }).lean();
+
+        if (!template) {
+            // A template only enters this database when it is created in this
+            // CRM — nothing imports the ones a WABA already had, and the send
+            // service says as much (see its en_US fallback for "an unsynced one,
+            // or Meta's hello_world"). Sending those worked before, so refusing
+            // them here would break a live integration. Plain values are the one
+            // case that genuinely cannot proceed: without the template there is
+            // no placeholder list and no mapping to apply them against.
+            if (Object.keys(normalized.value).length) {
+                return res.status(404).json({
+                    success: false,
+                    error:   'template_not_found',
+                    message: `Template "${templateName}" is not in this account, so the values you sent cannot be matched to its placeholders. ` +
+                             'Use GET /api/partner/v1/whatsapp/templates to list the templates this account knows, or send a ready-made Meta components array.'
+                });
+            }
+
+            const passThrough = await sendTemplateMessage(
+                phone, templateName, languageCode ? String(languageCode).trim() : null,
+                isRawComponents ? variables : [], req.tenantId
+            );
+            return res.json({
+                success: true,
+                data: passThrough,
+                messageId: passThrough?.messages?.[0]?.id || null,
+                template: templateName,
+                variableSources: {},
+                warnings: [
+                    `Template "${templateName}" is not stored in this account, so nothing could be validated before sending — its approval status and language came from Meta. Create or re-sync it in the CRM to get variable mapping and pre-send checks.`
+                ]
+            });
+        }
+        if (template.status !== 'APPROVED') {
+            return res.status(400).json({
+                success: false,
+                error:   'template_not_approved',
+                message: `Template "${templateName}" is ${template.status}, so Meta will not deliver it. Only APPROVED templates can be sent.`
+            });
+        }
+
+        let components;
+        let sources = {};
+
+        if (isRawComponents) {
+            components = variables;
+            warnings.push('`variables` was read as a ready-made Meta components array. Send plain values instead — ["Rahul", "invoice"] or { "1": "Rahul" } — and this account\'s variable mapping is applied for you.');
+        } else {
+            const plan = planTemplateVariables({
+                components:      template.components,
+                variableMapping: template.variableMapping,
+                provided:        normalized.value
+            });
+
+            if (plan.errors.length) {
+                return res.status(400).json({
+                    success: false,
+                    error:   'invalid_variables',
+                    message: plan.errors[0],
+                    details: plan.errors,
+                    templateVariables: plan.present
+                });
+            }
+            if (plan.missing.length) {
+                const wanted = plan.missing.map(k => {
+                    const [scope, n] = k.split('.');
+                    return { scope, variable: Number(n) };
+                });
+                return res.status(400).json({
+                    success: false,
+                    error:   'variables_required',
+                    message: `Template "${templateName}" expects you to supply ` +
+                             wanted.map(w => `{{${w.variable}}} (${w.scope})`).join(', ') + '.',
+                    required: wanted,
+                    example:  wanted.reduce((acc, w) => {
+                        acc[w.scope] = { ...(acc[w.scope] || {}), [w.variable]: 'your value' };
+                        return acc;
+                    }, {}),
+                    templateVariables: plan.present
+                });
+            }
+
+            const owner = await User.findById(req.tenantId).select('name companyName').lean();
+            const { resolveTemplateMedia } = require('../services/mediaLibraryService');
+            const media = await resolveTemplateMedia(template, req.tenantId);
+            const tplContext = buildTemplateContext({
+                lead:   { phone },
+                user:   owner,
+                system: { customData: { media } }
+            });
+
+            // Built unconditionally: a template with {{1}} sent with no parameters
+            // is rejected by Meta on a count mismatch, and its error names no field.
+            components = buildMetaComponents(
+                template.components || [], template.variableMapping, tplContext, plan.applied
+            );
+            sources = plan.sources;
+            warnings.push(...plan.warnings);
+        }
+
+        // To Meta a template IS the pair (name, language): one approved as en_US
+        // does not exist as en. This passed `languageCode || 'en'`, and an
+        // explicit language short-circuits the lookup that would have resolved
+        // it — so the guide's own "en_US" example, and every caller that omitted
+        // the field, could only fail with 132001.
+        const requested = languageCode ? String(languageCode).trim() : null;
+        const effectiveLanguage = template.language || requested;
+        if (requested && effectiveLanguage && requested !== effectiveLanguage) {
+            warnings.push(`Template "${templateName}" is approved in "${effectiveLanguage}", not "${requested}". It was sent in the approved language — drop \`languageCode\` to silence this.`);
+        }
 
         const result = await sendTemplateMessage(
-            phone, templateName, languageCode || 'en', variables || [], req.tenantId
+            phone, templateName, effectiveLanguage, components, req.tenantId
         );
-        res.json({ success: true, data: result });
+
+        res.json({
+            success: true,
+            data: result,                 // unchanged: the raw Meta response
+            messageId: result?.messages?.[0]?.id || null,
+            template:  templateName,
+            language:  effectiveLanguage,
+            variableSources: sources,
+            ...(warnings.length ? { warnings } : {})
+        });
     } catch (err) {
+        // Meta rejecting the payload is the partner's problem to fix, not a
+        // server fault — a 500 told their client to retry a send that can only
+        // fail again, and hid the field Meta actually named.
+        const metaError = err.response?.data?.error;
+        if (metaError) {
+            console.error('[PartnerAPI] sendTemplate rejected by Meta:', metaError.code, metaError.message);
+            return res.status(422).json({
+                success:  false,
+                error:    'whatsapp_send_failed',
+                message:  metaError.error_user_msg || metaError.message || 'WhatsApp rejected this template send.',
+                metaCode: metaError.code || null
+            });
+        }
         console.error('[PartnerAPI] sendTemplate error:', err.message);
         res.status(500).json({ success: false, message: err.message || 'Failed to send template.' });
     }

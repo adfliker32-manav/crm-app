@@ -33,7 +33,11 @@ const ROUTES_DIR = path.join(__dirname, '..', '..', 'src', 'routes');
 // loudly. Verify each controller's real field list, as the entries above were.
 // 190 → 185 on 2026-09-05: the partner-app audit added 5 write routes and
 // validated 10 (the 5 new ones plus every pre-existing partner-app write route).
-const BASELINE_UNVALIDATED = 185;
+// 185 → 184 on 2026-09-15: the MCP OAuth rewrite validated POST /oauth/authorize
+// (a fixed form) and added POST /oauth/revoke with a schema. /oauth/token and
+// /oauth/register stay unvalidated on purpose — they must answer malformed input
+// in OAuth's error format (RFC 6749 §5.2 / RFC 7591 §3.2.2), not validate()'s.
+const BASELINE_UNVALIDATED = 184;
 
 const scanRoutes = () => {
     const perFile = [];

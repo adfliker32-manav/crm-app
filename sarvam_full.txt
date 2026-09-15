@@ -1,0 +1,293 @@
+# Sarvam AI Developer Documentation
+
+> Build with Sarvam AI. Speech-to-text, text-to-speech, translation, chat, and document intelligence APIs for 22 Indian languages, plus no-code platforms for voice agents, coding agents, Cowork, and Content Studio.
+
+Indus: Full Stack AI Platform
+
+# AI for all from India.
+
+Speech, text, and document models trained for 22 Indian languages and English, plus
+no-code platforms for voice agents, coding agents, Cowork, and Content Studio. Create a key
+and make your first call in a minute.
+
+[Get started](/api/getting-started/quickstart)
+
+[Browse the API reference](/api-reference/introduction)
+
+Native support for हिन्दी বাংলা தமிழ் తెలుగు मराठी ગુજરાતી ಕನ್ನಡ മലയാളം ਪੰਜਾਬੀ ଓଡ଼ିଆ অসমীয়া اردو नेपाली कोंकणी کٲشُر سنڌي संस्कृतम् संताली মৈতৈলোন্ बर' मैथिली डोगरी English
+
+### Call the models
+
+REST, WebSocket, and batch endpoints for transcription, speech synthesis, translation,
+chat, and document extraction. Official Python and JavaScript SDKs.
+
+[Quickstart](/api/getting-started/quickstart)
+
+[SDKs](/api/getting-started/sdks)
+
+### Build agents
+
+Design, deploy, and monitor conversational agents across phone and chat in 10 Indian
+languages, hand recurring work to agents wired into Gmail, Slack, and Notion, or deploy coding agents for development tasks.
+
+[Voice Agents](/conversations/overview)
+
+[Cowork](/cowork/overview)
+
+[Coding Agents](/api/sarvam-code)
+
+### Work without code
+
+Dub video, clone voices, generate speech, and turn scans and handwritten forms into
+structured data, all from the dashboard with no integration required.
+
+[Content Studio](/creative/studio-overview)
+
+[Doc Agents](/docai/getting-started/overview)
+
+## Explore the platform
+
+Six products, one account. Start wherever your problem lives.
+
+[Model APIs](/api/getting-started/welcome)
+
+Speech, text, chat, and document models behind a single API key. Build it into your own product.
+
+[Voice Agents](/conversations/overview)
+
+Build, deploy, and monitor voice and chat agents. Bring your own telephony or rent a number from Sarvam.
+
+[Doc Agents](/docai/getting-started/overview)
+
+Extract fields and digitise documents (invoices, KYC, land deeds, handwritten manuscripts) into JSON, CSV, Markdown, or DOCX.
+
+[Content Studio](/creative/studio-overview)
+
+Dub video, clone voices, generate speech, and transcribe audio from the browser.
+
+[Cowork](/cowork/overview)
+
+An agentic workspace for real work: email triage, morning briefings, internal helpdesk, lead follow-up.
+
+[Coding Agent](/api/sarvam-code)
+
+An agentic coding assistant for your terminal and IDE, built on Sarvam models for development tasks.
+
+## Build with the APIs
+
+Guides and tutorials for each capability, from a first request to production
+patterns.
+
+[All API guides →](/api/getting-started/welcome)
+
+[Speech-to-Text Saaras v3](/api/api-guides-tutorials/speech-to-text/overview)
+
+Transcribe, translate, and caption audio in real time or in batch, across code-mixed and regional speech.
+
+[Text-to-Speech Bulbul v3](/api/api-guides-tutorials/text-to-speech/overview)
+
+Generate natural, expressive speech in Indian languages with control over pitch, pace, and speaker.
+
+[Chat Completion Sarvam-105B](/api/api-guides-tutorials/chat-completion/overview)
+
+Build conversational AI on a flagship model tuned for Indic reasoning, with a 128K context window.
+
+[Text Processing Mayura](/api/api-guides-tutorials/text-processing/overview)
+
+Translate, transliterate, and detect languages across 22 Indian languages and English.
+
+[Document AI Sarvam Vision](/api/api-guides-tutorials/document-intelligence/overview)
+
+Turn PDFs, scans, and handwriting into structured, searchable data: whole documents or just the fields you define.
+
+[Dubbing Beta](/api/api-guides-tutorials/dubbing/overview)
+
+Localize video and audio into Indian languages with speaker voice cloning, tone control, and multi-format exports.
+
+## Models
+
+Every model is trained and evaluated on Indian languages, accents, and code-mixed
+usage, not adapted from an English-first baseline.
+
+[Compare models →](/api/getting-started/models)
+
+[Saaras v3 Speech-to-text](/api/getting-started/models/saaras)
+
+23 languages (22 Indian + English), with transcribe, translate, verbatim, translit, and codemix output modes.
+
+[Bulbul v3 Text-to-speech](/api/getting-started/models/bulbul)
+
+Natural voices for 11 languages (10 Indian + English), with customizable pitch, pace, and speaker.
+
+[Sarvam-105B Chat](/api/getting-started/models/sarvam-105b)
+
+Flagship 105B-parameter chat model: the highest quality Indian language understanding, reasoning, and generation.
+
+[Mayura Translation](/api/getting-started/models/mayura)
+
+High-quality translation between 11 languages (10 Indian + English) with context preservation.
+
+[Sarvam Vision Document intelligence](/api/getting-started/models/sarvam-vision)
+
+Document model with accurate OCR and structured output across 23 languages.
+
+## Integrations
+
+Drop Sarvam into the frameworks and telephony you already run.
+
+[All integrations →](/api/integration/build-voice-agent-with-live-kit)
+
+[LiveKit](/api/integration/build-voice-agent-with-live-kit)
+
+Real-time voice agents with Saaras and Bulbul in the pipeline.
+
+[Pipecat](/api/integration/build-voice-agent-with-pipecat)
+
+Build a real-time voice agent wired end to end to Sarvam models.
+
+[Vapi](/api/integration/build-voice-agent-with-vapi)
+
+Run a Vapi agent on Saaras v3, Sarvam-105B, and Bulbul v3.
+
+[Twilio](/api/integration/build-voice-agent-with-twilio)
+
+Phone voice agents and WhatsApp bots over Twilio.
+
+[Exotel](/api/integration/build-voice-agent-with-exotel)
+
+Phone voice agents on Exotel telephony, via Pipecat.
+
+[LangChain](/api/integration/langchain)
+
+The official langchain-sarvam package: streaming, tools, structured output.
+
+[Vercel AI SDK](/api/integration/vercel-ai-sdk)
+
+Chat, speech, and translation through the sarvam-ai-sdk provider.
+
+[n8n](/api/integration/n8n)
+
+Automate Indian-language speech and chat with the community node.
+
+## Cookbook
+
+End-to-end projects you can run today, with the full source in each guide.
+
+[All recipes →](/api/cookbook)
+
+[Call analytics pipeline](/api/cookbook/guides/call-analytics-pipeline)
+
+Transcribe support calls, then summarise, tag, and score them into a reporting pipeline.
+
+[WhatsApp bot](/api/cookbook/guides/whats-app-bot)
+
+Wire Sarvam speech and chat into a WhatsApp bot that answers in the user's own language.
+
+[Live video transcription](/api/cookbook/guides/live-video-transcription)
+
+Real-time transcription and translation with the streaming STT API, Flask-SocketIO, and the Web Audio API.
+
+[Podcast generator](/api/cookbook/guides/podcast-generator)
+
+Turn a script into a multi-speaker podcast episode with distinct Bulbul voices.
+
+## What's new
+
+[Full changelog →](/changelog)
+
+[August 2026 Realtime API for voice agents and live transcription](/api/api-guides-tutorials/speech-to-text/realtime-streaming)
+
+`saaras:v3-realtime` brings true partial transcripts, live mid-stream reconfiguration, and millisecond-based VAD tuning over WebSocket.
+
+Read the changelog →
+
+[August 2026 GLM-5.2 and Gemma 4 31B now available (beta)](/api/getting-started/models/open-source/glm-5-2)
+
+512K context and tool calling with GLM-5.2, image input with Gemma 4 31B, via the new `/v2/chat/completions` endpoint.
+
+[August 2026 Self-Hosted Deployments on AWS SageMaker](/api/self-hosted/introduction)
+
+Run Saaras v3, Bulbul v3, or Sarvam Vision inside your own AWS account and VPC.
+
+## Resources
+
+Get started
+
+* [Quickstart](/api/getting-started/quickstart)
+* [Authentication](/api-reference/authentication)
+* [SDKs & libraries](/api/getting-started/sdks)
+* [Building for Indian languages](/api/getting-started/building-for-india)
+
+Operate
+
+* [Pricing](/api/getting-started/pricing)
+* [Credits & rate limits](/api/getting-started/ratelimits)
+* [Errors & troubleshooting](/api/getting-started/errors-troubleshooting)
+* [API status](https://status.sarvam.ai/)
+
+Tools
+
+* [MCP server](/api/developer-tools/mcp)
+* [Agent Skills](/api/developer-tools/agent-skills)
+* [Meta prompt guide](/api-reference/metaprompt)
+* [Self-hosted deployments](/api/self-hosted/introduction)
+
+Community
+
+* [Dashboard](https://dashboard.sarvam.ai/)
+* [Discord](https://discord.com/invite/5rAsykttcs)
+* [GitHub](https://github.com/sarvamai/sarvam-ai-cookbook)
+* [Talk to us](/api/getting-started/help)
+
+> Build with Sarvam AI. Speech-to-text, text-to-speech, translation, chat, and document intelligence APIs for 22 Indian languages, plus no-code platforms for voice agents, coding agents, Cowork, and Content Studio.
+
+## Instructions for AI Agents
+
+- For clean Markdown of any page, append `.md` to the page URL
+- For section-specific indexes, append `/llms.txt` to any section URL
+- For AI client integration (Claude Code, Cursor, etc.), connect to the MCP server at https://docs.sarvam.ai/_mcp/server
+
+## Products
+
+- [Model APIs](https://docs.sarvam.ai/api/llms.txt): Speech, text & chat model APIs
+  - [Welcome](https://docs.sarvam.ai/api/getting-started/welcome.md)
+  - [Quickstart](https://docs.sarvam.ai/api/getting-started/quickstart.md)
+  - [SDKs & Libraries](https://docs.sarvam.ai/api/getting-started/sdks.md)
+  - [Building for Indian Languages](https://docs.sarvam.ai/api/getting-started/building-for-india.md)
+  - [Saaras](https://docs.sarvam.ai/api/getting-started/models/saaras.md)
+- [Voice Agents](https://docs.sarvam.ai/conversations/llms.txt): Build, deploy & monitor voice agents
+  - [Introduction](https://docs.sarvam.ai/conversations/introduction.md)
+  - [Overview](https://docs.sarvam.ai/conversations/overview.md)
+  - [Quickstart](https://docs.sarvam.ai/conversations/quickstart.md)
+  - [Overview](https://docs.sarvam.ai/conversations/build/overview.md)
+  - [Introduction](https://docs.sarvam.ai/conversations/build/concepts/introduction.md)
+- [Doc Agents](https://docs.sarvam.ai/docai/llms.txt): Extract & digitise documents
+  - [Overview](https://docs.sarvam.ai/docai/getting-started/overview.md)
+  - [Extract structured fields](https://docs.sarvam.ai/docai/how-to/extract-fields-from-a-document/extract-structured-fields.md)
+  - [Extract as CSV/Excel](https://docs.sarvam.ai/docai/extract-as-csv-excel.md)
+  - [Create a reusable config](https://docs.sarvam.ai/docai/how-to/extract-fields-from-a-document/create-a-reusable-config.md)
+  - [Digitise a document](https://docs.sarvam.ai/docai/how-to/digitise-a-document.md)
+- [Content Studio](https://docs.sarvam.ai/creative/llms.txt): Generate voice & media content
+  - [Overview](https://docs.sarvam.ai/creative/studio-overview.md)
+  - [Creating a Dub](https://docs.sarvam.ai/creative-dubbing-create.md)
+  - [Editing a Dub](https://docs.sarvam.ai/creative-dubbing-edit.md)
+  - [Dubbing Best Practices](https://docs.sarvam.ai/creative-dubbing-best-practices.md)
+  - [Generating Speech](https://docs.sarvam.ai/creative-tts-generate.md)
+- [Cowork](https://docs.sarvam.ai/cowork/llms.txt): Build & deploy AI agents for real work
+  - [Overview](https://docs.sarvam.ai/cowork/overview.md)
+  - [Quickstart](https://docs.sarvam.ai/cowork/quickstart.md)
+  - [Chat](https://docs.sarvam.ai/cowork/build/chat.md)
+  - [Create custom agents](https://docs.sarvam.ai/cowork/build/creating-an-agent.md)
+  - [Connectors](https://docs.sarvam.ai/cowork/build/connectors.md)
+- [API Reference](https://docs.sarvam.ai/api-reference/llms.txt): Explore REST & WebSocket endpoints
+  - [Introduction](https://docs.sarvam.ai/api-reference/introduction.md)
+  - [Authentication](https://docs.sarvam.ai/api-reference/authentication.md)
+  - [Access to Beta APIs](https://docs.sarvam.ai/api-reference/beta-apis.md)
+  - [Meta Prompt Guide](https://docs.sarvam.ai/api-reference/metaprompt.md)
+  - [Introduction](https://docs.sarvam.ai/api-reference/conversations.md)
+- [Changelog](https://docs.sarvam.ai/changelog/llms.txt): Track API and product updates
+  - [September 9, 2026](https://docs.sarvam.ai/changelog/2026/9/9.md)
+  - [September 3, 2026](https://docs.sarvam.ai/changelog/2026/9/3.md)
+  - [September 2, 2026](https://docs.sarvam.ai/changelog/2026/9/2.md)
+  - [September 1, 2026](https://docs.sarvam.ai/changelog/2026/9/1.md)
+  - [August 28, 2026](https://docs.sarvam.ai/changelog/2026/8/28.md)

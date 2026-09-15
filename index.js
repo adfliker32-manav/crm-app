@@ -69,7 +69,7 @@ const { renderManageBookingPage } = require('./src/views/manageBookingPage');
 const webLeadRoutes = require('./src/routes/webLeadRoutes'); // Web-to-Lead embed
 const mcpRoutes = require('./src/routes/mcpRoutes'); // Claude AI / MCP server
 const oauthRoutes = require('./src/routes/oauthRoutes'); // OAuth 2.1 for Claude.ai browser connector
-const { getMetadata: oauthMetadata } = require('./src/controllers/oauthController');
+const { getMetadata: oauthMetadata, getProtectedResourceMetadata: oauthResourceMetadata } = require('./src/controllers/oauthController');
 const sequenceRoutes = require('./src/routes/sequenceRoutes'); // Drip Sequences
 const billingRoutes = require('./src/routes/billingRoutes'); // Razorpay Autodebit Subscriptions
 const { router: invoicePublicRoute } = require('./src/routes/invoicePublicRoute'); // Public invoice viewer (HMAC-secured)
@@ -174,12 +174,17 @@ const corsOptions = {
 // Apply CORS middleware only to API, Webhook, and Uploads endpoints.
 // Standard page navigations or redirects should not be blocked by CORS origin checks.
 app.use((req, res, next) => {
-  // OAuth endpoints need open CORS — Claude.ai's domain must reach them.
-  // These are public OAuth endpoints that any MCP client may call.
-  if (req.path.startsWith('/.well-known/') || req.path.startsWith('/oauth/')) {
+  // OAuth + MCP endpoints need open CORS — any MCP client (including browser
+  // based ones like the MCP Inspector) may call them. This is safe because they
+  // authenticate with an explicit bearer token, never a cookie, so a foreign
+  // page gains nothing it could not already do with its own token.
+  // WWW-Authenticate must be EXPOSED or a browser client can't read where to
+  // sign in from a 401.
+  if (req.path.startsWith('/.well-known/') || req.path.startsWith('/oauth/') || req.path === '/mcp' || req.path.startsWith('/mcp/')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version');
+    res.setHeader('Access-Control-Expose-Headers', 'WWW-Authenticate, Mcp-Session-Id');
     if (req.method === 'OPTIONS') return res.status(204).end();
     return next();
   }
@@ -801,9 +806,27 @@ app.use('/api/activity-logs', require('./src/routes/activityLogRoutes'));
 app.use('/api/reports', reportRoutes); // Reports & Analytics
 app.use('/mcp', mcpRoutes);           // Claude AI MCP server (API-key auth, no JWT)
 
-// OAuth 2.1 endpoints for Claude.ai browser connector (public — no JWT)
-// Metadata discovery must live at /.well-known/ per RFC 8414.
-app.get('/.well-known/oauth-authorization-server', oauthMetadata);
+// OAuth 2.1 for MCP clients (Claude.ai, Claude Desktop, Claude Code) — public, no JWT.
+//
+// ⚠️ Every discovery path an MCP client may try MUST be answered here. Anything
+// under /.well-known/ that falls through reaches the React catch-all, which
+// replies 200 with index.html — and a client that gets HTML where it expected
+// JSON reports a generic "authentication error". That is exactly how Claude
+// connections broke: /.well-known/oauth-protected-resource did not exist.
+//
+//   RFC 9728 protected resource metadata: root and path-suffixed (/mcp) forms
+//   RFC 8414 authorization server metadata: root, path-suffixed, and the
+//   OpenID Connect discovery names some clients try first.
+app.get(['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'], oauthResourceMetadata);
+app.get([
+  '/.well-known/oauth-authorization-server',
+  '/.well-known/oauth-authorization-server/mcp',
+  '/.well-known/openid-configuration',
+  '/.well-known/openid-configuration/mcp',
+  '/mcp/.well-known/openid-configuration'
+], oauthMetadata);
+// Any other /.well-known/ path is a real 404 in JSON, never the SPA shell.
+app.use('/.well-known', (req, res) => res.status(404).json({ error: 'not_found' }));
 app.use('/oauth', oauthRoutes);
 app.use('/api/ai', aiProxyRoutes);
 

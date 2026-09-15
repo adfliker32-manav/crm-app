@@ -5,6 +5,7 @@ const GlobalSetting = require('../models/GlobalSetting');
 const { generateReply } = require('../services/aiService');
 const aiCreditService = require('../services/aiCreditService');
 const { decryptToken } = require('../utils/encryptionUtils');
+const { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } = require('../constants/aiDefaults');
 
 // Helper to get or create integration config
 async function getOrCreateConfig(userId) {
@@ -24,8 +25,8 @@ exports.getSettings = async (req, res) => {
 
         // Prepare settings for frontend (masking API key)
         const settings = {
-            provider: config.ai?.provider || 'gemini',
-            model: config.ai?.model || 'gemini-2.5-flash',
+            provider: config.ai?.provider || DEFAULT_AI_PROVIDER,
+            model: config.ai?.model || DEFAULT_AI_MODEL,
             agentName: config.ai?.agentName || 'AI Assistant',
             systemPrompt: config.ai?.systemPrompt || '',
             aiEnabled: config.ai?.aiEnabled || false,

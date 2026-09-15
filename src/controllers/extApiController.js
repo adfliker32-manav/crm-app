@@ -36,7 +36,10 @@ const { evaluateLead } = require('../services/AutomationService');
 const { sendAutomatedEmailOnLeadCreate } = require('../services/emailAutomationService');
 const { sendAutomatedWhatsAppOnLeadCreate } = require('../services/whatsappAutomationService');
 const { normalizePhone } = require('../services/duplicateService');
-const { buildMetaComponents, buildTemplateContext } = require('../utils/templateResolver');
+const {
+    buildMetaComponents, buildTemplateContext,
+    normalizeVariableInput, planTemplateVariables
+} = require('../utils/templateResolver');
 const { queueLeadCreatedEffects, queueLeadStageChangeEffects, queueLeadAssignmentEffects } = require('../utils/leadEffects');
 const { checkLeadLimit } = require('../utils/leadLimitGuard');
 const whatsappAssignment = require('../services/whatsappAssignmentService');
@@ -668,15 +671,29 @@ exports.sendWhatsApp = async (req, res) => {
 // ─── 8. SEND WHATSAPP TEMPLATE ────────────────────────────────────────────────
 exports.sendWhatsAppTemplate = async (req, res) => {
     try {
-        const { phone, leadId, templateName, languageCode } = req.body;
+        const { phone, leadId, templateName, languageCode, variables } = req.body;
 
         if (!templateName) {
             return res.status(400).json({ success: false, message: '`templateName` is required.' });
         }
+
         if (typeof templateName !== 'string' || !TEMPLATE_NAME_RE.test(templateName)) {
             return res.status(400).json({
                 success: false,
                 message: '`templateName` must be lowercase letters, digits and underscores only (^[a-z0-9_]+$).'
+            });
+        }
+
+        // Shape-checked before anything is looked up, so a malformed payload
+        // costs no query and the caller gets every problem in one response
+        // rather than one per retry.
+        const normalized = normalizeVariableInput(variables);
+        if (!normalized.ok) {
+            return res.status(400).json({
+                success: false,
+                error:   'invalid_variables',
+                message: normalized.errors[0],
+                details: normalized.errors
             });
         }
 
@@ -729,7 +746,56 @@ exports.sendWhatsAppTemplate = async (req, res) => {
             user: owner,
             system: { customData: { media } }
         });
-        const components = buildMetaComponents(template.components || [], template.variableMapping, tplContext);
+
+        // Who fills each {{n}} — the caller or this workspace — is decided in one
+        // place, against the ONE template snapshot read above. Re-reading the
+        // template (or consulting the mapping again further down) would let a
+        // mapping edit landing mid-request produce a message that matches neither
+        // the plan the caller was answered with nor what the tenant configured.
+        const plan = planTemplateVariables({
+            components:      template.components,
+            variableMapping: template.variableMapping,
+            provided:        normalized.value
+        });
+
+        if (plan.errors.length) {
+            return res.status(400).json({
+                success: false,
+                error:   'invalid_variables',
+                message: plan.errors[0],
+                details: plan.errors,
+                templateVariables: plan.present
+            });
+        }
+
+        // Mapped to "Filled by API" with nothing sent and no fallback text: the
+        // only honest answer is to refuse. Sending a placeholder "-" to a real
+        // customer, or quietly substituting the lead's name for the order number
+        // the caller meant to pass, is the silent mismatch this whole path exists
+        // to prevent.
+        if (plan.missing.length) {
+            const wanted = plan.missing.map(k => {
+                const [scope, n] = k.split('.');
+                return { scope, variable: Number(n) };
+            });
+            return res.status(400).json({
+                success: false,
+                error:   'variables_required',
+                message: `Template "${templateName}" expects you to supply ` +
+                         wanted.map(w => `{{${w.variable}}} (${w.scope})`).join(', ') +
+                         '. Add them to `variables`, or give the template a fallback value in Template Builder → Variable Mapping.',
+                required: wanted,
+                example: wanted.reduce((acc, w) => {
+                    acc[w.scope] = { ...(acc[w.scope] || {}), [w.variable]: 'your value' };
+                    return acc;
+                }, {}),
+                templateVariables: plan.present
+            });
+        }
+
+        const components = buildMetaComponents(
+            template.components || [], template.variableMapping, tplContext, plan.applied
+        );
 
         // To Meta, (name, language) IS the identity of a template — a template
         // approved as "en" does not exist as "en_US". The stored row is synced
@@ -768,6 +834,11 @@ exports.sendWhatsAppTemplate = async (req, res) => {
             source: 'API'
         });
 
+        const languageWarning = languageOverridden
+            ? `Template "${templateName}" is approved in "${effectiveLanguage}", not "${requestedLanguage}". ` +
+              `It was sent in the approved language — drop \`languageCode\` from your request to silence this.`
+            : null;
+
         res.json({
             success: true,
             messageId: waMessageId,
@@ -775,10 +846,17 @@ exports.sendWhatsAppTemplate = async (req, res) => {
             language: effectiveLanguage,
             to: toPhone,
             sentAt: new Date().toISOString(),
-            ...(languageOverridden ? {
-                warning: `Template "${templateName}" is approved in "${effectiveLanguage}", not "${requestedLanguage}". ` +
-                         `It was sent in the approved language — drop \`languageCode\` from your request to silence this.`
-            } : {})
+            // Who actually filled each placeholder: 'api' (your value), 'crm:<field>'
+            // (this workspace's mapping), 'fallback' (the template's fallback text)
+            // or 'auto' (positional default). A caller never has to guess whether
+            // the value it sent reached the customer.
+            variableSources: plan.sources,
+            // `warning` stays a string for the integrations already reading it;
+            // `warnings` carries everything, including the language note.
+            ...(languageWarning ? { warning: languageWarning } : {}),
+            ...((plan.warnings.length || languageWarning)
+                ? { warnings: [...(languageWarning ? [languageWarning] : []), ...plan.warnings] }
+                : {})
         });
     } catch (err) {
         // A Meta rejection is the caller's problem to fix, not a server fault:

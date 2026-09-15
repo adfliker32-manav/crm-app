@@ -21,8 +21,8 @@ const TRIGGER_OPTIONS = [
 // ─────────────────────────────────────────────────────────────────────────────
 const ADFLIKER_MODELS = [
     { id: 'gemini-2.5-flash-lite-preview-06-17', provider: 'gemini', name: 'Adfliker Light', desc: 'Fast & cost-effective' },
-    { id: 'gemini-2.5-flash', provider: 'gemini', name: 'Adfliker Smart', desc: 'Best balance — Recommended', recommended: true },
-    { id: 'gpt-4o-mini', provider: 'openai', name: 'Adfliker Advance', desc: 'Powerful reasoning, affordable' },
+    { id: 'gemini-2.5-flash', provider: 'gemini', name: 'Adfliker Smart', desc: 'Best balance' },
+    { id: 'gpt-4o-mini', provider: 'openai', name: 'Adfliker Advance', desc: 'Powerful reasoning, affordable — Recommended', recommended: true },
     { id: 'gpt-4o', provider: 'openai', name: 'Adfliker Ultra', desc: 'Maximum capability, premium' },
 ];
 

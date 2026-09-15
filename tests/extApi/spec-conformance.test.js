@@ -1128,3 +1128,246 @@ describe('gap 7: the stored messageId had nothing to resolve against', () => {
         assert.strictEqual((await call('getWhatsAppMessageStatus', { params: { messageId: 'wamid.THEIRS' } })).code, 404);
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Caller-supplied template variables.
+//
+// A third-party CRM holds facts this workspace does not (an order number, a slot
+// it just booked), so POST /whatsapp/template accepts `variables`. Two sources
+// filling one {{n}} is where silent mismatches breed, so what is tested here is
+// the precedence contract itself: who wins, what the caller is told when it
+// loses, and that nothing the tenant configured can be rewritten from outside.
+describe('POST /whatsapp/template — caller-supplied variables', () => {
+    const seedTpl = (over = {}) => {
+        const t = {
+            _id: oid(60 + DB.templates.length), userId: TENANT, name: 'vars_tpl',
+            language: 'en', category: 'UTILITY', status: 'APPROVED',
+            components: [{ type: 'BODY', text: 'Hi {{1}}, your {{2}} is ready. Team {{3}}' }],
+            variableMapping: {},
+            ...over
+        };
+        DB.templates.push(t);
+        return t;
+    };
+    const bodyParams = (i = 0) =>
+        calls.waTemplate[i].components.find(c => c.type === 'body').parameters.map(p => p.text);
+    const headerParams = (i = 0) =>
+        calls.waTemplate[i].components.find(c => c.type === 'header').parameters.map(p => p.text);
+
+    // ── the shapes a caller may send ─────────────────────────────────────────
+    test('a positional array fills the body placeholders in order', async () => {
+        seedTpl();
+        const res = await call('sendWhatsAppTemplate', { body: {
+            phone: '919876543210', templateName: 'vars_tpl',
+            variables: ['Rahul', 'invoice', 'Adfliker']
+        }});
+        assert.strictEqual(res.code, 200);
+        assert.deepStrictEqual(bodyParams(), ['Rahul', 'invoice', 'Adfliker']);
+    });
+
+    test('an object keyed by variable number is equivalent', async () => {
+        seedTpl();
+        await call('sendWhatsAppTemplate', { body: {
+            phone: '919876543210', templateName: 'vars_tpl',
+            variables: { 1: 'Rahul', 2: 'invoice', 3: 'Adfliker' }
+        }});
+        assert.deepStrictEqual(bodyParams(), ['Rahul', 'invoice', 'Adfliker']);
+    });
+
+    test('header and body are addressable separately', async () => {
+        seedTpl({ components: [
+            { type: 'HEADER', format: 'TEXT', text: 'Order {{1}}' },
+            { type: 'BODY', text: 'Hi {{1}}, your {{2}} is ready. Team {{3}}' }
+        ]});
+        const res = await call('sendWhatsAppTemplate', { body: {
+            phone: '919876543210', templateName: 'vars_tpl',
+            variables: { header: { 1: 'A-1029' }, body: { 1: 'Rahul', 2: 'invoice', 3: 'Adfliker' } }
+        }});
+        assert.strictEqual(res.code, 200);
+        assert.deepStrictEqual(headerParams(), ['A-1029']);
+        assert.deepStrictEqual(bodyParams(), ['Rahul', 'invoice', 'Adfliker']);
+    });
+
+    test('a value the CRM would have filled is still overridable when the variable is unmapped', async () => {
+        // {{1}} unmapped resolves to the lead's name by position. An explicit
+        // value has to beat that, or a caller could never correct it.
+        const l = seedLead({ name: 'Rahul Kumar' });
+        seedTpl();
+        await call('sendWhatsAppTemplate', { body: {
+            leadId: l._id, templateName: 'vars_tpl', variables: { 1: 'Mr Kumar' }
+        }});
+        assert.strictEqual(bodyParams()[0], 'Mr Kumar');
+    });
+
+    test('unsupplied variables keep resolving from the CRM in the same request', async () => {
+        const l = seedLead({ name: 'Rahul Kumar' });
+        seedTpl({ variableMapping: { 1: 'lead.name', 2: 'api' } });
+        const res = await call('sendWhatsAppTemplate', { body: {
+            leadId: l._id, templateName: 'vars_tpl', variables: { 2: 'invoice' }
+        }});
+        assert.strictEqual(res.code, 200);
+        const p = bodyParams();
+        assert.strictEqual(p[0], 'Rahul Kumar', 'mapped variable still comes from the lead');
+        assert.strictEqual(p[1], 'invoice', 'and the API value fills the one left to it');
+    });
+
+    // ── precedence: the tenant's configuration is not rewritable from outside ─
+    test("a variable mapped to the workspace's own data ignores the value sent and says so", async () => {
+        const l = seedLead({ name: 'Rahul Kumar' });
+        seedTpl({ variableMapping: { 1: 'lead.name', 3: 'custom', '3_custom': 'Adfliker Pvt Ltd' } });
+        const res = await call('sendWhatsAppTemplate', { body: {
+            leadId: l._id, templateName: 'vars_tpl',
+            variables: { 1: 'Someone Else', 3: 'Rival Corp' }
+        }});
+        assert.strictEqual(res.code, 200, 'the send is not refused over it');
+        const p = bodyParams();
+        assert.strictEqual(p[0], 'Rahul Kumar');
+        assert.strictEqual(p[2], 'Adfliker Pvt Ltd', "a workspace's static text must not be replaceable by a caller");
+        assert.strictEqual(res.payload.variableSources['body.1'], 'crm:lead.name');
+        assert.strictEqual(res.payload.variableSources['body.3'], 'crm:custom');
+        assert.strictEqual(res.payload.warnings.length, 2, 'both ignored values are reported, never dropped in silence');
+        assert.match(res.payload.warnings.join(' '), /ignored/);
+    });
+
+    test('the response says who filled every placeholder', async () => {
+        const l = seedLead({ name: 'Rahul Kumar' });
+        seedTpl({ variableMapping: { 1: 'lead.name', 2: 'api' } });
+        const res = await call('sendWhatsAppTemplate', { body: {
+            leadId: l._id, templateName: 'vars_tpl', variables: { 2: 'invoice' }
+        }});
+        assert.deepStrictEqual(res.payload.variableSources, {
+            'body.1': 'crm:lead.name', 'body.2': 'api', 'body.3': 'auto'
+        });
+    });
+
+    // ── "Filled by API" with nothing sent ────────────────────────────────────
+    test('an api-mapped variable with no value and no fallback is refused, not guessed', async () => {
+        seedTpl({ variableMapping: { 2: 'api' } });
+        const res = await call('sendWhatsAppTemplate', { body: {
+            phone: '919876543210', templateName: 'vars_tpl'
+        }});
+        assert.strictEqual(res.code, 400);
+        assert.strictEqual(res.payload.error, 'variables_required');
+        assert.deepStrictEqual(res.payload.required, [{ scope: 'body', variable: 2 }]);
+        assert.deepStrictEqual(res.payload.example, { body: { 2: 'your value' } });
+        assert.strictEqual(calls.waTemplate.length, 0, 'nothing may reach the customer');
+    });
+
+    test('the template fallback covers a missing value and the caller is told it was used', async () => {
+        seedTpl({ variableMapping: { 2: 'api', '2_custom': 'order' } });
+        const res = await call('sendWhatsAppTemplate', { body: {
+            phone: '919876543210', templateName: 'vars_tpl'
+        }});
+        assert.strictEqual(res.code, 200);
+        assert.strictEqual(bodyParams()[1], 'order');
+        assert.strictEqual(res.payload.variableSources['body.2'], 'fallback');
+        assert.match(res.payload.warnings.join(' '), /fallback/);
+    });
+
+    test('a CRM-side send of an api-mapped template falls back instead of sending a dash', async () => {
+        // Broadcasts, automations and manual sends have no caller to ask. Before
+        // the fallback path they resolved 'api' as a data path and sanitizeParam
+        // turned the miss into "-" for every recipient.
+        const { buildMetaComponents, buildTemplateContext } = require(R('src/utils/templateResolver.js'));
+        const ctx = buildTemplateContext({ lead: { name: 'Rahul' }, user: { name: 'Amit', companyName: 'Acme' } });
+        const comps = buildMetaComponents(
+            [{ type: 'BODY', text: 'Hi {{1}}, your {{2}} is ready' }],
+            { 2: 'api', '2_custom': 'order' }, ctx
+        );
+        assert.deepStrictEqual(comps[0].parameters.map(p => p.text), ['Rahul', 'order']);
+
+        const noFallback = buildMetaComponents(
+            [{ type: 'BODY', text: 'Hi {{1}}, your {{2}} is ready' }], { 2: 'api' }, ctx
+        );
+        assert.strictEqual(noFallback[0].parameters[1].text, 'New',
+            'with no fallback it lands on the positional default, not "-"');
+    });
+
+    // ── caller mistakes fail loudly ──────────────────────────────────────────
+    test('a variable number the template does not have is rejected', async () => {
+        seedTpl();
+        const res = await call('sendWhatsAppTemplate', { body: {
+            phone: '919876543210', templateName: 'vars_tpl',
+            variables: { 1: 'Rahul', 2: 'invoice', 3: 'Adfliker', 4: 'extra' }
+        }});
+        assert.strictEqual(res.code, 400);
+        assert.strictEqual(res.payload.error, 'invalid_variables');
+        assert.match(res.payload.message, /\{\{4\}\}/);
+        assert.deepStrictEqual(res.payload.templateVariables.body, [1, 2, 3]);
+        assert.strictEqual(calls.waTemplate.length, 0);
+    });
+
+    test('non-text values, empties and over-long values are rejected before anything is sent', async () => {
+        seedTpl();
+        const bad = [
+            { 1: { deep: 'object' } },
+            { 1: ['array'] },
+            { 1: true },
+            { 1: null },
+            { 1: '   ' },
+            { 1: 'x'.repeat(1025) },
+            { abc: 'not a number' },
+            'a plain string',
+            42,
+            { body: { 1: 'ok' }, 5: 'mixed shapes' }
+        ];
+        for (const variables of bad) {
+            const res = await call('sendWhatsAppTemplate', { body: {
+                phone: '919876543210', templateName: 'vars_tpl', variables
+            }});
+            assert.strictEqual(res.code, 400, `should reject ${JSON.stringify(variables)}`);
+            assert.strictEqual(res.payload.error, 'invalid_variables');
+            assert.ok(Array.isArray(res.payload.details) && res.payload.details.length);
+        }
+        assert.strictEqual(calls.waTemplate.length, 0);
+    });
+
+    test('a number is accepted as text, and whitespace Meta rejects is collapsed', async () => {
+        seedTpl();
+        const res = await call('sendWhatsAppTemplate', { body: {
+            phone: '919876543210', templateName: 'vars_tpl',
+            variables: { 1: 'Rahul', 2: 1029, 3: 'Adfliker\n\nPvt    Ltd' }
+        }});
+        assert.strictEqual(res.code, 200);
+        assert.deepStrictEqual(bodyParams(), ['Rahul', '1029', 'Adfliker Pvt Ltd']);
+    });
+
+    test('omitting variables entirely leaves the old behaviour untouched', async () => {
+        const l = seedLead({ name: 'Rahul Kumar', status: 'Qualified' });
+        seedTpl();
+        const res = await call('sendWhatsAppTemplate', { body: { leadId: l._id, templateName: 'vars_tpl' } });
+        assert.strictEqual(res.code, 200);
+        assert.deepStrictEqual(bodyParams(), ['Rahul Kumar', 'Qualified', 'Client Co']);
+    });
+
+    // ── no interference between requests ─────────────────────────────────────
+    test('concurrent sends of one template cannot see each other values', async () => {
+        const tpl = seedTpl({ variableMapping: { 1: 'api', 2: 'api', 3: 'custom', '3_custom': 'Adfliker' } });
+        const mappingBefore = JSON.stringify(tpl.variableMapping);
+
+        await Promise.all([
+            call('sendWhatsAppTemplate', { body: { phone: '919000000001', templateName: 'vars_tpl', variables: { 1: 'Rahul', 2: 'invoice' } } }),
+            call('sendWhatsAppTemplate', { body: { phone: '919000000002', templateName: 'vars_tpl', variables: { 1: 'Priya',  2: 'receipt' } } }),
+            call('sendWhatsAppTemplate', { body: { phone: '919000000003', templateName: 'vars_tpl', variables: { 1: 'Imran',  2: 'quote'   } } })
+        ]);
+
+        assert.strictEqual(calls.waTemplate.length, 3);
+        const byPhone = Object.fromEntries(calls.waTemplate.map((c, i) => [c.to, bodyParams(i)]));
+        assert.deepStrictEqual(byPhone['919000000001'], ['Rahul', 'invoice', 'Adfliker']);
+        assert.deepStrictEqual(byPhone['919000000002'], ['Priya', 'receipt', 'Adfliker']);
+        assert.deepStrictEqual(byPhone['919000000003'], ['Imran', 'quote', 'Adfliker']);
+
+        // The plan is a fresh object every request. Were the caller's values ever
+        // written back onto the template, request two would inherit request one's.
+        assert.strictEqual(JSON.stringify(tpl.variableMapping), mappingBefore,
+            'a send must never mutate the stored mapping');
+    });
+
+    test('the request body is not mutated either', async () => {
+        seedTpl();
+        const body = { phone: '919876543210', templateName: 'vars_tpl', variables: { 1: 'Rahul' } };
+        const snapshot = JSON.stringify(body);
+        await call('sendWhatsAppTemplate', { body });
+        assert.strictEqual(JSON.stringify(body), snapshot);
+    });
+});

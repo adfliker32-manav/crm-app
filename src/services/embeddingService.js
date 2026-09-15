@@ -44,6 +44,7 @@ const IntegrationConfig = require('../models/IntegrationConfig');
 const AiModelRate = require('../models/AiModelRate');
 const aiCreditService = require('./aiCreditService');
 const { getGlobalAIKey } = require('../utils/aiKeyResolver');
+const { DEFAULT_AI_PROVIDER } = require('../constants/aiDefaults');
 
 // Per provider: the embedding model used, its vector length, its retrieval
 // cut-off (see the score note above) and the credit rate seeded into AiModelRate.
@@ -143,7 +144,8 @@ async function resolveEmbeddingContext(tenantId) {
     const config = await IntegrationConfig.findOne({ userId: tenantId })
         .select('ai.provider').lean();
 
-    const provider = config?.ai?.provider === 'openai' ? 'openai' : 'gemini';
+    // lean() skips schema defaults, so an unset provider must fall back to the same default the chatbot sees.
+    const provider = (config?.ai?.provider || DEFAULT_AI_PROVIDER) === 'openai' ? 'openai' : 'gemini';
     const spec = EMBEDDING_MODELS[provider];
 
     const apiKey = await getGlobalAIKey(provider);

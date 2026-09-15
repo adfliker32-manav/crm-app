@@ -566,10 +566,69 @@ Content-Type: application/json
 {
   "phone": "+919876543210",
   "templateName": "appointment_reminder",
-  "languageCode": "en_US",
   "variables": ["John", "3 PM", "Tomorrow"]
 }
 ```
+
+**Omit `languageCode`.** To Meta, a template's name *and* language together are
+its identity — one approved as `en` does not exist as `en_US`. We send the
+language Meta approved; a `languageCode` that disagrees is overridden and the
+response says so in `warnings`.
+
+**Filling `{{1}}`, `{{2}}` …** — `variables` accepts a positional list, an object
+keyed by variable number (`{ "2": "3 PM" }`), or a scoped object when the
+template also has a text header (`{ "header": {...}, "body": {...} }`).
+
+Which placeholders you may fill is set per template by the account, under
+**WhatsApp → Templates → Variable Mapping**:
+
+| Variable Mapping option | Filled by | A value you send is |
+|---|---|---|
+| 🔌 **Filled by API (third-party)** | you | **used** — required, unless the template has fallback text |
+| *Auto (default by position)* | you, or the account's data if you send none | **used** |
+| A CRM field, or ✏️ Custom Static Text | the account | ignored, and reported in `warnings` |
+
+An account's own wording (brand name, legal line) is deliberately not
+replaceable from outside — ask them to set that variable to **Filled by API**.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": { "messages": [{ "id": "wamid.HBgMOTE5..." }] },
+  "messageId": "wamid.HBgMOTE5...",
+  "template": "appointment_reminder",
+  "language": "en",
+  "variableSources": { "body.1": "api", "body.2": "crm:lead.name" }
+}
+```
+
+`variableSources` says who filled each placeholder: `api` (your value),
+`crm:<mapping>` (the account's — yours was ignored), `fallback`, or `auto`.
+
+**Errors**
+
+| HTTP | `error` | Cause |
+|---|---|---|
+| 400 | `invalid_variables` | A value is not text, is empty, exceeds 1024 characters, or names a `{{n}}` the template does not have. |
+| 400 | `variables_required` | A placeholder is set to **Filled by API**, you sent no value, and there is no fallback text. Nothing is sent. |
+| 400 | `template_not_approved` | The template exists but Meta has not approved it yet. |
+| 404 | `template_not_found` | You sent values for a template this account does not store, so they cannot be matched to its placeholders. |
+| 422 | `whatsapp_send_failed` | Meta rejected the send; `metaCode` carries its error code. |
+
+**Templates the CRM does not store.** Only templates created in the CRM live in
+our database — a WABA's pre-existing ones (and Meta's `hello_world`) do not.
+Sending those still works as long as you send no values, or a ready-made
+components array; the response carries a `warnings` entry saying nothing could
+be checked first. Send plain values for such a template and you get the 404
+above, because there is no placeholder list to match them against.
+
+> **Changed:** `variables` used to be forwarded to Meta as a raw `components`
+> array, so the flat list shown above was rejected on every call. It now carries
+> plain values, as documented here. A ready-made Meta components array is still
+> detected and passed through, so an integration built against the old behaviour
+> keeps working — it gets a `warnings` entry asking it to move to plain values.
 
 #### List Templates
 

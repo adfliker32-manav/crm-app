@@ -141,6 +141,24 @@ exports.updateTemplate = async (req, res) => {
         if (stage !== undefined) template.stage = stage;
         if (isActive !== undefined) template.isActive = isActive;
 
+        // variableMapping is CRM-side too: it decides which field fills each
+        // {{n}} at send time and is never part of what Meta approved (see
+        // submitTemplateToMeta — it sends components only). It used to sit inside
+        // the isDraft block below, so the builder's mapping controls were live on
+        // an APPROVED template, Save returned 200, and the change was silently
+        // dropped — the one status where mapping actually matters, since only
+        // APPROVED templates can be sent.
+        if (variableMapping !== undefined) {
+            if (variableMapping === null || typeof variableMapping !== 'object' || Array.isArray(variableMapping)) {
+                return res.status(400).json({ message: 'variableMapping must be an object keyed by variable number' });
+            }
+            const bad = Object.entries(variableMapping).find(([, v]) => v !== null && typeof v === 'object');
+            if (bad) {
+                return res.status(400).json({ message: `variableMapping.${bad[0]} must be a text value` });
+            }
+            template.variableMapping = variableMapping;
+        }
+
         // Structural fields (content/format) can only be changed on DRAFT or REJECTED templates
         if (isDraft) {
             if (name && name !== template.name) {
@@ -158,7 +176,6 @@ exports.updateTemplate = async (req, res) => {
             if (language) template.language = language;
             if (category) template.category = category;
             if (components) template.components = components;
-            if (variableMapping !== undefined) template.variableMapping = variableMapping;
         }
 
         await template.save();
@@ -299,6 +316,16 @@ exports.duplicateTemplate = async (req, res) => {
             language: original.language,
             category: original.category,
             components: original.components,
+            // Copied with the components it belongs to. Left out, a duplicate's
+            // {{n}} silently fell back to the positional default — and now that a
+            // variable can be marked "Filled by API", the copy would quietly stop
+            // expecting the caller's value and send the lead's name instead.
+            //
+            // Spread into a plain object, never handed over as-is: Mongoose keeps
+            // the SAME Map instance on both documents, so editing the copy's
+            // mapping would silently rewrite the original's too. (The components
+            // array is cast into fresh subdocuments, so it has no such problem.)
+            variableMapping: original.variableMapping ? Object.fromEntries(original.variableMapping) : {},
             status: 'DRAFT',
             isActive: false
         });

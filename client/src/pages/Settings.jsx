@@ -313,7 +313,7 @@ const Settings = () => {
                     <div className="animate-in fade-in duration-300">
                         <div className="p-8 border-b border-slate-100 bg-slate-50/50">
                             <h2 className="text-xl font-bold text-slate-800">Claude AI</h2>
-                            <p className="text-sm text-slate-500 mt-1">Connect Claude Code to your CRM for AI-powered analytics and reporting in plain English.</p>
+                            <p className="text-sm text-slate-500 mt-1">Connect Claude.ai, Claude Desktop or Claude Code to your CRM. Sign in with your Adfliker account — no setup files needed.</p>
                         </div>
                         <div className="p-8">
                             <ClaudeAISettings />

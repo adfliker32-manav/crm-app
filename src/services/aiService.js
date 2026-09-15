@@ -306,7 +306,7 @@ async function callOpenAI(apiKey, modelName, systemPrompt, history, lastUserMess
     ];
     
     const response = await openai.chat.completions.create({
-        model: modelName || 'gpt-4o',
+        model: modelName || 'gpt-4o-mini',
         messages,
         response_format: { type: 'json_object' },
         max_tokens: 500 // Guard: prevents runaway token costs + WhatsApp 4096-char limit

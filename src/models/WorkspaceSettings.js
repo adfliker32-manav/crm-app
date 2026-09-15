@@ -287,8 +287,11 @@ const workspaceSettingsSchema = new mongoose.Schema({
     },
 
     // ── Claude AI / MCP Integration ──────────────────────────────────────────
-    // Per-tenant API key for Claude Code MCP server. Grants read-only analytics
-    // access scoped strictly to this tenant's data. Revocable at any time.
+    // Per-tenant API key for the MCP server (/mcp). Optional since the OAuth
+    // sign-in (see services/mcpOAuthService.js): used as a fixed Claude Code
+    // header, or on the sign-in page by Google-login owners. Grants the same
+    // read/write tool access as OAuth, scoped strictly to this tenant's data.
+    // Revoking or regenerating it also revokes OAuth grants approved with it.
     // No `default: null` — same sparse-unique reason as webLeadApiKey above.
     mcpApiKey: {
         type: String,

@@ -10,7 +10,7 @@
 - Anything marked **NOT SUPPORTED** or **KNOWN LIMITATION** must never be promised as working.
 - For billing disputes, refunds, account deletion or data requests, always hand over to a human.
 
-Last updated: 2026-09-08.
+Last updated: 2026-09-15.
 
 ---
 
@@ -380,7 +380,7 @@ Deeper trend analysis and custom breakdowns are part of **Advanced Analytics**, 
 - **Inbound webhook** — a generic endpoint for Zapier, Pabbly or custom code.
 - **REST API** (`/api/v1`) — for a business running its own CRM.
 - **Partner API** (`/api/partner/v1`) — a separate, reseller-facing surface for managing many sub-accounts. It is *not* the same as the customer API.
-- **Claude AI / MCP** — connects Claude Code to the workspace, if enabled.
+- **Claude AI / MCP** — connects Claude (Claude.ai, Claude Desktop or Claude Code) to the workspace, if enabled.
 
 ### What can the REST API do?
 Create, list, read and update leads and add notes; send WhatsApp messages and templates; assign a WhatsApp chat to an agent; send email; create appointments; and read statistics.
@@ -390,6 +390,23 @@ With a per-workspace API key sent as an `x-api-key` header, generated in Setting
 
 ### Where is the full API documentation?
 `EXTERNAL_API_DOCS.md` in the product documentation, and in-app under Settings → API Access.
+
+### How do I connect Claude to Adfliker?
+The server URL is the same for every workspace: `https://app.adfliker.com/mcp`. Full steps are in Settings → Claude AI.
+- **Claude.ai or Claude Desktop:** Settings → Connectors → Add custom connector → paste the URL → Connect. A sign-in page opens; sign in with the workspace owner's Adfliker email and password and click **Allow access**. No key is needed.
+- **Claude Code:** run `claude mcp add --transport http adfliker-crm https://app.adfliker.com/mcp`, start `claude`, type `/mcp`, choose adfliker-crm → Authenticate, and sign in the same way.
+- **Accounts that log in with Google** have no password: on the sign-in page choose the **API key** tab and paste a key generated in Settings → Claude AI.
+
+The connection is locked to the workspace of the account that signed in. Claude never sees another business's data.
+
+### Who can connect Claude?
+Only the workspace owner (the Manager account). Agents cannot connect, because Claude's tools can see the whole workspace, not just an agent's assigned leads. Claude AI must also be enabled on the plan.
+
+### How do I disconnect Claude?
+Settings → Claude AI → **Connected apps** → Disconnect (or Disconnect all). It takes effect immediately. Changing the account password also disconnects every app, and regenerating or revoking the API key disconnects apps that were connected with that key.
+
+### Is there a limit on Claude requests?
+Yes: 120 requests per minute per workspace. Sends made through Claude always show a preview first and are capped at 50 leads at a time; bigger campaigns must use Broadcasts.
 
 ---
 
@@ -492,6 +509,17 @@ Almost certainly a renamed stage. See the stage-rename limitation in section 6 �
 ### Everyone in my team got a welcome message after I imported a spreadsheet.
 That is the CSV-import behaviour described in section 5. Pause welcome messages and sequences before a migration import next time.
 
+### Claude says "authentication error" or will not connect.
+Work through these in order:
+1. **Remove the Adfliker connector in Claude and add it again.** Connectors added before 15 September 2026 used the old sign-in and must be re-added once.
+2. Use the exact URL `https://app.adfliker.com/mcp`. In Claude Code, add it with `--transport http` (not `sse`).
+3. Sign in with the **workspace owner's** login. Agent logins are refused.
+4. If the account uses Google sign-in, choose the **API key** tab and paste a current key from Settings → Claude AI. A regenerated or revoked key no longer works.
+5. If the password was changed recently, reconnect — a password change disconnects every app.
+6. A suspended account or an ended plan cannot connect; the sign-in page says so.
+
+If it still fails, raise a ticket with the exact error text and whether it was Claude.ai, Claude Desktop or Claude Code.
+
 ### A feature disappeared from my menu.
 Either the plan changed, the Adfliker team adjusted an entitlement, or the Manager changed that agent's permissions. Check with the account Manager first.
 
@@ -534,6 +562,7 @@ The account email, the module involved, what was expected versus what happened, 
 - **WhatsApp media out:** 16 MB. Media library: 100 MB.
 - **Email retention:** 180 days. **Support tickets:** 30 days.
 - **API limits:** 60 requests/minute, 500/day per key.
+- **Claude connection:** add `https://app.adfliker.com/mcp` as a connector and sign in with the owner's Adfliker login; no key needed (Google-login accounts use the API key tab).
 - **Gmail:** requires an App Password, not the account password.
 - **AI credits:** roughly ₹0.01 per credit; minimum top-up ₹100.
 - **Payments:** Razorpay, INR by default.

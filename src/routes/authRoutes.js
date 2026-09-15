@@ -88,6 +88,10 @@ router.get('/app-name', authController.getAppName);
 router.get('/mcp-key',    authMiddleware, mcpKeyController.getMcpKey);
 router.post('/mcp-key',   authMiddleware, validate(schemas.noBody), mcpKeyController.generateMcpKey);
 router.delete('/mcp-key', authMiddleware, mcpKeyController.revokeMcpKey);
+// Apps connected through the OAuth sign-in flow (Claude.ai, Claude Desktop, Claude Code)
+router.get('/mcp-connections',        authMiddleware, mcpKeyController.listMcpConnections);
+router.delete('/mcp-connections',     authMiddleware, mcpKeyController.revokeAllMcpConnections);
+router.delete('/mcp-connections/:id', authMiddleware, validateObjectId(), mcpKeyController.revokeMcpConnection);
 
 module.exports = router;
 

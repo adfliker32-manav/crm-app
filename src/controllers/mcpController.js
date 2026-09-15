@@ -16,7 +16,13 @@ const Goal = require('../models/Goal');
 const { sendWhatsAppTextMessage } = require('../services/whatsappService');
 const { queueLeadCreatedEffects, queueLeadStageChangeEffects } = require('../utils/leadEffects');
 
-const MCP_VERSION = '2024-11-05';
+// Newest first. `initialize` answers with the client's requested version when we
+// support it, otherwise our newest (MCP lifecycle spec, version negotiation).
+// This server uses nothing version-specific beyond tools, so all three behave
+// identically — hard-coding 2024-11-05 made newer clients negotiate down.
+const SUPPORTED_MCP_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+const negotiateVersion = (requested) =>
+    SUPPORTED_MCP_VERSIONS.includes(requested) ? requested : SUPPORTED_MCP_VERSIONS[0];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 const periodStart = (period) => {
@@ -1667,7 +1673,7 @@ const processMessage = async (msg, tenantId) => {
                     jsonrpc: '2.0',
                     id,
                     result: {
-                        protocolVersion: MCP_VERSION,
+                        protocolVersion: negotiateVersion(msg.params?.protocolVersion),
                         capabilities: { tools: {} },
                         serverInfo: { name: 'adfliker-crm', version: '1.0.0' }
                     }
@@ -1749,12 +1755,15 @@ const handleMcp = async (req, res) => {
         }
         const results = await Promise.all(body.map(msg => processMessage(msg, tenantId)));
         const responses = results.filter(Boolean);
+        // Streamable HTTP: input with nothing to answer (only notifications)
+        // gets 202 Accepted with no body.
+        if (responses.length === 0) return res.status(202).end();
         return res.json(responses);
     }
 
     const response = await processMessage(body, tenantId);
-    if (response === null) return res.status(204).end();
+    if (response === null) return res.status(202).end();
     return res.json(response);
 };
 
-module.exports = { handleMcp };
+module.exports = { handleMcp, negotiateVersion, SUPPORTED_MCP_VERSIONS };

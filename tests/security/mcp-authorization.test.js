@@ -148,11 +148,26 @@ describe('4. tenant scoping and account state', () => {
     });
 
     test('suspended, frozen and expired accounts are refused', () => {
-        assert.match(middlewareSrc, /accountStatus === 'Suspended'/);
-        assert.match(middlewareSrc, /accountStatus === 'Frozen'/);
+        // One shared check (mcpOAuthService.checkWorkspace) serves the API-key
+        // path, the OAuth token path and the sign-in page, so they can't drift.
+        const serviceSrc = read('src', 'services', 'mcpOAuthService.js');
+        const check = serviceSrc.match(/const checkWorkspace = [\s\S]*?\n\};/)[0];
+        assert.match(check, /accountStatus === 'Suspended'/);
+        assert.match(check, /accountStatus === 'Frozen'/);
         // Without this an expired tenant would keep full WRITE access through MCP
         // while being read-only everywhere else.
-        assert.match(middlewareSrc, /planExpiryDate/);
+        assert.match(check, /planExpiryDate/);
+        assert.match(middlewareSrc, /oauth\.checkWorkspace\(workspace\)/,
+            'the API-key path must run the shared workspace check');
+    });
+
+    test('every 401 tells the client where to sign in (WWW-Authenticate)', () => {
+        // MCP Authorization spec: a 401 MUST carry resource_metadata. Without it
+        // Claude reported "authentication error" and never opened the login page.
+        assert.match(middlewareSrc, /WWW-Authenticate/);
+        assert.match(middlewareSrc, /resource_metadata=/);
+        assert.ok(!/status\(401\)/.test(middlewareSrc.replace(/const rpcError[\s\S]*?;\n/, '')),
+            'send 401s through unauthorized() so the header is never forgotten');
     });
 
     test('the key format is validated before any database round trip', () => {

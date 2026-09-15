@@ -47,6 +47,36 @@ const schemas = {
     // schema — leaving it on noBody would silently delete that field.
     noBody: Joi.object({}),
 
+    // MCP OAuth sign-in form (POST /oauth/authorize). Every field is a plain
+    // form string and every field the handler reads is listed — stripUnknown
+    // would silently drop anything missing here. Empty strings are allowed on
+    // purpose: the handler returns a readable page for a missing value, where a
+    // Joi 400 would show a browser user raw JSON.
+    oauthAuthorize: Joi.object({
+        client_id:             Joi.string().allow('').max(200),
+        redirect_uri:          Joi.string().allow('').max(2000),
+        response_type:         Joi.string().allow('').max(50),
+        state:                 Joi.string().allow('').max(4096),
+        code_challenge:        Joi.string().allow('').max(200),
+        code_challenge_method: Joi.string().allow('').max(20),
+        scope:                 Joi.string().allow('').max(500),
+        resource:              Joi.string().allow('').max(2000),
+        auth_method:           Joi.string().valid('password', 'api_key').allow(''),
+        action:                Joi.string().valid('allow', 'deny').allow(''),
+        email:                 Joi.string().allow('').max(320),
+        password:              Joi.string().allow('').max(1024),
+        mcp_api_key:           Joi.string().allow('').max(200)
+    }),
+
+    // MCP OAuth token revocation (RFC 7009). Client credentials may arrive in
+    // the body (client_secret_post / public clients) or a Basic header.
+    oauthRevoke: Joi.object({
+        token:           Joi.string().max(500).required(),
+        token_type_hint: Joi.string().valid('access_token', 'refresh_token').allow(''),
+        client_id:       Joi.string().allow('').max(200),
+        client_secret:   Joi.string().allow('').max(500)
+    }),
+
     // External CRM API -> POST /api/v1/whatsapp/assign-agent.
     // `agentEmail` is REQUIRED but nullable, deliberately. Sending null is how a
     // partner unassigns, so if the key were merely optional, stripUnknown would

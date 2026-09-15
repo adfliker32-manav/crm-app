@@ -10,6 +10,7 @@ const { SUPPORT_UPLOAD_ROOT, classifyAttachment } = require('../middleware/suppo
 const { getIO } = require('../services/socketService');
 const { generateReply } = require('../services/aiService');
 const aiCreditService = require('../services/aiCreditService');
+const { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } = require('../constants/aiDefaults');
 
 // Smart auto-tag — keyword rules, no LLM. Lightweight & deterministic.
 const TAG_RULES = [
@@ -289,7 +290,7 @@ async function triggerAiSupportReply(ticket, { customerText }) {
 
         // ── Decrypt provider API key ─────────────────────────────────────────
         const { decryptToken } = require('../utils/encryptionUtils');
-        const provider = cfg.provider || 'gemini';
+        const provider = cfg.provider || DEFAULT_AI_PROVIDER;
         const apiKey = provider === 'openai'
             ? decryptToken(globalOpenai?.value)
             : decryptToken(globalGemini?.value);
@@ -436,7 +437,7 @@ Ticket Details:
         const { reply, usage } = await generateReply({
             provider,
             apiKey,
-            modelName: cfg.model || 'gemini-2.5-flash',
+            modelName: cfg.model || DEFAULT_AI_MODEL,
             systemPrompt,
             conversationHistory,
             leadContext: {}

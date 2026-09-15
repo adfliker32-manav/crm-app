@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const saasPlugin = require('./plugins/saasPlugin');
 const { encryptToken, decryptToken } = require('../utils/encryptionUtils');
+const { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } = require('../constants/aiDefaults');
 
 const integrationConfigSchema = new mongoose.Schema({
     // Hard link back to the Tenant Owner (Manager/Agency)
@@ -184,8 +185,8 @@ const integrationConfigSchema = new mongoose.Schema({
 
     // 🤖 AI Chatbot Configuration
     ai: {
-        provider: { type: String, enum: ['gemini', 'openai'], default: 'gemini' },
-        model: { type: String, default: 'gemini-2.5-flash' },
+        provider: { type: String, enum: ['gemini', 'openai'], default: DEFAULT_AI_PROVIDER },
+        model: { type: String, default: DEFAULT_AI_MODEL },
         agentName: { type: String, default: 'AI Assistant' },
         systemPrompt: { type: String, default: 'You are a helpful lead qualification assistant. Your goal is to qualify the customer by asking for their name, requirements, budget, and location. Be brief and polite.' },
         aiEnabled: { type: Boolean, default: false },

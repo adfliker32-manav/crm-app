@@ -1,12 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { mcpAuthMiddleware, mcpRateLimit } = require('../middleware/mcpAuthMiddleware');
+const { mcpAuthMiddleware, mcpRateLimit, mcpTenantRateLimit } = require('../middleware/mcpAuthMiddleware');
 const { requireFeature } = require('../middleware/authMiddleware');
 const { handleMcp } = require('../controllers/mcpController');
 
 // Single endpoint — MCP Streamable HTTP transport uses POST for all JSON-RPC messages.
-// Auth: Bearer mcp_<key> in Authorization header (no JWT, no session cookie).
-router.post('/', mcpRateLimit, mcpAuthMiddleware, requireFeature('settings.claudeAI'), handleMcp);
+// Auth: OAuth 2.1 bearer token (mcpat_…) or workspace API key (mcp_…) — no JWT, no cookie.
+// Order matters: IP flood guard → authenticate → per-workspace limit (needs
+// req.tenantId) → feature gate (needs req.entitlements) → handler.
+router.post('/', mcpRateLimit, mcpAuthMiddleware, mcpTenantRateLimit, requireFeature('settings.claudeAI'), handleMcp);
 
 // GET / DELETE — this server is POST-only (no server→client SSE stream, no
 // resumable sessions).
@@ -30,7 +32,8 @@ const methodNotAllowed = (req, res) => {
             code: -32000,
             message: 'This MCP server speaks the Streamable HTTP transport and accepts POST only. ' +
                      'Re-add it with: claude mcp add --transport http adfliker <url> ' +
-                     '--header "Authorization: Bearer mcp_<your key>"'
+                     '(Claude will open a browser to sign in), or add ' +
+                     '--header "Authorization: Bearer mcp_<your key>" to use an API key.'
         },
         id: null
     });

@@ -48,8 +48,8 @@ const AiSupportSettingsModal = ({ isOpen, onClose }) => {
     const [saving, setSaving] = useState(false);
 
     const [enabled, setEnabled] = useState(false);
-    const [provider, setProvider] = useState('gemini');
-    const [model, setModel] = useState('gemini-2.5-flash');
+    const [provider, setProvider] = useState('openai');
+    const [model, setModel] = useState('gpt-4o-mini');
     const [agentName, setAgentName] = useState('AI Support');
     const [systemPrompt, setSystemPrompt] = useState('');
     const [usage, setUsage] = useState(null);
@@ -65,8 +65,8 @@ const AiSupportSettingsModal = ({ isOpen, onClose }) => {
             .then(res => {
                 const c = res.data.config || {};
                 setEnabled(!!c.enabled);
-                setProvider(c.provider || 'gemini');
-                setModel(c.model || 'gemini-2.5-flash');
+                setProvider(c.provider || 'openai');
+                setModel(c.model || 'gpt-4o-mini');
                 setAgentName(c.agentName || 'AI Support');
                 setSystemPrompt(c.systemPrompt || '');
                 setUsage(res.data.usage || null);

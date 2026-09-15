@@ -39,6 +39,7 @@ const COMPANY_ROLE_FILTER = { $in: ['manager', 'agency'] };
 // Trial-provisioning constants are shared with the public self-registration flow
 // (authController.register) so both paths spin up an identical 14-day trial.
 const { TRIAL_DURATION_MS, DEFAULT_AGENT_LIMIT, DEFAULT_ACTIVE_MODULES, SIGNUP_AI_CREDITS } = require('../constants/trial');
+const { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } = require('../constants/aiDefaults');
 
 const findCompanyById = (id) => User.findOne({ _id: id, role: COMPANY_ROLE_FILTER });
 
@@ -2363,8 +2364,8 @@ const listAiCreditTopups = async (req, res) => {
 const AI_SUPPORT_KEY = 'ai_support_config';
 const AI_SUPPORT_DEFAULTS = {
     enabled: false,
-    provider: 'gemini',
-    model: 'gemini-2.5-flash',
+    provider: DEFAULT_AI_PROVIDER,
+    model: DEFAULT_AI_MODEL,
     agentName: 'AI Support',
     systemPrompt: '',
     knowledgeResources: [],

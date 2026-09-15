@@ -26,6 +26,7 @@ const UsageLog = require('../models/UsageLog');
 const WorkspaceSettings = require('../models/WorkspaceSettings');
 const IntegrationConfig = require('../models/IntegrationConfig');
 const AgencySettings = require('../models/AgencySettings');
+const { OAuthGrant, OAuthAuthCode } = require('../models/OAuthClient');
 
 const USER_OWNED_MODELS = [
     Lead,
@@ -207,6 +208,11 @@ const deleteOwnedRecords = async (userIds, options = {}) => {
     // USER_OWNED_MODELS above, so it was deleted by a field it does not have: the
     // query matched nothing and every agency's settings row was orphaned on delete.
     deletions.push(AgencySettings.deleteMany({ agencyId: userIdFilter }));
+
+    // Claude / MCP OAuth connections key off `tenantId`. A deleted tenant's grants
+    // already fail verification (no user), but the rows would linger for 90 days.
+    deletions.push(OAuthGrant.deleteMany({ tenantId: userIdFilter }));
+    deletions.push(OAuthAuthCode.deleteMany({ tenantId: userIdFilter }));
 
     const activityScope = companyId
         ? { $or: [{ userId: userIdFilter }, { companyId }] }
