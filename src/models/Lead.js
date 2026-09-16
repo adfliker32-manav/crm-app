@@ -82,14 +82,27 @@ const LeadSchema = new mongoose.Schema({
 
     // 👇 NEW: Generic History for ALL events (Notes, Emails, WhatsApp, Follow-ups)
     history: [{
+        // These two enums are the contract for EVERY history writer in the codebase.
+        // A value written here that the enum does not list does not just lose the
+        // timeline entry — because Mongoose validates the whole history array on
+        // save(), the enclosing lead can never be saved again, so the write that
+        // added it 500s and so does every later save() of that lead. 'Appointment'
+        // (appointmentController, bookingManageController, extApiController) and
+        // 'Assignment' / 'Booked' / 'Updated' were all being written without being
+        // listed: assigning a lead answered "Server error", and any lead that had
+        // picked up a bad row through a $push (bulk assign, the external API) was
+        // permanently unsavable. Add the value HERE first when adding a new one.
         type: {
             type: String,
-            enum: ['Note', 'Follow-up', 'Email', 'WhatsApp', 'System', 'Task', 'Document'],
+            enum: ['Note', 'Follow-up', 'Email', 'WhatsApp', 'System', 'Task', 'Document', 'Appointment'],
             required: true
         },
         subType: {
             type: String,
-            enum: ['Manual', 'Auto', 'Stage Change', 'Created', 'Completed', 'Deleted'],
+            enum: [
+                'Manual', 'Auto', 'Stage Change', 'Created', 'Completed', 'Deleted',
+                'Assignment', 'Booked', 'Updated'
+            ],
             default: 'Manual'
         },
         content: { type: String }, // Text, Summary, or Note content
