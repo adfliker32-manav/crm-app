@@ -523,38 +523,55 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
             ? await resolveAssigneeForConversation({ tenantId: userId, lead })
             : null;
 
-        const conversation = await WhatsAppConversation.findOneAndUpdate(
-            { userId, waContactId: normalizedPhone },
-            {
-                $setOnInsert: {
-                    userId,
-                    leadId,
-                    assignedTo,
-                    waContactId: normalizedPhone,
-                    phone:       normalizedPhone,
-                    displayName: lead.name,
-                    status:      'active',
-                    unreadCount: 0,
-                    metadata:    { totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
-                },
-                $set: {
-                    lastMessage:          `[Broadcast] ${templateName}`,
-                    lastMessageAt:        new Date(),
-                    lastMessageDirection: 'outbound'
-                },
-                $inc: {
-                    'metadata.totalMessages': 1,
-                    'metadata.totalOutbound': 1
-                }
+        // Exact match first, then a last-10-digit suffix match, so a thread
+        // already stored as "919876543210" (e.g. from an inbound reply or a
+        // manual send) is reused instead of the broadcast filing this send
+        // into a brand-new duplicate conversation the agent never opens —
+        // same dedup rule as whatsappOutboundRecorder.recordOutboundMessage.
+        let conversation = await WhatsAppConversation.findOne({ userId, waContactId: normalizedPhone });
+        if (!conversation && normalizedPhone.length >= 10) {
+            conversation = await WhatsAppConversation.findOne({
+                userId,
+                waContactId: { $regex: normalizedPhone.slice(-10) + '$' }
+            });
+        }
+
+        if (!conversation) {
+            conversation = await WhatsAppConversation.create({
+                userId,
+                leadId,
+                assignedTo,
+                waContactId: normalizedPhone,
+                phone:       normalizedPhone,
+                displayName: lead.name,
+                status:      'active',
+                unreadCount: 0,
+                metadata:    { totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
+            });
+        }
+
+        const now = new Date();
+        const conversationUpdate = {
+            $set: {
+                lastMessage:          `[Broadcast] ${templateName}`,
+                lastMessageAt:        now,
+                lastMessageDirection: 'outbound'
             },
-            { upsert: true, returnDocument: 'after' }
+            $inc: {
+                'metadata.totalMessages': 1,
+                'metadata.totalOutbound': 1
+            }
+        };
+        if (!conversation.leadId && leadId) conversationUpdate.$set.leadId = leadId;
+        conversation = await WhatsAppConversation.findByIdAndUpdate(
+            conversation._id, conversationUpdate, { returnDocument: 'after' }
         );
 
         // Use upsert so if another code path already saved this waMessageId (without broadcastId),
         // we patch it instead of silently dropping the create (E11000).
         // setDefaultsOnInsert ensures schema defaults (incl. deletedAt: null) are applied so that
         // the saasPlugin's { deletedAt: null } filter finds this document in future queries.
-        await WhatsAppMessage.findOneAndUpdate(
+        const message = await WhatsAppMessage.findOneAndUpdate(
             { waMessageId },
             {
                 $setOnInsert: {
@@ -564,7 +581,7 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
                     type:             'template',
                     content:          { text: `[Broadcast] Template: ${templateName}`, templateName },
                     status:           'sent',
-                    timestamp:        new Date(),
+                    timestamp:        now,
                     isAutomated:      true,
                     broadcastId,
                     automationSource: 'broadcast'
@@ -576,6 +593,41 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
             },
             { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
+
+        // 🔌 Move it into the right inbox live — same push every other outbound
+        // sender does (whatsappOutboundRecorder, whatsappConversationController),
+        // which broadcasts previously skipped entirely.
+        try {
+            const { getCompanyUserIds } = require('../utils/whatsappUtils');
+            const { broadcastConversationEvent } = require('./whatsappAssignmentService');
+            const companyUserIds = await getCompanyUserIds(userId);
+            await broadcastConversationEvent({
+                tenantId: userId,
+                companyUserIds,
+                conversationId: conversation._id,
+                assignedTo: conversation.assignedTo,
+                events: [
+                    {
+                        event: 'whatsapp:newMessage',
+                        data: { conversationId: conversation._id, message: message.toObject() }
+                    },
+                    {
+                        event: 'whatsapp:conversationUpdate',
+                        data: {
+                            conversationId: conversation._id,
+                            updates: {
+                                lastMessage:          `[Broadcast] ${templateName}`,
+                                lastMessageAt:        now,
+                                lastMessageDirection: 'outbound'
+                            }
+                        }
+                    }
+                ]
+            });
+        } catch (socketErr) {
+            // The record is what matters; a dropped socket push only costs a refresh.
+            console.error('[DB Sync] socket push failed:', socketErr.message);
+        }
 
     } catch (syncErr) {
         console.error(`[DB Sync] Failed for ${lead.phone}:`, syncErr.message);
