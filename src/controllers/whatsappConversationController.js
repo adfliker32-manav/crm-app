@@ -19,6 +19,8 @@ const { storeOutboundMedia } = require('../services/inboundMediaService');
 
 const { getUserWhatsAppCredentials, getCompanyUserIds } = require('../utils/whatsappUtils');
 const { parseMetaError } = require('../utils/metaErrorUtils');
+const { queueLeadCreatedEffects, queueLeadAssignmentEffects } = require('../utils/leadEffects');
+const { logUsage } = require('../services/usageLogger');
 
 // 🔐 Visibility scope. Every handler below resolves its row through this BEFORE
 // touching it, so a conversation outside the caller's scope 404s rather than
@@ -586,25 +588,86 @@ exports.startConversation = async (req, res) => {
         // 🔐 An assignment-restricted agent may only open a thread they would be
         // allowed to see. Without this, "start a conversation" is a trivial
         // bypass: message anyone, then read the replies in the new thread.
+        //
+        // What a restricted agent may NOT do is take over a contact another
+        // agent owns. Everything else is allowed, and the agent is made the
+        // owner THROUGH THE LEAD (the conversation's owner is only a mirror of
+        // Lead.assignedTo — setting it directly would be undone by the next
+        // inbound message):
+        //   - unknown number     → a lead is created, assigned to the agent
+        //   - unassigned lead    → the lead is assigned to the agent
+        //   - lead already theirs → nothing to do
+        // Managers see every conversation regardless, so the thread is always
+        // shared with the admin.
+        let restrictedClaimLead = null;
+        let restrictedTargetLead = null;
         if (isAssignmentRestricted(req)) {
-            if (conversation) {
-                // Existing thread — it must already be theirs.
-                if (String(conversation.assignedTo || '') !== String(userId)) {
-                    return res.status(403).json({
-                        message: 'This conversation belongs to another agent.'
-                    });
-                }
-            } else {
-                // New thread — the contact's lead must be theirs. An unknown
-                // number has no lead, and therefore no owner, so it is refused.
-                const targetLead = requestedLead
-                    || await findLeadByPhone().select('assignedTo').lean();
+            const isMine = (id) => String(id || '') === String(userId);
 
-                if (!targetLead || String(targetLead.assignedTo || '') !== String(userId)) {
+            if (conversation && !isMine(conversation.assignedTo) && conversation.assignedTo) {
+                return res.status(403).json({
+                    message: 'This conversation belongs to another agent.'
+                });
+            }
+
+            if (!conversation || !isMine(conversation.assignedTo)) {
+                // The lead this thread is (or will be) mirrored from: its own
+                // link first, then the one the caller named, then the phone.
+                let targetLead = null;
+                if (conversation?.leadId) {
+                    targetLead = await Lead.findOne({ _id: conversation.leadId, userId: req.tenantId });
+                }
+                if (!targetLead) targetLead = requestedLead || await findLeadByPhone();
+
+                if (targetLead?.assignedTo && !isMine(targetLead.assignedTo)) {
                     return res.status(403).json({
-                        message: 'You can only start conversations with leads assigned to you.'
+                        message: 'This contact is assigned to another agent.'
                     });
                 }
+
+                if (!targetLead) {
+                    const leadLimit = req.workspace?.planFeatures?.leadLimit;
+                    if (leadLimit != null && leadLimit > 0
+                        && await Lead.countDocuments({ userId: req.tenantId }) >= leadLimit) {
+                        return res.status(403).json({
+                            error: 'lead_limit_reached',
+                            message: `You have reached your maximum account capacity of ${leadLimit} leads. Please contact your administrator to increase your limit.`
+                        });
+                    }
+
+                    targetLead = new Lead({
+                        userId: req.tenantId,
+                        name: normalizedPhone,
+                        phone: normalizedPhone,
+                        source: 'WhatsApp',
+                        assignedTo: userId
+                    });
+                    targetLead.history.push({
+                        type: 'System',
+                        subType: 'Assignment',
+                        content: `Created from a new WhatsApp chat and assigned to ${req.user.name || 'agent'}`,
+                        date: new Date()
+                    });
+                    restrictedClaimLead = { lead: targetLead, created: true };
+                } else if (!targetLead.assignedTo) {
+                    targetLead.assignedTo = userId;
+                    targetLead.history.push({
+                        type: 'System',
+                        subType: 'Assignment',
+                        content: `Assigned to ${req.user.name || 'agent'} (started a WhatsApp chat)`,
+                        date: new Date()
+                    });
+                    restrictedClaimLead = { lead: targetLead, created: false };
+                }
+
+                // Nothing is saved yet: the lead is persisted only after the
+                // message actually goes out, so a failed send leaves no stray
+                // lead or claim behind. The resolution below must still see the
+                // pending owner rather than re-query the unsaved copy.
+                if (!requestedLead || String(requestedLead._id) === String(targetLead._id)) {
+                    requestedLead = targetLead;
+                }
+                restrictedTargetLead = targetLead;
             }
         }
 
@@ -651,13 +714,23 @@ exports.startConversation = async (req, res) => {
                 lead: resolvedLead
             });
             if (enabled) conversation.assignedTo = assignedTo;
+        } else if (restrictedTargetLead
+            && String(conversation.leadId) === String(restrictedTargetLead._id)
+            && String(conversation.assignedTo || '') !== String(restrictedTargetLead.assignedTo)) {
+            // Already linked to the agent's lead (just claimed, or theirs all
+            // along but the mirror never caught up) — mirror the owner so the
+            // agent can actually see the thread they are starting.
+            conversation.assignedTo = restrictedTargetLead.assignedTo;
         }
 
         let result, waMessageId, messageContent, messageType;
 
         if (templateName) {
             // Send via Template API (required for new contacts / outside 24hr window)
-            const templateObj = await WhatsAppTemplate.findOne({ userId, name: templateName });
+            // Templates belong to the workspace, usually created by the manager —
+            // an agent's own id owns none, which silently fell back to en_US with
+            // no variables and made Meta reject the send.
+            const templateObj = await WhatsAppTemplate.findOne({ userId: { $in: companyUserIds }, name: templateName });
             let metaComponents = null;
             
             if (templateObj) {
@@ -717,8 +790,26 @@ exports.startConversation = async (req, res) => {
         conversation.metadata.totalMessages = (conversation.metadata.totalMessages || 0) + 1;
         conversation.metadata.totalOutbound = (conversation.metadata.totalOutbound || 0) + 1;
 
+        // The lead goes first: the conversation references it.
+        if (restrictedClaimLead) {
+            await restrictedClaimLead.lead.save();
+        }
+
         await conversation.save();
         await message.save();
+
+        if (restrictedClaimLead) {
+            const { lead, created } = restrictedClaimLead;
+            if (created) {
+                logUsage(req.tenantId, 'leadsCreated');
+                // skipWelcome: the agent's own message IS the first contact —
+                // an automated welcome on top of it would double-message them.
+                // (Also runs the assignment effects.)
+                queueLeadCreatedEffects(lead, req.tenantId, { skipWelcome: true, source: 'WhatsApp Inbox' });
+            } else {
+                queueLeadAssignmentEffects(lead, req.tenantId);
+            }
+        }
 
         const savedMsg = message.toObject();
         res.json({
