@@ -25,8 +25,7 @@ const blankBill = () => ({
     receivedAmount: '',
     billDate: todayISO(), generatedDate: todayISO(), dueDate: '',
     paymentMethod: 'bank_transfer', reference: '',
-    notes: '', termsAndConditions: '',
-    saveTermsAsDefault: false
+    notes: '', termsAndConditions: ''
 });
 
 const FIELD = 'w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400';
@@ -47,14 +46,9 @@ const CustomBillModal = ({ isOpen, onClose, onSuccess, clients = [] }) => {
     useEffect(() => {
         if (!isOpen) return;
         setMode('saved');
+        // Every bill starts empty — nothing, terms included, carries over from a
+        // previous bill or a saved default.
         setForm(blankBill());
-        // Prefill the reusable terms so they never have to be retyped.
-        api.get('/superadmin/agency-finance/bill-defaults')
-            .then(res => {
-                const t = res.data?.defaults?.termsAndConditions || '';
-                if (t) setForm(f => ({ ...f, termsAndConditions: t }));
-            })
-            .catch(() => { /* prefill is a convenience, not a requirement */ });
     }, [isOpen]);
 
     const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -375,13 +369,8 @@ const CustomBillModal = ({ isOpen, onClose, onSuccess, clients = [] }) => {
                             <label className={LABEL}>Terms &amp; conditions</label>
                             <textarea rows={5} value={form.termsAndConditions}
                                 onChange={e => set('termsAndConditions', e.target.value)} className={FIELD}
-                                placeholder={'1. Payment due within 15 days.\n2. Services pause if the balance stays unpaid past 30 days.'} />
-                            <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
-                                <input type="checkbox" checked={form.saveTermsAsDefault}
-                                    onChange={e => set('saveTermsAsDefault', e.target.checked)}
-                                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-400" />
-                                <span className="text-xs text-slate-600">Save these as my default terms for future bills</span>
-                            </label>
+                                placeholder="Optional — type this bill's terms / policy" />
+                            <p className="text-[11px] text-slate-400 mt-1">Leave blank to print no terms on this bill.</p>
                         </div>
                     </section>
 

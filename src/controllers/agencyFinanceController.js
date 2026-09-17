@@ -7,14 +7,6 @@ const GlobalSetting = require('../models/GlobalSetting');
 // Unified keys: company_name, company_address, company_gst, company_logo
 const { findClientById, resolveBillRecipient } = require('../utils/billRecipient');
 
-// Key under which the reusable default Terms & Conditions live in GlobalSetting.
-const BILLING_TERMS_KEY = 'billing_terms';
-
-const fetchDefaultTerms = async () => {
-    const row = await GlobalSetting.findOne({ key: BILLING_TERMS_KEY }).lean();
-    return typeof row?.value === 'string' ? row.value : '';
-};
-
 const fetchAgencyBranding = async () => {
     const keys = ['company_name', 'company_address', 'company_gst', 'company_logo'];
     const settings = await GlobalSetting.find({ key: { $in: keys } }).lean();
@@ -720,45 +712,6 @@ exports.getSummary = async (req, res) => {
 
 // ─── CUSTOM BILLS ──────────────────────────────────────────────────────────────
 
-// GET  /superadmin/agency-finance/bill-defaults
-// The reusable Terms & Conditions the Custom Bill form prefills with.
-exports.getBillDefaults = async (req, res) => {
-    try {
-        res.json({ success: true, defaults: { termsAndConditions: await fetchDefaultTerms() } });
-    } catch (err) {
-        console.error('[AgencyFinance] getBillDefaults:', err);
-        res.status(500).json({ success: false, message: 'Server error' });
-    }
-};
-
-// Upsert helper shared by the settings endpoint and the "save as default" checkbox.
-const persistDefaultTerms = async (terms, userId) => {
-    await GlobalSetting.findOneAndUpdate(
-        { key: BILLING_TERMS_KEY },
-        {
-            $set: {
-                value: terms || '',
-                description: 'Default Terms & Conditions prefilled on new custom bills',
-                updatedBy: userId || null,
-                updatedAt: new Date()
-            }
-        },
-        { upsert: true }
-    );
-};
-
-// POST /superadmin/agency-finance/bill-defaults   { termsAndConditions }
-exports.saveBillDefaults = async (req, res) => {
-    try {
-        const terms = typeof req.body?.termsAndConditions === 'string' ? req.body.termsAndConditions : '';
-        await persistDefaultTerms(terms, req.user?.userId || req.user?.id);
-        res.json({ success: true, message: 'Default terms saved.' });
-    } catch (err) {
-        console.error('[AgencyFinance] saveBillDefaults:', err);
-        res.status(500).json({ success: false, message: 'Server error' });
-    }
-};
-
 // POST /superadmin/agency-finance/custom-bill
 //
 // A hand-composed invoice. Differs from createPayment in three ways:
@@ -777,7 +730,7 @@ exports.createCustomBill = async (req, res) => {
             lineItems, amount, receivedAmount,
             billDate, generatedDate, dueDate,
             paymentMethod, reference, notes,
-            termsAndConditions, saveTermsAsDefault
+            termsAndConditions
         } = req.body;
 
         // undefined means "supplied but unparseable" — distinct from null ("absent").
@@ -881,9 +834,10 @@ exports.createCustomBill = async (req, res) => {
 
         const branding = await fetchAgencyBranding();
 
-        const terms = typeof termsAndConditions === 'string' && termsAndConditions.trim()
-            ? termsAndConditions
-            : await fetchDefaultTerms();
+        // Printed exactly as typed on THIS bill. Blank means no terms on the invoice —
+        // there is deliberately no saved/default text to fall back to, so one bill's
+        // terms can never appear on another.
+        const terms = typeof termsAndConditions === 'string' ? termsAndConditions.trim() : '';
 
         // Same collision-retry shape as createPayment. The BILL- prefix keeps a
         // hand-made bill visually distinct from an auto-generated INV- retainer.
@@ -944,16 +898,6 @@ exports.createCustomBill = async (req, res) => {
                     continue;
                 }
                 throw createErr;
-            }
-        }
-
-        // Opt-in, and only after the bill itself saved — a failed bill must not
-        // quietly rewrite the default terms for every future bill.
-        if (saveTermsAsDefault === true) {
-            try {
-                await persistDefaultTerms(terms, req.user?.userId || req.user?.id);
-            } catch (termsErr) {
-                console.error('[AgencyFinance] Could not save default terms:', termsErr.message);
             }
         }
 

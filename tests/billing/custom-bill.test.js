@@ -280,7 +280,7 @@ test('a custom bill for a one-off customer can still be edited', () => {
 
 test('custom bill routes are mounted behind requireSuperAdmin', () => {
     const routes = read('src/routes/superAdminRoutes.js');
-    for (const p of ['/agency-finance/custom-bill', '/agency-finance/bill-defaults']) {
+    for (const p of ['/agency-finance/custom-bill']) {
         const line = routes.split('\n').find(l => l.includes(p));
         assert.ok(line, `route ${p} is not mounted`);
         assert.ok(line.includes('requireSuperAdmin'), `route ${p} must be superadmin-only`);
@@ -306,8 +306,7 @@ const formPayload = () => ({
     billDate: '2026-08-15', generatedDate: '2026-09-11', dueDate: '',
     paymentMethod: 'bank_transfer', reference: '',
     notes: 'Second installment after Diwali.',
-    termsAndConditions: '1. Due in 15 days.',
-    saveTermsAsDefault: true
+    termsAndConditions: '1. Due in 15 days.'
 });
 
 const runSchema = (schema, payload) => schema.validate(payload, {
@@ -350,9 +349,23 @@ test('the schema rejects bills that cannot be billed', () => {
     }
 });
 
-test('clearing the default terms is allowed', () => {
-    const { error } = runSchema(schemas.saveBillDefaults, { termsAndConditions: '' });
-    assert.ok(!error, 'an empty string means "no default terms", not a validation failure');
+test('blank terms are allowed', () => {
+    const { error } = runSchema(schemas.createCustomBill, { ...formPayload(), termsAndConditions: '' });
+    assert.ok(!error, 'an empty string means "no terms on this bill", not a validation failure');
+});
+
+test('terms are never prefilled or defaulted from a saved setting or an older bill', () => {
+    // Blank terms must print blank. There used to be a saved "default terms" that
+    // prefilled the form AND was silently substituted server-side for an empty box.
+    const ctrl = read('src/controllers/agencyFinanceController.js');
+    const modal = read('client/src/components/SuperAdmin/CustomBillModal.jsx');
+    const routes = read('src/routes/superAdminRoutes.js');
+    assert.ok(!/fetchDefaultTerms|billing_terms|persistDefaultTerms/.test(ctrl),
+        'a blank terms box must not fall back to saved default terms');
+    assert.ok(!/bill-defaults|saveTermsAsDefault/.test(modal),
+        'the form must open with empty terms and offer no "save as default"');
+    assert.ok(!routes.includes('bill-defaults'), 'the default-terms endpoints are gone');
+    assert.strictEqual(schemas.saveBillDefaults, undefined);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

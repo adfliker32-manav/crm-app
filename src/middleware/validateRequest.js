@@ -508,14 +508,7 @@ const schemas = {
         reference:     Joi.string().trim().max(200).optional().allow('', null),
         notes:         Joi.string().trim().max(2000).optional().allow('', null),
 
-        termsAndConditions: Joi.string().trim().max(5000).optional().allow('', null),
-        saveTermsAsDefault: Joi.boolean().optional()
-    }),
-
-    // agencyFinanceController.saveBillDefaults — the reusable terms.
-    // Empty is meaningful: it clears the default.
-    saveBillDefaults: Joi.object({
-        termsAndConditions: Joi.string().trim().max(5000).required().allow('')
+        termsAndConditions: Joi.string().trim().max(5000).optional().allow('', null)
     })
 };
 

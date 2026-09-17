@@ -45,8 +45,8 @@ const agencyPaymentSchema = new mongoose.Schema({
     serviceValidityFrom: { type: Date, default: null },
     serviceValidityTo:   { type: Date, default: null },
 
-    // Printed at the foot of the invoice. Prefilled from the billing_terms global
-    // setting, then editable per bill, so one client's terms never rewrite another's.
+    // Printed at the foot of the invoice, exactly as typed on this bill. Blank = no
+    // terms block. Never prefilled or defaulted from another bill or a global setting.
     termsAndConditions: { type: String, default: '' },
 
     // Only used by a one-off custom bill; a saved client carries its own email.
