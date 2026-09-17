@@ -1,5 +1,17 @@
 const mongoose = require('mongoose');
 
+// One service line on a custom bill.
+const lineItemSchema = new mongoose.Schema({
+    name:         { type: String, required: true, trim: true },
+    description:  { type: String, default: '', trim: true },
+    quantity:     { type: Number, default: 1, min: 0 },
+    rate:         { type: Number, default: 0, min: 0 },
+    amount:       { type: Number, default: 0, min: 0 },   // quantity × rate, computed server-side
+    // Optional per-line period; falls back to the bill's own validity window.
+    validityFrom: { type: Date, default: null },
+    validityTo:   { type: Date, default: null }
+}, { _id: false });
+
 const agencyPaymentSchema = new mongoose.Schema({
     // Null ONLY on a custom bill raised for a one-off customer who is not a saved
     // AgencyClient. Everything that reads it must null-check first: this codebase
@@ -21,6 +33,13 @@ const agencyPaymentSchema = new mongoose.Schema({
     // Free-text service name. Overrides the clientServiceType label on the invoice
     // so a bill is not limited to the fixed SEO/Ads/Social list.
     customServiceName: { type: String, default: '', trim: true },
+
+    // Several services on one custom bill, each quantity × rate. The bill's `amount`
+    // is always the server-computed sum of these lines, never a number from the body.
+    // Empty on retainers and on custom bills raised before line items existed; those
+    // still print the single customServiceName row. customServiceName stays filled
+    // with a summary ("SEO + 2 more") for the payments list and billing emails.
+    lineItems: { type: [lineItemSchema], default: [] },
 
     // The period the service actually covers, printed in place of the billing month.
     serviceValidityFrom: { type: Date, default: null },

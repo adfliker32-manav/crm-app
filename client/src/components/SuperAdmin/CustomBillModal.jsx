@@ -11,14 +11,18 @@ import { useNotification } from '../../context/NotificationContext';
 
 const fmtINR = (n) => `₹${(Number(n) || 0).toLocaleString('en-IN')}`;
 const todayISO = () => new Date().toISOString().slice(0, 10);
+const round2 = (n) => Math.round(n * 100) / 100;
+
+const blankLine = () => ({ name: '', description: '', quantity: '1', rate: '', validityFrom: '', validityTo: '', showDetails: false });
+const lineTotal = (li) => round2((Number(li.quantity) || 0) * (Number(li.rate) || 0));
 
 const blankBill = () => ({
     agencyClientId: '',
     clientName: '', clientCompany: '', clientEmail: '', clientPhone: '',
     billingAddress: '', gstNumber: '',
-    serviceName: '',
+    lineItems: [blankLine()],
     serviceValidityFrom: '', serviceValidityTo: '',
-    amount: '', receivedAmount: '',
+    receivedAmount: '',
     billDate: todayISO(), generatedDate: todayISO(), dueDate: '',
     paymentMethod: 'bank_transfer', reference: '',
     notes: '', termsAndConditions: '',
@@ -55,23 +59,45 @@ const CustomBillModal = ({ isOpen, onClose, onSuccess, clients = [] }) => {
 
     const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-    const total = Number(form.amount) || 0;
+    // The total is the sum of the service lines — the server recomputes it the same way.
+    const total = round2(form.lineItems.reduce((s, li) => s + lineTotal(li), 0));
     const received = Number(form.receivedAmount) || 0;
     const balance = Math.max(0, total - received);
     const status = total > 0 && received >= total ? 'received' : received > 0 ? 'partial' : 'pending';
     const overpaid = total > 0 && received > total;
 
+    const setLine = (i, k, v) => setForm(f => ({
+        ...f, lineItems: f.lineItems.map((li, idx) => idx === i ? { ...li, [k]: v } : li)
+    }));
+    const addLine = () => setForm(f => ({ ...f, lineItems: [...f.lineItems, blankLine()] }));
+    const removeLine = (i) => setForm(f => ({
+        ...f, lineItems: f.lineItems.length > 1 ? f.lineItems.filter((_, idx) => idx !== i) : f.lineItems
+    }));
+
     const pickClient = (id) => {
         const c = clients.find(x => x._id === id);
-        setForm(f => ({ ...f, agencyClientId: id, amount: f.amount || (c?.monthlyFee ?? '') }));
+        // Prefill the first service's rate with the client's monthly fee if it is still empty.
+        setForm(f => ({
+            ...f,
+            agencyClientId: id,
+            lineItems: f.lineItems.map((li, idx) => idx === 0 && !li.rate ? { ...li, rate: c?.monthlyFee ?? '' } : li)
+        }));
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (mode === 'saved' && !form.agencyClientId) return showError('Please select a client.');
         if (mode === 'oneoff' && !form.clientName.trim()) return showError('Customer name is required.');
-        if (!form.serviceName.trim()) return showError('Service name is required.');
-        if (!total || total <= 0) return showError('Amount must be greater than zero.');
+        for (const [i, li] of form.lineItems.entries()) {
+            const n = form.lineItems.length > 1 ? ` ${i + 1}` : '';
+            if (!li.name.trim()) return showError(`Service${n}: name is required.`);
+            if (!(Number(li.quantity) > 0)) return showError(`Service${n}: quantity must be greater than zero.`);
+            if (li.rate === '' || Number(li.rate) < 0 || isNaN(Number(li.rate))) return showError(`Service${n}: enter a valid rate.`);
+            if (li.validityFrom && li.validityTo && li.validityTo < li.validityFrom) {
+                return showError(`Service${n}: validity end date cannot be before the start date.`);
+            }
+        }
+        if (!total || total <= 0) return showError('Total amount must be greater than zero.');
         if (overpaid) return showError('Received amount cannot be more than the total.');
         if (form.serviceValidityFrom && form.serviceValidityTo &&
             form.serviceValidityTo < form.serviceValidityFrom) {
@@ -80,11 +106,15 @@ const CustomBillModal = ({ isOpen, onClose, onSuccess, clients = [] }) => {
 
         setSaving(true);
         try {
+            // UI-only state stays out of the payload (the schema would strip it anyway).
+            const lineItems = form.lineItems.map(({ showDetails, ...li }) => ({
+                ...li, name: li.name.trim(), description: li.description.trim()
+            }));
             // Only send the half of the customer block that applies, so a stale value
             // from the other mode cannot leak onto the bill.
             const payload = mode === 'saved'
-                ? { ...form, clientName: '', clientCompany: '', clientEmail: '', clientPhone: '', billingAddress: '', gstNumber: '' }
-                : { ...form, agencyClientId: '' };
+                ? { ...form, lineItems, clientName: '', clientCompany: '', clientEmail: '', clientPhone: '', billingAddress: '', gstNumber: '' }
+                : { ...form, lineItems, agencyClientId: '' };
             await api.post('/superadmin/agency-finance/custom-bill', payload);
             onSuccess();
         } catch (err) {
@@ -177,12 +207,79 @@ const CustomBillModal = ({ isOpen, onClose, onSuccess, clients = [] }) => {
 
                     {/* ── Service ──────────────────────────────────────────── */}
                     <section className="space-y-3 pt-2 border-t border-slate-100">
-                        <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider pt-3">Service</h3>
-                        <div>
-                            <label className={LABEL}>Service name *</label>
-                            <input value={form.serviceName} onChange={e => set('serviceName', e.target.value)} className={FIELD}
-                                placeholder="e.g. Website Maintenance + Hosting" />
+                        <div className="flex items-center pt-3">
+                            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                                Services {form.lineItems.length > 1 && <span className="text-slate-400">({form.lineItems.length})</span>}
+                            </h3>
                         </div>
+
+                        <div className="space-y-2">
+                            {form.lineItems.map((li, i) => (
+                                <div key={i} className="border border-slate-200 rounded-xl p-3 space-y-2 bg-slate-50/40">
+                                    <div className="grid grid-cols-12 gap-2 items-end">
+                                        <div className="col-span-12 sm:col-span-5">
+                                            {i === 0 && <label className={LABEL}>Service name *</label>}
+                                            <input value={li.name} onChange={e => setLine(i, 'name', e.target.value)} className={FIELD}
+                                                placeholder={i === 0 ? 'e.g. Website Maintenance' : 'e.g. Hosting'} />
+                                        </div>
+                                        <div className="col-span-3 sm:col-span-2">
+                                            {i === 0 && <label className={LABEL}>Qty</label>}
+                                            <input type="number" min="0" step="any" value={li.quantity}
+                                                onChange={e => setLine(i, 'quantity', e.target.value)} className={FIELD} />
+                                        </div>
+                                        <div className="col-span-4 sm:col-span-2">
+                                            {i === 0 && <label className={LABEL}>Rate (₹)</label>}
+                                            <input type="number" min="0" step="0.01" value={li.rate}
+                                                onChange={e => setLine(i, 'rate', e.target.value)} className={FIELD} placeholder="0" />
+                                        </div>
+                                        <div className="col-span-3 sm:col-span-2 text-right">
+                                            {i === 0 && <label className={`${LABEL} text-right`}>Amount</label>}
+                                            <p className="py-2 text-sm font-bold text-slate-800 truncate">{fmtINR(lineTotal(li))}</p>
+                                        </div>
+                                        <div className="col-span-2 sm:col-span-1 flex justify-end">
+                                            <button type="button" onClick={() => removeLine(i)} disabled={form.lineItems.length === 1}
+                                                title="Remove service"
+                                                className="w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
+                                                <i className="fa-solid fa-trash-can text-xs" />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <button type="button" onClick={() => setLine(i, 'showDetails', !li.showDetails)}
+                                        className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700">
+                                        <i className={`fa-solid fa-chevron-${li.showDetails ? 'up' : 'down'} mr-1`} />
+                                        {li.showDetails ? 'Hide details' : 'Add description / own period'}
+                                    </button>
+
+                                    {li.showDetails && (
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div className="col-span-2">
+                                                <label className={LABEL}>Description</label>
+                                                <input value={li.description} onChange={e => setLine(i, 'description', e.target.value)} className={FIELD}
+                                                    placeholder="Shown under the service name on the bill" />
+                                            </div>
+                                            <div>
+                                                <label className={LABEL}>Valid from</label>
+                                                <input type="date" value={li.validityFrom} onChange={e => setLine(i, 'validityFrom', e.target.value)} className={FIELD} />
+                                            </div>
+                                            <div>
+                                                <label className={LABEL}>Valid until</label>
+                                                <input type="date" value={li.validityTo} onChange={e => setLine(i, 'validityTo', e.target.value)} className={FIELD} />
+                                            </div>
+                                            <p className="col-span-2 text-[11px] text-slate-400 -mt-1">
+                                                Leave the period blank to use the bill's validity below.
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+
+                        <button type="button" onClick={addLine}
+                            className="w-full border-2 border-dashed border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/40 text-indigo-600 font-bold text-xs rounded-xl py-2.5 transition">
+                            <i className="fa-solid fa-plus mr-1" /> Add another service
+                        </button>
+
                         <div className="grid grid-cols-2 gap-3">
                             <div>
                                 <label className={LABEL}>Service valid from</label>
@@ -222,9 +319,9 @@ const CustomBillModal = ({ isOpen, onClose, onSuccess, clients = [] }) => {
                         <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider pt-3">Amount</h3>
                         <div className="grid grid-cols-2 gap-3">
                             <div>
-                                <label className={LABEL}>Total amount *</label>
-                                <input type="number" min="0" step="0.01" value={form.amount}
-                                    onChange={e => set('amount', e.target.value)} className={FIELD} placeholder="50000" />
+                                <label className={LABEL}>Total amount</label>
+                                <div className={`${FIELD} bg-slate-50 font-bold text-slate-800`}>{fmtINR(total)}</div>
+                                <p className="text-[11px] text-slate-400 mt-1">Sum of all services.</p>
                             </div>
                             <div>
                                 <label className={LABEL}>Payment received</label>

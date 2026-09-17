@@ -384,13 +384,20 @@ const PAYMENT_UPDATABLE_FIELDS = [
 
 exports.updatePayment = async (req, res) => {
     try {
-        const prevPayment = await AgencyPayment.findById(req.params.id).select('status agencyClientId').lean();
+        const prevPayment = await AgencyPayment.findById(req.params.id).select('status agencyClientId lineItems').lean();
 
         // BUG 3 FIX: Only allow whitelisted fields to be updated
         const update = {};
         PAYMENT_UPDATABLE_FIELDS.forEach(field => {
             if (req.body[field] !== undefined) update[field] = req.body[field];
         });
+
+        // A multi-service bill's total IS the sum of its lines and its service label is
+        // their summary. Editing either alone would print a total the rows don't add up to.
+        if (prevPayment?.lineItems?.length) {
+            delete update.amount;
+            delete update.customServiceName;
+        }
 
         // Auto-set receivedDate if marking as received
         if (update.status === 'received' && !update.receivedDate) {
@@ -767,20 +774,64 @@ exports.createCustomBill = async (req, res) => {
             clientName, clientCompany, clientEmail, clientPhone,
             billingAddress, gstNumber,
             serviceName, serviceValidityFrom, serviceValidityTo,
-            amount, receivedAmount,
+            lineItems, amount, receivedAmount,
             billDate, generatedDate, dueDate,
             paymentMethod, reference, notes,
             termsAndConditions, saveTermsAsDefault
         } = req.body;
 
-        if (!serviceName || !String(serviceName).trim()) {
+        // undefined means "supplied but unparseable" — distinct from null ("absent").
+        const parseDate = (v) => {
+            if (!v) return null;
+            const d = new Date(v);
+            return isNaN(d.getTime()) ? undefined : d;
+        };
+        const round2 = (n) => Math.round(n * 100) / 100;
+
+        // Several services on one bill. Each line's amount and the bill total are
+        // computed here from quantity × rate; no amount from the body is trusted.
+        const hasLines = Array.isArray(lineItems) && lineItems.length > 0;
+        let items = [];
+        if (hasLines) {
+            for (const [i, li] of lineItems.entries()) {
+                const name = String(li?.name || '').trim();
+                const quantity = Number(li?.quantity);
+                const rate = Number(li?.rate);
+                if (!name) {
+                    return res.status(400).json({ success: false, message: `Service ${i + 1}: name is required.` });
+                }
+                if (isNaN(quantity) || quantity <= 0 || isNaN(rate) || rate < 0) {
+                    return res.status(400).json({ success: false, message: `Service ${i + 1}: quantity must be above zero and rate cannot be negative.` });
+                }
+                const validityFrom = parseDate(li.validityFrom);
+                const validityTo   = parseDate(li.validityTo);
+                if (validityFrom === undefined || validityTo === undefined) {
+                    return res.status(400).json({ success: false, message: `Service ${i + 1}: one of its dates is not a valid date.` });
+                }
+                if (validityFrom && validityTo && validityTo < validityFrom) {
+                    return res.status(400).json({ success: false, message: `Service ${i + 1}: validity end date cannot be before the start date.` });
+                }
+                items.push({
+                    name,
+                    description: String(li.description || '').trim(),
+                    quantity, rate,
+                    amount: round2(quantity * rate),
+                    validityFrom, validityTo
+                });
+            }
+        } else if (!serviceName || !String(serviceName).trim()) {
             return res.status(400).json({ success: false, message: 'Service name is required.' });
         }
 
-        const total = Number(amount);
-        if (amount == null || isNaN(total) || total <= 0) {
+        const total = hasLines ? round2(items.reduce((s, li) => s + li.amount, 0)) : Number(amount);
+        if ((!hasLines && amount == null) || isNaN(total) || total <= 0) {
             return res.status(400).json({ success: false, message: 'Amount must be greater than zero.' });
         }
+
+        // The list view and billing emails show one service label; summarise the lines.
+        const serviceSummary = hasLines
+            ? (items.length === 1 ? items[0].name : `${items[0].name} + ${items.length - 1} more`)
+            : String(serviceName).trim();
 
         const received = Number(receivedAmount || 0);
         if (isNaN(received) || received < 0) {
@@ -799,14 +850,7 @@ exports.createCustomBill = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Pick a client, or type the customer name.' });
         }
 
-        // undefined means "supplied but unparseable" — distinct from null ("absent").
-        const parseDate = (v) => {
-            if (!v) return null;
-            const d = new Date(v);
-            return isNaN(d.getTime()) ? undefined : d;
-        };
-
-        const validFrom       = parseDate(serviceValidityFrom);
+        const validFrom      = parseDate(serviceValidityFrom);
         const validTo         = parseDate(serviceValidityTo);
         const billOn          = parseDate(billDate);
         const generatedOn     = parseDate(generatedDate);
@@ -862,7 +906,8 @@ exports.createCustomBill = async (req, res) => {
                     clientPhone:   client?.phone   || String(clientPhone   || '').trim(),
                     clientServiceType: client?.serviceType || 'other',
 
-                    customServiceName:   String(serviceName).trim(),
+                    customServiceName:   serviceSummary,
+                    lineItems:           items,
                     serviceValidityFrom: validFrom,
                     serviceValidityTo:   validTo,
                     termsAndConditions:  terms,

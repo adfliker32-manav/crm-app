@@ -423,3 +423,106 @@ test('createCustomBill derives status from the money and never trusts the body',
         'status must never come from the request body'
     );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8 — several services on one bill (2026-09-17)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const multiServicePayload = () => ({
+    ...formPayload(),
+    serviceName: undefined,
+    amount: undefined,
+    lineItems: [
+        { name: 'SEO', description: 'On-page + backlinks', quantity: '3', rate: '10000', validityFrom: '', validityTo: '' },
+        { name: 'Hosting', description: '', quantity: '1', rate: '2500.50', validityFrom: '2026-09-01', validityTo: '2027-08-31' }
+    ]
+});
+
+test('the schema accepts a multi-service bill with no top-level service name or amount', () => {
+    const { error, value } = runSchema(schemas.createCustomBill, multiServicePayload());
+    assert.ok(!error, error && error.details.map(d => d.message).join('; '));
+    assert.strictEqual(value.lineItems.length, 2);
+    for (const k of ['name', 'description', 'quantity', 'rate', 'validityFrom', 'validityTo']) {
+        assert.ok(k in value.lineItems[0], `stripUnknown dropped lineItems[].${k}`);
+    }
+});
+
+test('a client-supplied amount is stripped when line items are sent', () => {
+    const { value } = runSchema(schemas.createCustomBill, { ...multiServicePayload(), amount: '1' });
+    assert.ok(!('amount' in value), 'the total must come from the lines, never the body');
+});
+
+test('the schema rejects broken service lines', () => {
+    const bad = {
+        'empty list':        { lineItems: [] },
+        'nameless line':     { lineItems: [{ name: '', quantity: 1, rate: 10 }] },
+        'zero quantity':     { lineItems: [{ name: 'A', quantity: 0, rate: 10 }] },
+        'negative rate':     { lineItems: [{ name: 'A', quantity: 1, rate: -1 }] }
+    };
+    for (const [label, patch] of Object.entries(bad)) {
+        const { error } = runSchema(schemas.createCustomBill, { ...multiServicePayload(), ...patch });
+        assert.ok(error, `${label} should have been rejected`);
+    }
+});
+
+test('the model keeps line items without adding a subdocument _id', () => {
+    const doc = new AgencyPayment({
+        ...baseCustomBill(),
+        lineItems: [{ name: 'SEO', quantity: 2, rate: 100, amount: 200 }]
+    });
+    assert.ok(!doc.validateSync()?.errors?.['lineItems.0.name']);
+    assert.strictEqual(doc.lineItems[0].name, 'SEO');
+    assert.strictEqual(doc.toObject().lineItems[0]._id, undefined);
+});
+
+test('the invoice prints one row per service with qty, rate and its own period', () => {
+    const html = buildInvoiceHtml({
+        ...baseCustomBill(),
+        customServiceName: 'SEO + 1 more',
+        amount: 32500.5, receivedAmount: 0, status: 'pending',
+        lineItems: [
+            { name: 'SEO', description: 'On-page + backlinks', quantity: 3, rate: 10000, amount: 30000 },
+            { name: 'Hosting', quantity: 1, rate: 2500.5, amount: 2500.5,
+              validityFrom: new Date('2027-01-01'), validityTo: new Date('2027-12-31') }
+        ]
+    }, {}, {});
+
+    assert.ok(html.includes('<th style="text-align:center">Qty</th>'), 'qty column');
+    assert.ok(html.includes('On-page + backlinks'), 'line description');
+    assert.ok(html.includes('₹30,000.00') && html.includes('₹2,500.50'), 'line amounts');
+    assert.ok(html.includes('1 January 2027 — 31 December 2027'), 'a line with its own period prints it');
+    assert.ok(html.includes('1 September 2026 — 31 August 2027'), 'a line without one inherits the bill validity');
+    assert.ok(!html.includes('SEO + 1 more</strong>'), 'the summary label is not printed as a row');
+    assert.match(html, /Total<\/span>\s*<span>₹32,500\.50/);
+});
+
+test('line item text is HTML-escaped', () => {
+    const html = buildInvoiceHtml({
+        ...baseCustomBill(),
+        lineItems: [{ name: '<script>x</script>', description: '<img src=x>', quantity: 1, rate: 1, amount: 1 }]
+    }, {}, {});
+    assert.ok(!html.includes('<script>x</script>') && !html.includes('<img src=x>'));
+});
+
+test('createCustomBill computes the total from the lines', () => {
+    const src = read('src/controllers/agencyFinanceController.js');
+    const start = src.indexOf('exports.createCustomBill');
+    const body = src.slice(start, src.indexOf('\n};', start));
+    assert.match(body, /amount: round2\(quantity \* rate\)/, 'each line amount is quantity × rate');
+    assert.match(body, /items\.reduce\(\(s, li\) => s \+ li\.amount, 0\)/, 'total is the sum of the lines');
+    assert.match(body, /lineItems:\s+items/, 'the computed lines are stored');
+});
+
+test('editing a multi-service bill cannot desync its total from its lines', () => {
+    const src = read('src/controllers/agencyFinanceController.js');
+    const start = src.indexOf('exports.updatePayment');
+    const body = src.slice(start, src.indexOf('\n};', start));
+    assert.match(body, /if \(prevPayment\?\.lineItems\?\.length\) \{\s*delete update\.amount;/);
+});
+
+test('the client-side print template also renders line items', () => {
+    const client = read('client/src/components/SuperAdmin/AgencyFinanceView.jsx');
+    for (const token of ['payment.lineItems', 'linePeriod(li)', 'fmtCur(li.rate)']) {
+        assert.ok(client.includes(token), `printInvoice is missing "${token}"`);
+    }
+});

@@ -364,8 +364,11 @@ const PaymentModal = ({ isOpen, onClose, onSuccess, clients, initial }) => {
                         </div>
                         <div>
                             <label className="block text-xs font-bold text-slate-600 mb-1">Amount (₹) *</label>
+                            {/* A multi-service bill's total is the sum of its lines; the server ignores edits to it. */}
                             <input type="number" min="0" value={form.amount} onChange={e => set('amount', e.target.value)}
-                                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 read-only:bg-slate-50 read-only:text-slate-500"
+                                readOnly={!!initial?.lineItems?.length}
+                                title={initial?.lineItems?.length ? 'Total of the services on this bill' : undefined}
                                 placeholder="10000" required />
                         </div>
                         <div>
@@ -900,6 +903,14 @@ const printInvoice = (payment, globalBranding = null) => {
         ? `${fmtD(payment.serviceValidityFrom)} — ${fmtD(payment.serviceValidityTo)}`
         : `${MONTHS_FULL[(payment.billingMonth || 1) - 1]} ${payment.billingYear}`;
 
+    // A multi-service custom bill prints one row per service. Each line may carry its
+    // own period; otherwise it inherits the bill's. Mirrors invoiceHtmlBuilder.js.
+    const lines = Array.isArray(payment.lineItems) ? payment.lineItems : [];
+    const hasLines = lines.length > 0;
+    const linePeriod = (li) => (li.validityFrom || li.validityTo)
+        ? `${fmtD(li.validityFrom)} — ${fmtD(li.validityTo)}`
+        : period;
+
     // Honour the date stored on the bill. This was hardcoded to new Date(), which
     // silently overrode the invoice date the user chose.
     const invoiceDate = payment.invoiceDate || payment.createdAt || new Date();
@@ -1025,15 +1036,24 @@ const printInvoice = (payment, globalBranding = null) => {
       <tr>
         <th>Description</th>
         <th>Period</th>
+        ${hasLines ? '<th style="text-align:center">Qty</th><th style="text-align:right">Rate</th>' : ''}
         <th>Amount</th>
       </tr>
     </thead>
     <tbody>
+      ${hasLines ? lines.map(li => `
+      <tr>
+        <td><strong>${esc(li.name)}</strong>${li.description ? `<div style="font-size:12px;color:#64748b;margin-top:2px;">${esc(li.description)}</div>` : ''}</td>
+        <td>${esc(linePeriod(li))}</td>
+        <td style="text-align:center">${esc(li.quantity)}</td>
+        <td style="text-align:right">${fmtCur(li.rate)}</td>
+        <td>${fmtCur(li.amount)}</td>
+      </tr>`).join('') : `
       <tr>
         <td><strong>${serviceLabel}</strong></td>
         <td>${period}</td>
         <td>${fmtCur(payment.amount)}</td>
-      </tr>
+      </tr>`}
     </tbody>
   </table>
 

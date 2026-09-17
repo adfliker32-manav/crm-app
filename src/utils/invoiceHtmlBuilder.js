@@ -47,6 +47,15 @@ const buildInvoiceHtml = (payment, branding = {}, opts = {}) => {
         ? `${fmtD(payment.serviceValidityFrom)} — ${fmtD(payment.serviceValidityTo)}`
         : `${MONTHS_FULL[(payment.billingMonth || 1) - 1]} ${payment.billingYear}`;
 
+    // A multi-service custom bill prints one row per service. Each line may carry its
+    // own period; otherwise it inherits the bill's. Bills without lines keep the
+    // single-row layout.
+    const lines = Array.isArray(payment.lineItems) ? payment.lineItems : [];
+    const hasLines = lines.length > 0;
+    const linePeriod = (li) => (li.validityFrom || li.validityTo)
+        ? `${fmtD(li.validityFrom)} — ${fmtD(li.validityTo)}`
+        : period;
+
     // Honour the date stored on the bill. This was hardcoded to new Date(), which
     // silently overrode the invoice date the user chose — a bill deliberately
     // backdated to last month still printed as today.
@@ -202,15 +211,24 @@ ${saveButton}
       <tr>
         <th>Description</th>
         <th>Period</th>
+        ${hasLines ? '<th style="text-align:center">Qty</th><th style="text-align:right">Rate</th>' : ''}
         <th>Amount</th>
       </tr>
     </thead>
     <tbody>
+      ${hasLines ? lines.map(li => `
+      <tr>
+        <td><strong>${esc(li.name)}</strong>${li.description ? `<div style="font-size:12px;color:#64748b;margin-top:2px;">${esc(li.description)}</div>` : ''}</td>
+        <td>${esc(linePeriod(li))}</td>
+        <td style="text-align:center">${esc(li.quantity)}</td>
+        <td style="text-align:right">${fmtCur(li.rate)}</td>
+        <td>${fmtCur(li.amount)}</td>
+      </tr>`).join('') : `
       <tr>
         <td><strong>${esc(serviceLabel)}</strong></td>
         <td>${esc(period)}</td>
         <td>${fmtCur(payment.amount)}</td>
-      </tr>
+      </tr>`}
     </tbody>
   </table>
 

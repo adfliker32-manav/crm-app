@@ -472,11 +472,32 @@ const schemas = {
         billingAddress: Joi.string().trim().max(500).optional().allow('', null),
         gstNumber:      Joi.string().trim().max(30).optional().allow('', null),
 
-        serviceName:         Joi.string().trim().min(1).max(200).required(),
+        // Several services on one bill. When present, the total is computed from the
+        // lines and serviceName/amount become optional; without lines the bill is the
+        // original single-service shape, which still requires both.
+        lineItems: Joi.array().min(1).max(50).items(Joi.object({
+            name:         Joi.string().trim().min(1).max(200).required(),
+            description:  Joi.string().trim().max(500).optional().allow('', null),
+            quantity:     Joi.number().positive().max(100000).required(),
+            rate:         Joi.number().min(0).required(),
+            validityFrom: Joi.date().iso().optional().allow('', null),
+            validityTo:   Joi.date().iso().optional().allow('', null)
+        })).optional(),
+
+        serviceName: Joi.any().when('lineItems', {
+            is: Joi.exist(),
+            then: Joi.string().trim().max(200).optional().allow('', null),
+            otherwise: Joi.string().trim().min(1).max(200).required()
+        }),
         serviceValidityFrom: Joi.date().iso().optional().allow('', null),
         serviceValidityTo:   Joi.date().iso().optional().allow('', null),
 
-        amount:         Joi.number().positive().required(),
+        // Ignored when lines are sent — the controller sums them instead.
+        amount: Joi.any().when('lineItems', {
+            is: Joi.exist(),
+            then: Joi.any().strip(),
+            otherwise: Joi.number().positive().required()
+        }),
         receivedAmount: Joi.number().min(0).optional().allow('', null),
 
         billDate:      Joi.date().iso().optional().allow('', null),
