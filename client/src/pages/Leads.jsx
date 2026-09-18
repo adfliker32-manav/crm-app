@@ -35,6 +35,7 @@ const Leads = () => {
 
     // Filter & Sort State
     const [filterSource, setFilterSource] = useState("All");
+    const [filterStage, setFilterStage] = useState("All"); // stage name, or "All" — client-side
     const [filterTags, setFilterTags] = useState([]); // array of tag names — server-side filter
     const [filterTagMatch, setFilterTagMatch] = useState('all'); // 'all' = AND, 'any' = OR
     const [isTagDropdownOpen, setIsTagDropdownOpen] = useState(false);
@@ -210,7 +211,13 @@ const Leads = () => {
             processed = processed.filter(lead => (lead.source || 'Manual') === filterSource);
         }
 
-        // 3. Sort
+        // 3. Filter by Stage — leads with no status are treated as 'New', matching
+        // how the pipeline columns bucket them.
+        if (filterStage !== "All") {
+            processed = processed.filter(lead => (lead.status || 'New') === filterStage);
+        }
+
+        // 4. Sort
         processed.sort((a, b) => {
             const dateA = new Date(a.createdAt || a.date).getTime();
             const dateB = new Date(b.createdAt || b.date).getTime();
@@ -239,12 +246,24 @@ const Leads = () => {
         });
 
         return processed;
-    }, [leads, searchQuery, filterSource, sortOption]);
+    }, [leads, searchQuery, filterSource, filterStage, sortOption]);
 
-    // Update Pipeline Columns when filteredLeads or stages change
+    // A renamed or deleted stage would leave filterStage pointing at a name that no
+    // longer exists, which silently hides every lead. Fall back to "All" instead.
+    useEffect(() => {
+        if (filterStage !== 'All' && stages.length > 0 && !stages.some(s => s.name === filterStage)) {
+            setFilterStage('All');
+        }
+    }, [stages, filterStage]);
+
+    // Update Pipeline Columns when filteredLeads or stages change.
+    // With a stage filter active, only that stage's column is rendered.
     useEffect(() => {
         const newColumns = {};
-        stages.forEach(stage => {
+        const visibleStages = filterStage === 'All'
+            ? stages
+            : stages.filter(stage => stage.name === filterStage);
+        visibleStages.forEach(stage => {
             newColumns[stage.name] = {
                 id: stage._id,
                 name: stage.name,
@@ -252,7 +271,7 @@ const Leads = () => {
             };
         });
         setColumns(newColumns);
-    }, [filteredLeads, stages]);
+    }, [filteredLeads, stages, filterStage]);
 
     // Pipeline handlers
     const onDragEnd = async (result) => {
@@ -582,6 +601,25 @@ const Leads = () => {
                         </select>
                         <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-400">
                             <i className="fa-solid fa-filter text-xs"></i>
+                        </div>
+                    </div>
+
+                    {/* Stage Filter — client-side, mirrors the Source dropdown.
+                        In pipeline view it narrows the board to the single chosen column. */}
+                    <div className="relative w-full sm:w-auto">
+                        <select
+                            value={filterStage}
+                            onChange={(e) => setFilterStage(e.target.value)}
+                            className={`w-full sm:w-auto appearance-none border rounded-xl py-2 pl-4 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer transition shadow-sm ${filterStage !== 'All' ? 'border-blue-400 text-blue-700 bg-blue-50/70' : 'bg-slate-100/50 border-slate-200 text-slate-700 hover:bg-slate-100'}`}
+                            title="Filter by stage"
+                        >
+                            <option value="All">All Stages</option>
+                            {stages.map(stage => (
+                                <option key={stage._id} value={stage.name}>{stage.name}</option>
+                            ))}
+                        </select>
+                        <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-400">
+                            <i className="fa-solid fa-layer-group text-xs"></i>
                         </div>
                     </div>
 

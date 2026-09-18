@@ -387,11 +387,16 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                         Total: {sortedLeads.length}
                     </span>
                 </div>
+                {/* min-w keeps the columns at a readable width instead of squashing them,
+                    so narrow screens get a real horizontal scrollbar. The checkbox and
+                    Name columns are pinned left so a scrolled-right row is still
+                    identifiable. Their left offsets must match the checkbox column width
+                    (w-12 = 48px). */}
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                        <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold tracking-wider">
+                    <table className="w-full min-w-[1100px] text-left">
+                        <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold tracking-wider whitespace-nowrap">
                             <tr>
-                                <th className="px-6 py-4 w-10">
+                                <th className="px-4 py-4 w-12 sticky left-0 z-10 bg-slate-50">
                                     <input
                                         type="checkbox"
                                         onChange={handleSelectAll}
@@ -399,7 +404,7 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                     />
                                 </th>
-                                <th onClick={() => handleSort('name')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition">
+                                <th onClick={() => handleSort('name')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition sticky left-12 z-10 bg-slate-50 border-r border-slate-200 shadow-[4px_0_6px_-4px_#0f172a26]">
                                     Name <SortIcon sortConfig={sortConfig} column="name" />
                                 </th>
                                 <th onClick={() => handleSort('score')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition text-center">
@@ -424,8 +429,11 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                         <tbody className="divide-y divide-slate-100">
                             {/* BUG FIX: use Set.has() — O(1) vs Array.includes() O(n) */}
                             {visibleLeads.map((lead) => (
-                                <tr key={lead._id} className={`hover:bg-slate-50 transition ${selectedIds.has(lead._id) ? 'bg-blue-50' : ''}`}>
-                                    <td className="px-6 py-4">
+                                <tr key={lead._id} className={`group/row hover:bg-slate-50 transition ${selectedIds.has(lead._id) ? 'bg-blue-50' : ''}`}>
+                                    {/* Pinned cells need their own background or the scrolling
+                                        columns show through, so they re-create the row's
+                                        hover/selected colours via group-hover. */}
+                                    <td className={`px-4 py-4 w-12 sticky left-0 z-[5] ${selectedIds.has(lead._id) ? 'bg-blue-50' : 'bg-white group-hover/row:bg-slate-50'} transition`}>
                                         <input
                                             type="checkbox"
                                             onChange={() => handleSelect(lead._id)}
@@ -433,7 +441,7 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                         />
                                     </td>
-                                    <td className="px-6 py-4">
+                                    <td className={`px-6 py-4 sticky left-12 z-[5] border-r border-slate-200 shadow-[4px_0_6px_-4px_#0f172a26] ${selectedIds.has(lead._id) ? 'bg-blue-50' : 'bg-white group-hover/row:bg-slate-50'} transition`}>
                                         <div
                                             className="flex items-center gap-3 cursor-pointer group"
                                             onClick={() => onLeadClick && onLeadClick(lead)}
@@ -548,7 +556,7 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                             ))}
                             {sortedLeads.length === 0 && (
                                 <tr>
-                                    <td colSpan="7" className="px-6 py-12 text-center text-gray-400">
+                                    <td colSpan="9" className="px-6 py-12 text-center text-gray-400">
                                         <div className="flex flex-col items-center gap-3">
                                             <i className="fa-solid fa-user-xmark text-4xl text-gray-200"></i>
                                             <p>No leads found matching your search.</p>
