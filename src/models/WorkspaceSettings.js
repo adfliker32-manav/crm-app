@@ -137,6 +137,21 @@ const workspaceSettingsSchema = new mongoose.Schema({
         default: false
     },
 
+    // 📧 EMAIL INBOX FOLLOWS LEAD ASSIGNMENT
+    // Exactly the same contract as whatsappFollowsLeadAssignment above, applied
+    // to the Email inbox. When ON:
+    //   • EmailConversation.assignedTo mirrors the linked Lead's assignedTo
+    //   • an agent without permissions.viewAllEmails sees only their own threads
+    //   • managers and superadmins still see every thread
+    // When OFF (the default, and the pre-existing behaviour) the inbox stays
+    // fully shared across the company and assignedTo is neither written nor
+    // read. Defaults to false so upgrading changes nothing.
+    // See src/services/emailAssignmentService.js — the ONLY writer.
+    emailFollowsLeadAssignment: {
+        type: Boolean,
+        default: false
+    },
+
     // 🎛️ WORKSPACE-LEVEL FEATURE FLAGS
     planFeatures: {
         whatsappAutomation:  { type: Boolean, default: true },

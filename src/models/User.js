@@ -158,6 +158,15 @@ const userSchema = new mongoose.Schema({
 
         // Email
         viewEmails: { type: Boolean, default: false },
+        // false = only threads whose Lead is assigned to this agent.
+        // Defaults to TRUE for exactly the same reason as viewAllWhatsApp below:
+        // the email inbox has always been fully shared, so every EXISTING agent
+        // row must keep reading as "full inbox" or enabling
+        // WorkspaceSettings.emailFollowsLeadAssignment would silently empty it.
+        // NEW agents are restricted through the VIEW_ONLY / BASIC_AGENT presets
+        // instead (src/constants/permissionPresets.js).
+        // Only consulted when that workspace toggle is ON.
+        viewAllEmails: { type: Boolean, default: true },
         sendEmails: { type: Boolean, default: true },
         sendBulkEmails: { type: Boolean, default: false },
         manageEmailTemplates: { type: Boolean, default: false },

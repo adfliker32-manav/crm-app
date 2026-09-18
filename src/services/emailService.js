@@ -70,6 +70,41 @@ const getTransporter = (userCredentials = null, tenantId = null) => {
 const createTransporter = (userCredentials = null) => {
     let email, password;
 
+    // ── OAuth mailbox (XOAUTH2) ─────────────────────────────────────────────
+    // Handled before the password branch because it has no password at all —
+    // the checks below would otherwise fall straight through to the env
+    // fallback and send this tenant's mail from the platform's own mailbox.
+    if (userCredentials?.authType === 'oauth_google' && userCredentials.accessToken) {
+        console.log(`[EmailService] SMTP transporter built for ${userCredentials.email} using OAuth (XOAUTH2)`);
+        return nodemailer.createTransport({
+            host: 'smtp.gmail.com',
+            port: 465,
+            secure: true,
+            auth: {
+                type: 'OAuth2',
+                user: userCredentials.email,
+                // The access token only — deliberately NOT the refresh token,
+                // clientId or clientSecret. Nodemailer would happily refresh on
+                // its own, but it caches the result inside a transporter we
+                // also cache, so the two would drift and the rotated token
+                // would never be persisted. googleOAuthService owns refresh;
+                // this object is rebuilt with a fresh token whenever the
+                // transporter cache expires (CACHE_TTL_MS, 5 min), which is
+                // why googleOAuthService refreshes with a larger skew.
+                accessToken: userCredentials.accessToken
+            },
+            connectionTimeout: 10000,
+            greetingTimeout: 10000,
+            socketTimeout: 10000,
+            pool: true,
+            maxConnections: 5,
+            maxMessages: 100,
+            tls: { rejectUnauthorized: true },
+            debug: process.env.NODE_ENV === 'development',
+            logger: process.env.NODE_ENV === 'development'
+        });
+    }
+
     // Use user credentials if provided, otherwise fallback to env
     if (userCredentials && userCredentials.email && userCredentials.password) {
         email = userCredentials.email;
@@ -98,22 +133,30 @@ const createTransporter = (userCredentials = null) => {
         return null;
     }
 
-    let host, port, service;
+    let host, port, service, secure;
     if (userCredentials && userCredentials.serviceType === 'smtp') {
         service = undefined; // Do not use predefined service
         host = userCredentials.smtpHost;
         port = userCredentials.smtpPort || 587;
+        // Port 465 means implicit TLS and everything else STARTTLS — true for
+        // the overwhelming majority of servers, but not all, and getting it
+        // wrong produces a connection that hangs until the socket times out
+        // rather than a clear error. An explicit setting wins when supplied.
+        secure = typeof userCredentials.smtpSecure === 'boolean'
+            ? userCredentials.smtpSecure
+            : port === 465;
     } else {
         service = 'gmail';
         host = 'smtp.gmail.com';
         port = 587;
+        secure = false;
     }
 
     const transporter = nodemailer.createTransport({
         service: service,
         host: host,
         port: port,
-        secure: port === 465, // true for 465, false for other ports
+        secure,
         auth: {
             user: email,
             pass: password
@@ -438,7 +481,10 @@ const sendEmail = async (options) => {
                 bodyForInbox: options.bodyForInbox,
                 senderEmail: fromEmail,
                 logId: trackingLogId, // pre-allocated so the tracking pixel resolves
-                skipInbox: policy.skipInbox
+                skipInbox: policy.skipInbox,
+                // Only a restricted agent composing to an unknown address sets
+                // this; every automated sender leaves it null.
+                assignToOnCreate: options.assignToOnCreate || null
             });
         }
 
@@ -470,7 +516,10 @@ const sendEmail = async (options) => {
                 bodyForInbox: options.bodyForInbox,
                 senderEmail: fromEmail,
                 logId: trackingLogId, // pre-allocated so the tracking pixel resolves
-                skipInbox: policy.skipInbox
+                skipInbox: policy.skipInbox,
+                // Only a restricted agent composing to an unknown address sets
+                // this; every automated sender leaves it null.
+                assignToOnCreate: options.assignToOnCreate || null
             });
         }
 

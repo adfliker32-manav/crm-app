@@ -24,6 +24,23 @@ const emailConversationSchema = new mongoose.Schema({
         enum: ['active', 'archived'],
         default: 'active'
     },
+
+    // ── DERIVED MIRROR of Lead.assignedTo — see services/emailAssignmentService.js
+    // The Lead is the single source of truth for who owns an email thread. That
+    // service is this field's ONLY writer; no API, request body or UI control
+    // sets it independently, and if the two ever disagree the Lead wins
+    // (scripts/backfillEmailAssignment.js re-derives the collection).
+    //
+    // Denormalized rather than joined through leadId because the inbox list, the
+    // unread badge and search all paginate and sort by lastMessageAt — a $lookup
+    // would force a full-collection aggregation before $sort/$skip/$limit.
+    //
+    // Only consulted when WorkspaceSettings.emailFollowsLeadAssignment is on.
+    assignedTo: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
     unreadCount: {
         type: Number,
         default: 0
@@ -62,6 +79,13 @@ emailConversationSchema.index({ userId: 1, lastMessageAt: -1 });
 emailConversationSchema.index({ userId: 1, status: 1, lastMessageAt: -1 });
 // Server-side "unread only" filter for the Inbox list.
 emailConversationSchema.index({ userId: 1, status: 1, unreadCount: 1 });
+
+// Assignment-scoped inbox. A restricted agent's list, unread badge and search
+// all carry assignedTo alongside userId+status, so both the paginated read and
+// the counts stay index-backed exactly as the shared inbox already was.
+emailConversationSchema.index({ userId: 1, assignedTo: 1, lastMessageAt: -1 });
+emailConversationSchema.index({ userId: 1, status: 1, assignedTo: 1, lastMessageAt: -1 });
+emailConversationSchema.index({ userId: 1, status: 1, assignedTo: 1, unreadCount: 1 });
 
 // FIX L9: EmailMessage expires after 180 days but conversations had no TTL, so
 // the inbox filled with threads whose metadata claimed dozens of messages but

@@ -104,6 +104,12 @@ const schemas = {
         whatsappFollowsLeadAssignment: Joi.boolean().required()
     }),
 
+    // Settings -> Lead Assignment -> Email Inbox Assignment. Same contract as
+    // the WhatsApp switch above, including "required, never optional".
+    emailAssignmentConfig: Joi.object({
+        emailFollowsLeadAssignment: Joi.boolean().required()
+    }),
+
     // Auth — public self-registration (creates a manager + 14-day trial workspace)
     register: Joi.object({
         name:        Joi.string().trim().min(2).max(100).required(),

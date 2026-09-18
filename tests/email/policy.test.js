@@ -337,7 +337,11 @@ describe('inbound email has the same reply effects as WhatsApp', () => {
         const src = readSrc('services', 'imapService.js');
         assert.match(src, /pauseLeadSequences/,
             'stopOnReply was WhatsApp-only: an email drip kept firing at a lead who had replied');
-        assert.match(src, /if \(!isNewLead\)/,
+        assert.match(src, /if \(!isNewLead\b[^)]*\)\s*\{/,
             'a brand-new lead must not pause the sequence it was just enrolled in');
+        assert.match(src, /if \(!isNewLead && !isAutomatic\)/,
+            "nor may an out-of-office: it carries Auto-Submitted but an ordinary "
+            + 'subject, so it used to read as a human reply and stop the drip '
+            + 'chasing a contact who was merely on holiday');
     });
 });

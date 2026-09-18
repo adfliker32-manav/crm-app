@@ -39,10 +39,21 @@ function freshModules() {
     stub('utils/emailUtils', { decrypt: (x) => x, resolveTenantId: async (id) => id });
     stub('services/socketService', {
         emitToUsers: (ids, ev, payload) => emitted.push({ ids, ev, payload }),
+        // Inbound mail now fans out through emailAssignmentService, which
+        // addresses the dedicated `em:<userId>` rooms so a restricted agent
+        // cannot receive a thread they are not allowed to open.
+        emitToEmailUsers: (ids, ev, payload) => emitted.push({ ids, ev, payload }),
         emitToUser: () => {},
         emitToConversation: () => {}
     });
     stub('utils/whatsappUtils', { getCompanyUserIds: async (id) => [String(id)] });
+
+    // emailAssignmentService reads this on every inbound message to decide
+    // whether to mirror the lead's owner onto the thread. Unstubbed it is a live
+    // mongoose model, so each lookup buffered for ten seconds against a database
+    // that is not running here. Empty store => toggle reads false => the shared
+    // inbox behaviour these tests assert.
+    stub('models/WorkspaceSettings', makeModel());
 
     // The real guard reads WorkspaceSettings, which is a live mongoose model —
     // unstubbed it buffered against a database that isn't running here and every

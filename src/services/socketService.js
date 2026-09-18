@@ -83,7 +83,7 @@ const initSocket = (httpServer) => {
             // undefined value in a query filter is dropped by BSON rather than
             // matching nothing — which silently turns the guard into a no-op.
             const userDoc = await User.findById(userId)
-                .select('tokenVersion is_active parentId role permissions.viewAllWhatsApp')
+                .select('tokenVersion is_active parentId role permissions.viewAllWhatsApp permissions.viewAllEmails')
                 .lean();
             if (!userDoc) {
                 console.warn(`❌ [Socket.IO] Rejected socket ${socket.id}: user no longer exists`);
@@ -130,6 +130,10 @@ const initSocket = (httpServer) => {
             // and coercing that to false would restrict every legacy agent.
             // hasFullInbox() owns that decision.
             socket.waPermissions = { viewAllWhatsApp: userDoc.permissions?.viewAllWhatsApp };
+            // Same contract for the Email inbox — see emailAssignmentService.
+            // hasFullInbox() owns the undefined-means-full decision, so the raw
+            // value is passed through rather than coerced with === true.
+            socket.emailPermissions = { viewAllEmails: userDoc.permissions?.viewAllEmails };
             socket.tenantId = String(tenantId);
             console.log(`✅ [Socket.IO] Authentication successful for user: ${socket.userId}`);
             next();
@@ -157,6 +161,12 @@ const initSocket = (httpServer) => {
         // grantable through join:company, so emitToWhatsAppUsers() can address
         // an exact audience. See whatsappAssignmentService.conversationAudience.
         socket.join(`wa:${userId}`);
+
+        // ⚠️ AND THE SAME FOR THE EMAIL INBOX, for exactly the same reason.
+        // `em:<userId>` is joined ONLY for the socket's own id and is never
+        // grantable through join:company, so emitToEmailUsers() can address an
+        // exact audience. See emailAssignmentService.conversationAudience.
+        socket.join(`em:${userId}`);
 
         // If the user is an agent, also join their parent's room
         // so managers can see agent activity and vice versa
@@ -322,6 +332,24 @@ const emitToWhatsAppUsers = (userIds, event, data) => {
 };
 
 /**
+ * Emit an email inbox event to an EXACT audience.
+ *
+ * The `em:<userId>` twin of emitToWhatsAppUsers, and it exists for the same
+ * reason: `join:company` lets an agent into their manager's `user:` room, so
+ * emitting a filtered list into `user:` rooms would still leak every thread to
+ * any agent who joined their manager. Pair this with
+ * emailAssignmentService.conversationAudience() to compute the id list.
+ *
+ * @param {Array<string|ObjectId>} userIds - the resolved audience
+ * @param {string} event
+ * @param {object} data
+ */
+const emitToEmailUsers = (userIds, event, data) => {
+    if (!io || !Array.isArray(userIds)) return;
+    for (const uid of userIds) io.to(`em:${String(uid)}`).emit(event, data);
+};
+
+/**
  * Emit an event to all sockets watching a specific conversation.
  *
  * @param {string} conversationId - The conversation's MongoDB _id
@@ -353,6 +381,7 @@ module.exports = {
     emitToUser,
     emitToUsers,
     emitToWhatsAppUsers,
+    emitToEmailUsers,
     emitToConversation,
     removeUserFromConversation
 };

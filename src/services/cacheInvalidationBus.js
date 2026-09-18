@@ -5,6 +5,7 @@
 // request path:
 //   • authMiddleware.tenantCache          — req.workspace / req.integrations (5 min)
 //   • whatsappAssignmentService toggle    — whatsappFollowsLeadAssignment (5 min)
+//   • emailAssignmentService toggle       — emailFollowsLeadAssignment (5 min)
 //
 // Both are invalidated on write — but only inside the process that HANDLED the
 // write. With more than one instance behind a load balancer (Render scales the
@@ -66,6 +67,12 @@ const applyLocalInvalidation = (tenantId) => {
         invalidateFollowLeadCache(tenantId);
     } catch (err) {
         console.error('[CacheBus] assignment toggle cache clear failed:', err.message);
+    }
+    try {
+        const { invalidateEmailFollowLeadCache } = require('./emailAssignmentService');
+        invalidateEmailFollowLeadCache(tenantId);
+    } catch (err) {
+        console.error('[CacheBus] email assignment toggle cache clear failed:', err.message);
     }
 };
 

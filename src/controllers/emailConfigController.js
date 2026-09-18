@@ -10,7 +10,7 @@ exports.getEmailConfig = async (req, res) => {
         const ownerId = req.tenantId;
         // Must use '+' to include select:false fields (emailPassword)
         const config = await IntegrationConfig.findOne({ userId: ownerId })
-            .select('+email.emailPassword email.emailUser email.emailFromName email.emailSignature email.emailServiceType email.smtpHost email.smtpPort email.businessAddress email.imapHost email.imapPort email.imapEnabled');
+            .select('+email.emailPassword email.emailUser email.emailFromName email.emailSignature email.emailServiceType email.smtpHost email.smtpPort email.businessAddress email.imapHost email.imapPort email.imapEnabled email.imapLastSyncAt email.imapLastError email.imapLastErrorAt');
 
         if (!config || !config.email) {
             return res.json({
@@ -46,6 +46,17 @@ exports.getEmailConfig = async (req, res) => {
             imapHost,
             imapPort: config.email.imapPort || 993,
             imapEnabled: config.email.imapEnabled !== false,
+            imapSecure: config.email.imapSecure,
+            smtpSecure: config.email.smtpSecure,
+            // How this mailbox authenticates, so the UI can offer "Connect
+            // Google" instead of an app-password field it no longer needs.
+            authType: config.email.authType || 'password',
+            // Inbound health. A mailbox that stopped receiving used to look
+            // exactly like a mailbox nobody had written to, so a rejected login
+            // could go unnoticed indefinitely.
+            imapLastSyncAt: config.email.imapLastSyncAt || null,
+            imapLastError: config.email.imapLastError || null,
+            imapLastErrorAt: config.email.imapLastErrorAt || null,
             // FIX F2: the UI presented "Custom SMTP" as equivalent to Gmail while
             // inbound sync silently skipped those tenants. Tell the client
             // whether replies can actually be received with this configuration.
@@ -67,8 +78,8 @@ exports.updateEmailConfig = async (req, res) => {
         const ownerId = req.tenantId;
         const {
             emailUser, emailPassword, emailFromName, emailSignature,
-            emailServiceType, smtpHost, smtpPort,
-            businessAddress, imapHost, imapPort, imapEnabled
+            emailServiceType, smtpHost, smtpPort, smtpSecure,
+            businessAddress, imapHost, imapPort, imapSecure, imapEnabled
         } = req.body;
 
         // Validation
@@ -93,16 +104,37 @@ exports.updateEmailConfig = async (req, res) => {
             'email.businessAddress': businessAddress || null,
             'email.imapHost': imapHost || null,
             'email.imapPort': imapPort || 993,
-            'email.imapEnabled': imapEnabled !== false
+            'email.imapEnabled': imapEnabled !== false,
+            // Tri-state on purpose: null means "infer from the port", which is
+            // right for the standard 465/587 and 993/143 pairs. Only an
+            // explicit boolean overrides, for the servers that do not follow
+            // the convention — coercing to false here would silently force
+            // STARTTLS on every implicit-TLS server.
+            'email.smtpSecure': typeof smtpSecure === 'boolean' ? smtpSecure : null,
+            'email.imapSecure': typeof imapSecure === 'boolean' ? imapSecure : null
         };
 
         if (emailPassword) {
             updateData['email.emailPassword'] = encrypt(emailPassword);
 
+            // Saving a password means this mailbox is on password auth. Without
+            // this, a tenant who had connected Google and then typed an app
+            // password would keep authenticating via the stale OAuth grant and
+            // wonder why the new password changed nothing.
+            updateData['email.authType'] = 'password';
+
             // Changing the mailbox invalidates the incremental IMAP cursor —
             // otherwise the new account resumes from the old account's UID and
-            // skips everything below it.
+            // skips everything below it. The uidvalidity goes with it: a UID is
+            // only meaningful within the generation it was issued in.
             updateData['email.lastImapUid'] = 0;
+            updateData['email.lastImapUidValidity'] = null;
+
+            // A new credential deserves a clean slate — a stale "login was
+            // rejected" banner against a password the user has just fixed is
+            // worse than no banner at all.
+            updateData['email.imapLastError'] = null;
+            updateData['email.imapLastErrorAt'] = null;
         }
 
         const config = await IntegrationConfig.findOneAndUpdate(
@@ -254,5 +286,117 @@ exports.testEmailConfig = async (req, res) => {
             success: false,
             message: errorMessage
         });
+    }
+};
+
+/**
+ * POST /api/email/config/test-imap
+ *
+ * The receiving-side twin of testEmailConfig. Sending had a Test button from
+ * the start; receiving had none, which is part of why a dead inbound path could
+ * go unnoticed indefinitely — there was no way for a user to ask.
+ *
+ * Opens a real IMAP session and selects INBOX, because that is exactly what the
+ * poller does: a server can accept the TCP connection and the login and still
+ * refuse the mailbox.
+ */
+exports.testImapConfig = async (req, res) => {
+    const { ImapFlow } = require('imapflow');
+
+    try {
+        const ownerId = req.tenantId;
+
+        const config = await IntegrationConfig.findOne({ userId: ownerId })
+            .select('+email.emailPassword +email.oauthRefreshToken +email.oauthAccessToken '
+                + 'email.authType email.oauthExpiryDate email.emailUser email.emailServiceType '
+                + 'email.imapHost email.imapPort email.imapSecure')
+            .lean();
+
+        if (!config?.email?.emailUser) {
+            return res.status(400).json({ success: false, message: 'Configure your mailbox first.' });
+        }
+
+        const email = config.email;
+        const host = email.imapHost || (email.emailServiceType === 'smtp' ? null : 'imap.gmail.com');
+        if (!host) {
+            return res.status(400).json({
+                success: false,
+                message: 'No IMAP server is configured, so incoming mail cannot be received. '
+                    + 'Add an IMAP host under Receiving.'
+            });
+        }
+
+        const port = email.imapPort || 993;
+
+        let auth;
+        if (email.authType === 'oauth_google') {
+            const { getAccessToken } = require('../services/googleOAuthService');
+            const accessToken = await getAccessToken(ownerId, { config });
+            if (!accessToken) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Google access has expired or been revoked. Reconnect the mailbox.'
+                });
+            }
+            auth = { user: email.emailUser, accessToken };
+        } else {
+            const pass = email.emailPassword ? decrypt(email.emailPassword) : null;
+            if (!pass) {
+                return res.status(400).json({ success: false, message: 'No mailbox password is stored.' });
+            }
+            auth = { user: email.emailUser, pass };
+        }
+
+        const client = new ImapFlow({
+            host,
+            port,
+            secure: typeof email.imapSecure === 'boolean' ? email.imapSecure : port !== 143,
+            auth,
+            logger: false
+        });
+
+        try {
+            await Promise.race([
+                client.connect(),
+                new Promise((_, reject) => setTimeout(
+                    () => reject(new Error('Connection timeout: the IMAP server did not respond in time')), 15000))
+            ]);
+
+            // Connecting is not enough — the poller needs INBOX specifically.
+            const lock = await client.getMailboxLock('INBOX');
+            const total = client.mailbox?.exists ?? null;
+            lock.release();
+
+            res.json({
+                success: true,
+                message: 'Connected. Incoming mail can be received.',
+                host,
+                port,
+                mailbox: 'INBOX',
+                messages: total
+            });
+        } catch (connErr) {
+            const raw = connErr.message || '';
+            let message = raw;
+            if (/AUTHENTICATIONFAILED|Invalid credentials|LOGIN failed/i.test(raw)) {
+                message = email.authType === 'oauth_google'
+                    ? 'Google rejected the connection. Disconnect and reconnect the mailbox.'
+                    : 'Login was rejected. Gmail needs a 16-character App Password with '
+                      + '2-Step Verification enabled — not your normal password.';
+            } else if (/ENOTFOUND|EAI_AGAIN/i.test(raw)) {
+                message = 'That IMAP host could not be found. Check the server address.';
+            } else if (/ECONNREFUSED/i.test(raw)) {
+                message = 'The server refused the connection. Check the IMAP port.';
+            } else if (/timeout/i.test(raw)) {
+                message = 'The server did not respond. Check the host, the port, and whether '
+                    + 'this port uses TLS (993) or STARTTLS (143).';
+            }
+            res.status(400).json({ success: false, message });
+        } finally {
+            try { await client.logout(); } catch { try { client.close(); } catch { /* gone */ } }
+        }
+    } catch (error) {
+        console.error('Error testing IMAP configuration:', error);
+        res.status(500).json({ success: false, message: 'Could not test the incoming mail connection' });
     }
 };

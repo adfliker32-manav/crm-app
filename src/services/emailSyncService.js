@@ -25,9 +25,9 @@ const { logEmail } = require('./emailLogService');
  * Finds (or creates) the Lead an outbound email belongs to.
  * Returns null when no lead exists and we must not create one.
  */
-const resolveLead = async (tenantId, to, { allowCreate }) => {
+const resolveLead = async (tenantId, to, { allowCreate, assignToOnCreate = null }) => {
     const email = to.toLowerCase().trim();
-    const existing = await Lead.findOne({ email, userId: tenantId }).select('_id name email').lean();
+    const existing = await Lead.findOne({ email, userId: tenantId }).select('_id name email assignedTo').lean();
     if (existing) return existing;
     if (!allowCreate) return null;
 
@@ -40,16 +40,26 @@ const resolveLead = async (tenantId, to, { allowCreate }) => {
             return null;
         }
 
+        // assignToOnCreate: an agent who composes to an address the CRM has
+        // never seen owns the lead they just created, exactly as starting a new
+        // WhatsApp chat claims one. Set here rather than after the fact so the
+        // lead is never briefly unassigned — queueLeadCreatedEffects below
+        // mirrors it straight onto the thread, and a window where the effects
+        // ran against an unassigned lead would leave the composer unable to see
+        // their own message. Null for every automated sender.
         const lead = await Lead.create({
             userId: tenantId,
             email,
             name: email.split('@')[0],
             source: 'Email',
             status: 'New',
+            assignedTo: assignToOnCreate || undefined,
             history: [{
                 type: 'System',
                 subType: 'Created',
-                content: 'Lead created from an outgoing email to a new address',
+                content: assignToOnCreate
+                    ? 'Lead created from an outgoing email and assigned to the sender'
+                    : 'Lead created from an outgoing email to a new address',
                 date: new Date()
             }]
         });
@@ -92,7 +102,7 @@ const resolveLead = async (tenantId, to, { allowCreate }) => {
     } catch (err) {
         // Duplicate key: another concurrent send created it first — re-read.
         if (err.code === 11000) {
-            return Lead.findOne({ email, userId: tenantId }).select('_id name email').lean();
+            return Lead.findOne({ email, userId: tenantId }).select('_id name email assignedTo').lean();
         }
         throw err;
     }
@@ -111,6 +121,10 @@ const resolveLead = async (tenantId, to, { allowCreate }) => {
  * @param {string}  opts.status       'sent' | 'failed'
  * @param {string} [opts.bodyForInbox] Author-written body; defaults to unwrapping `html`
  * @param {boolean}[opts.skipInbox]   Log only, do not create a conversation thread
+ * @param {string} [opts.assignToOnCreate] Agent to own a lead this send brings
+ *        into existence (an agent composing to an unknown address). Ignored
+ *        when the lead already exists — taking over someone else's contact is a
+ *        decision for the assignment flow, not a side effect of sending.
  */
 const recordOutboundEmail = async (opts = {}) => {
     const {
@@ -131,7 +145,8 @@ const recordOutboundEmail = async (opts = {}) => {
         bodyForInbox,
         senderEmail,
         logId = null,
-        skipInbox = false
+        skipInbox = false,
+        assignToOnCreate = null
     } = opts;
 
     if (!userId || !to) return;
@@ -175,24 +190,47 @@ const recordOutboundEmail = async (opts = {}) => {
         // may simply be a mistyped address — only thread it if we already know
         // the contact.
         const lead = leadId
-            ? await Lead.findOne({ _id: leadId, userId: tenantId }).select('_id name email').lean()
-            : await resolveLead(tenantId, to, { allowCreate: status === 'sent' });
+            ? await Lead.findOne({ _id: leadId, userId: tenantId }).select('_id name email assignedTo').lean()
+            : await resolveLead(tenantId, to, {
+                allowCreate: status === 'sent',
+                assignToOnCreate
+            });
 
         if (!lead) return;
+
+        // The thread's owner is a DERIVED MIRROR of the lead's — never a
+        // parameter. "enabled: false" means this workspace does not mirror
+        // assignment, so nothing is written and the field keeps whatever it
+        // already has; that is NOT the same as "this lead has no owner".
+        const emailAssignment = require('./emailAssignmentService');
+        const { enabled: mirrorAssignment, assignedTo } =
+            await emailAssignment.resolveAssignmentForConversation({ tenantId, lead });
 
         // Atomic upsert + $inc. The previous read-modify-write
         // (`metadata.totalMessages += 1; save()`) lost increments whenever two
         // sends to the same contact overlapped.
         const now = new Date();
+        const set = {
+            lastMessage: subject || 'Outgoing Email',
+            lastMessageAt: now,
+            lastMessageDirection: 'outbound',
+            status: 'active' // re-open an archived thread on new activity
+        };
+        // Re-derived on EVERY send, not only on insert, so a thread self-heals
+        // if its lead was reassigned while the mirror was unreachable.
+        //
+        // It goes in $set and NEVER also in $setOnInsert: Mongo validates an
+        // update document STATICALLY, so a path present in both operators throws
+        // "Updating the path 'x' would create a conflict at 'x'" even when only
+        // one of them could ever apply. That exact clash killed every inbound
+        // WhatsApp message in production once already (see the upsert in
+        // whatsappWebhookController) — do not reintroduce it here.
+        if (mirrorAssignment) set.assignedTo = assignedTo || null;
+
         const conversation = await EmailConversation.findOneAndUpdate(
             { userId: tenantId, leadId: lead._id },
             {
-                $set: {
-                    lastMessage: subject || 'Outgoing Email',
-                    lastMessageAt: now,
-                    lastMessageDirection: 'outbound',
-                    status: 'active' // re-open an archived thread on new activity
-                },
+                $set: set,
                 $setOnInsert: {
                     userId: tenantId,
                     leadId: lead._id,
@@ -233,20 +271,38 @@ const recordOutboundEmail = async (opts = {}) => {
         // FIX F11: push outbound activity to every open Inbox in the tenant, so
         // an email sent by an automation (or by a colleague) appears live rather
         // than only on the next poll.
+        //
+        // Addressed through broadcastConversationEvent rather than emitToUsers:
+        // with the workspace toggle on the socket audience has to match what the
+        // REST layer will show, or a restricted agent would watch another
+        // agent's mail stream into an inbox that cannot open it. With the toggle
+        // off the audience is the whole company, exactly as before.
         try {
-            const { emitToUsers } = require('./socketService');
             const { getCompanyUserIds } = require('../utils/whatsappUtils');
             const recipients = await getCompanyUserIds(tenantId);
-            emitToUsers(recipients, 'email:newMessage', {
-                conversationId: String(conversation._id),
-                message: messageRecord.toObject()
-            });
-            emitToUsers(recipients, 'email:conversationUpdate', {
-                conversationId: String(conversation._id),
-                lastMessage: conversation.lastMessage,
-                lastMessageAt: conversation.lastMessageAt,
-                lastMessageDirection: 'outbound',
-                unreadCount: conversation.unreadCount || 0
+            await emailAssignment.broadcastConversationEvent({
+                tenantId,
+                companyUserIds: recipients,
+                assignedTo: conversation.assignedTo,
+                events: [
+                    {
+                        event: 'email:newMessage',
+                        data: {
+                            conversationId: String(conversation._id),
+                            message: messageRecord.toObject()
+                        }
+                    },
+                    {
+                        event: 'email:conversationUpdate',
+                        data: {
+                            conversationId: String(conversation._id),
+                            lastMessage: conversation.lastMessage,
+                            lastMessageAt: conversation.lastMessageAt,
+                            lastMessageDirection: 'outbound',
+                            unreadCount: conversation.unreadCount || 0
+                        }
+                    }
+                ]
             });
         } catch (socketErr) {
             console.error('⚠️ [EmailSync] Socket emit failed:', socketErr.message);

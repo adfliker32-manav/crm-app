@@ -47,13 +47,41 @@ const integrationConfigSchema = new mongoose.Schema({
     // 📧 Email SMTP/IMAP Configuration
     email: {
         emailServiceType: { type: String, enum: ['gmail', 'smtp'], default: 'gmail' },
+
+        // How this mailbox authenticates.
+        //   'password'     — an app password (Gmail) or a mailbox password (custom SMTP)
+        //   'oauth_google' — XOAUTH2 against Gmail, using the tokens below
+        // Defaults to 'password' so every existing tenant is unchanged.
+        authType: { type: String, enum: ['password', 'oauth_google'], default: 'password' },
+
         emailUser: { type: String, default: null },
         // FIX 4.3: Gmail app password must never be exposed in API responses
         emailPassword: { type: String, default: null, select: false },
+
+        // ── Google OAuth (XOAUTH2) ──────────────────────────────────────────
+        // The refresh token is the durable credential — the direct replacement
+        // for emailPassword — so it is encrypted and select:false for the same
+        // reasons. The access token is short-lived but is still a bearer
+        // credential for the whole mailbox, so it gets the same treatment.
+        //
+        // ⚠️ Any query that needs these MUST ask for them back with
+        // select('+email.oauthRefreshToken'). A select:false field is dropped by
+        // the projection even though a FILTER on it still matches — that exact
+        // trap silently killed inbound IMAP for emailPassword.
+        oauthRefreshToken: { type: String, default: null, select: false },
+        oauthAccessToken: { type: String, default: null, select: false },
+        oauthExpiryDate: { type: Date, default: null },
+        oauthScope: { type: String, default: null },
         emailFromName: { type: String, default: null },
         emailSignature: { type: String, default: null },
         smtpHost: { type: String, default: null },
         smtpPort: { type: Number, default: 587 },
+        // Implicit TLS on connect (SMTPS, normally port 465) vs STARTTLS
+        // upgrade (normally 587). null = infer from the port, which is right
+        // almost always; the override exists for the servers where it is not
+        // (465 with STARTTLS, or implicit TLS on a non-standard port), where
+        // guessing produces a connection that hangs until it times out.
+        smtpSecure: { type: Boolean, default: null },
 
         // FIX W6: CAN-SPAM requires a physical postal address in bulk email.
         // emailService has always read `businessAddress` when building the
@@ -67,11 +95,36 @@ const integrationConfigSchema = new mongoose.Schema({
         // inbox with no indication why.
         imapHost: { type: String, default: null },
         imapPort: { type: Number, default: 993 },
+        // Same override as smtpSecure. null = infer (993 implicit TLS, 143
+        // STARTTLS), which covers the standard ports.
+        imapSecure: { type: Boolean, default: null },
         imapEnabled: { type: Boolean, default: true },
 
         // Highest IMAP UID processed for this mailbox. Persisted so a server
         // restart doesn't trigger a full re-sync of every unseen email.
-        lastImapUid: { type: Number, default: 0 }
+        lastImapUid: { type: Number, default: 0 },
+
+        // The UIDVALIDITY the stored lastImapUid belongs to.
+        //
+        // IMAP UIDs are only meaningful WITHIN a uidvalidity generation. When a
+        // server changes it (mailbox recreated, restored from backup, some
+        // provider migrations) UIDs restart from 1 — and a stored high-water
+        // mark of, say, 48000 then makes the next fetch range start past the end
+        // of the mailbox. IMAP answers an out-of-range fetch with the single
+        // highest message rather than an error, so this does not fail loudly:
+        // inbound mail simply stops, permanently and silently. RFC 3501 requires
+        // a client that persists UIDs to persist UIDVALIDITY alongside them.
+        //
+        // String, not Number: ImapFlow reports uidValidity as a BigInt, which
+        // Mongoose cannot cast and which can exceed Number.MAX_SAFE_INTEGER.
+        lastImapUidValidity: { type: String, default: null },
+
+        // Last inbound sync outcome, so a mailbox that has stopped working is
+        // visible instead of failing in silence (a wrong app password used to be
+        // indistinguishable from "no mail has arrived").
+        imapLastSyncAt: { type: Date, default: null },
+        imapLastError: { type: String, default: null },
+        imapLastErrorAt: { type: Date, default: null }
     },
 
     // 🟦 Meta (Facebook/Meta Ads) Lead Sync & CAPI

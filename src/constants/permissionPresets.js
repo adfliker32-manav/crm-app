@@ -18,6 +18,7 @@ const VIEW_ONLY = {
     viewPipeline: true,
     moveLeads: false,
     viewEmails: false,
+    viewAllEmails: false, // Only threads for their assigned leads
     sendEmails: false,
     sendBulkEmails: false,
     manageEmailTemplates: false,
@@ -56,6 +57,7 @@ const BASIC_AGENT = {
     viewPipeline: true,
     moveLeads: true,
     viewEmails: false,
+    viewAllEmails: false, // Only threads for their assigned leads
     sendEmails: true,
     sendBulkEmails: false,
     manageEmailTemplates: false,
@@ -94,6 +96,7 @@ const SENIOR_AGENT = {
     viewPipeline: true,
     moveLeads: true,
     viewEmails: true,
+    viewAllEmails: true, // Can see the entire email inbox
     sendEmails: true,
     sendBulkEmails: true,
     manageEmailTemplates: true,
@@ -132,6 +135,7 @@ const MANAGER = {
     viewPipeline: true,
     moveLeads: true,
     viewEmails: true,
+    viewAllEmails: true, // Can see the entire email inbox
     sendEmails: true,
     sendBulkEmails: true,
     manageEmailTemplates: true,

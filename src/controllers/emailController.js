@@ -1,6 +1,68 @@
 // src/controllers/emailController.js
 
 const { sendEmail } = require('../services/emailService');
+const { isAssignmentRestricted } = require('../services/emailAssignmentService');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Composing as a restricted agent.
+//
+// When a workspace runs a per-agent email inbox, an agent may still write to
+// anyone — refusing that would make the feature a cage rather than a filter, and
+// they could route around it through the lead detail view anyway. What they may
+// NOT do is take over a contact another agent owns.
+//
+// So the agent is made the owner THROUGH THE LEAD, never by writing
+// EmailConversation.assignedTo directly (that field is a derived mirror; setting
+// it by hand would be undone by the next inbound message):
+//   • unknown address      -> a lead is created, assigned to the agent
+//                             (deferred to emailSyncService via assignToOnCreate,
+//                             so a send that never leaves the building creates
+//                             nothing)
+//   • unassigned lead      -> the lead is assigned to the agent, now
+//   • lead already theirs   -> nothing to do
+//   • another agent's lead -> 403
+//
+// The claim on an EXISTING lead is saved BEFORE the send rather than after it.
+// sendEmail records failures into the thread too, so an agent whose send bounces
+// must already own the thread — otherwise their own failed message lands
+// somewhere they cannot open. Managers keep seeing every thread regardless.
+//
+// Returns { assignToOnCreate, claimedLead } or an { error } for the caller to
+// return verbatim.
+// ─────────────────────────────────────────────────────────────────────────────
+const claimRecipientForAgent = async (req, to) => {
+    if (!isAssignmentRestricted(req)) return {};
+
+    const Lead = require('../models/Lead');
+    const tenantId = req.tenantId || req.user?.userId || req.user?.id;
+    const agentId = req.user?.userId || req.user?.id;
+
+    const lead = await Lead.findOne({ email: to.toLowerCase().trim(), userId: tenantId });
+
+    if (!lead) {
+        // Nothing to claim yet — the lead does not exist and must not be
+        // created until the mail is actually accepted for delivery.
+        return { assignToOnCreate: agentId };
+    }
+
+    if (lead.assignedTo && String(lead.assignedTo) !== String(agentId)) {
+        return { error: { status: 403, message: 'This contact is assigned to another agent.' } };
+    }
+
+    if (!lead.assignedTo) {
+        lead.assignedTo = agentId;
+        lead.history.push({
+            type: 'System',
+            subType: 'Assignment',
+            content: `Assigned to ${req.user?.name || 'agent'} (composed an email)`,
+            date: new Date()
+        });
+        await lead.save();
+        return { claimedLead: lead };
+    }
+
+    return {};
+};
 
 // Send Email Controller
 const sendEmailController = async (req, res) => {
@@ -46,6 +108,17 @@ const sendEmailController = async (req, res) => {
         // Conversations/leads belong to the tenant, not the individual agent.
         const tenantId = req.tenantId || userId;
 
+        // Resolve ownership of the recipient before anything is sent, so a
+        // refusal costs nothing and a claim is already in place by the time the
+        // thread is written. A no-op for managers and full-inbox agents.
+        const claim = await claimRecipientForAgent(req, to);
+        if (claim.error) {
+            return res.status(claim.error.status).json({
+                success: false,
+                message: claim.error.message
+            });
+        }
+
         // FIX F5: attachments uploaded with the compose form (memory storage —
         // handed straight to nodemailer, so nothing lands on disk).
         const attachments = (req.files || []).map(file => ({
@@ -84,7 +157,10 @@ const sendEmailController = async (req, res) => {
             bcc: bcc || null,
             conversational: true,
             attachments: attachments.length > 0 ? attachments : undefined,
-            templateId: templateId || null
+            templateId: templateId || null,
+            // Only set for a restricted agent writing to an address the CRM has
+            // never seen; emailSyncService stamps it on the lead it creates.
+            assignToOnCreate: claim.assignToOnCreate || null
         };
 
         // FIX F4: Add In-Reply-To / References headers for proper email threading
@@ -154,6 +230,15 @@ const sendEmailController = async (req, res) => {
         const result = await sendEmail(emailOptions);
 
         console.log("✅ Email sent successfully to:", to);
+
+        // A contact the agent just took over may already have threads (email and
+        // WhatsApp) sitting unassigned. The hub mirrors the new owner onto all of
+        // them and tells both sides over the socket — without it the agent would
+        // own the lead but still not see its history.
+        if (claim.claimedLead) {
+            const { queueLeadAssignmentEffects } = require('../utils/leadEffects');
+            queueLeadAssignmentEffects(claim.claimedLead, String(tenantId));
+        }
 
         res.status(200).json({ 
             success: true, 

@@ -81,11 +81,19 @@ const LeadAssignmentSettings = () => {
     const [waSaving, setWaSaving] = useState(false);
     const [waLocked, setWaLocked] = useState(false); // 403 module_locked -> no WhatsApp module
 
+    // The Email inbox twin of the four above. Kept as separate state rather
+    // than a shared object because the two switches are independently
+    // module-gated — a tenant can hold one module and not the other.
+    const [emailFollowsLead, setEmailFollowsLead] = useState(false);
+    const [emailSavedValue, setEmailSavedValue] = useState(false);
+    const [emailSaving, setEmailSaving] = useState(false);
+    const [emailLocked, setEmailLocked] = useState(false); // 403 module_locked -> no Email module
+
     // ── Load all data ─────────────────────────────────────────────────────
     const loadAll = useCallback(async () => {
         setLoadingData(true);
         try {
-            const [teamRes, webRes, sheetRes, metaRes, alertRes, waRes] = await Promise.all([
+            const [teamRes, webRes, sheetRes, metaRes, alertRes, waRes, emailRes] = await Promise.all([
                 api.get('/auth/my-team?includeManager=true').catch(() => ({ data: [] })),
                 api.get('/web-leads/config').catch(() => ({ data: {} })),
                 api.get('/leads/sheet-sync-config').catch(() => ({ data: {} })),
@@ -94,6 +102,11 @@ const LeadAssignmentSettings = () => {
                 // A tenant without the WhatsApp module gets 403 module_locked —
                 // an expected entitlement state, not an error.
                 api.get('/leads/whatsapp-assignment-config').catch((e) => ({
+                    data: {},
+                    __locked: e.response?.data?.error === 'module_locked'
+                })),
+                // Same expected-403 handling for a tenant without the Email module.
+                api.get('/leads/email-assignment-config').catch((e) => ({
                     data: {},
                     __locked: e.response?.data?.error === 'module_locked'
                 }))
@@ -117,6 +130,14 @@ const LeadAssignmentSettings = () => {
                 const on = waRes.data?.whatsappFollowsLeadAssignment === true;
                 setWaFollowsLead(on);
                 setWaSavedValue(on);
+            }
+
+            if (emailRes.__locked) {
+                setEmailLocked(true);
+            } else {
+                const on = emailRes.data?.emailFollowsLeadAssignment === true;
+                setEmailFollowsLead(on);
+                setEmailSavedValue(on);
             }
 
             if (alertRes.data) {
@@ -225,6 +246,27 @@ const LeadAssignmentSettings = () => {
             showError(err.response?.data?.message || 'Failed to save WhatsApp assignment setting');
         } finally {
             setWaSaving(false);
+        }
+    };
+
+    // ── Save Email conversation assignment ─────────────────────────────────
+    const handleSaveEmailFollowsLead = async (next) => {
+        setEmailSaving(true);
+        // Optimistic, so the switch does not feel laggy; rolled back on failure.
+        setEmailFollowsLead(next);
+        try {
+            await api.put('/leads/email-assignment-config', {
+                emailFollowsLeadAssignment: next
+            });
+            setEmailSavedValue(next);
+            showSuccess(next
+                ? 'Email conversations now follow Lead assignment'
+                : 'Email conversations no longer follow Lead assignment');
+        } catch (err) {
+            setEmailFollowsLead(emailSavedValue);
+            showError(err.response?.data?.message || 'Failed to save email assignment setting');
+        } finally {
+            setEmailSaving(false);
         }
     };
 
@@ -599,6 +641,91 @@ const LeadAssignmentSettings = () => {
                                         <span className="font-semibold">Existing conversations</span> need a one-time sync before they
                                         follow their Lead. Ask your administrator to run
                                         <code className="mx-1 px-1.5 py-0.5 bg-white border border-amber-200 rounded text-[11px]">scripts/backfillWhatsAppAssignment.js</code>
+                                        &mdash; until then, restricted agents may see an empty inbox.
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </section>
+
+            {/* ══ SECTION 3b: Email Conversation Assignment ═══════════ */}
+            <section>
+                <div className="flex items-center gap-2 mb-4">
+                    <div className="w-6 h-6 rounded-lg bg-blue-100 flex items-center justify-center">
+                        <i className="fa-solid fa-envelope text-blue-600 text-xs"></i>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-700 uppercase tracking-widest">Email Inbox Assignment</h3>
+                </div>
+                <p className="text-xs text-slate-500 mb-5 -mt-2">
+                    Make the Lead owner the source of truth for the Email inbox, so a conversation always
+                    belongs to whoever the contact&rsquo;s Lead is assigned to.
+                </p>
+
+                {emailLocked ? (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-200 flex items-center justify-center mx-auto mb-3">
+                            <i className="fa-solid fa-lock text-slate-400 text-lg"></i>
+                        </div>
+                        <h4 className="font-semibold text-slate-600 mb-1">Email isn&rsquo;t included in your plan</h4>
+                        <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                            Add the Email module to route conversations by Lead assignment.
+                        </p>
+                    </div>
+                ) : (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                        <div className="flex items-start justify-between gap-6">
+                            <div className="min-w-0">
+                                <h4 className="font-semibold text-slate-800">Follow Lead Assignment</h4>
+                                <p className="text-xs text-slate-500 mt-1 max-w-xl">
+                                    When ON, assigning or reassigning a Lead moves its email thread to the same agent,
+                                    and incoming mail from that contact is delivered to the Lead&rsquo;s agent.
+                                </p>
+                            </div>
+                            <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                                <input
+                                    type="checkbox"
+                                    checked={emailFollowsLead}
+                                    disabled={emailSaving}
+                                    onChange={e => handleSaveEmailFollowsLead(e.target.checked)}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600 peer-disabled:opacity-50"></div>
+                            </label>
+                        </div>
+
+                        {emailFollowsLead && (
+                            <div className="mt-5 pt-5 border-t border-slate-100 space-y-3">
+                                <div className="flex items-start gap-2.5 text-xs text-slate-600">
+                                    <i className="fa-solid fa-user-check text-blue-500 mt-0.5"></i>
+                                    <span>
+                                        Agents with <span className="font-semibold">View ALL Email Conversations</span> still see the
+                                        entire inbox. Turn that off for an agent (Team &rarr; edit agent) to restrict them to
+                                        threads for their own Leads. Managers and admins always see everything.
+                                    </span>
+                                </div>
+                                <div className="flex items-start gap-2.5 text-xs text-slate-600">
+                                    <i className="fa-solid fa-pen-to-square text-slate-400 mt-0.5"></i>
+                                    <span>
+                                        A restricted agent can still <span className="font-semibold">compose to anyone</span>. Writing to a
+                                        new address creates the Lead and assigns it to them; writing to an unassigned contact
+                                        claims it. A contact already owned by another agent is refused.
+                                    </span>
+                                </div>
+                                <div className="flex items-start gap-2.5 text-xs text-slate-600">
+                                    <i className="fa-solid fa-inbox text-slate-400 mt-0.5"></i>
+                                    <span>
+                                        Threads whose Lead has no agent stay visible to managers only &mdash; the same rule
+                                        unassigned Leads already follow.
+                                    </span>
+                                </div>
+                                <div className="flex items-start gap-2.5 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl p-3">
+                                    <i className="fa-solid fa-triangle-exclamation text-amber-500 mt-0.5"></i>
+                                    <span>
+                                        <span className="font-semibold">Existing conversations</span> need a one-time sync before they
+                                        follow their Lead. Ask your administrator to run
+                                        <code className="mx-1 px-1.5 py-0.5 bg-white border border-amber-200 rounded text-[11px]">scripts/backfillEmailAssignment.js</code>
                                         &mdash; until then, restricted agents may see an empty inbox.
                                     </span>
                                 </div>

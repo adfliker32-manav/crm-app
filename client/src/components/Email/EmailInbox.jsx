@@ -61,6 +61,17 @@ const EmailInbox = () => {
 
     const [conversations, setConversations] = useState([]);
     const [totalUnread, setTotalUnread] = useState(0);
+    // True when this user is seeing only the threads whose Lead is assigned to
+    // them (emailAssignmentService.isAssignmentRestricted). Reported by the
+    // list endpoint rather than derived here, so the client never has to
+    // second-guess the workspace toggle or the legacy-undefined permission rule.
+    const [assignmentRestricted, setAssignmentRestricted] = useState(false);
+    // Whether the WORKSPACE mirrors ownership onto threads. Distinct from the
+    // flag above: a manager is never restricted but still needs to know whether
+    // reassigning will move the thread or only the lead.
+    const [mirrorEnabled, setMirrorEnabled] = useState(false);
+    const [assignAgents, setAssignAgents] = useState([]);
+    const [assignSaving, setAssignSaving] = useState(false);
     const [hasMoreConversations, setHasMoreConversations] = useState(false);
     const [page, setPage] = useState(1);
     const [loadingMore, setLoadingMore] = useState(false);
@@ -110,6 +121,80 @@ const EmailInbox = () => {
     const selectedChatIdRef = useRef(null);
     const isFetchingRef = useRef(false);
 
+    // ── Assignable agents ────────────────────────────────────────────────────
+    // The manager is included: they own leads too, and leaving them out of the
+    // list made "give it back to me" impossible from the inbox.
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await api.get('/auth/my-team?includeManager=true');
+                if (!cancelled) setAssignAgents(Array.isArray(res.data) ? res.data : []);
+            } catch {
+                // Not fatal — the dropdown just stays empty.
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    /**
+     * Hand this thread to an agent by reassigning its linked LEAD.
+     *
+     * There is deliberately no endpoint that sets a thread's owner directly.
+     * Writing one would create a second source of truth that the next inbound
+     * message overwrites — see emailAssignmentService's header.
+     */
+    const handleAssignThread = async (agentId) => {
+        const leadId = selectedChat?.leadId?._id;
+        if (!leadId || assignSaving) return;
+
+        const agent = assignAgents.find(a => String(a._id) === String(agentId));
+        const previous = selectedChat.assignedTo || null;
+        const next = agentId ? { _id: agentId, name: agent?.name || null } : null;
+
+        setAssignSaving(true);
+
+        // Only paint the badge when this workspace actually mirrors ownership.
+        // With the toggle OFF, syncConversationsForLead returns early and never
+        // writes assignedTo — an optimistic update would show an owner the
+        // server does not have, which then vanishes on the next refresh.
+        const applyOptimistic = (value) => {
+            if (!mirrorEnabled) return;
+            setSelectedChat(prev => (prev ? { ...prev, assignedTo: value } : prev));
+            setConversations(prev => prev.map(c => (
+                c._id === selectedChat._id ? { ...c, assignedTo: value } : c
+            )));
+        };
+
+        applyOptimistic(next);
+
+        try {
+            await api.put(`/leads/${leadId}/assign`, { agentId: agentId || null });
+
+            // Say what actually happened. With mirroring off the LEAD moved but
+            // the thread did not, and claiming otherwise is how a support ticket
+            // starts.
+            if (agent) {
+                showSuccess(mirrorEnabled
+                    ? `Conversation assigned to ${agent.name}`
+                    : `Lead assigned to ${agent.name} — the inbox stays shared`);
+            } else {
+                showSuccess(mirrorEnabled ? 'Conversation unassigned' : 'Lead unassigned');
+            }
+
+            // Keep the panel's own dropdown honest even when the badge is not
+            // repainted: the lead's owner really did change.
+            setSelectedChat(prev => (prev
+                ? { ...prev, leadId: { ...prev.leadId, assignedTo: agentId || null } }
+                : prev));
+        } catch (err) {
+            applyOptimistic(previous);
+            showError(err.response?.data?.message || 'Failed to assign this conversation');
+        } finally {
+            setAssignSaving(false);
+        }
+    };
+
     // ── Debounced search ─────────────────────────────────────────────────────
     // Every keystroke previously triggered a fresh unindexed $regex query
     // against the conversations collection.
@@ -135,6 +220,8 @@ const EmailInbox = () => {
 
             setConversations(prev => (targetPage > 1 ? [...prev, ...list] : list));
             setTotalUnread(res.data.totalUnread || 0);
+            setAssignmentRestricted(res.data.assignmentRestricted === true);
+            setMirrorEnabled(res.data.assignmentMirrored === true);
             setHasMoreConversations(!!res.data.pagination?.hasMore);
             setPage(targetPage);
         } catch (error) {
@@ -287,12 +374,57 @@ const EmailInbox = () => {
             }
         };
 
+        // --- Lead reassignment moved this thread ---
+        // Emitted when a Lead's owner changes and lead-based email assignment is
+        // enabled. `revoked` means THIS user just lost access; anyone else
+        // receiving it either gained it or already had it.
+        const handleConversationAssigned = ({ conversationId, assignedTo, assignedToName, revoked }) => {
+            const convId = String(conversationId || '');
+            if (!convId) return;
+
+            // The list renders the owner as a POPULATED object
+            // (chat.assignedTo.name) but the socket payload carries a bare id.
+            // Writing that straight in would blank the badge on every live
+            // reassignment until the next full refetch, which reads as the
+            // feature having failed. Rebuild the shape the REST layer returns.
+            const nextAssignee = assignedTo
+                ? { _id: assignedTo, name: assignedToName || null }
+                : null;
+
+            if (revoked) {
+                setConversations(prev => prev.filter(c => String(c._id) !== convId));
+                // Close it if it is open right now — the server already 404s
+                // every call for it, so leaving it open only produces errors.
+                if (String(selectedChatIdRef.current || '') === convId) {
+                    setSelectedChat(null);
+                    setMessages([]);
+                }
+                return;
+            }
+
+            setConversations(prev => {
+                const exists = prev.some(c => String(c._id) === convId);
+                if (!exists) {
+                    // Newly visible to this user — pull it in.
+                    fetchConversations({ silent: true });
+                    return prev;
+                }
+                return prev.map(c => (String(c._id) === convId ? { ...c, assignedTo: nextAssignee } : c));
+            });
+
+            setSelectedChat(prev => (
+                prev && String(prev._id) === convId ? { ...prev, assignedTo: nextAssignee } : prev
+            ));
+        };
+
         socket.on('email:newMessage', handleNewMessage);
         socket.on('email:conversationUpdate', handleConversationUpdate);
+        socket.on('email:conversationAssigned', handleConversationAssigned);
 
         return () => {
             socket.off('email:newMessage', handleNewMessage);
             socket.off('email:conversationUpdate', handleConversationUpdate);
+            socket.off('email:conversationAssigned', handleConversationAssigned);
         };
     }, [socket, fetchConversations]);
 
@@ -567,7 +699,14 @@ const EmailInbox = () => {
             ? { title: "You're all caught up", hint: 'No unread conversations.' }
             : filter === 'archived'
                 ? { title: 'No archived conversations', hint: 'Archived threads will show up here.' }
-                : { title: 'No conversations yet', hint: canSend ? 'Compose an email to start one.' : 'New email threads will appear here.' };
+                : assignmentRestricted
+                    ? {
+                        title: 'No conversations assigned to you',
+                        hint: canSend
+                            ? 'Threads appear here once a lead is assigned to you. Compose an email to start one.'
+                            : 'Threads appear here once a lead is assigned to you.'
+                    }
+                    : { title: 'No conversations yet', hint: canSend ? 'Compose an email to start one.' : 'New email threads will appear here.' };
 
     const closeThread = () => { setSelectedChat(null); setMessages([]); setShowContactPanel(false); };
 
@@ -581,6 +720,15 @@ const EmailInbox = () => {
                             <h2 className="text-base font-semibold text-slate-900">Inbox</h2>
                             {totalUnread > 0 && (
                                 <span className="text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">{totalUnread}</span>
+                            )}
+                            {assignmentRestricted && (
+                                <span
+                                    className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full flex-shrink-0"
+                                    title="You are seeing the conversations for leads assigned to you. Your manager sees all of them."
+                                >
+                                    <i className="fa-solid fa-user-check text-[9px] text-blue-500"></i>
+                                    Your leads
+                                </span>
                             )}
                         </div>
                         {canSend && (
@@ -670,6 +818,20 @@ const EmailInbox = () => {
                                             </span>
                                         )}
                                     </div>
+                                    {/* Owning agent, mirrored from the linked Lead. Only
+                                        populated once lead-based assignment is enabled for
+                                        the workspace, so this stays invisible otherwise. */}
+                                    {chat.assignedTo?.name && (
+                                        <div className="flex items-center gap-1 mt-1">
+                                            <span
+                                                className="inline-flex items-center gap-1 text-[11px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-full max-w-full"
+                                                title={`Assigned to ${chat.assignedTo.name} (follows the Lead owner)`}
+                                            >
+                                                <i className="fa-solid fa-user-check text-[9px] text-blue-500"></i>
+                                                <span className="truncate">{chat.assignedTo.name}</span>
+                                            </span>
+                                        </div>
+                                    )}
                                 </div>
                             </button>
                         );
@@ -1016,6 +1178,53 @@ const EmailInbox = () => {
                                         </span>
                                     )}
                                 </div>
+
+                                {/* Assigned agent — writes the LEAD's owner, which the
+                                    thread mirrors. Hidden for a restricted agent: they
+                                    cannot hand their own conversations away, and the
+                                    server would refuse it anyway (assignLeads). */}
+                                {selectedChat.leadId?._id && !assignmentRestricted && (
+                                    <div className="p-5 border-b border-slate-100">
+                                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Assigned agent</p>
+                                        <div className="relative">
+                                            {/* Reads the LEAD's owner, because that is what this
+                                                control writes. selectedChat.assignedTo would be
+                                                wrong whenever mirroring is off: the lead has an
+                                                owner, the thread never gets one, and the dropdown
+                                                would sit on "Unassigned" forever. */}
+                                            <select
+                                                value={selectedChat.leadId?.assignedTo || ''}
+                                                onChange={(e) => handleAssignThread(e.target.value || null)}
+                                                disabled={assignSaving}
+                                                className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-8 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60 cursor-pointer"
+                                            >
+                                                <option value="">Unassigned</option>
+                                                {assignAgents.map(a => (
+                                                    <option key={a._id} value={a._id}>
+                                                        {a.name}{a.role === 'manager' ? ' (Owner)' : ''}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <i className={`fa-solid ${assignSaving ? 'fa-spinner fa-spin' : 'fa-user-tag'} absolute left-3 top-1/2 -translate-y-1/2 text-blue-600 text-sm pointer-events-none`}></i>
+                                            <i className="fa-solid fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"></i>
+                                        </div>
+
+                                        {mirrorEnabled ? (
+                                            <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+                                                Assigning moves this conversation to that agent&rsquo;s inbox. Ownership follows the linked lead.
+                                            </p>
+                                        ) : (
+                                            // Without this the control looks broken: the lead really
+                                            // is reassigned, but the thread stays visible to everyone.
+                                            <p className="text-[11px] text-amber-600 mt-2 leading-relaxed">
+                                                <i className="fa-solid fa-circle-info mr-1"></i>
+                                                This sets the lead&rsquo;s owner. The inbox is currently shared with the whole
+                                                team, so the conversation will not move. Enable Email Inbox Assignment in
+                                                Settings to change that.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
 
                                 <div className="p-5 space-y-4">
                                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Thread activity</p>

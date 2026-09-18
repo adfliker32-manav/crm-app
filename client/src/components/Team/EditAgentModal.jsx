@@ -16,6 +16,7 @@ const PRESETS = {
         viewPipeline: true,
         moveLeads: false,
         viewEmails: false,
+        viewAllEmails: false,
         sendEmails: false,
         sendBulkEmails: false,
         manageEmailTemplates: false,
@@ -54,6 +55,7 @@ const PRESETS = {
         viewPipeline: true,
         moveLeads: true,
         viewEmails: false,
+        viewAllEmails: false,
         sendEmails: true,
         sendBulkEmails: false,
         manageEmailTemplates: false,
@@ -92,6 +94,7 @@ const PRESETS = {
         viewPipeline: true,
         moveLeads: true,
         viewEmails: true,
+        viewAllEmails: true,
         sendEmails: true,
         sendBulkEmails: true,
         manageEmailTemplates: true,
@@ -233,6 +236,7 @@ const EditAgentModal = ({ isOpen, onClose, onSuccess, agent }) => {
             title: '📧 Email',
             permissions: [
                 { key: 'viewEmails', label: 'View Emails' },
+                { key: 'viewAllEmails', label: 'View ALL Email Conversations (not just assigned)', highlight: true },
                 { key: 'sendEmails', label: 'Send Individual Emails' },
                 { key: 'sendBulkEmails', label: 'Send Bulk Emails' },
                 { key: 'manageEmailTemplates', label: 'Manage Email Templates' }

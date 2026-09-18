@@ -140,11 +140,13 @@ const queueLeadStageChangeEffects = (lead, fromStage = undefined, options = {}) 
 };
 
 /**
- * Lead ownership changed → the WhatsApp conversation follows.
+ * Lead ownership changed → the WhatsApp AND Email conversations follow.
  *
  * The Lead is the single source of truth for who owns a conversation, so EVERY
- * path that writes Lead.assignedTo must call this. It is a no-op unless the
- * workspace has WorkspaceSettings.whatsappFollowsLeadAssignment enabled.
+ * path that writes Lead.assignedTo must call this. Each channel is a no-op
+ * unless its own workspace toggle is on —
+ * WorkspaceSettings.whatsappFollowsLeadAssignment for WhatsApp,
+ * WorkspaceSettings.emailFollowsLeadAssignment for Email.
  *
  * Deliberately an explicit call rather than a Mongoose hook: the bulk paths use
  * updateMany, which fires no document middleware, so a hook would silently miss
@@ -219,6 +221,32 @@ const queueLeadAssignmentEffects = (lead, tenantId) => {
             changes: result.conversations
         });
     });
+
+    // The EMAIL inbox follows the same lead, behind its own workspace toggle.
+    // Deliberately a second background task rather than a branch inside the
+    // first: WhatsApp and Email are independently switchable, so a tenant that
+    // runs only one of them must not pay for — or be broken by — the other.
+    runInBackground('Email assignment sync error (non-blocking):', async () => {
+        const svc = require('../services/emailAssignmentService');
+        const { getCompanyUserIds } = require('./whatsappUtils');
+
+        // No link step here: EmailConversation.leadId is required, so an email
+        // thread is never lead-less and the WhatsApp "link before sync" problem
+        // cannot arise. See emailAssignmentService's header.
+        const result = await svc.syncConversationsForLead({
+            leadId: lead._id,
+            tenantId,
+            assignedTo: lead.assignedTo || null
+        });
+
+        if (result.conversations.length === 0) return;
+
+        await svc.broadcastAssignmentChanges({
+            tenantId,
+            companyUserIds: await getCompanyUserIds(tenantId),
+            changes: result.conversations
+        });
+    });
 };
 
 /**
@@ -261,18 +289,47 @@ const queueBulkLeadAssignmentEffects = (leadIds, assignedTo, tenantId) => {
             changes: result.conversations
         });
     });
+
+    // Email twin — see the note in queueLeadAssignmentEffects.
+    runInBackground('Email bulk assignment sync error (non-blocking):', async () => {
+        const svc = require('../services/emailAssignmentService');
+        const { getCompanyUserIds } = require('./whatsappUtils');
+
+        const result = await svc.syncConversationsForLeads({
+            leadIds,
+            tenantId,
+            assignedTo: assignedTo || null
+        });
+
+        if (result.conversations.length === 0) return;
+
+        await svc.broadcastAssignmentChanges({
+            tenantId,
+            companyUserIds: await getCompanyUserIds(tenantId),
+            changes: result.conversations
+        });
+    });
 };
 
 /**
- * Leads were deleted → their conversations lose the link AND the derived owner.
- * The message history itself is preserved; the thread falls back to
- * manager-only visibility, because the assignment's justification is gone.
+ * Leads were deleted → their conversations lose the derived owner (and, for
+ * WhatsApp, the lead link too). The message history itself is preserved; the
+ * thread falls back to manager-only visibility, because the assignment's
+ * justification is gone.
  */
 const queueLeadDeletionEffects = (leadIds, tenantId) => {
     if (!Array.isArray(leadIds) || leadIds.length === 0 || !tenantId) return;
 
     runInBackground('WhatsApp lead-deletion detach error (non-blocking):', () =>
         require('../services/whatsappAssignmentService')
+            .detachDeletedLeads({ leadIds, tenantId })
+    );
+
+    // Email threads keep their leadId (the field is required, so it cannot be
+    // nulled) but lose the derived owner, which has the same effect: the thread
+    // falls back to manager-only visibility.
+    runInBackground('Email lead-deletion detach error (non-blocking):', () =>
+        require('../services/emailAssignmentService')
             .detachDeletedLeads({ leadIds, tenantId })
     );
 };

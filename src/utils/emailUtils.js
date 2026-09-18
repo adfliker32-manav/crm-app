@@ -84,22 +84,45 @@ async function getUserEmailCredentials(userId) {
             if (parentUser) tenantName = parentUser.name;
         }
 
-        // Must use '+' to include select:false fields (emailPassword)
+        // Must use '+' to include select:false fields (the password AND the
+        // OAuth tokens — all three are dropped by the default projection).
         const config = await IntegrationConfig.findOne({ userId: tenantId })
-            .select('+email.emailPassword email.emailUser email.emailFromName email.emailSignature email.emailServiceType email.smtpHost email.smtpPort email.businessAddress')
+            .select('+email.emailPassword +email.oauthRefreshToken +email.oauthAccessToken '
+                + 'email.authType email.oauthExpiryDate email.emailUser email.emailFromName '
+                + 'email.emailSignature email.emailServiceType email.smtpHost email.smtpPort '
+                + 'email.smtpSecure email.businessAddress')
             .lean();
 
-        if (!config || !config.email?.emailUser || !config.email?.emailPassword) {
-            return null;
+        if (!config || !config.email?.emailUser) return null;
+
+        const authType = config.email.authType === 'oauth_google' ? 'oauth_google' : 'password';
+
+        // A mailbox is only usable if it actually holds the credential its
+        // auth type needs. Checking emailPassword unconditionally (as this did)
+        // would reject every OAuth mailbox as "not configured".
+        let password = null;
+        let accessToken = null;
+        if (authType === 'oauth_google') {
+            const { getAccessToken } = require('../services/googleOAuthService');
+            accessToken = await getAccessToken(tenantId, { config });
+            if (!accessToken) return null;
+        } else {
+            if (!config.email.emailPassword) return null;
+            password = decrypt(config.email.emailPassword);
+            if (!password) return null;
         }
+
         return {
             email: config.email.emailUser,
-            password: decrypt(config.email.emailPassword),
+            authType,
+            password,
+            accessToken,
             fromName: config.email.emailFromName || tenantName || 'Adfliker',
             signature: config.email.emailSignature || '',
             serviceType: config.email.emailServiceType || 'gmail',
             smtpHost: config.email.smtpHost,
             smtpPort: config.email.smtpPort,
+            smtpSecure: config.email.smtpSecure,
             businessAddress: config.email.businessAddress || ''
         };
     } catch (error) {

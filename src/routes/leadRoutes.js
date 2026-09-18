@@ -122,6 +122,12 @@ const whatsappConversationController = require('../controllers/whatsappConversat
 router.get('/whatsapp-assignment-config', authMiddleware, checkPermission('accessSettings'), requireModule('whatsapp'), whatsappConversationController.getAssignmentConfig);
 router.put('/whatsapp-assignment-config', authMiddleware, checkPermission('accessSettings'), requireModule('whatsapp'), validate(schemas.whatsappAssignmentConfig), whatsappConversationController.updateAssignmentConfig);
 
+// The same pair for the Email inbox, gated on the email module rather than the
+// WhatsApp one so a tenant with only one of the two still gets its switch.
+const emailConversationController = require('../controllers/emailConversationController');
+router.get('/email-assignment-config', authMiddleware, checkPermission('accessSettings'), requireModule('email'), emailConversationController.getAssignmentConfig);
+router.put('/email-assignment-config', authMiddleware, checkPermission('accessSettings'), requireModule('email'), validate(schemas.emailAssignmentConfig), emailConversationController.updateAssignmentConfig);
+
 // 1. Sync Google Sheet (Manual — MUST BE BEFORE /:id routes!)
 router.post('/sync-sheet', authMiddleware, bulkLimiter, checkPermission('createLeads'), leadController.syncLeads);
 

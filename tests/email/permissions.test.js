@@ -179,7 +179,17 @@ describe('email routers — every route is gated (S1-S4)', () => {
     });
 
     test('no email route is left completely ungated except the public three', () => {
-        const publicPaths = ['/unsubscribe', '/track/open/:logId', '/track/click/:logId'];
+        const publicPaths = [
+            '/unsubscribe', '/track/open/:logId', '/track/click/:logId',
+            // Google redirects the BROWSER here after consent: no Authorization
+            // header, and on a split frontend/backend deployment a cross-site
+            // request that drops cookies too — so there is no session to gate
+            // on. Authorization is instead carried by the signed, 10-minute
+            // state JWT that googleOAuthService.verifyState checks, which is
+            // what binds the grant to one workspace. Adding checkPermission
+            // here would break the flow outright, not secure it.
+            '/oauth/google/callback'
+        ];
         const files = ['emailRoutes.js', 'emailConversationRoutes.js', 'emailLogRoutes.js', 'emailTemplateRoutes.js'];
 
         const ungated = [];

@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars, react-hooks/exhaustive-deps */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 
@@ -29,8 +29,14 @@ const EmailSettings = () => {
         businessAddress: '',
         imapHost: '',
         imapPort: 993,
+        imapSecure: null,
+        smtpSecure: null,
+        authType: 'password',
         imapEnabled: true,
         inboundSupported: true,
+        imapLastSyncAt: null,
+        imapLastError: null,
+        imapLastErrorAt: null,
         isConfigured: false
     });
     const [loading, setLoading] = useState(true);
@@ -56,8 +62,16 @@ const EmailSettings = () => {
                 businessAddress: res.data.businessAddress || '',
                 imapHost: res.data.imapHost || '',
                 imapPort: res.data.imapPort || 993,
+                // Tri-state: null means "infer from the port". Coercing to a
+                // boolean here would force an override the user never chose.
+                imapSecure: typeof res.data.imapSecure === 'boolean' ? res.data.imapSecure : null,
+                smtpSecure: typeof res.data.smtpSecure === 'boolean' ? res.data.smtpSecure : null,
+                authType: res.data.authType || 'password',
                 imapEnabled: res.data.imapEnabled !== false,
                 inboundSupported: res.data.inboundSupported !== false,
+                imapLastSyncAt: res.data.imapLastSyncAt || null,
+                imapLastError: res.data.imapLastError || null,
+                imapLastErrorAt: res.data.imapLastErrorAt || null,
                 isConfigured: res.data.isConfigured || false
             }));
         } catch (error) {
@@ -88,6 +102,8 @@ const EmailSettings = () => {
                 businessAddress: config.businessAddress.trim(),
                 imapHost: config.imapHost.trim(),
                 imapPort: parseInt(config.imapPort, 10) || 993,
+                imapSecure: config.imapSecure,
+                smtpSecure: config.smtpSecure,
                 imapEnabled: config.imapEnabled
             };
             if (config.emailPassword.trim() && config.emailPassword !== '••••••••') {
@@ -108,6 +124,95 @@ const EmailSettings = () => {
             showError(error.response?.data?.message || 'Failed to save configuration');
         } finally {
             setSaving(false);
+        }
+    };
+
+    // ── Google mailbox connection ────────────────────────────────────────
+    const [google, setGoogle] = useState({ available: false, connected: false, email: null });
+    const [connecting, setConnecting] = useState(false);
+    const [testingImap, setTestingImap] = useState(false);
+
+    const loadGoogleStatus = useCallback(async () => {
+        try {
+            const res = await api.get('/email/oauth/google/status');
+            setGoogle({
+                available: res.data.available === true,
+                connected: res.data.connected === true,
+                email: res.data.email || null
+            });
+        } catch {
+            // A server without OAuth configured is a normal state, not an error.
+            setGoogle({ available: false, connected: false, email: null });
+        }
+    }, []);
+
+    useEffect(() => { loadGoogleStatus(); }, [loadGoogleStatus]);
+
+    // The OAuth callback redirects the browser back here with the outcome in the
+    // query string — it cannot return JSON to an XHR, because the round trip
+    // goes through Google and leaves the SPA entirely.
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const outcome = params.get('mailbox');
+        if (!outcome) return;
+
+        if (outcome === 'connected') {
+            showSuccess(`Mailbox ${params.get('email') || ''} connected`.trim());
+            loadGoogleStatus();
+            fetchConfig();
+        } else if (outcome === 'cancelled') {
+            showInfo('Google sign-in was cancelled — nothing was changed.');
+        } else if (outcome === 'error') {
+            showError(params.get('reason') || 'Could not connect the mailbox.');
+        }
+
+        // Strip the params so a refresh does not replay the toast.
+        params.delete('mailbox'); params.delete('email'); params.delete('reason');
+        const qs = params.toString();
+        window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+    }, []);
+
+    const handleConnectGoogle = async () => {
+        setConnecting(true);
+        try {
+            const res = await api.get('/email/oauth/google/start', {
+                params: config.emailUser ? { email: config.emailUser } : {}
+            });
+            // Full navigation, not a popup: Google blocks its consent screen in
+            // many embedded/popup contexts, and the callback redirects back here
+            // anyway.
+            window.location.href = res.data.url;
+        } catch (error) {
+            showError(error.response?.data?.message || 'Could not start Google sign-in');
+            setConnecting(false);
+        }
+    };
+
+    const handleDisconnectGoogle = async () => {
+        setConnecting(true);
+        try {
+            await api.post('/email/oauth/google/disconnect');
+            showSuccess('Mailbox disconnected');
+            await loadGoogleStatus();
+            await fetchConfig();
+        } catch (error) {
+            showError(error.response?.data?.message || 'Could not disconnect the mailbox');
+        } finally {
+            setConnecting(false);
+        }
+    };
+
+    const handleTestImap = async () => {
+        setTestingImap(true);
+        showInfo('Checking incoming mail connection...');
+        try {
+            const res = await api.post('/email/config/test-imap');
+            showSuccess(res.data.message || 'Incoming mail is working');
+            fetchConfig(); // clears a stale error banner
+        } catch (error) {
+            showError(error.response?.data?.message || 'Could not connect for incoming mail');
+        } finally {
+            setTestingImap(false);
         }
     };
 
@@ -184,6 +289,27 @@ const EmailSettings = () => {
                 </div>
             )}
 
+            {/* The mailbox IS configured for receiving but the last sync failed.
+                Without this the only symptom is "no replies ever arrive", which
+                is indistinguishable from nobody having written. */}
+            {config.isConfigured && config.inboundSupported && config.imapLastError && (
+                <div className="flex items-start gap-4 bg-red-50 border border-red-200 rounded-2xl px-5 py-4">
+                    <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                        <i className="fa-solid fa-triangle-exclamation text-red-600 text-lg"></i>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-red-800">Incoming mail is not being received</p>
+                        <p className="text-xs text-red-700 mt-0.5 break-words">{config.imapLastError}</p>
+                        {config.imapLastErrorAt && (
+                            <p className="text-[11px] text-red-500 mt-1">
+                                Last failed {new Date(config.imapLastErrorAt).toLocaleString()}
+                                {config.imapLastSyncAt && ` · last successful sync ${new Date(config.imapLastSyncAt).toLocaleString()}`}
+                            </p>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Send works, receive doesn't — make that explicit rather than
                 leaving the user to wonder why no replies ever arrive. */}
             {config.isConfigured && !config.inboundSupported && (
@@ -204,6 +330,63 @@ const EmailSettings = () => {
                             Configure
                         </button>
                     )}
+                </div>
+            )}
+
+            {/* ── Connected-with-Google summary ───────────────────────────────
+                Shown outside the form: once a mailbox is connected this way
+                there is no address or password to type, so the form below is
+                about the remaining settings only. */}
+            {google.connected && (
+                <div className="flex items-start gap-4 bg-white border border-slate-200 rounded-2xl px-5 py-4 shadow-sm">
+                    <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                        <i className="fa-brands fa-google text-emerald-600 text-lg"></i>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-slate-800">Connected with Google</p>
+                        <p className="text-xs text-slate-500 mt-0.5 break-all">
+                            {google.email || config.emailUser} — sending and receiving are authorised by
+                            sign-in, so no app password is needed.
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleDisconnectGoogle}
+                        disabled={connecting}
+                        className="text-xs font-semibold px-3 py-2 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 rounded-xl transition flex-shrink-0 disabled:opacity-50"
+                    >
+                        Disconnect
+                    </button>
+                </div>
+            )}
+
+            {/* ── Connect with Google ─────────────────────────────────────────
+                The recommended path for Gmail. Google removed password access
+                for mail clients in 2022, so the alternative is an App Password,
+                which requires 2-Step Verification and is where most setups
+                stall. Hidden when the server has no OAuth credentials
+                configured, rather than offering a button that cannot work. */}
+            {!google.connected && google.available && config.emailServiceType === 'gmail' && (
+                <div className="flex items-start gap-4 bg-white border border-slate-200 rounded-2xl px-5 py-4 shadow-sm">
+                    <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                        <i className="fa-brands fa-google text-slate-500 text-lg"></i>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-slate-800">Connect with Google</p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                            Sign in once to authorise sending and receiving. No App Password and no
+                            2-Step Verification setup required.
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleConnectGoogle}
+                        disabled={connecting}
+                        className="text-xs font-semibold px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl transition flex-shrink-0 disabled:opacity-50 flex items-center gap-2"
+                    >
+                        <i className={`fa-solid ${connecting ? 'fa-spinner fa-spin' : 'fa-right-to-bracket'} text-[11px]`}></i>
+                        {connecting ? 'Opening…' : 'Connect'}
+                    </button>
                 </div>
             )}
 
@@ -244,6 +427,22 @@ const EmailSettings = () => {
                                     <input type="number" name="smtpPort" value={config.smtpPort} onChange={handleChange}
                                         placeholder="587" required className={inputCls} />
                                 </Field>
+                                <div className="col-span-3">
+                                    <Field label="Encryption" hint="leave on Automatic unless your provider says otherwise">
+                                        <select
+                                            className={inputCls}
+                                            value={config.smtpSecure === null ? 'auto' : String(config.smtpSecure)}
+                                            onChange={(e) => setConfig(p => ({
+                                                ...p,
+                                                smtpSecure: e.target.value === 'auto' ? null : e.target.value === 'true'
+                                            }))}
+                                        >
+                                            <option value="auto">Automatic (SSL on 465, STARTTLS otherwise)</option>
+                                            <option value="true">SSL/TLS on connect</option>
+                                            <option value="false">STARTTLS</option>
+                                        </select>
+                                    </Field>
+                                </div>
                             </div>
                         )}
                     </div>
@@ -352,6 +551,22 @@ const EmailSettings = () => {
                                         <input type="number" name="imapPort" value={config.imapPort} onChange={handleChange}
                                             placeholder="993" className={inputCls} />
                                     </Field>
+                                    <div className="col-span-3">
+                                        <Field label="Encryption" hint="leave on Automatic unless your provider says otherwise">
+                                            <select
+                                                className={inputCls}
+                                                value={config.imapSecure === null ? 'auto' : String(config.imapSecure)}
+                                                onChange={(e) => setConfig(p => ({
+                                                    ...p,
+                                                    imapSecure: e.target.value === 'auto' ? null : e.target.value === 'true'
+                                                }))}
+                                            >
+                                                <option value="auto">Automatic (SSL on 993, STARTTLS on 143)</option>
+                                                <option value="true">SSL/TLS on connect</option>
+                                                <option value="false">STARTTLS</option>
+                                            </select>
+                                        </Field>
+                                    </div>
                                 </div>
                                 {/* Custom SMTP tenants were silently skipped by the sync
                                     service, so their inbox was one-way with no explanation. */}
@@ -368,6 +583,21 @@ const EmailSettings = () => {
                                     </div>
                                 )}
                             </>
+                        )}
+
+                        {/* Sending has had a Test button since day one; receiving —
+                            the half that can fail silently — had none, so there was
+                            no way for a user to ask whether it worked. */}
+                        {config.isConfigured && config.imapEnabled && (
+                            <button
+                                type="button"
+                                onClick={handleTestImap}
+                                disabled={testingImap}
+                                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-sm font-semibold text-slate-700 transition disabled:opacity-50"
+                            >
+                                <i className={`fa-solid ${testingImap ? 'fa-spinner fa-spin' : 'fa-inbox'} text-slate-400`}></i>
+                                {testingImap ? 'Checking…' : 'Test incoming mail'}
+                            </button>
                         )}
                     </div>
 

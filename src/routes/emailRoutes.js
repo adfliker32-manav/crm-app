@@ -8,6 +8,7 @@ const requireModule = require('../middleware/moduleMiddleware');
 const { meterUsage } = require('../middleware/usageMeter');
 const { emailSendLimiter, emailTestLimiter } = require('../middleware/emailRateLimiter');
 const checkPermission = require('../middleware/checkPermission');
+const { validate, schemas } = require('../middleware/validateRequest');
 const multer = require('multer');
 
 // FIX F5: the compose window could not attach files at all — /email/send only
@@ -67,6 +68,28 @@ const validateObjectId = require('../middleware/validateObjectId');
 router.get('/config', authMiddleware, requireModule('email'), checkPermission('viewEmails'), emailConfigController.getEmailConfig);
 router.put('/config', authMiddleware, requireModule('email'), checkPermission('accessSettings'), emailConfigController.updateEmailConfig);
 router.post('/config/test', authMiddleware, requireModule('email'), checkPermission('accessSettings'), emailTestLimiter, emailConfigController.testEmailConfig);
+// Receiving had no test at all, so "why do replies never arrive?" had no answer
+// short of reading server logs. Same rate limiter as the send test: both open a
+// real outbound connection to a user-supplied host.
+router.post('/config/test-imap', authMiddleware, requireModule('email'), checkPermission('accessSettings'), emailTestLimiter, validate(schemas.noBody), emailConfigController.testImapConfig);
+
+// ── Mailbox OAuth (Google) ──────────────────────────────────────────────────
+// Gmail dropped password auth for mail clients in 2022, so an App Password (and
+// therefore 2-Step Verification) was the only way in. These let an admin grant
+// IMAP+SMTP access by signing in instead.
+const emailOAuthController = require('../controllers/emailOAuthController');
+router.get('/oauth/google/status', authMiddleware, requireModule('email'), checkPermission('viewEmails'), emailOAuthController.status);
+router.get('/oauth/google/start', authMiddleware, requireModule('email'), checkPermission('accessSettings'), emailOAuthController.start);
+router.post('/oauth/google/disconnect', authMiddleware, requireModule('email'), checkPermission('accessSettings'), validate(schemas.noBody), emailOAuthController.disconnect);
+
+// ⚠️ NO authMiddleware on the callback, and that is not an oversight.
+// Google redirects the BROWSER here: there is no Authorization header, and on a
+// split frontend/backend deployment it is a cross-site request that drops
+// cookies too. Authenticating it is impossible. The tenant identity instead
+// travels inside the signed, short-lived `state` (googleOAuthService.verifyState),
+// which is what stops anyone binding their own mailbox to another workspace.
+// Do not "fix" this by adding the middleware — it would break the flow outright.
+router.get('/oauth/google/callback', emailOAuthController.callback);
 
 // FIX B1: Public unsubscribe endpoint (no auth — accessed from email link)
 const { handleUnsubscribe } = require('../controllers/emailUnsubscribeController');
