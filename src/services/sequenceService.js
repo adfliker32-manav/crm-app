@@ -34,6 +34,89 @@ const scheduleStepJob = async (enrollmentId, delayHours) => {
     });
 };
 
+// ── Is this enrollment still in the stage that started it? ───────────────────
+// Pure, so the whole of the stage-exit rule is one testable decision, and so the
+// send-time gate and the stage-change sweep can never disagree about it.
+//
+// `false` for everything that is not stage-scoped:
+//   - a LEAD_CREATED welcome series or a MANUAL sequence is not about a stage;
+//   - a sequence with exitOnStageChange turned off runs to its end on purpose;
+//   - a sequence with no triggerStage has no stage to be out of;
+//   - a MANUAL enrolment is someone deliberately putting THIS lead in THIS
+//     sequence, quite possibly from another stage - a stage rule must not undo it.
+//
+// The exitOnStageChange test is `=== false`, not `!exitOnStageChange`: sequences
+// saved before that field existed have it MISSING, and a .lean() read hands back
+// undefined rather than the schema default. Missing must mean "on", which is what
+// the default says for every row written since.
+const shouldExitOnStage = (sequence, enrollment, leadStage) => {
+    if (!sequence || sequence.trigger !== 'STAGE_CHANGED') return false;
+    if (sequence.exitOnStageChange === false) return false;
+    if (!sequence.triggerStage) return false;
+    if (enrollment?.enrolledVia === 'manual') return false;
+    return String(leadStage || '') !== String(sequence.triggerStage);
+};
+
+// How long after one run of a stage sequence ends before the same lead may start
+// it again. Re-entering a stage is meant to re-run its sequence - that is the
+// point of the rule - but a stage change is one click, and a mis-click plus its
+// undo is two. Without a floor, Cold -> Warm -> Cold inside a minute restarts the
+// cold sequence and re-sends step 1 on the spot. Ten minutes absorbs a fat finger
+// and a double-fired trigger while leaving every real pipeline movement - which is
+// never a ten-minute round trip - free to re-enroll.
+const REENROLL_COOLDOWN_MS = 10 * 60 * 1000;
+
+// ── Take a lead out of the stage sequences they have just left ────────────────
+// Runs on every stage change, immediately BEFORE enrolment, so a lead moving
+// Warm -> Cold leaves the warm sequence in the same breath that starts the cold
+// one instead of running both at once on two schedules.
+//
+// Only 'active' and 'paused' rows are live. 'completed' and 'cancelled' rows have
+// already stopped sending and are the record of what this lead was sent.
+const exitLeadSequencesOnStageChange = async (lead, newStage) => {
+    // Refuse to sweep on a stage we do not actually know. This cancels EVERY
+    // stage-scoped enrollment the lead has, from an argument a caller supplies, so
+    // an empty one would read as "in no stage" and quietly empty the lead out of
+    // all of them. A caller that cannot name the new stage has told us nothing, and
+    // nothing is not a stage change. The send-time gate stays strict on its own
+    // freshly read lead.status, so a genuinely stage-less lead is still not sent to.
+    if (!String(newStage || '').trim()) return 0;
+
+    const enrollments = await SequenceEnrollment.find({
+        leadId: lead._id,
+        status: { $in: ['active', 'paused'] }
+    }).lean();
+    if (!enrollments.length) return 0;
+
+    let exited = 0;
+    for (const enrollment of enrollments) {
+        const sequence = await Sequence.findById(enrollment.sequenceId)
+            .select('trigger triggerStage exitOnStageChange name')
+            .lean();
+        if (!shouldExitOnStage(sequence, enrollment, newStage)) continue;
+
+        // Kill the pending step first. Flipping the row without this leaves a job
+        // that fires into processSequenceStep, which no-ops on a non-active
+        // enrollment - correct, but it burns a worker slot per exited lead.
+        if (enrollment.agendaJobId && globalAgendaInstance) {
+            await globalAgendaInstance.cancel({ _id: enrollment.agendaJobId }).catch(() => {});
+        }
+
+        await SequenceEnrollment.findByIdAndUpdate(enrollment._id, {
+            status: 'cancelled',
+            exitReason: 'stage_changed',
+            pauseReason: null,
+            nextStepAt: null
+        });
+        exited++;
+        console.log(
+            `🚪 [Sequence] Lead "${lead.name}" left "${sequence.name}" ` +
+            `(stage is now "${newStage}", sequence is for "${sequence.triggerStage}")`
+        );
+    }
+    return exited;
+};
+
 // ── Enroll a lead into all sequences matching the given trigger ───────────────
 // Called from leadController on lead create and stage change.
 const enrollLeadInSequences = async (lead, triggerType, triggerStage = null) => {
@@ -42,6 +125,17 @@ const enrollLeadInSequences = async (lead, triggerType, triggerStage = null) => 
 
         // 🔒 BUG-1 FIX: Skip enrollment for expired tenants.
         if (await isTenantExpired(lead.userId)) return;
+
+        // Leaving comes before joining, and deliberately before the `no matching
+        // sequence` return below: a lead moving Cold -> Won must still leave the cold
+        // sequence even though no sequence starts on Won. Doing it here rather than at
+        // the four call sites means every path that reports a stage change - the lead
+        // controller, the workflow engine's update_stage node, the chatbot, the
+        // booking page - gets it without having to remember to ask, and the two can
+        // never race each other: this awaits before enrolment reads anything.
+        if (triggerType === 'STAGE_CHANGED') {
+            await exitLeadSequencesOnStageChange(lead, triggerStage ?? lead.status);
+        }
 
         const query = { tenantId: lead.userId, isActive: true, trigger: triggerType };
         if (triggerType === 'STAGE_CHANGED' && triggerStage) {
@@ -54,15 +148,44 @@ const enrollLeadInSequences = async (lead, triggerType, triggerStage = null) => 
         for (const seq of sequences) {
             if (!seq.steps || seq.steps.length === 0) continue;
 
-            // Never re-enroll a lead that is already active, completed, or paused in this sequence.
-            // Previously only checked 'active' — a lead that completed or was paused by a reply
-            // could get re-enrolled on the next trigger, causing duplicate messaging.
+            // 'active' and 'paused' are LIVE rows: a second one would double every send,
+            // so both still block, exactly as they did.
+            //
+            // 'completed' no longer blocks a STAGE_CHANGED sequence. It used to, which
+            // quietly made a stage sequence a once-per-lead-forever event - a lead who
+            // ran the warm sequence to the end, went cold, and came back to warm got
+            // nothing the second time, because the finished row was still sitting there.
+            // Re-entering the stage IS the signal to run it again. LEAD_CREATED and
+            // MANUAL keep the old rule: neither can genuinely happen to one lead twice,
+            // so a repeat there is a double-fire rather than a return.
+            const blockingStatuses = triggerType === 'STAGE_CHANGED'
+                ? ['active', 'paused']
+                : ['active', 'completed', 'paused'];
+
             const existing = await SequenceEnrollment.findOne({
                 sequenceId: seq._id,
                 leadId: lead._id,
-                status: { $in: ['active', 'completed', 'paused'] }
+                status: { $in: blockingStatuses }
             });
             if (existing) continue;
+
+            // A run that ended moments ago means a bounce, not a return - a mis-click
+            // and its undo, or one transition reported twice - and restarting on top of
+            // it re-sends step 1 immediately. updatedAt is when the row stopped:
+            // completedAt covers only the rows that finished, not the ones the stage
+            // rule cancelled.
+            if (triggerType === 'STAGE_CHANGED') {
+                const justEnded = await SequenceEnrollment.findOne({
+                    sequenceId: seq._id,
+                    leadId: lead._id,
+                    status: { $in: ['completed', 'cancelled'] },
+                    updatedAt: { $gt: new Date(Date.now() - REENROLL_COOLDOWN_MS) }
+                }).select('_id').lean();
+                if (justEnded) {
+                    console.log(`[Sequence] "${seq.name}" ended for lead ${lead._id} moments ago - not restarting it yet`);
+                    continue;
+                }
+            }
 
             let enrollment;
             try {
@@ -400,6 +523,7 @@ const processSequenceStep = async (enrollmentId) => {
     if (!sequence) {
         await SequenceEnrollment.findByIdAndUpdate(enrollmentId, {
             status: 'cancelled',
+            exitReason: 'sequence_deleted',
             lastError: 'the sequence was deleted'
         });
         return;
@@ -421,7 +545,31 @@ const processSequenceStep = async (enrollmentId) => {
 
     const lead = await Lead.findById(enrollment.leadId).lean();
     if (!lead) {
-        await SequenceEnrollment.findByIdAndUpdate(enrollmentId, { status: 'cancelled' });
+        await SequenceEnrollment.findByIdAndUpdate(enrollmentId, {
+            status: 'cancelled',
+            exitReason: 'lead_deleted'
+        });
+        return;
+    }
+
+    // THE GATE. The stage sweep on lead update is what normally ends a run, but it
+    // only ever sees the stage changes that were reported to it; this reads the
+    // lead's stage as it is right now, at the last possible moment before a send,
+    // and so covers every way a stage can move - a direct write, an import, a
+    // restore, a path added later that forgets to announce itself. A step is held
+    // for hours or days, which is plenty of time for the lead to stop being the
+    // lead this sequence was written for.
+    if (shouldExitOnStage(sequence, enrollment, lead.status)) {
+        await SequenceEnrollment.findByIdAndUpdate(enrollmentId, {
+            status: 'cancelled',
+            exitReason: 'stage_changed',
+            pauseReason: null,
+            nextStepAt: null
+        });
+        console.log(
+            `🚪 [Sequence] Not sending "${sequence.name}" to "${lead.name}" - ` +
+            `the sequence is for stage "${sequence.triggerStage}" and the lead is "${lead.status}"`
+        );
         return;
     }
 
@@ -640,6 +788,7 @@ const recoverStalledEnrollments = async ({
             if ((row.recoveryCount || 0) >= maxRecoveries) {
                 await SequenceEnrollment.findByIdAndUpdate(row._id, {
                     status: 'cancelled',
+                    exitReason: 'recovery_exhausted',
                     lastError: `step could not be scheduled after ${maxRecoveries} recovery attempts`
                 });
                 summary.abandoned++;
@@ -691,6 +840,11 @@ module.exports = {
     // step runs, resolveStepChannels decides which channels that step sends on.
     resolveStepToRun,
     resolveStepChannels,
+    // shouldExitOnStage carries the whole of the stage-exit rule and is pure, so it
+    // is unit-tested directly rather than through a database.
+    shouldExitOnStage,
+    exitLeadSequencesOnStageChange,
+    REENROLL_COOLDOWN_MS,
     resumeEnrollment,
     resumeEnrollmentsForSequence,
     recoverStalledEnrollments

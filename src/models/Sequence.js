@@ -50,6 +50,22 @@ const SequenceSchema = new mongoose.Schema({
     // Pause/stop the sequence when the lead sends any WhatsApp reply
     stopOnReply: { type: Boolean, default: true },
 
+    // Leave the sequence when the lead leaves the stage that enrolled them.
+    //
+    // A STAGE_CHANGED sequence is written FOR one stage - "Cold Lead" chases a lead
+    // who is cold - but nothing used to end the run when the lead stopped being
+    // cold. A lead who moved on kept receiving the rest of the cold sequence for as
+    // many days as it had steps, and a lead moving Warm -> Cold sat in the warm
+    // sequence and the cold one at once, on two separate message schedules.
+    //
+    // Only STAGE_CHANGED sequences are stage-scoped: a LEAD_CREATED welcome series
+    // and a MANUAL sequence are not about a stage and are never exited by one.
+    //
+    // Defaults to true, so sequences saved before this field existed adopt it - the
+    // old behaviour is the bug. Turn it off for a stage sequence that should run to
+    // the end regardless of where the lead goes next.
+    exitOnStageChange: { type: Boolean, default: true },
+
     // Which channels this sequence sends on. Both can be on: a step then sends its
     // WhatsApp template AND its email, together, at that step's time.
     //

@@ -43,6 +43,7 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
         trigger: 'LEAD_CREATED',
         triggerStage: '',
         stopOnReply: true,
+        exitOnStageChange: true,
         isActive: true,
         // Both on by default: a sequence is a follow-up, and a follow-up that can use
         // both channels is the point. Either can be switched off per sequence.
@@ -71,6 +72,7 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                     ? stepTypes.includes('SEND_EMAIL')
                     : editingSequence.sendEmail === true,
                 triggerStage: editingSequence.triggerStage || '',
+                exitOnStageChange: editingSequence.exitOnStageChange !== false,
                 steps: (editingSequence.steps && editingSequence.steps.length)
                     ? editingSequence.steps.map((s, i) => ({
                         // Carried through untouched: this id is how leads already
@@ -222,6 +224,7 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                 trigger: seq.trigger,
                 triggerStage: seq.trigger === 'STAGE_CHANGED' ? seq.triggerStage : null,
                 stopOnReply: seq.stopOnReply,
+                exitOnStageChange: seq.exitOnStageChange,
                 isActive: seq.isActive,
                 sendWhatsApp: seq.sendWhatsApp,
                 sendEmail: seq.sendEmail,
@@ -378,6 +381,17 @@ const SequenceBuilderModal = ({ isOpen, onClose, onSave, editingSequence = null 
                             subtitle="Industry best practice — never spam someone who's already engaged"
                             icon="fa-comments"
                         />
+                        {seq.trigger === 'STAGE_CHANGED' && (
+                            <ToggleRow
+                                checked={seq.exitOnStageChange}
+                                onChange={(v) => setSeq({ ...seq, exitOnStageChange: v })}
+                                title="Exit when lead leaves this stage"
+                                subtitle={seq.triggerStage
+                                    ? `Stop sending the moment the lead is no longer "${seq.triggerStage}"`
+                                    : 'Stop sending the moment the lead moves to another stage'}
+                                icon="fa-door-open"
+                            />
+                        )}
                         <ToggleRow
                             checked={seq.isActive}
                             onChange={(v) => setSeq({ ...seq, isActive: v })}
