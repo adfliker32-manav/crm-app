@@ -98,7 +98,7 @@ const getSequences = async (req, res) => {
 
 const createSequence = async (req, res) => {
     try {
-        const { name, trigger, triggerStage, stopOnReply, steps, isActive } = req.body;
+        const { name, trigger, triggerStage, stopOnReply, exitOnStageChange, steps, isActive } = req.body;
         if (!name || !trigger || !steps || steps.length === 0) {
             return res.status(400).json({ message: 'Name, trigger, and at least one step are required' });
         }
@@ -113,6 +113,10 @@ const createSequence = async (req, res) => {
             trigger,
             triggerStage: triggerStage || null,
             stopOnReply: stopOnReply !== undefined ? stopOnReply : true,
+            // Defaults ON for the same reason the schema does: a stage sequence that
+            // keeps sending after the lead has left the stage is the bug, not the
+            // feature. An API client that says nothing gets the safe behaviour.
+            exitOnStageChange: exitOnStageChange !== undefined ? exitOnStageChange : true,
             // null on both = the caller did not send them, so the sequence keeps the
             // old one-channel-per-step meaning until it is saved from the builder.
             sendWhatsApp: channels ? channels.sendWhatsApp : null,
@@ -133,12 +137,13 @@ const updateSequence = async (req, res) => {
         const { id } = req.params;
         if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid ID' });
 
-        const { name, trigger, triggerStage, stopOnReply, steps, isActive } = req.body;
+        const { name, trigger, triggerStage, stopOnReply, exitOnStageChange, steps, isActive } = req.body;
         const update = {};
         if (name !== undefined) update.name = name;
         if (trigger !== undefined) update.trigger = trigger;
         if (triggerStage !== undefined) update.triggerStage = triggerStage;
         if (stopOnReply !== undefined) update.stopOnReply = stopOnReply;
+        if (exitOnStageChange !== undefined) update.exitOnStageChange = exitOnStageChange;
         const channels = channelsFromBody(req.body);
         if (channels) {
             update.sendWhatsApp = channels.sendWhatsApp;
@@ -207,7 +212,7 @@ const deleteSequence = async (req, res) => {
 
         await SequenceEnrollment.updateMany(
             { sequenceId: id, status: { $in: liveStatuses } },
-            { $set: { status: 'cancelled', pauseReason: null, lastError: 'the sequence was deleted' } }
+            { $set: { status: 'cancelled', pauseReason: null, exitReason: 'sequence_deleted', lastError: 'the sequence was deleted' } }
         );
 
         // Cancel scheduled Agenda step jobs so they don't fire after deletion
@@ -289,6 +294,11 @@ const manualEnroll = async (req, res) => {
                 status: 'active',
                 currentStep: 0,
                 currentStepId: seq.steps[0]?.stepId || null,
+                // Marks this row as deliberate, which is what keeps the stage-exit rule
+                // off it. A manual enrol is allowed to put a lead into a stage sequence
+                // from any stage at all, and must not be cancelled a moment later for
+                // being in the "wrong" one.
+                enrolledVia: 'manual',
                 enrolledAt: new Date()
             });
         } catch (createErr) {

@@ -13,6 +13,7 @@ import FunnelChart from '../components/Reports/FunnelChart';
 import ActivityMetrics from '../components/Reports/ActivityMetrics';
 import ExportReport from '../components/Reports/ExportReport';
 import FeatureGate from '../components/FeatureGate';
+import HelpButton from '../components/Help/HelpButton';
 
 const Reports = () => {
     const { user } = useAuth();
@@ -108,13 +109,18 @@ const Reports = () => {
                         </h1>
                         <p className="text-slate-500 text-sm mt-2">Track performance, conversions, revenue, funnels, and goals</p>
                     </div>
-                    <button
-                        onClick={fetchReportData}
-                        className="px-5 py-2.5 bg-white/80 backdrop-blur-xl text-slate-700 hover:text-slate-900 hover:bg-white rounded-xl transition-all duration-300 text-sm font-medium flex items-center gap-2 shadow-lg shadow-slate-200/50 border border-white/50"
-                    >
-                        <i className={`fa-solid fa-arrows-rotate ${loading ? 'animate-spin' : ''}`}></i>
-                        Refresh
-                    </button>
+                    <div className="flex items-center gap-3">
+                        {/* Contextual help — the topic follows the open report tab. */}
+                        <HelpButton module="reports" submodule={activeTab} />
+
+                        <button
+                            onClick={fetchReportData}
+                            className="px-5 py-2.5 bg-white/80 backdrop-blur-xl text-slate-700 hover:text-slate-900 hover:bg-white rounded-xl transition-all duration-300 text-sm font-medium flex items-center gap-2 shadow-lg shadow-slate-200/50 border border-white/50"
+                        >
+                            <i className={`fa-solid fa-arrows-rotate ${loading ? 'animate-spin' : ''}`}></i>
+                            Refresh
+                        </button>
+                    </div>
                 </div>
 
                 {/* Filters */}

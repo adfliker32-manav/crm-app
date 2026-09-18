@@ -13,6 +13,7 @@ import KnowledgeBase from '../components/WhatsApp/KnowledgeBase';
 import AISettings from '../components/Settings/AISettings';
 import FeatureGate from '../components/FeatureGate';
 import { hasEntitlement } from '../utils/entitlements';
+import HelpButton from '../components/Help/HelpButton';
 
 // Which partner module each tab requires (PA-H2). The SuperAdmin "Module
 // Access" grid writes these keys onto PartnerApp.allowedModules; without this
@@ -242,24 +243,31 @@ const WhatsAppManagement = ({ embedded = false, embedUser = null }) => {
                             </div>
                         </div>
 
-                        {/* Navigation Tabs - Modern Floating Style */}
-                        <div className="flex items-center gap-1.5 bg-black/10 backdrop-blur-xl rounded-2xl p-1.5 border border-white/10 shadow-lg">
-                            {tabs.map(tab => (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setActiveTab(tab.id)}
-                                    className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all duration-300 flex items-center gap-2.5 relative group ${effectiveTab === tab.id
-                                        ? 'bg-white text-[#008069] shadow-lg shadow-black/25 ring-2 ring-white scale-110'
-                                        : 'text-white/80 hover:bg-white/15 hover:text-white hover:scale-102'
-                                    }`}
-                                >
-                                    <i className={`${tab.icon} ${effectiveTab === tab.id ? 'text-[#008069]' : 'text-white/70 group-hover:text-white'} text-sm`}></i>
-                                    <span className="hidden lg:inline">{tab.label}</span>
-                                    {effectiveTab === tab.id && (
-                                        <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-[#008069] rounded-full"></span>
-                                    )}
-                                </button>
-                            ))}
+                        {/* Navigation Tabs + contextual help. Wrapped together so the
+                            header keeps exactly two justify-between children. */}
+                        <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-1.5 bg-black/10 backdrop-blur-xl rounded-2xl p-1.5 border border-white/10 shadow-lg">
+                                {tabs.map(tab => (
+                                    <button
+                                        key={tab.id}
+                                        onClick={() => setActiveTab(tab.id)}
+                                        className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all duration-300 flex items-center gap-2.5 relative group ${effectiveTab === tab.id
+                                            ? 'bg-white text-[#008069] shadow-lg shadow-black/25 ring-2 ring-white scale-110'
+                                            : 'text-white/80 hover:bg-white/15 hover:text-white hover:scale-102'
+                                        }`}
+                                    >
+                                        <i className={`${tab.icon} ${effectiveTab === tab.id ? 'text-[#008069]' : 'text-white/70 group-hover:text-white'} text-sm`}></i>
+                                        <span className="hidden lg:inline">{tab.label}</span>
+                                        {effectiveTab === tab.id && (
+                                            <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-[#008069] rounded-full"></span>
+                                        )}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Renders nothing inside the partner embed, which has no
+                                help provider mounted. */}
+                            <HelpButton module="whatsapp" submodule={effectiveTab} variant="onDark" />
                         </div>
                     </div>
                 </div>

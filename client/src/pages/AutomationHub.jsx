@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import Automations from './Automations';
 import Workflows from './Workflows';
 import Sequences from './Sequences';
+import HelpButton from '../components/Help/HelpButton';
 
 // Unified "Automation" module. Merges the three former sidebar entries —
 // Legacy Automation rules, the visual Workflow builder, and Drip Sequences —
@@ -43,22 +44,27 @@ export default function AutomationHub() {
 
     return (
         <div className="animate-fade-in-up">
-            {/* Segmented control — matches the Settings / WhatsApp tab styling */}
-            <div className="flex flex-wrap gap-2 mb-6 bg-slate-100/70 p-1.5 rounded-2xl border border-slate-200/60 w-fit">
-                {VIEWS.map(v => (
-                    <button
-                        key={v.id}
-                        onClick={() => switchView(v)}
-                        className={`px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2.5 transition-all duration-200 ${
-                            active.id === v.id
-                                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
-                                : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
-                        }`}
-                    >
-                        <i className={`fa-solid ${v.icon} ${active.id === v.id ? 'text-white' : 'text-slate-400'}`}></i>
-                        {v.label}
-                    </button>
-                ))}
+            <div className="flex items-start justify-between gap-4 mb-6">
+                {/* Segmented control — matches the Settings / WhatsApp tab styling */}
+                <div className="flex flex-wrap gap-2 bg-slate-100/70 p-1.5 rounded-2xl border border-slate-200/60 w-fit">
+                    {VIEWS.map(v => (
+                        <button
+                            key={v.id}
+                            onClick={() => switchView(v)}
+                            className={`px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2.5 transition-all duration-200 ${
+                                active.id === v.id
+                                    ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
+                                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+                            }`}
+                        >
+                            <i className={`fa-solid ${v.icon} ${active.id === v.id ? 'text-white' : 'text-slate-400'}`}></i>
+                            {v.label}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Contextual help — the topic follows the active view. */}
+                <HelpButton module="automation" submodule={active.id} variant="subtle" className="mt-1.5" />
             </div>
 
             {active.render()}

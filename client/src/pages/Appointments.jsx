@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import { useNotification } from '../context/NotificationContext';
 import useSocket from '../hooks/useSocket';
+import HelpButton from '../components/Help/HelpButton';
 
 const STATUS_COLORS = {
     Pending:   'bg-amber-100 text-amber-700',
@@ -1393,14 +1394,19 @@ export default function Appointments() {
                         <h1 className="text-xl font-bold text-slate-900">Appointments</h1>
                         <p className="text-sm text-slate-400">Manage bookings and customize your booking page</p>
                     </div>
-                    {stats && (
-                        <div className="flex gap-4">
-                            <StatBadge label="Today"     value={stats.today}     color="blue" />
-                            <StatBadge label="Pending"   value={stats.pending}   color="amber" />
-                            <StatBadge label="Confirmed" value={stats.confirmed} color="green" />
-                            <StatBadge label="Total"     value={stats.total}     color="slate" />
-                        </div>
-                    )}
+                    <div className="flex items-center gap-4">
+                        {stats && (
+                            <div className="flex gap-4">
+                                <StatBadge label="Today"     value={stats.today}     color="blue" />
+                                <StatBadge label="Pending"   value={stats.pending}   color="amber" />
+                                <StatBadge label="Confirmed" value={stats.confirmed} color="green" />
+                                <StatBadge label="Total"     value={stats.total}     color="slate" />
+                            </div>
+                        )}
+
+                        {/* Contextual help — the topic follows the open tab. */}
+                        <HelpButton module="appointments" submodule={activeTab} />
+                    </div>
                 </div>
 
                 <div className="flex gap-1 mt-4">

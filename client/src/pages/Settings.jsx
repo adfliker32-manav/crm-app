@@ -13,6 +13,25 @@ import LeadAssignmentSettings from '../components/Settings/LeadAssignmentSetting
 import ExternalApiSettings from '../components/Settings/ExternalApiSettings';
 import AuditLogSettings from '../components/Settings/AuditLogSettings';
 import FeatureGate from '../components/FeatureGate';
+import HelpButton from '../components/Help/HelpButton';
+
+// Tab id -> contextual-help topic key.
+//
+// This page is the only one whose tab ids are camelCase. Help keys are
+// normalised by lower-casing and folding separators, never by splitting
+// camelCase (that would mangle a brand name like "WhatsApp" into "whats-app"),
+// so `customFields` would otherwise store as `customfields`. Declaring the
+// mapping here keeps the keys readable in the Super Admin panel and makes the
+// page's help topics explicit rather than incidental.
+const HELP_TOPIC = {
+    customFields:   'custom-fields',
+    sheetSync:      'sheet-sync',
+    webLead:        'web-lead',
+    claudeAI:       'claude-ai',
+    leadAssignment: 'lead-assignment',
+    externalApi:    'external-api',
+    auditLog:       'audit-log'
+};
 
 const Settings = () => {
     const { user, updateUser } = useAuth();
@@ -136,7 +155,12 @@ const Settings = () => {
 
     return (
         <div className="max-w-5xl mx-auto p-4 md:p-8 animate-fade-in-up">
-            <h1 className="text-3xl font-extrabold text-slate-900 mb-8 tracking-tight">Organization Settings</h1>
+            <div className="flex items-center justify-between gap-4 mb-8">
+                <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Organization Settings</h1>
+
+                {/* Contextual help — the topic follows the open settings tab. */}
+                <HelpButton module="settings" submodule={HELP_TOPIC[activeTab] || activeTab} />
+            </div>
 
             {/* Tabs - Segmented Control Style */}
             <div className="flex flex-wrap gap-2 mb-8 bg-slate-100/70 p-1.5 rounded-2xl border border-slate-200/60 w-fit">

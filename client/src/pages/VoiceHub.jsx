@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 import { useNotification } from '../context/NotificationContext';
+import HelpButton from '../components/Help/HelpButton';
 
 const VoiceHub = () => {
     const { showSuccess, showError } = useNotification();
@@ -177,22 +178,26 @@ const VoiceHub = () => {
                     <p className="text-sm text-slate-500 mt-1">Manage AI calling performance, outcomes, and integrations.</p>
                 </div>
 
-                {/* Tabs */}
-                <div className="flex bg-slate-100 p-1 rounded-xl w-fit">
-                    {tabs.map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id)}
-                            className={`px-5 py-2 rounded-lg text-sm font-bold transition flex items-center gap-2 ${
-                                activeTab === tab.id
-                                    ? 'bg-white text-indigo-600 shadow-sm'
-                                    : 'text-slate-500 hover:text-slate-700'
-                            }`}
-                        >
-                            <i className={`fa-solid ${tab.icon}`}></i>
-                            {tab.label}
-                        </button>
-                    ))}
+                {/* Tabs + contextual help */}
+                <div className="flex items-center gap-3">
+                    <div className="flex bg-slate-100 p-1 rounded-xl w-fit">
+                        {tabs.map(tab => (
+                            <button
+                                key={tab.id}
+                                onClick={() => setActiveTab(tab.id)}
+                                className={`px-5 py-2 rounded-lg text-sm font-bold transition flex items-center gap-2 ${
+                                    activeTab === tab.id
+                                        ? 'bg-white text-indigo-600 shadow-sm'
+                                        : 'text-slate-500 hover:text-slate-700'
+                                }`}
+                            >
+                                <i className={`fa-solid ${tab.icon}`}></i>
+                                {tab.label}
+                            </button>
+                        ))}
+                    </div>
+
+                    <HelpButton module="voice" submodule={activeTab} />
                 </div>
             </div>
 

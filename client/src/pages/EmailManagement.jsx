@@ -10,6 +10,7 @@ import EmailAnalytics from '../components/Email/EmailAnalytics';
 import EmailLogs from '../components/Email/EmailLogs';
 import EmailCampaigns from '../components/Email/EmailCampaigns';
 import { hasEmailPermission } from '../components/Email/emailPermissions';
+import HelpButton from '../components/Help/HelpButton';
 
 const ALL_TABS = [
     { id: 'inbox',     label: 'Inbox',      icon: 'fa-inbox' },
@@ -97,12 +98,17 @@ const EmailManagement = () => {
                             <p className="text-sm text-slate-500 truncate">Conversations, templates, campaigns and delivery in one place</p>
                         </div>
                     </div>
-                    {showStats && statsError && (
-                        <span className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 rounded-full text-xs font-semibold border border-rose-100 flex-shrink-0">
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block"></span>
-                            Analytics error
-                        </span>
-                    )}
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                        {showStats && statsError && (
+                            <span className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 rounded-full text-xs font-semibold border border-rose-100">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block"></span>
+                                Analytics error
+                            </span>
+                        )}
+
+                        {/* Contextual help. The topic follows the open tab. */}
+                        <HelpButton module="email" submodule={activeTab} />
+                    </div>
                 </div>
 
                 {/* ═══ Tab Navigation ═══ */}

@@ -3,6 +3,7 @@ import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import TaskFormModal from '../components/Tasks/TaskFormModal';
+import HelpButton from '../components/Help/HelpButton';
 
 const PRIORITY_COLORS = {
     low:    'bg-slate-100 text-slate-600',
@@ -118,12 +119,17 @@ export default function Tasks() {
                     <h1 className="text-xl font-bold text-slate-800">Tasks</h1>
                     <p className="text-sm text-slate-500 mt-0.5">Assign and track work across your team.</p>
                 </div>
-                {canCreate && (
-                    <button onClick={openCreate}
-                        className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-2">
-                        <i className="fa-solid fa-plus"></i> New Task
-                    </button>
-                )}
+                <div className="flex items-center gap-3">
+                    {/* Contextual help */}
+                    <HelpButton module="tasks" submodule="overview" />
+
+                    {canCreate && (
+                        <button onClick={openCreate}
+                            className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-2">
+                            <i className="fa-solid fa-plus"></i> New Task
+                        </button>
+                    )}
+                </div>
             </div>
 
             <div className="flex flex-wrap gap-2 mb-4">

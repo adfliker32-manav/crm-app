@@ -73,7 +73,14 @@ const SuperAdminSidebar = ({ activeView, setActiveView }) => {
                 { id: 'plans', icon: 'fa-layer-group', label: 'Plan Catalog', color: 'text-indigo-500 font-semibold' },
                 { id: 'coupons', icon: 'fa-tag', label: 'Coupon Codes', color: 'text-pink-500 font-semibold' },
                 { id: 'ai-credits', icon: 'fa-coins', label: 'AI Credit Rates', color: 'text-indigo-500 font-semibold' },
+            ]
+        },
+        {
+            label: 'Support',
+            items: [
                 { id: 'support', icon: 'fa-life-ring', label: 'Support Inbox', color: 'text-orange-500', badge: supportUnread },
+                // Tutorial library behind the "? Help" button in every CRM module.
+                { id: 'help-videos', icon: 'fa-circle-play', label: 'Video Management', color: 'text-rose-400' },
             ]
         },
 

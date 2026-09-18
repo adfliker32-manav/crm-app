@@ -37,6 +37,23 @@ const SequenceEnrollmentSchema = new mongoose.Schema({
         default: null
     },
 
+    // How this enrollment was started. A MANUAL enrol is a deliberate act - someone
+    // put THIS lead in THIS sequence on purpose, and may well have done it while the
+    // lead sat in some other stage - so the stage-exit rule must not undo it. Only
+    // rows a trigger created are stage-scoped. Defaults to 'trigger', which is what
+    // every row written before this field existed was.
+    enrolledVia: { type: String, enum: ['trigger', 'manual'], default: 'trigger' },
+
+    // Why a 'cancelled' enrollment ended. 'cancelled' alone cannot tell the lead
+    // moving out of the sequence's stage - an ordinary, expected end - apart from
+    // the sequence being deleted underneath it, and the enrollments list has to show
+    // the difference. null on a row that ended before this field existed.
+    exitReason: {
+        type: String,
+        enum: ['stage_changed', 'sequence_deleted', 'lead_deleted', 'recovery_exhausted', null],
+        default: null
+    },
+
     // How many times the stalled-enrollment sweep has had to re-schedule this
     // step. Bounded, so a step that can never be scheduled stops churning.
     recoveryCount: { type: Number, default: 0 },

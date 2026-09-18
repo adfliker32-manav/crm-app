@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
 import useSocket from '../../hooks/useSocket';
 import { useNotification } from '../../context/NotificationContext';
@@ -104,6 +105,7 @@ const SupportWidget = () => {
     const { socket } = useSocket();
     const { showError, showSuccess } = useNotification();
     const { showDanger } = useConfirm();
+    const [searchParams, setSearchParams] = useSearchParams();
 
     const openTicketCount = useMemo(() => tickets.filter(t => t.status !== 'closed').length, [tickets]);
 
@@ -135,6 +137,19 @@ const SupportWidget = () => {
     useEffect(() => {
         if (open) loadTickets();
     }, [open, loadTickets]);
+
+    // ?support=1 opens the widget. It is how "Contact Support" in the contextual
+    // Help drawer reaches this panel from any module page: the drawer routes to
+    // /dashboard?support=1 rather than firing an event at a component that may
+    // not be mounted yet. The param is cleared straight away so a refresh or a
+    // back-nav doesn't reopen it.
+    useEffect(() => {
+        if (searchParams.get('support') !== '1') return;
+        setOpen(true);
+        const next = new URLSearchParams(searchParams);
+        next.delete('support');
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams]);
 
     // Initial unread sweep on mount so the red dot appears even before the panel is opened
     useEffect(() => {

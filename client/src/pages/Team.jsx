@@ -6,6 +6,7 @@ import { useConfirm } from '../context/ConfirmContext';
 import { useNotification } from '../context/NotificationContext';
 import CreateAgentModal from '../components/Team/CreateAgentModal';
 import EditAgentModal from '../components/Team/EditAgentModal';
+import HelpButton from '../components/Help/HelpButton';
 
 const Team = () => {
     const { user } = useAuth();
@@ -78,15 +79,20 @@ const Team = () => {
                     <h1 className="text-2xl font-bold text-slate-800">Team Management</h1>
                     <p className="text-sm text-slate-500 mt-1">Manage your team members and their permissions</p>
                 </div>
-                {canManageTeam && (
-                    <button
-                        onClick={() => setIsModalOpen(true)}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold shadow-md transition flex items-center gap-2"
-                    >
-                        <i className="fa-solid fa-user-plus"></i>
-                        Add Agent
-                    </button>
-                )}
+                <div className="flex items-center gap-3">
+                    {/* Contextual help */}
+                    <HelpButton module="team" submodule="overview" />
+
+                    {canManageTeam && (
+                        <button
+                            onClick={() => setIsModalOpen(true)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold shadow-md transition flex items-center gap-2"
+                        >
+                            <i className="fa-solid fa-user-plus"></i>
+                            Add Agent
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Team List */}

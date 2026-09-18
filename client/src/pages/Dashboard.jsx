@@ -5,6 +5,7 @@ import ChartsRow from '../components/Dashboard/ChartsRow';
 import FollowUpModal from '../components/Dashboard/FollowUpModal';
 import TaskModal from '../components/Dashboard/TaskModal';
 import TrialBanner from '../components/TrialBanner';
+import HelpButton from '../components/Help/HelpButton';
 import { Link, useNavigate } from 'react-router-dom';
 
 const MOTIVATIONAL_QUOTES = [
@@ -146,6 +147,10 @@ const Dashboard = () => {
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
+                        {/* Contextual help. The Dashboard opens the full CRM demo /
+                            getting-started walkthrough, with the other quick guides
+                            listed beneath it. */}
+                        <HelpButton module="dashboard" submodule="getting-started" />
                         <button
                             onClick={() => fetchDashboardData()}
                             className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-lg transition-colors text-sm font-semibold flex items-center gap-2 border border-slate-200"

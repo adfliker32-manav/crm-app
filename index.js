@@ -62,6 +62,7 @@ const automationRoutes = require('./src/routes/automationRoutes'); // Visual Aut
 const appointmentRoutes = require('./src/routes/appointmentRoutes'); // Appointment Booking
 const bookingRoutes = require('./src/routes/bookingRoutes'); // Public Booking Pages
 const supportRoutes = require('./src/routes/supportRoutes'); // In-built Help Center
+const helpVideoRoutes = require('./src/routes/helpVideoRoutes'); // Contextual Help tutorial videos
 const { authMiddleware, requireFeature } = require('./src/middleware/authMiddleware');
 const requireModule = require('./src/middleware/moduleMiddleware');
 const { renderPublicBookingPage } = require('./src/views/publicBookingPage');
@@ -732,6 +733,12 @@ app.use('/api/appointments', authMiddleware, appointmentRoutes);
 
 // In-built Help Center (auth handled inside route file — supports customer + super admin)
 app.use('/api/support', supportRoutes);
+
+// Contextual Help videos — the tutorial library behind the "? Help" button on
+// every module, managed from SuperAdmin → Support → Video Management. Auth is
+// applied per-route inside the router: any signed-in user may READ the video for
+// the page they are on; only a super admin may manage the library.
+app.use('/api/help-videos', helpVideoRoutes);
 
 // Public booking page (no auth — customer-facing)
 app.use('/api/book', bookingRoutes);

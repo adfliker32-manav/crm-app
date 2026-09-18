@@ -17,6 +17,7 @@ import SuperAdminCommSettings from '../components/SuperAdmin/SuperAdminCommSetti
 import SuperAdminVoiceTemplates from '../components/SuperAdmin/SuperAdminVoiceTemplates';
 import AiCreditsView from '../components/SuperAdmin/AiCreditsView';
 import PartnerAppsView from '../components/SuperAdmin/PartnerAppsView';
+import HelpVideosView from '../components/SuperAdmin/HelpVideosView';
 
 
 const SuperAdmin = () => {
@@ -40,6 +41,8 @@ const SuperAdmin = () => {
                 return <CouponView />;
             case 'support':
                 return <SupportInboxView />;
+            case 'help-videos':
+                return <HelpVideosView />;
 
             case 'wa-inbox':
                 return <WhatsAppInbox />;

@@ -459,6 +459,49 @@ const schemas = {
         companyName: Joi.string().trim().max(150).optional().allow('', null)
     }).min(1),
 
+    // ── Contextual Help videos (SuperAdmin → Support → Video Management) ────
+    //
+    // `module` / `submodule` are free-form keys on purpose: the seed catalog in
+    // src/constants/helpCatalog.js is a dropdown convenience, not an allow-list,
+    // so a super admin can introduce a new topic without a deploy. The
+    // controller normalises whatever arrives (lower-cases, kebab-cases and
+    // strips to [a-z0-9-]) before it touches the database, and rejects an empty
+    // module. '' on `submodule` is the module-level overview, not a missing value.
+    createHelpVideo: Joi.object({
+        module:      Joi.string().trim().min(1).max(60).required(),
+        submodule:   Joi.string().trim().max(60).optional().allow('', null),
+        title:       Joi.string().trim().min(1).max(150).required(),
+        description: Joi.string().trim().max(1000).optional().allow('', null),
+        // Shape only — validity is decided by the single YouTube parser in
+        // src/utils/youtubeUrl.js, which the controller calls. A Joi URI rule
+        // here would reject the scheme-less links admins routinely paste.
+        youtubeUrl:  Joi.string().trim().min(1).max(500).required(),
+        isActive:    Joi.boolean().optional(),
+        sortOrder:   Joi.number().integer().min(0).max(9999).optional()
+    }),
+
+    // Every field optional: the list screen toggles status with a one-field PUT.
+    // .min(1) keeps an empty body from counting as an update.
+    updateHelpVideo: Joi.object({
+        module:      Joi.string().trim().min(1).max(60).optional(),
+        submodule:   Joi.string().trim().max(60).optional().allow('', null),
+        title:       Joi.string().trim().min(1).max(150).optional(),
+        description: Joi.string().trim().max(1000).optional().allow('', null),
+        youtubeUrl:  Joi.string().trim().min(1).max(500).optional(),
+        isActive:    Joi.boolean().optional(),
+        sortOrder:   Joi.number().integer().min(0).max(9999).optional()
+    }).min(1),
+
+    toggleHelpVideo: Joi.object({
+        isActive: Joi.boolean().required()
+    }),
+
+    // Dry-run link check for the add/edit form — returns the thumbnail so the
+    // admin can confirm they pasted the right video before saving.
+    previewHelpVideoUrl: Joi.object({
+        youtubeUrl: Joi.string().trim().min(1).max(500).required()
+    }),
+
     // ── Agency custom bills ─────────────────────────────────────────────────
 
     // agencyFinanceController.createCustomBill — a hand-composed invoice.

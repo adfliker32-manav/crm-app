@@ -12,6 +12,7 @@ import DuplicateLeadsModal from '../components/Dashboard/DuplicateLeadsModal';
 import ImportCSVModal from '../components/Dashboard/ImportCSVModal';
 import ExportCSVModal from '../components/Dashboard/ExportCSVModal';
 import EnrollInSequenceModal from '../components/Sequences/EnrollInSequenceModal';
+import HelpButton from '../components/Help/HelpButton';
 
 import Papa from 'papaparse';
 import { useNotification } from '../context/NotificationContext';
@@ -828,6 +829,10 @@ const Leads = () => {
                             </>
                         )}
                     </div>
+
+                    {/* Contextual help. Last in the control cluster so it sits at the
+                        far top-right, and the topic follows the active view. */}
+                    <HelpButton module="leads" submodule={view === 'pipeline' ? 'pipeline' : 'lead-management'} />
                 </div>
             </div>
 

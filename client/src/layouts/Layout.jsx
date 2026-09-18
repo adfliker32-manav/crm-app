@@ -3,6 +3,8 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import SupportWidget from '../components/Support/SupportWidget';
 import PaymentBanner from '../components/PaymentBanner';
+import { HelpProvider } from '../components/Help/HelpContext';
+import HelpDrawer from '../components/Help/HelpDrawer';
 import useSocket from '../hooks/useSocket';
 import { useNotification } from '../context/NotificationContext';
 
@@ -69,19 +71,25 @@ const Layout = () => {
     }, [socket, showError, showInfo, showSuccess]);
 
     return (
-        <div className="flex h-screen bg-slate-900 overflow-hidden font-sans">
-            {/* Sidebar */}
-            <Sidebar />
+        // HelpProvider owns the single contextual-help drawer for the whole CRM.
+        // Pages inside <Outlet /> only render <HelpButton module=… submodule=… />
+        // in their own header; the panel itself is mounted once, here.
+        <HelpProvider>
+            <div className="flex h-screen bg-slate-900 overflow-hidden font-sans">
+                {/* Sidebar */}
+                <Sidebar />
 
-            {/* Main Content Area */}
-            <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-100">
-                <PaymentBanner />
-                <main className="flex-1 overflow-y-auto p-4 md:p-6 relative scroll-smooth flex flex-col font-sans">
-                    <Outlet />
-                </main>
+                {/* Main Content Area */}
+                <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-100">
+                    <PaymentBanner />
+                    <main className="flex-1 overflow-y-auto p-4 md:p-6 relative scroll-smooth flex flex-col font-sans">
+                        <Outlet />
+                    </main>
+                </div>
+                {isDashboard && <SupportWidget />}
+                <HelpDrawer />
             </div>
-            {isDashboard && <SupportWidget />}
-        </div>
+        </HelpProvider>
     );
 };
 

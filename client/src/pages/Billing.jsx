@@ -5,6 +5,7 @@ import { useNotification } from '../context/NotificationContext';
 import { useConfirm } from '../context/ConfirmContext';
 import { WORKSPACE_MODULES, moduleLabel } from '../constants/modules';
 import { openSubscriptionCheckout } from '../services/razorpay';
+import HelpButton from '../components/Help/HelpButton';
 
 const fmt = (n) => (n ?? 0).toLocaleString('en-IN');
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
@@ -369,10 +370,15 @@ const Billing = () => {
                     <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Billing</h1>
                     <p className="text-sm text-slate-500 mt-0.5">Manage your subscription and invoices.</p>
                 </div>
-                <button onClick={() => navigate('/plans')}
-                    className="text-sm font-medium text-slate-700 border border-slate-300 px-3.5 py-1.5 rounded-lg hover:bg-slate-50 transition">
-                    View plans
-                </button>
+                <div className="flex items-center gap-2.5">
+                    {/* Contextual help */}
+                    <HelpButton module="billing" submodule="overview" />
+
+                    <button onClick={() => navigate('/plans')}
+                        className="text-sm font-medium text-slate-700 border border-slate-300 px-3.5 py-1.5 rounded-lg hover:bg-slate-50 transition">
+                        View plans
+                    </button>
+                </div>
             </div>
 
             {/* Confirming banner */}
