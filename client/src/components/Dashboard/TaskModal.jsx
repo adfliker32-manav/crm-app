@@ -209,11 +209,18 @@ const TaskCard = ({ task, variant, onComplete, onOpenLead, completing }) => {
                             {task.leadId.phone && <span className="text-gray-500 font-normal ml-1">· {task.leadId.phone}</span>}
                         </button>
                     )}
-                    {dueDate && (
+                    {dueDate ? (
                         <p className={`text-xs font-medium mt-1 ${isOverdue ? 'text-rose-600' : isCompleted ? 'text-emerald-600' : isUpcoming ? 'text-blue-600' : 'text-orange-600'}`}>
                             <i className="fa-solid fa-calendar mr-1"></i>
                             {isCompleted ? 'Completed: ' : 'Due: '}
                             {dueDate.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                        </p>
+                    ) : (
+                        // A reminder created with no due date (create_task allows it).
+                        // Say so, rather than leaving a gap that reads as a render bug.
+                        <p className="text-xs font-medium mt-1 text-slate-400">
+                            <i className="fa-regular fa-calendar mr-1"></i>
+                            No due date
                         </p>
                     )}
                 </div>

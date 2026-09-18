@@ -523,6 +523,8 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
             ? await resolveAssigneeForConversation({ tenantId: userId, lead })
             : null;
 
+        const now = new Date();
+
         // Exact match first, then a last-10-digit suffix match, so a thread
         // already stored as "919876543210" (e.g. from an inbound reply or a
         // manual send) is reused instead of the broadcast filing this send
@@ -537,20 +539,35 @@ async function _syncToDB(lead, userId, waMessageId, templateName, broadcastId) {
         }
 
         if (!conversation) {
-            conversation = await WhatsAppConversation.create({
-                userId,
-                leadId,
-                assignedTo,
-                waContactId: normalizedPhone,
-                phone:       normalizedPhone,
-                displayName: lead.name,
-                status:      'active',
-                unreadCount: 0,
-                metadata:    { totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
-            });
+            try {
+                conversation = await WhatsAppConversation.create({
+                    userId,
+                    leadId,
+                    assignedTo,
+                    waContactId: normalizedPhone,
+                    phone:       normalizedPhone,
+                    displayName: lead.name,
+                    status:      'active',
+                    initiatedBy: 'user',
+                    unreadCount: 0,
+                    metadata:    { firstMessageAt: now, totalMessages: 0, totalInbound: 0, totalOutbound: 0 }
+                });
+            } catch (createErr) {
+                // The lookup above and this insert are two separate round-trips, and
+                // _processBatch sends 5 leads IN PARALLEL while de-duplicating by
+                // lead._id, not by phone. Two duplicate leads sharing one number can
+                // therefore both miss the lookup and race to insert, and the unique
+                // { userId, waContactId } index rejects the loser with E11000.
+                // Falling through to the outer catch would drop the WhatsAppMessage
+                // entirely — the customer gets the message and the CRM records
+                // nothing, which also breaks the broadcastId-keyed delivery-status
+                // webhook. Adopt the winner's thread instead.
+                if (createErr?.code !== 11000) throw createErr;
+                conversation = await WhatsAppConversation.findOne({ userId, waContactId: normalizedPhone });
+                if (!conversation) throw createErr;
+            }
         }
 
-        const now = new Date();
         const conversationUpdate = {
             $set: {
                 lastMessage:          `[Broadcast] ${templateName}`,

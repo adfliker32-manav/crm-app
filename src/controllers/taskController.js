@@ -75,14 +75,29 @@ const getTasks = async (req, res) => {
             today.setHours(0, 0, 0, 0);
             const tomorrow = new Date(today);
             tomorrow.setDate(tomorrow.getDate() + 1);
-            query.dueDate = { $gte: tomorrow };
+            // Tasks with no due date live here too. The MCP create_task tool
+            // deliberately allows a standalone reminder with no dueDate, but
+            // MongoDB comparison operators are type-bracketed: a null NEVER
+            // matches { $gte: <Date> }, so such a task matched no filter at all
+            // — and every UI caller (TaskModal's four tabs, the sidebar badge,
+            // the dashboard widgets) passes one. The row existed and no human
+            // could ever see it. Unscheduled is not overdue and not due today,
+            // so "upcoming" is its only honest home.
+            query.$or = [{ dueDate: { $gte: tomorrow } }, { dueDate: null }];
             query.status = 'Pending';
         }
 
-        const tasks = await Task.find(query)
+        let tasks = await Task.find(query)
             .populate('leadId', 'name phone email status')
             .sort({ dueDate: 1 })
             .lean();
+
+        // null sorts BEFORE every real date in BSON order, which would float
+        // undated reminders above genuinely urgent work. Keep Mongo's ordering
+        // for everything that has a date, then append the undated ones.
+        if (tasks.some(t => !t.dueDate)) {
+            tasks = [...tasks.filter(t => t.dueDate), ...tasks.filter(t => !t.dueDate)];
+        }
 
         res.json(tasks);
     } catch (err) {
