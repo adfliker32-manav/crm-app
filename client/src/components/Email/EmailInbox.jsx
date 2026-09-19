@@ -8,6 +8,8 @@ import { useAuth } from '../../context/AuthContext';
 import { hasEmailPermission } from './emailPermissions';
 import VariableSelector from '../VariableSelector';
 import DOMPurify from 'dompurify';
+import MediaLibraryPickerModal from './MediaLibraryPickerModal';
+import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './attachmentLimits';
 
 const PAGE_SIZE = 30;
 const MESSAGE_PAGE_SIZE = 50;
@@ -108,6 +110,10 @@ const EmailInbox = () => {
     const [composeMessage, setComposeMessage] = useState('');
     const [composeSchedule, setComposeSchedule] = useState('');
     const [composeFiles, setComposeFiles] = useState([]);
+    // Files picked from the shared Media Library — attached by reference, so a
+    // brochure already used by a WhatsApp template needs no re-upload.
+    const [composeLibraryPicks, setComposeLibraryPicks] = useState([]);
+    const [showComposeLibrary, setShowComposeLibrary] = useState(false);
     const [composeTemplates, setComposeTemplates] = useState([]);
     const [composeTemplateId, setComposeTemplateId] = useState('');
     const [showCcBcc, setShowCcBcc] = useState(false);
@@ -437,7 +443,11 @@ const EmailInbox = () => {
         if (!files || files.length === 0) return { data: payload, config: undefined };
         const form = new FormData();
         Object.entries(payload).forEach(([k, v]) => {
-            if (v !== undefined && v !== null && v !== '') form.append(k, v);
+            if (v === undefined || v === null || v === '') return;
+            // An array appended whole becomes the string "a,b" — multer would
+            // hand the server one id made of two.
+            if (Array.isArray(v)) v.forEach(item => form.append(k, item));
+            else form.append(k, v);
         });
         files.forEach(file => form.append('attachments', file));
         return { data: form, config: { headers: { 'Content-Type': 'multipart/form-data' } } };
@@ -481,6 +491,7 @@ const EmailInbox = () => {
     const resetCompose = () => {
         setComposeEmail(''); setComposeSubject(''); setComposeMessage('');
         setComposeCc(''); setComposeBcc(''); setComposeSchedule(''); setComposeFiles([]);
+        setComposeLibraryPicks([]);
         setComposeTemplateId('');
         setShowCcBcc(false);
         setDraftId(null);
@@ -492,6 +503,26 @@ const EmailInbox = () => {
         setShowNewChatModal(true);
         // Fetch templates for the dropdown
         api.get('/email-templates').then(r => setComposeTemplates(r.data || [])).catch(() => {});
+    };
+
+    const handleComposeLibrarySelect = (asset) => {
+        setShowComposeLibrary(false);
+        if (composeLibraryPicks.some(a => String(a.id) === String(asset.id))) return;
+        // Mirrors the server budget (see attachmentLimits) so an oversized
+        // brochure is refused before the send round trip.
+        const staged = [
+            ...composeFiles.map(f => f.size || 0),
+            ...composeLibraryPicks.map(a => a.size || 0)
+        ];
+        if (asset.size > MAX_FILE_BYTES) {
+            showError(`"${asset.label || asset.fileName}" is ${formatBytes(asset.size)} — each attachment must be under ${formatBytes(MAX_FILE_BYTES)}.`);
+            return;
+        }
+        if (staged.reduce((a, b) => a + b, 0) + asset.size > MAX_TOTAL_BYTES) {
+            showError(`Attachments would total more than ${formatBytes(MAX_TOTAL_BYTES)}. Most mail servers reject emails that large.`);
+            return;
+        }
+        setComposeLibraryPicks(prev => [...prev, asset]);
     };
 
     const applyComposeTemplate = (id) => {
@@ -569,7 +600,7 @@ const EmailInbox = () => {
         e.preventDefault();
         if (!composeEmail.trim() || sending) return;
 
-        if (composeSchedule && composeFiles.length > 0) {
+        if (composeSchedule && (composeFiles.length > 0 || composeLibraryPicks.length > 0)) {
             showError('Attachments cannot be used with scheduled emails.');
             return;
         }
@@ -589,6 +620,7 @@ const EmailInbox = () => {
             };
 
             if (composeTemplateId) payload.templateId = composeTemplateId;
+            if (composeLibraryPicks.length > 0) payload.mediaAssetIds = composeLibraryPicks.map(a => a.id);
 
             if (composeCc.trim()) payload.cc = composeCc.trim();
             if (composeBcc.trim()) payload.bcc = composeBcc.trim();
@@ -1517,15 +1549,47 @@ const EmailInbox = () => {
                                         disabled={!!composeSchedule}
                                         onChange={(e) => setComposeFiles(Array.from(e.target.files || []).slice(0, 5))}
                                     />
-                                    <button
-                                        type="button"
-                                        onClick={() => composeFileInput.current?.click()}
-                                        disabled={!!composeSchedule}
-                                        className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-dashed border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-slate-300 disabled:hover:text-slate-600 disabled:hover:bg-transparent"
-                                    >
-                                        <i className="fa-solid fa-paperclip"></i>
-                                        {composeSchedule ? 'Attachments are not available for scheduled emails' : 'Add files (up to 5, 10MB each)'}
-                                    </button>
+                                    <div className="flex flex-col sm:flex-row gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => composeFileInput.current?.click()}
+                                            disabled={!!composeSchedule}
+                                            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 border border-dashed border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-slate-300 disabled:hover:text-slate-600 disabled:hover:bg-transparent"
+                                        >
+                                            <i className="fa-solid fa-paperclip"></i>
+                                            {composeSchedule ? 'Not available for scheduled emails' : 'Upload files (up to 5, 10MB each)'}
+                                        </button>
+                                        {/* Reuse a file already in the shared Media Library instead of
+                                            uploading the same brochure for the hundredth time. */}
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowComposeLibrary(true)}
+                                            disabled={!!composeSchedule}
+                                            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 border border-dashed border-emerald-300 rounded-lg text-sm font-medium text-emerald-700 hover:border-emerald-400 hover:bg-emerald-50/50 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-emerald-300 disabled:hover:bg-transparent"
+                                        >
+                                            <i className="fa-solid fa-photo-film"></i>
+                                            From Media Library
+                                        </button>
+                                    </div>
+                                    {composeLibraryPicks.length > 0 && (
+                                        <div className="flex flex-wrap gap-2 mt-2.5">
+                                            {composeLibraryPicks.map(asset => (
+                                                <span key={asset.id} className="flex items-center gap-2 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 pl-3 pr-1.5 py-1 rounded-lg">
+                                                    <i className="fa-solid fa-photo-film text-[11px] text-emerald-500"></i>
+                                                    <span className="truncate max-w-[160px]">{asset.label || asset.fileName}</span>
+                                                    <span className="text-emerald-500 font-normal">{formatBytes(asset.size)}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setComposeLibraryPicks(prev => prev.filter(a => a.id !== asset.id))}
+                                                        className="w-5 h-5 rounded flex items-center justify-center text-emerald-400 hover:text-rose-600 hover:bg-rose-50"
+                                                        title="Remove"
+                                                    >
+                                                        <i className="fa-solid fa-xmark text-[11px]"></i>
+                                                    </button>
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
                                     {composeFiles.length > 0 && (
                                         <div className="flex flex-wrap gap-2 mt-2.5">
                                             {composeFiles.map((f, i) => (
@@ -1572,6 +1636,15 @@ const EmailInbox = () => {
                     </div>
                 </div>
             )}
+
+            {/* Compose → "From Media Library". Sits above the compose modal (z-[60]). */}
+            <MediaLibraryPickerModal
+                isOpen={showComposeLibrary}
+                onClose={() => setShowComposeLibrary(false)}
+                onSelect={handleComposeLibrarySelect}
+                title="Attach from Media Library"
+                subtitle="Send a file you already use in WhatsApp templates — no re-upload needed."
+            />
         </div>
     );
 };

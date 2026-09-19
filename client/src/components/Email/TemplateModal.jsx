@@ -1,6 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import VariableSelector from '../VariableSelector';
+import MediaLibraryPickerModal from './MediaLibraryPickerModal';
+import {
+    ACCEPT_ATTR,
+    MAX_FILE_BYTES,
+    MAX_FILES,
+    MAX_TOTAL_BYTES,
+    formatBytes,
+    iconForMime,
+    validateAddition
+} from './attachmentLimits';
+
+const MB = 1024 * 1024;
 
 const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
     const [formData, setFormData] = useState({
@@ -16,6 +28,22 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
+    // ── Attachments ─────────────────────────────────────────────────────────
+    // Attachments used to be reachable only AFTER saving, through View → Add
+    // Files, and only as fresh uploads. Both are staged here instead, so a
+    // template can be created with its brochure already on it, picked from the
+    // shared Media Library (the WhatsApp one) or uploaded fresh.
+    const [saved, setSaved] = useState([]);          // rows already on the template
+    const [removedIds, setRemovedIds] = useState([]); // saved rows staged for removal
+    const [libraryPicks, setLibraryPicks] = useState([]); // MediaAsset picks, not yet linked
+    const [newFiles, setNewFiles] = useState([]);    // File objects, not yet uploaded
+    const [showPicker, setShowPicker] = useState(false);
+    const fileInputRef = useRef(null);
+
+    // Set once a create succeeds. Without it, a failure while attaching files
+    // would turn the user's retry into a SECOND template.
+    const createdIdRef = useRef(null);
+
     useEffect(() => {
         if (template) {
             setFormData({
@@ -27,6 +55,7 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                 triggerType: template.triggerType || 'manual',
                 stage: template.stage || ''
             });
+            setSaved(template.attachments || []);
         } else {
             // Reset form for create mode
             setFormData({
@@ -38,7 +67,14 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                 triggerType: 'manual',
                 stage: ''
             });
+            setSaved([]);
         }
+        setRemovedIds([]);
+        setLibraryPicks([]);
+        setNewFiles([]);
+        setError(null);
+        createdIdRef.current = null;
+        if (fileInputRef.current) fileInputRef.current.value = '';
     }, [template, isOpen]);
 
     useEffect(() => {
@@ -61,10 +97,105 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
         }));
     };
 
+    // One list for the UI, whatever each row's origin is.
+    const rows = [
+        ...saved
+            .filter(a => !removedIds.includes(a._id))
+            .map(a => ({
+                key: `saved-${a._id}`,
+                name: a.originalName || a.filename,
+                size: a.size,
+                mimetype: a.mimetype,
+                fromLibrary: !!a.mediaAssetId,
+                onRemove: () => setRemovedIds(prev => [...prev, a._id])
+            })),
+        ...libraryPicks.map(p => ({
+            key: `lib-${p.id}`,
+            name: p.label || p.fileName,
+            size: p.size,
+            mimetype: p.mimeType,
+            fromLibrary: true,
+            pending: true,
+            onRemove: () => setLibraryPicks(prev => prev.filter(x => x.id !== p.id))
+        })),
+        ...newFiles.map((f, i) => ({
+            key: `file-${i}-${f.name}`,
+            name: f.name,
+            size: f.size,
+            mimetype: f.type,
+            fromLibrary: false,
+            pending: true,
+            onRemove: () => setNewFiles(prev => prev.filter((_, idx) => idx !== i))
+        }))
+    ];
+
+    const usedBytes = rows.reduce((sum, r) => sum + (r.size || 0), 0);
+
+    const handlePickFromLibrary = (asset) => {
+        setShowPicker(false);
+        if (rows.some(r => r.key === `lib-${asset.id}`)) return;
+        // Already linked from a previous save — the server would ignore it.
+        if (saved.some(a => String(a.mediaAssetId) === String(asset.id) && !removedIds.includes(a._id))) {
+            setError('That file is already attached to this template.');
+            return;
+        }
+        const err = validateAddition(rows, [{ name: asset.label || asset.fileName, size: asset.size }]);
+        if (err) return setError(err);
+        setError(null);
+        setLibraryPicks(prev => [...prev, asset]);
+    };
+
+    const handleSelectFiles = (e) => {
+        const picked = Array.from(e.target.files || []);
+        if (picked.length === 0) return;
+        const err = validateAddition(
+            rows,
+            picked.map(f => ({ name: f.name, size: f.size, mimetype: f.type })),
+            { checkMime: true }
+        );
+        if (err) {
+            setError(err);
+        } else {
+            setError(null);
+            setNewFiles(prev => [...prev, ...picked]);
+        }
+        // Always clear, or re-picking the same file fires no change event.
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    /** Apply staged attachment changes to a template that now exists. */
+    const syncAttachments = async (templateId, { skipLibrary = false } = {}) => {
+        for (const id of removedIds) {
+            await api.delete(`/email-templates/${templateId}/attachments`, { data: { attachmentId: id } });
+        }
+
+        // On create these rode along with the template itself — re-sending them
+        // would be a no-op, but skipping the round trip is cheaper.
+        if (!skipLibrary && libraryPicks.length > 0) {
+            await api.post(`/email-templates/${templateId}/attachments/library`, {
+                mediaAssetIds: libraryPicks.map(p => p.id)
+            });
+        }
+
+        if (newFiles.length > 0) {
+            const form = new FormData();
+            newFiles.forEach(file => form.append('attachments', file));
+            await api.post(`/email-templates/${templateId}/attachments`, form, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
         setError(null);
+
+        // The upload route takes 5 files per request; stay inside it.
+        if (newFiles.length > 5) {
+            setLoading(false);
+            return setError('You can upload at most 5 new files at a time. Save, then add the rest.');
+        }
 
         try {
             const data = { ...formData };
@@ -75,15 +206,27 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                 data.stage = null;
             }
 
-            if (template) {
-                await api.put(`/email-templates/${template._id}`, data);
+            const existingId = template?._id || createdIdRef.current;
+
+            if (existingId) {
+                await api.put(`/email-templates/${existingId}`, data);
+                await syncAttachments(existingId);
             } else {
-                await api.post('/email-templates', data);
+                // Library picks go WITH the create, so the template is never
+                // saved in a half-attached state.
+                if (libraryPicks.length > 0) data.mediaAssetIds = libraryPicks.map(p => p.id);
+                const res = await api.post('/email-templates', data);
+                const newId = res.data?._id;
+                createdIdRef.current = newId;
+                if (newId) await syncAttachments(newId, { skipLibrary: true });
             }
             onSuccess();
             onClose();
         } catch (err) {
             setError(err.response?.data?.message || 'Failed to save template');
+            // The template itself may already be saved — refresh the list so
+            // the card is not missing behind the error.
+            if (createdIdRef.current) onSuccess();
         } finally {
             setLoading(false);
         }
@@ -92,6 +235,7 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
     if (!isOpen) return null;
 
     return (
+        <>
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 animate-fade-in-up">
             <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-center mb-6">
@@ -151,6 +295,85 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                             placeholder="Hello {{lead.name}}, ..."
                         ></textarea>
                         <p className="text-xs text-gray-500 mt-1">Select variables using the dropdown above to insert them into your template.</p>
+                    </div>
+
+                    {/* ── Attachments ─────────────────────────────────────── */}
+                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-3">
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <h4 className="font-bold text-gray-700 text-sm">
+                                <i className="fa-solid fa-paperclip mr-2 text-gray-400"></i>
+                                Attachments {rows.length > 0 && <span className="text-gray-400 font-medium">({rows.length})</span>}
+                            </h4>
+                            <div className="flex gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPicker(true)}
+                                    className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-semibold rounded-lg transition"
+                                >
+                                    <i className="fa-solid fa-photo-film mr-1.5"></i>
+                                    Media Library
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 border border-gray-300 text-xs font-semibold rounded-lg transition"
+                                >
+                                    <i className="fa-solid fa-arrow-up-from-bracket mr-1.5"></i>
+                                    Upload file
+                                </button>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    multiple
+                                    className="hidden"
+                                    accept={ACCEPT_ATTR}
+                                    onChange={handleSelectFiles}
+                                />
+                            </div>
+                        </div>
+
+                        {rows.length === 0 ? (
+                            <p className="text-xs text-gray-500">
+                                Attach a brochure, price list or image. <strong>Media Library</strong> reuses the files
+                                you already use in WhatsApp templates; <strong>Upload file</strong> adds one just for
+                                this template.
+                            </p>
+                        ) : (
+                            <div className="space-y-2">
+                                {rows.map(row => (
+                                    <div
+                                        key={row.key}
+                                        className="flex items-center justify-between gap-3 p-2.5 bg-white rounded-lg border border-gray-200"
+                                    >
+                                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                                            <i className={`fa-solid ${iconForMime(row.mimetype)} text-lg ${row.fromLibrary ? 'text-emerald-600' : 'text-blue-600'}`}></i>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-sm font-medium text-gray-800 truncate">{row.name}</p>
+                                                <p className="text-[11px] text-gray-500">
+                                                    {formatBytes(row.size)}
+                                                    {row.fromLibrary && <span className="ml-2 text-emerald-600 font-semibold">· Media Library</span>}
+                                                    {row.pending && <span className="ml-2 text-amber-600 font-semibold">· saves with template</span>}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={row.onRemove}
+                                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                                            title={row.fromLibrary ? 'Detach (the file stays in your Media Library)' : 'Remove'}
+                                        >
+                                            <i className="fa-solid fa-xmark"></i>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <p className="text-[11px] text-gray-400">
+                            Up to {MAX_FILES} files · {MAX_FILE_BYTES / MB} MB each · {MAX_TOTAL_BYTES / MB} MB total
+                            {rows.length > 0 && ` · ${formatBytes(usedBytes)} used`}
+                            . Removing a Media Library file here only detaches it — it stays in your library.
+                        </p>
                     </div>
 
                     <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-3">
@@ -236,6 +459,13 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                 </form>
             </div>
         </div>
+
+        <MediaLibraryPickerModal
+            isOpen={showPicker}
+            onClose={() => setShowPicker(false)}
+            onSelect={handlePickFromLibrary}
+        />
+        </>
     );
 };
 

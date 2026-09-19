@@ -50,6 +50,28 @@ const upload = multer({
 
 const { wrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
+const {
+    buildLibraryAttachments,
+    totalBytes,
+    MAX_TOTAL_ATTACHMENT_BYTES,
+    MAX_ATTACHMENT_COUNT
+} = require('../utils/emailAttachments');
+
+const MB = 1024 * 1024;
+
+// A library file counts as "used" the moment a template points at it — the
+// Media Library surfaces this as "Used in N" and the same counter is bumped by
+// WhatsApp sends and chatbot flows. Best-effort: a failed counter must never
+// fail the attach.
+function bumpLibraryUsage(rows) {
+    const ids = (rows || []).map(r => r.mediaAssetId).filter(Boolean);
+    if (ids.length === 0) return Promise.resolve();
+    const MediaAsset = require('../models/MediaAsset');
+    return MediaAsset.updateMany(
+        { _id: { $in: ids } },
+        { $inc: { usageCount: 1 }, $set: { lastUsedAt: new Date() } }
+    ).catch(e => console.error('[EmailTemplate] usageCount bump failed:', e.message));
+}
 
 // Get all email templates
 exports.getTemplates = async (req, res) => {
@@ -84,10 +106,20 @@ exports.getTemplate = async (req, res) => {
 exports.createTemplate = async (req, res) => {
     try {
         const userId = req.user.userId || req.user.id;
-        const { name, subject, body, stage, isActive, isAutomated, triggerType } = req.body;
+        const { name, subject, body, stage, isActive, isAutomated, triggerType, mediaAssetIds } = req.body;
 
         if (!name || !subject || !body) {
             return res.status(400).json({ message: 'Name, subject, and body are required' });
+        }
+
+        // Media Library picks arrive with the create request, so a template can
+        // be saved WITH its brochure attached instead of forcing a save-then-
+        // reopen-then-attach round trip. The library is keyed to the workspace
+        // owner (req.tenantId), which is not the template's userId for an agent.
+        const { rows: libraryRows, error: libraryError } =
+            await buildLibraryAttachments(mediaAssetIds, req.tenantId || userId, []);
+        if (libraryError) {
+            return res.status(400).json({ message: libraryError });
         }
 
         const template = new EmailTemplate({
@@ -99,10 +131,11 @@ exports.createTemplate = async (req, res) => {
             isActive: isActive !== undefined ? isActive : true,
             isAutomated: isAutomated || false,
             triggerType: triggerType || 'manual',
-            attachments: []
+            attachments: libraryRows
         });
 
         await template.save();
+        await bumpLibraryUsage(libraryRows);
         res.status(201).json(template);
     } catch (error) {
         console.error('Error creating template:', error);
@@ -186,6 +219,28 @@ exports.uploadAttachment = [
             return res.status(400).json({ message: 'No files uploaded' });
         }
 
+        // Budget check BEFORE anything is stored. Multer caps a single file at
+        // 10 MB, but nothing stopped ten of them piling onto one template until
+        // the send bounced off the recipient's server with no explanation.
+        const cleanupTemp = () => (req.files || []).forEach(f => {
+            try { fs.unlinkSync(f.path); } catch (_) { /* already gone */ }
+        });
+
+        if (template.attachments.length + req.files.length > MAX_ATTACHMENT_COUNT) {
+            cleanupTemp();
+            return res.status(400).json({
+                message: `A template can carry at most ${MAX_ATTACHMENT_COUNT} attachments.`
+            });
+        }
+
+        const incoming = req.files.reduce((sum, f) => sum + (f.size || 0), 0);
+        if (totalBytes(template.attachments) + incoming > MAX_TOTAL_ATTACHMENT_BYTES) {
+            cleanupTemp();
+            return res.status(400).json({
+                message: `Attachments would total more than ${MAX_TOTAL_ATTACHMENT_BYTES / MB} MB. Most mail servers reject emails that large.`
+            });
+        }
+
         // Stream each staged file into object storage, then drop the temp copy.
         const objectStore = require('../services/storageService');
         for (const file of req.files) {
@@ -226,6 +281,51 @@ exports.uploadAttachment = [
     }
     }
 ];
+
+// Attach files from the shared Media Library — POST /:id/attachments/library
+//
+// The counterpart to uploadAttachment for files that are ALREADY stored: the
+// brochure used by a WhatsApp template, an image from a broadcast, anything in
+// the library. Nothing is copied — the template stores a reference, so one file
+// serves every channel and the library stays the single source of truth.
+exports.attachLibraryMedia = async (req, res) => {
+    try {
+        const userId = req.user.userId || req.user.id;
+        const template = await EmailTemplate.findOne({ _id: req.params.id, userId });
+
+        if (!template) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+
+        const { mediaAssetIds } = req.body;
+        if (!mediaAssetIds || (Array.isArray(mediaAssetIds) && mediaAssetIds.length === 0)) {
+            return res.status(400).json({ message: 'No files selected' });
+        }
+
+        const { rows, error } = await buildLibraryAttachments(
+            mediaAssetIds,
+            req.tenantId || userId,
+            template.attachments
+        );
+        if (error) {
+            return res.status(400).json({ message: error });
+        }
+        if (rows.length === 0) {
+            // Everything picked is already on the template — nothing to do, and
+            // re-adding would send the same file twice.
+            return res.json(template);
+        }
+
+        template.attachments.push(...rows);
+        await template.save();
+        await bumpLibraryUsage(rows);
+
+        res.json(template);
+    } catch (error) {
+        console.error('Error attaching library media:', error);
+        res.status(500).json({ message: 'Error attaching files', error: 'Server error' });
+    }
+};
 
 // Remove attachment from template
 exports.removeAttachment = async (req, res) => {

@@ -3,12 +3,14 @@ import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import AttachmentUploadModal from './AttachmentUploadModal';
+import MediaLibraryPickerModal from './MediaLibraryPickerModal';
 import DOMPurify from 'dompurify';
 
 const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onRefresh, canManage = true, canSend = true }) => {
     const { showSuccess, showError } = useNotification();
     const { showDanger } = useConfirm();
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+    const [isLibraryPickerOpen, setIsLibraryPickerOpen] = useState(false);
     const [previewMode, setPreviewMode] = useState('raw'); // 'raw' or 'preview'
 
     // FIX W3: POST /email-templates/:id/send has existed all along but nothing
@@ -54,11 +56,32 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
         return 'fa-file';
     };
 
+    // Attach a file that is ALREADY stored — the same library WhatsApp
+    // templates pick from. Nothing is uploaded again.
+    const handlePickFromLibrary = async (asset) => {
+        setIsLibraryPickerOpen(false);
+        try {
+            await api.post(`/email-templates/${template._id}/attachments/library`, {
+                mediaAssetIds: [asset.id]
+            });
+            showSuccess(`"${asset.label || asset.fileName}" attached`);
+            if (onRefresh) onRefresh();
+        } catch (error) {
+            showError(error.response?.data?.message || 'Failed to attach file');
+        }
+    };
+
     const handleDeleteAttachment = async (attachmentId) => {
-        const confirmed = await showDanger(
-            'This will permanently delete the attachment. This action cannot be undone.',
-            'Delete Attachment?'
-        );
+        const attachment = template.attachments?.find(a => String(a._id) === String(attachmentId));
+        const confirmed = attachment?.mediaAssetId
+            ? await showDanger(
+                'This removes the file from this template only. It stays in your Media Library and in any WhatsApp template using it.',
+                'Remove Attachment?'
+            )
+            : await showDanger(
+                'This will permanently delete the attachment. This action cannot be undone.',
+                'Delete Attachment?'
+            );
 
         if (!confirmed) return;
 
@@ -154,13 +177,22 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                                     Attachments ({template.attachments?.length || 0})
                                 </h4>
                                 {canManage && (
-                                    <button
-                                        onClick={() => setIsUploadModalOpen(true)}
-                                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-medium transition shadow-md"
-                                    >
-                                        <i className="fa-solid fa-plus mr-2"></i>
-                                        Add Files
-                                    </button>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setIsLibraryPickerOpen(true)}
+                                            className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-sm rounded-lg font-medium transition"
+                                        >
+                                            <i className="fa-solid fa-photo-film mr-2"></i>
+                                            From Library
+                                        </button>
+                                        <button
+                                            onClick={() => setIsUploadModalOpen(true)}
+                                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-medium transition shadow-md"
+                                        >
+                                            <i className="fa-solid fa-plus mr-2"></i>
+                                            Upload
+                                        </button>
+                                    </div>
                                 )}
                             </div>
 
@@ -172,13 +204,18 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                                             className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition"
                                         >
                                             <div className="flex items-center gap-3 flex-1 min-w-0">
-                                                <i className={`fa-solid ${getFileIcon(attachment.mimetype)} text-2xl text-blue-600`}></i>
+                                                <i className={`fa-solid ${getFileIcon(attachment.mimetype)} text-2xl ${attachment.mediaAssetId ? 'text-emerald-600' : 'text-blue-600'}`}></i>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="font-medium text-gray-800 truncate">
                                                         {attachment.originalName || attachment.filename}
                                                     </p>
                                                     <p className="text-xs text-gray-500">
                                                         {formatFileSize(attachment.size)}
+                                                        {attachment.mediaAssetId && (
+                                                            <span className="ml-2 text-emerald-600 font-semibold">
+                                                                <i className="fa-solid fa-photo-film mr-1"></i>Media Library
+                                                            </span>
+                                                        )}
                                                     </p>
                                                 </div>
                                             </div>
@@ -198,6 +235,9 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                                 <div className="text-center py-8 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
                                     <i className="fa-regular fa-file text-4xl text-gray-300 mb-2"></i>
                                     <p className="text-sm text-gray-500">No attachments added yet</p>
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        Reuse a file from your Media Library, or upload a new one.
+                                    </p>
                                 </div>
                             )}
                         </div>
@@ -272,6 +312,13 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                     )}
                 </div>
             </div>
+
+            {/* Pick a file that is already in the shared Media Library */}
+            <MediaLibraryPickerModal
+                isOpen={isLibraryPickerOpen}
+                onClose={() => setIsLibraryPickerOpen(false)}
+                onSelect={handlePickFromLibrary}
+            />
 
             {/* Attachment Upload Modal */}
             <AttachmentUploadModal

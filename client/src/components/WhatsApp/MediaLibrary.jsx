@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../../services/api';
 import { useConfirm } from '../../context/ConfirmContext';
 
@@ -9,7 +9,14 @@ const TYPE_FILTERS = [
     { id: 'DOCUMENT', label: 'Documents', icon: 'fa-file-pdf' },
 ];
 
-const ACCEPT = 'image/jpeg,image/png,video/mp4,video/3gpp,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,audio/mpeg';
+const ACCEPT_BY_TYPE = {
+    IMAGE:    'image/jpeg,image/png',
+    VIDEO:    'video/mp4,video/3gpp',
+    DOCUMENT: 'application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt',
+    AUDIO:    'audio/mpeg'
+};
+
+const ACCEPT = Object.values(ACCEPT_BY_TYPE).join(',');
 
 export const formatBytes = (bytes) => {
     if (!bytes) return '0 B';
@@ -26,6 +33,9 @@ export const iconForType = (t) =>
  * flows and manual sends. Files live in object storage (R2), never on the app server.
  *
  * Doubles as a picker: pass `pickerMode` + `onSelect` to embed it in a modal.
+ *
+ * `allowedType` narrows it to one type ('DOCUMENT') or a set (['DOCUMENT',
+ * 'IMAGE']) — email attachments, for instance, accept both but not video.
  */
 export default function MediaLibrary({ pickerMode = false, allowedType = null, onSelect = null }) {
     const [assets, setAssets]       = useState([]);
@@ -33,7 +43,12 @@ export default function MediaLibrary({ pickerMode = false, allowedType = null, o
     const [loading, setLoading]     = useState(true);
     const [uploading, setUploading] = useState(false);
     const [progress, setProgress]   = useState(0);
-    const [typeFilter, setTypeFilter] = useState(allowedType || '');
+    // One type, a set of types, or unrestricted. Joined into a string so the
+    // memo is not invalidated by a fresh array literal on every parent render.
+    const allowedKey = (Array.isArray(allowedType) ? allowedType : allowedType ? [allowedType] : []).join(',');
+    const allowedTypes = useMemo(() => (allowedKey ? allowedKey.split(',') : []), [allowedKey]);
+    // A single allowed type needs no tabs — ask the server for it directly.
+    const [typeFilter, setTypeFilter] = useState(allowedTypes.length === 1 ? allowedTypes[0] : '');
     const [search, setSearch]       = useState('');
     const [error, setError]         = useState('');
     const [dragging, setDragging]   = useState(false);
@@ -117,7 +132,20 @@ export default function MediaLibrary({ pickerMode = false, allowedType = null, o
         ? Math.min(100, Math.round((storage.usedBytes / (storage.limitMb * 1024 * 1024)) * 100))
         : 0;
 
-    const visible = allowedType ? assets.filter(a => a.mediaType === allowedType) : assets;
+    const visible = allowedTypes.length > 0
+        ? assets.filter(a => allowedTypes.includes(a.mediaType))
+        : assets;
+
+    // Only offer to upload what this picker can actually use.
+    const acceptTypes = allowedTypes.length > 0
+        ? allowedTypes.map(t => ACCEPT_BY_TYPE[t]).filter(Boolean).join(',')
+        : ACCEPT;
+
+    // Tabs are pointless with a single allowed type, and must not offer a type
+    // the caller excluded.
+    const typeTabs = allowedTypes.length === 1
+        ? []
+        : TYPE_FILTERS.filter(f => !f.id || allowedTypes.length === 0 || allowedTypes.includes(f.id));
 
     return (
         <div className={pickerMode ? '' : 'p-6'}>
@@ -168,7 +196,7 @@ export default function MediaLibrary({ pickerMode = false, allowedType = null, o
                     ref={fileInputRef}
                     type="file"
                     className="hidden"
-                    accept={ACCEPT}
+                    accept={acceptTypes}
                     onChange={(e) => handleUpload(e.target.files?.[0])}
                 />
                 {uploading ? (
@@ -199,7 +227,7 @@ export default function MediaLibrary({ pickerMode = false, allowedType = null, o
 
             {/* ── Filters ────────────────────────────────────────────────── */}
             <div className="flex items-center gap-2 mb-5 flex-wrap">
-                {!allowedType && TYPE_FILTERS.map(f => (
+                {typeTabs.map(f => (
                     <button
                         key={f.id}
                         onClick={() => setTypeFilter(f.id)}

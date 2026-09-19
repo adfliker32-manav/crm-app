@@ -299,14 +299,28 @@ exports.deleteAsset = async (req, res) => {
 
         // Refuse while a template still points at it — deleting would leave the
         // template unsendable with no indication why.
-        const inUse = await WhatsAppTemplate.countDocuments({
-            userId: req.tenantId,
-            'components.mediaAssetId': asset._id
-        });
+        const EmailTemplate = require('../models/EmailTemplate');
+        const [waInUse, emailInUse] = await Promise.all([
+            WhatsAppTemplate.countDocuments({
+                userId: req.tenantId,
+                'components.mediaAssetId': asset._id
+            }),
+            // Not scoped by userId on purpose: an email template created by an
+            // agent is keyed to that agent, not the workspace owner, so a
+            // tenant-scoped count would miss it and silently break their
+            // template. The asset id is unique, so this cannot match another
+            // tenant's row.
+            EmailTemplate.countDocuments({ 'attachments.mediaAssetId': asset._id })
+        ]);
+        const inUse = waInUse + emailInUse;
         if (inUse > 0) {
+            const where = [
+                waInUse    ? `${waInUse} WhatsApp template(s)`  : null,
+                emailInUse ? `${emailInUse} email template(s)`  : null
+            ].filter(Boolean).join(' and ');
             return res.status(409).json({
                 success: false,
-                message: `This file is used by ${inUse} template(s). Remove it from them first.`
+                message: `This file is used by ${where}. Remove it from them first.`
             });
         }
 

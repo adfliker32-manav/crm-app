@@ -323,6 +323,17 @@ const schemas = {
         description: Joi.string().trim().max(500).allow('', null)
     }),
 
+    // Attaching Media Library files to an email template. Only ids travel —
+    // the bytes are already stored, and the controller re-checks that each
+    // asset belongs to this workspace before it is linked.
+    attachLibraryMedia: Joi.object({
+        mediaAssetIds: Joi.array()
+            .items(Joi.string().hex().length(24))
+            .min(1)
+            .max(10)
+            .required()
+    }),
+
     updateMediaAsset: Joi.object({
         label:  Joi.string().trim().max(120).allow('', null),
         folder: Joi.string().trim().max(60).allow('', null)

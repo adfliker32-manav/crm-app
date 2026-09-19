@@ -128,6 +128,28 @@ const sendEmailController = async (req, res) => {
             size: file.size
         }));
 
+        // Files picked from the shared Media Library — the same brochures and
+        // images WhatsApp templates use. Nothing is re-uploaded: the ids are
+        // validated against the tenant's library, then streamed straight out.
+        const { mediaAssetIds } = req.body;
+        if (mediaAssetIds && (!Array.isArray(mediaAssetIds) || mediaAssetIds.length > 0)) {
+            // Same reason uploaded files are refused below: a scheduled job is
+            // persisted to MongoDB and cannot carry a stream. Checked before
+            // resolving, so nothing is opened only to be thrown away.
+            if (scheduledFor) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Attachments cannot be used with scheduled emails. Send now, or schedule without attachments.'
+                });
+            }
+            const { buildLibraryAttachments, resolveAttachments } = require('../utils/emailAttachments');
+            const { rows, error } = await buildLibraryAttachments(mediaAssetIds, tenantId, attachments);
+            if (error) {
+                return res.status(400).json({ success: false, message: error });
+            }
+            attachments.push(...await resolveAttachments(rows, tenantId));
+        }
+
         // When a template is selected in the compose modal, resolve its stored
         // attachments (object storage) and merge them with any user-uploaded files.
         if (templateId) {

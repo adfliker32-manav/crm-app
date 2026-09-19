@@ -6,6 +6,7 @@ const { emailSendLimiter } = require('../middleware/emailRateLimiter');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const requireModule = require('../middleware/moduleMiddleware');
 const checkPermission = require('../middleware/checkPermission');
+const { validate, schemas } = require('../middleware/validateRequest');
 
 // FIX S3: the Email module gate was missing on this router entirely.
 router.use(authMiddleware, requireModule('email'));
@@ -31,6 +32,11 @@ router.delete('/:id', validateObjectId({ params: ['id'] }), checkPermission('man
 
 // Upload attachment
 router.post('/:id/attachments', validateObjectId({ params: ['id'] }), checkPermission('manageEmailTemplates'), ...emailTemplateController.uploadAttachment);
+
+// Attach files that are already in the shared Media Library (no re-upload).
+// Deliberately NOT behind the multipart upload middleware — the body is a plain
+// list of asset ids.
+router.post('/:id/attachments/library', validateObjectId({ params: ['id'] }), checkPermission('manageEmailTemplates'), validate(schemas.attachLibraryMedia), emailTemplateController.attachLibraryMedia);
 
 // Remove attachment
 router.delete('/:id/attachments', validateObjectId({ params: ['id'] }), checkPermission('manageEmailTemplates'), emailTemplateController.removeAttachment);

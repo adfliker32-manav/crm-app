@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
+import { ACCEPT_ATTR, ALLOWED_MIME_TYPES, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './attachmentLimits';
 
 const AttachmentUploadModal = ({ isOpen, onClose, templateId, onSuccess }) => {
     const { showSuccess, showError } = useNotification();
@@ -8,20 +9,12 @@ const AttachmentUploadModal = ({ isOpen, onClose, templateId, onSuccess }) => {
     const [uploading, setUploading] = useState(false);
     const [dragActive, setDragActive] = useState(false);
 
-    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-    const MAX_FILES = 5;
-    const ALLOWED_TYPES = [
-        'application/pdf',
-        'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.ms-excel',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'image/jpeg',
-        'image/jpg',
-        'image/png',
-        'image/gif',
-        'text/plain'
-    ];
+    // One source of truth with the server (utils/emailAttachments) and the
+    // template modal — this list used to drift and reject WEBP/CSV that the
+    // send route accepts.
+    const MAX_FILE_SIZE = MAX_FILE_BYTES;
+    const MAX_FILES = 5; // per upload request — the route's multer ceiling
+    const ALLOWED_TYPES = ALLOWED_MIME_TYPES;
 
     const validateFile = (file) => {
         if (file.size > MAX_FILE_SIZE) {
@@ -146,7 +139,8 @@ const AttachmentUploadModal = ({ isOpen, onClose, templateId, onSuccess }) => {
                         <div>
                             <h3 className="text-xl font-bold text-slate-800">Upload Attachments</h3>
                             <p className="text-sm text-slate-500 mt-1">
-                                Max {MAX_FILES} files, 10MB each. Supported: PDF, DOC, XLS, Images
+                                Max {MAX_FILES} files per upload, {MAX_FILE_BYTES / (1024 * 1024)}MB each,{' '}
+                                {MAX_TOTAL_BYTES / (1024 * 1024)}MB total per template. Supported: PDF, DOC, XLS, TXT, CSV, Images
                             </p>
                         </div>
                         <button onClick={onClose} className="text-slate-400 hover:text-red-500 transition">
@@ -181,7 +175,7 @@ const AttachmentUploadModal = ({ isOpen, onClose, templateId, onSuccess }) => {
                                 multiple
                                 onChange={handleFileSelect}
                                 className="hidden"
-                                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,.txt"
+                                accept={ACCEPT_ATTR}
                             />
                         </label>
                     </div>

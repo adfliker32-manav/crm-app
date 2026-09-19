@@ -40,6 +40,15 @@ const emailTemplateSchema = new mongoose.Schema({
     },
     attachments: [{
         filename: String,
+        // Media Library reference. When set, the bytes live in the shared
+        // library (the same one WhatsApp templates, broadcasts and chatbot
+        // flows pick from) and this row owns nothing — storageKey stays empty
+        // and detaching never deletes the file. See utils/emailAttachments.
+        mediaAssetId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'MediaAsset',
+            default: null
+        },
         // Legacy on-disk path. Only set on rows created before attachments
         // moved to object storage; new rows use storageKey.
         path: String,
