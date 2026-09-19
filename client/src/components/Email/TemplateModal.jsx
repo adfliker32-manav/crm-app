@@ -38,6 +38,7 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
     const [libraryPicks, setLibraryPicks] = useState([]); // MediaAsset picks, not yet linked
     const [newFiles, setNewFiles] = useState([]);    // File objects, not yet uploaded
     const [showPicker, setShowPicker] = useState(false);
+    const [dragActive, setDragActive] = useState(false);
     const fileInputRef = useRef(null);
 
     // Set once a create succeeds. Without it, a failure while attaching files
@@ -145,8 +146,7 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
         setLibraryPicks(prev => [...prev, asset]);
     };
 
-    const handleSelectFiles = (e) => {
-        const picked = Array.from(e.target.files || []);
+    const addFiles = (picked) => {
         if (picked.length === 0) return;
         const err = validateAddition(
             rows,
@@ -159,8 +159,25 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
             setError(null);
             setNewFiles(prev => [...prev, ...picked]);
         }
+    };
+
+    const handleSelectFiles = (e) => {
+        addFiles(Array.from(e.target.files || []));
         // Always clear, or re-picking the same file fires no change event.
         if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    const handleDrag = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragActive(e.type === 'dragenter' || e.type === 'dragover');
+    };
+
+    const handleDrop = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragActive(false);
+        addFiles(Array.from(e.dataTransfer.files || []));
     };
 
     /** Apply staged attachment changes to a template that now exists. */
@@ -298,7 +315,20 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                     </div>
 
                     {/* ── Attachments ─────────────────────────────────────── */}
-                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-3">
+                    {/* The whole box is a drop target: dragging a PDF onto it is the
+                        fastest way to attach one, and it matches what people expect
+                        from every mail client. */}
+                    <div
+                        onDragEnter={handleDrag}
+                        onDragOver={handleDrag}
+                        onDragLeave={handleDrag}
+                        onDrop={handleDrop}
+                        className={`p-4 rounded-lg border-2 space-y-3 transition-colors ${
+                            dragActive
+                                ? 'bg-blue-50 border-dashed border-blue-400'
+                                : 'bg-gray-50 border-gray-200'
+                        }`}
+                    >
                         <div className="flex items-center justify-between gap-3 flex-wrap">
                             <h4 className="font-bold text-gray-700 text-sm">
                                 <i className="fa-solid fa-paperclip mr-2 text-gray-400"></i>
@@ -333,11 +363,16 @@ const TemplateModal = ({ isOpen, onClose, onSuccess, template = null }) => {
                         </div>
 
                         {rows.length === 0 ? (
-                            <p className="text-xs text-gray-500">
-                                Attach a brochure, price list or image. <strong>Media Library</strong> reuses the files
-                                you already use in WhatsApp templates; <strong>Upload file</strong> adds one just for
-                                this template.
-                            </p>
+                            <div className="text-center py-4">
+                                <i className={`fa-solid fa-cloud-arrow-up text-2xl ${dragActive ? 'text-blue-500' : 'text-gray-300'}`}></i>
+                                <p className="text-sm font-medium text-gray-600 mt-2">
+                                    {dragActive ? 'Drop to attach' : 'Drag files here, or use the buttons above'}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    <strong>Media Library</strong> reuses the files you already use in WhatsApp
+                                    templates; <strong>Upload file</strong> adds one just for this template.
+                                </p>
+                            </div>
                         ) : (
                             <div className="space-y-2">
                                 {rows.map(row => (

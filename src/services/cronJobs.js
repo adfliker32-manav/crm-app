@@ -836,6 +836,9 @@ const runFollowUpTemplateSend = async ({ ignoreSendHour = false } = {}) => {
 
         const userMap = new Map(tenantUsers.map(u => [u._id.toString(), u]));
         const templateMap = new Map(emailTemplates.map(t => [t._id.toString(), t]));
+        // One resolve per template, not per lead — the same batch often sends
+        // the same template to many leads.
+        const attachmentCache = new Map();
 
         for (const lead of leads) {
             // 🔒 BUG-1 FIX: Skip leads whose tenant plan has expired.
@@ -890,6 +893,29 @@ const runFollowUpTemplateSend = async ({ ignoreSendHour = false } = {}) => {
                     });
                     const subject = resolveTemplate(template.subject, tplContext);
                     const body = resolveTemplate(template.body, tplContext);
+
+                    // The follow-up cron sent the covering note without the file
+                    // the template exists to deliver. Resolved per template and
+                    // cached for the batch — the resolver hands back Buffers, so
+                    // reuse across leads is safe (a stream would not be).
+                    let attachments = [];
+                    if (template.attachments?.length > 0) {
+                        const cached = attachmentCache.get(String(template._id));
+                        if (cached) {
+                            attachments = cached;
+                        } else {
+                            const { resolveAttachments } = require('../utils/emailAttachments');
+                            attachments = await resolveAttachments(
+                                template.attachments,
+                                String(template.userId || lead.userId)
+                            ).catch(e => {
+                                console.warn(`⚠️ [FollowUpTemplate] Attachments for ${template._id}:`, e.message);
+                                return [];
+                            });
+                            attachmentCache.set(String(template._id), attachments);
+                        }
+                    }
+
                     await sendEmailWithRetry({
                         to: lead.email,
                         subject,
@@ -898,7 +924,8 @@ const runFollowUpTemplateSend = async ({ ignoreSendHour = false } = {}) => {
                         userId: lead.userId.toString(),
                         isAutomated: true,
                         triggerType: 'follow_up',
-                        leadId: lead._id
+                        leadId: lead._id,
+                        attachments: attachments.length > 0 ? attachments : undefined
                     }, 1);
                     await Lead.findByIdAndUpdate(lead._id, {
                         $set: { followUpTemplateSent: true, followUpTemplateType: null, followUpTemplateName: null },

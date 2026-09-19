@@ -1107,10 +1107,27 @@ exports.assignWhatsAppAgent = async (req, res) => {
 // ─── 10. SEND EMAIL ───────────────────────────────────────────────────────────
 exports.sendEmail = async (req, res) => {
     try {
-        const { to, leadId, subject, body } = req.body;
+        const { to, leadId, subject, body, templateId } = req.body;
 
-        if (!subject || !body) {
-            return res.status(400).json({ success: false, message: '`subject` and `body` are required.' });
+        // `templateId` sends a saved email template — subject, body AND the
+        // files attached to it. Without it the API could only ever send plain
+        // text, so a partner had no way to deliver the brochure the workspace
+        // had already set up. subject/body stay required only when no template
+        // is named, and still override the template's own when supplied.
+        let template = null;
+        if (templateId !== undefined && templateId !== null && templateId !== '') {
+            if (!isValidId(templateId)) {
+                return res.status(400).json({ success: false, message: 'Invalid templateId.' });
+            }
+            const EmailTemplate = require('../models/EmailTemplate');
+            template = await EmailTemplate.findOne({ _id: templateId, userId: req.tenantId }).lean();
+            if (!template) {
+                return res.status(404).json({ success: false, message: 'Email template not found.' });
+            }
+        }
+
+        if (!template && (!subject || !body)) {
+            return res.status(400).json({ success: false, message: '`subject` and `body` are required (or send a `templateId`).' });
         }
 
         let toEmail = to;
@@ -1141,19 +1158,47 @@ exports.sendEmail = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Provide `to` email address or `leadId`.' });
         }
 
+        // Variables ({{lead.name}} …) resolve against the lead when one is named,
+        // exactly as they do everywhere else a template is sent.
+        let finalSubject = subject || template?.subject;
+        let finalBody    = body    || template?.body;
+        let attachments  = [];
+
+        if (template) {
+            const { resolveTemplate, buildTemplateContext } = require('../utils/templateResolver');
+            const Lead = require('../models/Lead');
+            const User = require('../models/User');
+            const [leadObj, owner] = await Promise.all([
+                leadId ? Lead.findOne({ _id: leadId, userId: req.tenantId, deletedAt: null }).lean() : null,
+                User.findById(req.tenantId).select('name companyName').lean()
+            ]);
+            const tplContext = buildTemplateContext({ lead: leadObj, user: owner });
+            finalSubject = resolveTemplate(finalSubject, tplContext);
+            finalBody    = resolveTemplate(finalBody, tplContext);
+
+            if (template.attachments?.length > 0) {
+                const { resolveAttachments } = require('../utils/emailAttachments');
+                attachments = await resolveAttachments(template.attachments, String(template.userId));
+            }
+        }
+
         await sendEmail({
             to:      toEmail,
-            subject: subject.slice(0, 500),
-            html:    body,
+            subject: String(finalSubject).slice(0, 500),
+            html:    finalBody,
             userId:  req.tenantId,
             triggerType: 'api',
-            leadId:  leadId || null
+            templateId: template?._id || null,
+            leadId:  leadId || null,
+            attachments: attachments.length > 0 ? attachments : undefined
         });
 
         res.json({
             success: true,
             to:      toEmail,
-            subject,
+            subject: String(finalSubject).slice(0, 500),
+            template: template ? { id: String(template._id), name: template.name } : undefined,
+            attachments: attachments.length,
             sentAt:  new Date().toISOString()
         });
     } catch (err) {

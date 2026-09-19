@@ -20,6 +20,7 @@ const EmailMessage = require('../models/EmailMessage');
 const { resolveTenantId } = require('../utils/emailUtils');
 const { unwrapEmailHtml } = require('../utils/emailTemplateUtils');
 const { logEmail } = require('./emailLogService');
+const { attachmentSize } = require('../utils/emailAttachments');
 
 /**
  * Finds (or creates) the Lead an outbound email belongs to.
@@ -262,8 +263,8 @@ const recordOutboundEmail = async (opts = {}) => {
             attachments: (attachments || []).map(att => ({
                 filename: att.filename || att.originalName,
                 originalName: att.originalName || att.filename,
-                size: att.size || 0,
-                contentType: att.contentType || undefined
+                size: attachmentSize(att),
+                contentType: att.contentType || att.mimetype || undefined
             })),
             timestamp: now
         });

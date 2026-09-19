@@ -225,6 +225,41 @@ describe('resolveAttachments — reading the bytes at send time', () => {
     });
 });
 
+describe('attachmentSize — what the Email Log and Inbox record', () => {
+    beforeEach(freshModules);
+
+    test('reads the length of a resolved Buffer', () => {
+        // Template attachments reach the loggers as Buffers with no `size`
+        // field, so every one of them was recorded as "0 Bytes" — on exactly
+        // the sends that have attachments.
+        assert.equal(emailAttachments.attachmentSize({ content: Buffer.alloc(2048) }), 2048);
+    });
+
+    test('prefers an explicit size when the caller supplied one', () => {
+        assert.equal(emailAttachments.attachmentSize({ size: 99, content: Buffer.alloc(5) }), 99);
+    });
+
+    test('falls back to 0 rather than throwing on anything unexpected', () => {
+        assert.equal(emailAttachments.attachmentSize(null), 0);
+        assert.equal(emailAttachments.attachmentSize({}), 0);
+        assert.equal(emailAttachments.attachmentSize({ path: '/no/such/file.pdf' }), 0);
+    });
+
+    test('measures string content by bytes, not characters', () => {
+        assert.equal(emailAttachments.attachmentSize({ content: 'é' }), 2);
+    });
+
+    test('a resolved attachment carries the stored content type', async () => {
+        // Without it nodemailer guesses from the filename, which is wrong for
+        // anything with an unusual or missing extension.
+        const out = await emailAttachments.resolveAttachments(
+            [{ mediaAssetId: PDF, originalName: 'Brochure' }],
+            OWNER
+        );
+        assert.equal(out[0].contentType, 'application/pdf');
+    });
+});
+
 describe('deleteAttachmentFile — detaching must not destroy shared bytes', () => {
     beforeEach(freshModules);
 

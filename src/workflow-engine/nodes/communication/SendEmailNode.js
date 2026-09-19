@@ -51,11 +51,19 @@ const SendEmailNode = {
     schema: () => ({
         fields: [
             {
+                key:      'emailTemplateId',
+                label:    'Email Template',
+                type:     'email_template_select',
+                required: false,
+                description: 'Optional. Sends a saved template — subject, body and its attachments. Leave empty to write the email here.'
+            },
+            {
                 key:      'subject',
                 label:    'Email Subject',
                 type:     'text',
                 required: true,
-                placeholder: 'e.g. Following up on your enquiry, {{lead.name}}'
+                placeholder: 'e.g. Following up on your enquiry, {{lead.name}}',
+                description: 'Ignored when an Email Template is selected above.'
             },
             {
                 key:      'body',
@@ -64,15 +72,18 @@ const SendEmailNode = {
                 required: true,
                 rows:     6,
                 placeholder: 'Hi {{lead.name}}, ...',
-                description: 'Supports {{lead.name}}, {{lead.phone}}, {{lead.email}} variables'
+                description: 'Supports {{lead.name}}, {{lead.phone}}, {{lead.email}} variables. Ignored when an Email Template is selected above.'
             }
         ]
     }),
 
     validate: (data) => {
         const errors = [];
-        if (!data.subject?.trim()) errors.push('Email subject is required');
-        if (!data.body?.trim())    errors.push('Email body is required');
+        // A template supplies both, so neither is required alongside one.
+        if (!data.emailTemplateId) {
+            if (!data.subject?.trim()) errors.push('Email subject is required');
+            if (!data.body?.trim())    errors.push('Email body is required');
+        }
         return { valid: errors.length === 0, errors };
     },
 
@@ -155,8 +166,41 @@ const SendEmailNode = {
             appointment: context.env?.trigger?.appointment || context.env?.trigger?.payload?.appointment
         });
 
-        const subject = resolveTemplate(data.subject || '', tplContext);
-        const body    = resolveTemplate(data.body || '', tplContext);
+        // An email template supplies the subject, the body AND the files attached
+        // to it. Resolved live rather than snapshotted onto the node, so editing
+        // the template updates every workflow that points at it.
+        let rawSubject = data.subject || '';
+        let rawBody    = data.body || '';
+        let attachments = [];
+
+        if (data.emailTemplateId) {
+            const EmailTemplate = require('../../../models/EmailTemplate');
+            const tpl = await EmailTemplate.findOne({
+                _id: data.emailTemplateId,
+                userId: tenantId   // tenant-scoped: never read another workspace's template
+            }).lean().catch(() => null);
+
+            if (tpl) {
+                rawSubject = tpl.subject;
+                rawBody    = tpl.body;
+                if (tpl.attachments?.length > 0) {
+                    const { resolveAttachments } = require('../../../utils/emailAttachments');
+                    attachments = await resolveAttachments(tpl.attachments, String(tpl.userId || tenantId))
+                        .catch(err => {
+                            console.warn(`[SendEmailNode] Attachments for template ${data.emailTemplateId}:`, err.message);
+                            return [];
+                        });
+                }
+            } else {
+                // Deleted template: fall back to whatever the node still carries
+                // rather than sending an email with no subject, which throws
+                // inside sendEmail before anything is logged.
+                console.warn(`[SendEmailNode] Email template ${data.emailTemplateId} not found for tenant ${tenantId} — using the node's own subject/body.`);
+            }
+        }
+
+        const subject = resolveTemplate(rawSubject, tplContext);
+        const body    = resolveTemplate(rawBody, tplContext);
 
         try {
             await sendEmail({
@@ -169,6 +213,8 @@ const SendEmailNode = {
                 userId: tenantId,
                 isAutomated: true,
                 triggerType: 'workflow',
+                templateId: data.emailTemplateId || null,
+                attachments: attachments.length > 0 ? attachments : undefined,
                 leadId: lead._id
             });
         } catch (err) {

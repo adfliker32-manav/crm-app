@@ -1,6 +1,8 @@
 const EmailLog = require('../models/EmailLog');
 
 // Log email (success or failure)
+const { attachmentSize } = require('../utils/emailAttachments');
+
 const logEmail = async (logData) => {
     try {
         const {
@@ -45,7 +47,7 @@ const logEmail = async (logData) => {
             attachments: attachments.map(att => ({
                 filename: att.filename || att.originalName,
                 originalName: att.originalName || att.filename,
-                size: att.size || 0
+                size: attachmentSize(att)
             }))
         });
 

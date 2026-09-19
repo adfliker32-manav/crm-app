@@ -412,16 +412,31 @@ const executeStepAction = async (step, lead, sequenceName, sequence = null) => {
                     ? step.action.emailMode === 'template'
                     : !!step.action.emailTemplateId;
 
+                // Files the template carries. A sequence used to read only the
+                // subject and body, so a template whose whole point was the
+                // brochure sent the covering note and nothing else — silently.
+                let attachments = [];
+
                 if (usesEmailTemplate && step.action.emailTemplateId) {
                     const EmailTemplate = require('../models/EmailTemplate');
                     const tpl = await EmailTemplate.findOne({
                         _id: step.action.emailTemplateId,
                         userId: lead.userId   // tenant-scoped: never read another workspace's template
-                    }).select('subject body').lean();
+                    }).select('subject body attachments').lean();
 
                     if (tpl) {
                         rawSubject = tpl.subject;
                         rawBody = tpl.body;
+                        if (tpl.attachments?.length > 0) {
+                            const { resolveAttachments } = require('../utils/emailAttachments');
+                            // A missing file must not cost the lead its email —
+                            // resolveAttachments already skips what it cannot read.
+                            attachments = await resolveAttachments(tpl.attachments, String(lead.userId))
+                                .catch(err => {
+                                    console.warn(`[Sequence] Could not resolve attachments for template ${tpl._id}:`, err.message);
+                                    return [];
+                                });
+                        }
                     } else {
                         console.warn(
                             `[Sequence] Email template ${step.action.emailTemplateId} not found for tenant ` +
@@ -448,6 +463,7 @@ const executeStepAction = async (step, lead, sequenceName, sequence = null) => {
                     isAutomated: true,
                     triggerType: 'sequence',
                     leadId: lead._id,
+                    attachments: attachments.length > 0 ? attachments : undefined,
                     maxRetries: 1 // FIX D6: background sends retry transient SMTP failures
                 });
                 await Lead.findByIdAndUpdate(lead._id, {

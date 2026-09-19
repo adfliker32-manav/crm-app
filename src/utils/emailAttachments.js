@@ -44,6 +44,25 @@ const MAX_ATTACHMENT_COUNT = 10;             // per template
 // purpose: a 16 MB MP4 blows the total budget and bounces.
 const LIBRARY_MEDIA_TYPES = ['DOCUMENT', 'IMAGE'];
 
+/**
+ * Size of an outgoing nodemailer attachment, whatever shape it arrived in.
+ *
+ * Three shapes reach the loggers: a compose upload (carries `size`), a stored
+ * file resolved to a Buffer, and a legacy on-disk row that is only a path. Only
+ * the first reported a size, so every TEMPLATE attachment was recorded as
+ * "0 Bytes" — useless on exactly the sends that have attachments.
+ */
+function attachmentSize(att) {
+    if (!att) return 0;
+    if (Number.isFinite(att.size) && att.size > 0) return att.size;
+    if (Buffer.isBuffer(att.content)) return att.content.length;
+    if (typeof att.content === 'string') return Buffer.byteLength(att.content);
+    if (att.path) {
+        try { return fs.statSync(att.path).size; } catch (_) { /* already gone */ }
+    }
+    return 0;
+}
+
 /** Bytes already committed to a template's attachment list. */
 const totalBytes = (attachments = []) =>
     attachments.reduce((sum, a) => sum + (Number(a?.size) || 0), 0);
@@ -169,7 +188,11 @@ async function resolveAttachments(attachments, tenantId) {
                     console.warn(`[EmailAttachments] Refusing cross-tenant media asset ${att.mediaAssetId} for tenant ${tenantId}`);
                     continue;
                 }
-                out.push({ filename: name, content: await storage.getBuffer(asset.storageKey) });
+                out.push({
+                    filename: name,
+                    content: await storage.getBuffer(asset.storageKey),
+                    contentType: asset.mimeType || undefined
+                });
             } catch (err) {
                 console.error(`[EmailAttachments] Could not read media asset ${att.mediaAssetId}:`, err.message);
             }
@@ -185,7 +208,11 @@ async function resolveAttachments(attachments, tenantId) {
                 continue;
             }
             try {
-                out.push({ filename: name, content: await storage.getBuffer(att.storageKey) });
+                out.push({
+                    filename: name,
+                    content: await storage.getBuffer(att.storageKey),
+                    contentType: att.mimetype || undefined
+                });
             } catch (err) {
                 console.error(`[EmailAttachments] Could not read ${att.storageKey}:`, err.message);
             }
@@ -197,7 +224,7 @@ async function resolveAttachments(attachments, tenantId) {
             && att.path.startsWith(LEGACY_PATH_PREFIX)
             && !att.path.includes('..')
             && fs.existsSync(att.path)) {
-            out.push({ filename: name, path: att.path });
+            out.push({ filename: name, path: att.path, contentType: att.mimetype || undefined });
         }
     }
 
@@ -225,6 +252,7 @@ async function deleteAttachmentFile(att) {
 module.exports = {
     resolveAttachments,
     deleteAttachmentFile,
+    attachmentSize,
     buildLibraryAttachments,
     totalBytes,
     LEGACY_PATH_PREFIX,

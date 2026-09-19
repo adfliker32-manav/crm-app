@@ -988,6 +988,17 @@ const toolHandlers = {
 
         // 5. Fetch workspace owner details
         const owner = await User.findById(tenantId).select('name companyName').lean();
+
+        // Attachments were handed to nodemailer as RAW DATABASE ROWS
+        // ({ filename, storageKey, mimetype, … } with no `content` and no
+        // `path`), so every lead received a real-looking, completely EMPTY
+        // file. Resolve them into actual bytes — once, because the resolver
+        // returns Buffers and those are safe to reuse across the whole loop.
+        let attachments = [];
+        if (template.attachments?.length > 0) {
+            const { resolveAttachments } = require('../utils/emailAttachments');
+            attachments = await resolveAttachments(template.attachments, String(template.userId || tenantId));
+        }
         const userName = owner?.name || '';
         const companyName = owner?.companyName || '';
 
@@ -1010,7 +1021,7 @@ const toolHandlers = {
                     to: lead.email,
                     subject,
                     html,
-                    attachments: template.attachments || [],
+                    attachments: attachments.length > 0 ? attachments : undefined,
                     userId: tenantId
                 });
                 sent++;

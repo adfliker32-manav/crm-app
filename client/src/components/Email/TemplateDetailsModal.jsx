@@ -1,16 +1,10 @@
 import React, { useState } from 'react';
 import api from '../../services/api';
 import { useNotification } from '../../context/NotificationContext';
-import { useConfirm } from '../../context/ConfirmContext';
-import AttachmentUploadModal from './AttachmentUploadModal';
-import MediaLibraryPickerModal from './MediaLibraryPickerModal';
 import DOMPurify from 'dompurify';
 
-const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onRefresh, canManage = true, canSend = true }) => {
+const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, canManage = true, canSend = true }) => {
     const { showSuccess, showError } = useNotification();
-    const { showDanger } = useConfirm();
-    const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-    const [isLibraryPickerOpen, setIsLibraryPickerOpen] = useState(false);
     const [previewMode, setPreviewMode] = useState('raw'); // 'raw' or 'preview'
 
     // FIX W3: POST /email-templates/:id/send has existed all along but nothing
@@ -54,47 +48,6 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
         if (mimetype.includes('excel') || mimetype.includes('sheet')) return 'fa-file-excel';
         if (mimetype.includes('zip')) return 'fa-file-zipper';
         return 'fa-file';
-    };
-
-    // Attach a file that is ALREADY stored — the same library WhatsApp
-    // templates pick from. Nothing is uploaded again.
-    const handlePickFromLibrary = async (asset) => {
-        setIsLibraryPickerOpen(false);
-        try {
-            await api.post(`/email-templates/${template._id}/attachments/library`, {
-                mediaAssetIds: [asset.id]
-            });
-            showSuccess(`"${asset.label || asset.fileName}" attached`);
-            if (onRefresh) onRefresh();
-        } catch (error) {
-            showError(error.response?.data?.message || 'Failed to attach file');
-        }
-    };
-
-    const handleDeleteAttachment = async (attachmentId) => {
-        const attachment = template.attachments?.find(a => String(a._id) === String(attachmentId));
-        const confirmed = attachment?.mediaAssetId
-            ? await showDanger(
-                'This removes the file from this template only. It stays in your Media Library and in any WhatsApp template using it.',
-                'Remove Attachment?'
-            )
-            : await showDanger(
-                'This will permanently delete the attachment. This action cannot be undone.',
-                'Delete Attachment?'
-            );
-
-        if (!confirmed) return;
-
-        try {
-            await api.delete(`/email-templates/${template._id}/attachments`, {
-                data: { attachmentId }
-            });
-            showSuccess('Attachment deleted successfully');
-            if (onRefresh) onRefresh();
-        } catch (error) {
-            console.error('Error deleting attachment:', error);
-            showError(error.response?.data?.message || 'Failed to delete attachment');
-        }
     };
 
     if (!isOpen || !template) return null;
@@ -176,23 +129,18 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                                 <h4 className="font-bold text-gray-700">
                                     Attachments ({template.attachments?.length || 0})
                                 </h4>
+                                {/* Read-only here on purpose: attachments are added and
+                                    removed while writing the template, not from this
+                                    preview. One place to manage them, one place to
+                                    look at them. */}
                                 {canManage && (
-                                    <div className="flex gap-2">
-                                        <button
-                                            onClick={() => setIsLibraryPickerOpen(true)}
-                                            className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-sm rounded-lg font-medium transition"
-                                        >
-                                            <i className="fa-solid fa-photo-film mr-2"></i>
-                                            From Library
-                                        </button>
-                                        <button
-                                            onClick={() => setIsUploadModalOpen(true)}
-                                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-medium transition shadow-md"
-                                        >
-                                            <i className="fa-solid fa-plus mr-2"></i>
-                                            Upload
-                                        </button>
-                                    </div>
+                                    <button
+                                        onClick={() => onEdit(template)}
+                                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm rounded-lg font-medium transition"
+                                    >
+                                        <i className="fa-solid fa-paperclip mr-2"></i>
+                                        Manage in Edit
+                                    </button>
                                 )}
                             </div>
 
@@ -219,15 +167,6 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                                                     </p>
                                                 </div>
                                             </div>
-                                            {canManage && (
-                                                <button
-                                                    onClick={() => handleDeleteAttachment(attachment._id)}
-                                                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition ml-2"
-                                                    title="Delete attachment"
-                                                >
-                                                    <i className="fa-solid fa-trash"></i>
-                                                </button>
-                                            )}
                                         </div>
                                     ))}
                                 </div>
@@ -236,7 +175,8 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                                     <i className="fa-regular fa-file text-4xl text-gray-300 mb-2"></i>
                                     <p className="text-sm text-gray-500">No attachments added yet</p>
                                     <p className="text-xs text-gray-400 mt-1">
-                                        Reuse a file from your Media Library, or upload a new one.
+                                        Open <strong>Edit Template</strong> to attach a file from your Media
+                                        Library or upload a new one.
                                     </p>
                                 </div>
                             )}
@@ -313,22 +253,6 @@ const TemplateDetailsModal = ({ isOpen, onClose, template, onEdit, onDelete, onR
                 </div>
             </div>
 
-            {/* Pick a file that is already in the shared Media Library */}
-            <MediaLibraryPickerModal
-                isOpen={isLibraryPickerOpen}
-                onClose={() => setIsLibraryPickerOpen(false)}
-                onSelect={handlePickFromLibrary}
-            />
-
-            {/* Attachment Upload Modal */}
-            <AttachmentUploadModal
-                isOpen={isUploadModalOpen}
-                onClose={() => setIsUploadModalOpen(false)}
-                templateId={template._id}
-                onSuccess={() => {
-                    if (onRefresh) onRefresh();
-                }}
-            />
         </>
     );
 };

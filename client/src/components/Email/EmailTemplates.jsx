@@ -277,7 +277,6 @@ const EmailTemplates = () => {
                 template={selectedTemplate}
                 onEdit={handleEditClick}
                 onDelete={handleDeleteClick}
-                onRefresh={fetchTemplates}
                 canManage={canManage}
                 canSend={canSend}
             />
