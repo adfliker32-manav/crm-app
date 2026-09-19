@@ -35,13 +35,27 @@ const SENDERS = [
 
 describe('every email-template sender delivers its attachments', () => {
     for (const { label, file } of SENDERS) {
-        test(`${label} resolves attachments`, () => {
+        test(`${label} resolves attachments AND passes them on`, () => {
             const src = read(...file);
             assert.match(src, /resolveAttachments/,
                 `${file.join('/')} sends email templates but never resolves their ` +
                 'attachments — the files silently do not go out');
-            assert.match(src, /attachments:/,
-                `${file.join('/')} resolves attachments but never passes them to the send`);
+
+            // Not just "both strings appear somewhere": the variable that HOLDS
+            // the resolved attachments has to be the one handed to the send. A
+            // sender that resolves into `tplAttachments` and then passes a stale
+            // `attachments` would satisfy a naive check and deliver nothing.
+            const holders = new Set([
+                ...[...src.matchAll(/(\w+)\s*=\s*await\s+resolveAttachments\(/g)].map(m => m[1]),
+                ...[...src.matchAll(/(\w+)\.push\(\s*\.\.\.\s*await\s+resolveAttachments\(/g)].map(m => m[1])
+            ]);
+            const passed = new Set([...src.matchAll(/attachments:\s*(\w+)/g)].map(m => m[1]));
+            const linked = [...holders].filter(h => passed.has(h));
+
+            assert.ok(holders.size > 0, `${file.join('/')}: nothing captures the resolved attachments`);
+            assert.ok(linked.length > 0,
+                `${file.join('/')}: resolved into ${[...holders].join(', ')} but the send is given ` +
+                `${[...passed].join(', ') || 'nothing'} — the files never reach the email`);
         });
     }
 });
