@@ -36,7 +36,7 @@ const BUILT_IN_LEAD_FIELDS = [
     'jobTitle', 'department', 'timezone', 'language', 'priority'
 ];
 
-const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates, emailTemplates, customFields, nodeData }) => {
+const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates, emailTemplates, voiceTemplates, customFields, nodeData }) => {
     const v = value ?? field.defaultValue ?? '';
 
     const inputStyle = {
@@ -236,6 +236,30 @@ const FieldRenderer = ({ field, value, onChange, stages, users, waTemplates, ema
                     <p style={{ fontSize: 11, color: '#059669', marginTop: 4, fontWeight: 600 }}>
                         Subject, body{chosen.attachments?.length > 0 ? ` and ${chosen.attachments.length} attachment(s)` : ''} come from this
                         template — edits to it apply here automatically.
+                    </p>
+                )}
+                {field.description && <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>{field.description}</p>}
+            </div>
+        );
+    }
+
+    if (field.type === 'voice_template_select') {
+        const chosen = (voiceTemplates || []).find(t => String(t._id) === String(v));
+        return (
+            <div>
+                <label style={labelStyle}>{field.label}{field.required && <span style={{ color: '#EF4444' }}> *</span>}</label>
+                <select style={{ ...inputStyle, cursor: 'pointer' }} value={v} onChange={e => onChange(field.key, e.target.value)}>
+                    <option value="">-- Write the prompt below --</option>
+                    {(voiceTemplates || []).map(t => (
+                        <option key={t._id} value={t._id}>
+                            {t.name}{t.category && t.category !== 'General' ? ` · ${t.category}` : ''}
+                        </option>
+                    ))}
+                </select>
+                {chosen && (
+                    <p style={{ fontSize: 11, color: '#059669', marginTop: 4, fontWeight: 600 }}>
+                        Prompt and execution mode ({chosen.executionMode}) come from this template — edits to it
+                        apply here automatically.
                     </p>
                 )}
                 {field.description && <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>{field.description}</p>}
@@ -446,6 +470,7 @@ export default function ConfigSidebar({
     const [users, setUsers] = useState([]);
     const [waTemplates, setWaTemplates] = useState([]);
     const [emailTemplates, setEmailTemplates] = useState([]);
+    const [voiceTemplates, setVoiceTemplates] = useState([]);
     const [customFields, setCustomFields] = useState([]);
     // AUDIT BUG-19: the real `source` values in this workspace's leads.
     const [leadSources, setLeadSources] = useState([]);
@@ -453,13 +478,16 @@ export default function ConfigSidebar({
     useEffect(() => {
         const load = async () => {
             try {
-                const [s, u, w, cf, src, et] = await Promise.all([
+                const [s, u, w, cf, src, et, vt] = await Promise.all([
                     api.get('/stages').catch(() => ({ data: [] })),
                     api.get('/auth/my-team?includeManager=true').catch(() => ({ data: [] })),
                     api.get('/whatsapp/templates').catch(() => ({ data: {} })),
                     api.get('/custom-fields').catch(() => ({ data: [] })),
                     api.get('/workflows/lead-sources').catch(() => ({ data: [] })),
-                    api.get('/email-templates').catch(() => ({ data: [] }))
+                    api.get('/email-templates').catch(() => ({ data: [] })),
+                    // 404s for workspaces without the Voice module — an empty
+                    // list just means the picker offers nothing.
+                    api.get('/voice-templates').catch(() => ({ data: {} }))
                 ]);
                 setStages(s.data || []);
                 setUsers(u.data || []);
@@ -468,6 +496,7 @@ export default function ConfigSidebar({
                 setCustomFields(cf.data || []);
                 setLeadSources(Array.isArray(src.data) ? src.data : []);
                 setEmailTemplates((Array.isArray(et.data) ? et.data : []).filter(t => t.isActive));
+                setVoiceTemplates(vt.data?.templates || []);
             } catch {}
         };
         load();
@@ -709,7 +738,7 @@ export default function ConfigSidebar({
                 <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
                     {schema.fields.map(field => (
                         <FieldRenderer key={field.key} field={field} value={nodeData[field.key]}
-                            onChange={handleChange} stages={stages} users={users} waTemplates={waTemplates} emailTemplates={emailTemplates}
+                            onChange={handleChange} stages={stages} users={users} waTemplates={waTemplates} emailTemplates={emailTemplates} voiceTemplates={voiceTemplates}
                             customFields={customFields} nodeData={nodeData} />
                     ))}
                 </div>

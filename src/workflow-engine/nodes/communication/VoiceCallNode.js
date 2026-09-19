@@ -37,10 +37,18 @@ const VoiceCallNode = {
     schema: () => ({
         fields: [
             {
+                key:         'voiceTemplateId',
+                label:       'Voice Template',
+                type:        'voice_template_select',
+                required:    false,
+                description: 'Optional. Uses a saved Voice Template — its prompt and execution mode. Leave empty to write the prompt here.'
+            },
+            {
                 key:      'executionMode',
                 label:    'Execution Mode',
                 type:     'select',
                 required: true,
+                description: 'Ignored when a Voice Template is selected above.',
                 options:  [
                     { value: 'static',   label: 'Static Prompt (No AI cost)' },
                     { value: 'injected', label: 'CRM Variable Injection' },
@@ -53,7 +61,8 @@ const VoiceCallNode = {
                 type:        'textarea',
                 required:    true,
                 rows:        5,
-                placeholder: 'You are a sales agent calling {{lead.name}}...'
+                placeholder: 'You are a sales agent calling {{lead.name}}...',
+                description: 'Ignored when a Voice Template is selected above.'
             },
             {
                 key:         'agentId',
@@ -73,8 +82,11 @@ const VoiceCallNode = {
 
     validate: (data) => {
         const errors = [];
-        if (!data.executionMode) errors.push('Execution mode is required');
-        if (!data.basePrompt?.trim()) errors.push('System prompt is required');
+        // A template supplies both, so neither is required alongside one.
+        if (!data.voiceTemplateId) {
+            if (!data.executionMode) errors.push('Execution mode is required');
+            if (!data.basePrompt?.trim()) errors.push('System prompt is required');
+        }
         return { valid: errors.length === 0, errors };
     },
 
@@ -103,10 +115,45 @@ const VoiceCallNode = {
             };
         }
 
+        // A saved Voice Template supplies the prompt and the execution mode, the
+        // same way the Send Email node takes an email template. Resolved live, so
+        // editing the template updates every workflow pointing at it rather than
+        // leaving a stale copy behind on the node.
+        let executionMode = data.executionMode || 'static';
+        let basePrompt    = data.basePrompt || '';
+
+        if (data.voiceTemplateId) {
+            const VoiceTemplate = require('../../../models/VoiceTemplate');
+            const tenantId = context.tenantId.toString();
+            // Tenant's own templates, plus the platform-wide ones the Voice Hub
+            // also offers — matching what the picker lists.
+            const tpl = await VoiceTemplate.findOne({
+                _id: data.voiceTemplateId,
+                $or: [{ tenantId }, { isGlobal: true }]
+            }).lean().catch(() => null);
+
+            if (tpl) {
+                executionMode = tpl.executionMode || executionMode;
+                basePrompt    = tpl.basePrompt || basePrompt;
+            } else {
+                // Deleted template: fall back to whatever the node still carries
+                // rather than placing a call with an empty prompt.
+                console.warn(`[VoiceCallNode] Voice template ${data.voiceTemplateId} not found for tenant ${context.tenantId} — using the node's own prompt.`);
+            }
+        }
+
+        if (!basePrompt.trim()) {
+            console.warn('[VoiceCallNode] No prompt to call with — routing to error port.');
+            return {
+                nextPort: 'error',
+                output: { 'voice.skipped': true, 'voice.error': 'no_prompt' }
+            };
+        }
+
         // Build action in VoiceEngineService format
         const action = {
-            executionMode: data.executionMode || 'static',
-            basePrompt:    data.basePrompt || '',
+            executionMode,
+            basePrompt,
             agentId:       data.agentId || null
         };
 
