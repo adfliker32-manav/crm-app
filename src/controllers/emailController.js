@@ -156,9 +156,23 @@ const sendEmailController = async (req, res) => {
             try {
                 const EmailTemplate = require('../models/EmailTemplate');
                 const { resolveAttachments } = require('../utils/emailAttachments');
-                const template = await EmailTemplate.findOne({ _id: templateId, userId: tenantId });
+                // Templates are keyed to whoever CREATED them (see
+                // emailTemplateController), which for an agent is the agent —
+                // not the workspace owner. Looking only at the tenant meant an
+                // agent could pick their own template in the compose dropdown
+                // and have its attachments silently vanish: the lookup missed,
+                // the catch below swallowed it, and the email went out with no
+                // brochure and no error. Both ids belong to the same workspace
+                // chain, so this matches strictly more of the caller's own
+                // templates and nobody else's.
+                const template = await EmailTemplate.findOne({
+                    _id: templateId,
+                    userId: { $in: [userId, tenantId] }
+                });
                 if (template?.attachments?.length > 0) {
-                    const tplAttachments = await resolveAttachments(template.attachments, tenantId);
+                    // Resolved against the template's OWN owner — that is the id
+                    // whose library and attachment keys the resolver validates.
+                    const tplAttachments = await resolveAttachments(template.attachments, String(template.userId));
                     attachments.push(...tplAttachments);
                 }
             } catch (tplErr) {

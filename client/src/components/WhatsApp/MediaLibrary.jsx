@@ -63,7 +63,11 @@ export default function MediaLibrary({ pickerMode = false, allowedType = null, o
         try {
             setLoading(true);
             const params = {};
+            // With no tab selected, still constrain the query to what this
+            // picker accepts — filtering client-side only trims the page the
+            // server already chose, so older allowed files fell off the end.
             if (typeFilter) params.type = typeFilter;
+            else if (allowedKey) params.type = allowedKey;
             if (search.trim()) params.search = search.trim();
             const res = await api.get('/media-library', { params });
             setAssets(res.data.assets || []);
@@ -73,12 +77,20 @@ export default function MediaLibrary({ pickerMode = false, allowedType = null, o
         } finally {
             setLoading(false);
         }
-    }, [typeFilter, search]);
+    }, [typeFilter, search, allowedKey]);
 
     useEffect(() => {
         const t = setTimeout(load, search ? 350 : 0); // debounce typing only
         return () => clearTimeout(t);
     }, [load, search]);
+
+    // If the caller narrows what it accepts while mounted (the WhatsApp builder
+    // does, when the header format changes), a tab from the old set would keep
+    // filtering to a type that is no longer allowed.
+    useEffect(() => {
+        setTypeFilter(prev => (allowedTypes.length === 1 ? allowedTypes[0]
+            : (prev && allowedTypes.length > 0 && !allowedTypes.includes(prev)) ? '' : prev));
+    }, [allowedTypes]);
 
     const handleUpload = async (file) => {
         if (!file) return;

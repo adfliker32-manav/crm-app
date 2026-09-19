@@ -105,8 +105,17 @@ exports.listAssets = async (req, res) => {
     try {
         const query = { userId: req.tenantId };
         if (req.query.type) {
-            const t = String(req.query.type).toUpperCase();
-            if (TYPE_RULES.some(r => r.mediaType === t)) query.mediaType = t;
+            // Accepts one type or a comma-separated set ("DOCUMENT,IMAGE").
+            // A picker restricted to a subset must filter SERVER-side: doing it
+            // in the browser only hides rows from the page it was given, so a
+            // brochure sitting behind 60 newer videos became unreachable.
+            const wanted = [...new Set(
+                String(req.query.type).toUpperCase().split(',')
+                    .map(t => t.trim())
+                    .filter(t => TYPE_RULES.some(r => r.mediaType === t))
+            )];
+            if (wanted.length === 1) query.mediaType = wanted[0];
+            else if (wanted.length > 1) query.mediaType = { $in: wanted };
         }
         if (req.query.search) {
             const safe = String(req.query.search).slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

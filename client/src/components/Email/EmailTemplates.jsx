@@ -106,6 +106,13 @@ const EmailTemplates = () => {
         try {
             const res = await api.get('/email-templates');
             setTemplates(res.data);
+            // The details modal renders from `selectedTemplate`, a snapshot taken
+            // when it opened. Refreshing only the list left it showing stale
+            // attachments, so adding or removing a file from inside that modal
+            // appeared to do nothing until it was closed and reopened.
+            setSelectedTemplate(prev =>
+                prev ? (res.data.find(t => String(t._id) === String(prev._id)) || prev) : prev
+            );
         } catch (error) {
             console.error("Error fetching templates", error);
         } finally {

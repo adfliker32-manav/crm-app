@@ -56,7 +56,9 @@ function freshModules() {
     ]));
 
     stub('services/storageService', {
-        getStream: async (key) => { streamed.push(key); return { key }; },
+        // Mirrors the real driver: a Buffer, which can be read more than once.
+        getBuffer: async (key) => { streamed.push(key); return Buffer.from(`bytes:${key}`); },
+        getStream: async (key) => { throw new Error(`getStream(${key}) is not reusable — resolveAttachments must buffer`); },
         deleteObject: async (key) => { deleted.push(key); }
     });
 
@@ -195,6 +197,24 @@ describe('resolveAttachments — reading the bytes at send time', () => {
         assert.deepEqual(streamed, [`tenants/${OWNER}/email-attachments/x.pdf`]);
     });
 
+    test('hands back re-readable content, not a one-shot stream', async () => {
+        // campaignService resolves a template's attachments ONCE per batch and
+        // gives the same array to every lead. With a stream, recipient #1 got
+        // the brochure and everyone after them got an empty file — no error,
+        // no log, nothing to notice until a customer said "there's no PDF".
+        const resolved = await emailAttachments.resolveAttachments(
+            [{ mediaAssetId: PDF, originalName: 'Brochure' }],
+            OWNER
+        );
+
+        assert.ok(Buffer.isBuffer(resolved[0].content), 'content must be a Buffer');
+
+        const firstSend = resolved[0].content.toString();
+        const secondSend = resolved[0].content.toString();
+        assert.equal(firstSend, secondSend, 'the second recipient must get the same bytes');
+        assert.ok(secondSend.length > 0, 'the second recipient must not get an empty attachment');
+    });
+
     test('mixes library picks and private uploads in one email', async () => {
         const out = await emailAttachments.resolveAttachments([
             { mediaAssetId: PDF, originalName: 'Brochure' },
@@ -270,6 +290,41 @@ describe('wiring', () => {
         assert.match(modal, /MediaLibraryPickerModal/, 'the library picker must be reachable from the create form');
         assert.match(modal, /type="file"/, 'and so must a direct upload');
         assert.match(modal, /mediaAssetIds/, 'picks must ride along with the create request');
+    });
+
+    test('a restricted picker filters by type on the server, not in the browser', () => {
+        const ctrl = readSrc('controllers', 'mediaLibraryController.js');
+        const list = ctrl.slice(ctrl.indexOf('exports.listAssets'), ctrl.indexOf('exports.uploadAsset'));
+        assert.match(list, /\$in/,
+            'listAssets must accept a set of types — a picker that accepts two types ' +
+            'otherwise asks for ALL of them and trims the page client-side, hiding ' +
+            'older files behind newer ones it cannot use');
+
+        const lib = readClient('components', 'WhatsApp', 'MediaLibrary.jsx');
+        assert.match(lib, /else if \(allowedKey\) params\.type = allowedKey/,
+            'the allowed set must reach the query when no tab is selected');
+    });
+
+    test('the details modal re-reads the template it is showing after a refresh', () => {
+        const list = readClient('components', 'Email', 'EmailTemplates.jsx');
+        const start = list.indexOf('const fetchTemplates');
+        const fn = list.slice(start, list.indexOf('const handleCreateClick', start));
+        assert.ok(start > -1 && fn.length > 0, 'fetchTemplates must still be findable');
+        assert.match(fn, /setSelectedTemplate/,
+            'refreshing only the list leaves the open modal on a stale snapshot, so ' +
+            'attaching a file from inside it looks like it did nothing');
+    });
+
+    test("compose finds a template owned by the agent who made it", () => {
+        const ctrl = readSrc('controllers', 'emailController.js');
+        const block = ctrl.slice(ctrl.indexOf('When a template is selected in the compose modal'));
+
+        assert.match(block, /userId: \{ \$in: \[userId, tenantId\] \}/,
+            'templates are keyed to their creator, so a tenant-only lookup misses an ' +
+            "agent's own template and drops its attachments with no error");
+        assert.match(block, /resolveAttachments\(template\.attachments, String\(template\.userId\)\)/,
+            "attachments must resolve against the template's own owner — that is the " +
+            'id whose library and attachment keys the resolver validates');
     });
 
     test('compose sends library picks as repeated form fields, not one joined string', () => {

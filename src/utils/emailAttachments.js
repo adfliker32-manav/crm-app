@@ -131,6 +131,16 @@ async function buildLibraryAttachments(mediaAssetIds, tenantId, existing = []) {
  * @param {Array}  attachments  EmailTemplate.attachments rows
  * @param {string} tenantId     owner of the template
  * @returns {Promise<Array>}    [{ filename, content|path }] for nodemailer
+ *
+ * Content comes back as a BUFFER, never a stream. Callers reuse one resolved
+ * list across many sends — campaignService resolves a template's attachments
+ * once per batch and hands the same array to every lead — and a Readable can
+ * only be consumed once, so recipient #1 got the brochure and everybody after
+ * them got an empty file with no error anywhere. Buffers are re-readable, which
+ * is what that "resolve once" design assumed all along.
+ *
+ * Holding the bytes in memory is safe precisely because attachments are capped:
+ * MAX_ATTACHMENT_BYTES per file and MAX_TOTAL_ATTACHMENT_BYTES per email.
  */
 async function resolveAttachments(attachments, tenantId) {
     if (!Array.isArray(attachments) || attachments.length === 0) return [];
@@ -159,7 +169,7 @@ async function resolveAttachments(attachments, tenantId) {
                     console.warn(`[EmailAttachments] Refusing cross-tenant media asset ${att.mediaAssetId} for tenant ${tenantId}`);
                     continue;
                 }
-                out.push({ filename: name, content: await storage.getStream(asset.storageKey) });
+                out.push({ filename: name, content: await storage.getBuffer(asset.storageKey) });
             } catch (err) {
                 console.error(`[EmailAttachments] Could not read media asset ${att.mediaAssetId}:`, err.message);
             }
@@ -175,7 +185,7 @@ async function resolveAttachments(attachments, tenantId) {
                 continue;
             }
             try {
-                out.push({ filename: name, content: await storage.getStream(att.storageKey) });
+                out.push({ filename: name, content: await storage.getBuffer(att.storageKey) });
             } catch (err) {
                 console.error(`[EmailAttachments] Could not read ${att.storageKey}:`, err.message);
             }
