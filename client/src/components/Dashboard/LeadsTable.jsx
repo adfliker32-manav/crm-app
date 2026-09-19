@@ -43,6 +43,7 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
     const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
     const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
     const sentinelRef = useRef(null);
+    const scrollRef = useRef(null);
 
     // Team members for bulk assign
     const [agents, setAgents] = useState([]);
@@ -114,13 +115,17 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
     useEffect(() => {
         const sentinel = sentinelRef.current;
         if (!sentinel) return;
+        // The page no longer scrolls the rows — the table box does — so the
+        // sentinel has to be observed against THAT box. Left on the viewport it
+        // would sit permanently off-screen below the box and never fire, and
+        // "load more" would stop working entirely past the first page.
         const observer = new IntersectionObserver(
             (entries) => { if (entries[0].isIntersecting) loadMore(); },
-            { threshold: 0.1 }
+            { root: scrollRef.current || null, threshold: 0.1 }
         );
         observer.observe(sentinel);
         return () => observer.disconnect();
-    }, [loadMore]);
+    }, [loadMore, visibleCount]);
 
     const handleSort = (key) => {
         setSortConfig(prev => ({
@@ -222,10 +227,13 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
 
 
     return (
-        <div className="relative">
+        // h-full + flex column: the table box must be BOUNDED, or its horizontal
+        // scrollbar ends up below the last row — 100 leads down the page — which
+        // is the bug this layout fixes.
+        <div className="relative h-full flex flex-col min-h-0">
             {/* ── Bulk Actions Bar ── */}
             {selectedIds.size > 0 && (
-                <div className="absolute top-0 left-0 right-0 z-20 rounded-t-xl shadow-2xl overflow-hidden">
+                <div className="absolute top-0 left-0 right-0 z-40 rounded-t-xl shadow-2xl overflow-hidden">
                     {/* Gradient header */}
                     <div className="bg-gradient-to-r from-indigo-600 via-blue-600 to-blue-500 text-white px-4 py-3 flex flex-wrap items-center gap-3">
 
@@ -380,8 +388,8 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                 </div>
             )}
 
-            <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-                <div className={`p-6 border-b border-slate-100 flex justify-between items-center ${selectedIds.size > 0 ? 'invisible' : ''}`}>
+            <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex-1 min-h-0 flex flex-col">
+                <div className={`p-6 border-b border-slate-100 flex justify-between items-center flex-shrink-0 ${selectedIds.size > 0 ? 'invisible' : ''}`}>
                     <h3 className="text-lg font-bold text-slate-800">Recent Leads</h3>
                     <span className="bg-blue-100 text-blue-800 text-xs font-bold px-3 py-1 rounded-full">
                         Total: {sortedLeads.length}
@@ -391,12 +399,23 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                     so narrow screens get a real horizontal scrollbar. The checkbox and
                     Name columns are pinned left so a scrolled-right row is still
                     identifiable. Their left offsets must match the checkbox column width
-                    (w-12 = 48px). */}
-                <div className="overflow-x-auto">
+                    (w-12 = 48px).
+
+                    This box owns BOTH axes. It used to scroll only sideways and grow to
+                    the full height of the table, which put the horizontal scrollbar
+                    underneath the last row: with 100 leads you had to scroll the page all
+                    the way down before you could scroll right. Bounding the height keeps
+                    that scrollbar on screen the whole time, and lets the header row stay
+                    put as well. */}
+                <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto">
                     <table className="w-full min-w-[1100px] text-left">
+                        {/* Sticky lives on the CELLS: a sticky <thead> is ignored by
+                            Safari, and without a background per cell the rows scroll
+                            through underneath. z-30 for the two pinned cells (top AND
+                            left), z-20 for the rest, above the z-[5] pinned body cells. */}
                         <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold tracking-wider whitespace-nowrap">
                             <tr>
-                                <th className="px-4 py-4 w-12 sticky left-0 z-10 bg-slate-50">
+                                <th className="px-4 py-4 w-12 sticky left-0 top-0 z-30 bg-slate-50">
                                     <input
                                         type="checkbox"
                                         onChange={handleSelectAll}
@@ -404,26 +423,26 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                     />
                                 </th>
-                                <th onClick={() => handleSort('name')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition sticky left-12 z-10 bg-slate-50 border-r border-slate-200 shadow-[4px_0_6px_-4px_#0f172a26]">
+                                <th onClick={() => handleSort('name')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition sticky left-12 top-0 z-30 bg-slate-50 border-r border-slate-200 shadow-[4px_0_6px_-4px_#0f172a26]">
                                     Name <SortIcon sortConfig={sortConfig} column="name" />
                                 </th>
-                                <th onClick={() => handleSort('score')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition text-center">
+                                <th onClick={() => handleSort('score')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition text-center sticky top-0 z-20 bg-slate-50">
                                     Score <SortIcon sortConfig={sortConfig} column="score" />
                                 </th>
-                                <th className="px-6 py-4">Status</th>
-                                <th onClick={() => handleSort('nextFollowUpDate')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition">
+                                <th className="px-6 py-4 sticky top-0 z-20 bg-slate-50">Status</th>
+                                <th onClick={() => handleSort('nextFollowUpDate')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition sticky top-0 z-20 bg-slate-50">
                                     Next Follow-up <SortIcon sortConfig={sortConfig} column="nextFollowUpDate" />
                                 </th>
-                                <th onClick={() => handleSort('source')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition">
+                                <th onClick={() => handleSort('source')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition sticky top-0 z-20 bg-slate-50">
                                     Source <SortIcon sortConfig={sortConfig} column="source" />
                                 </th>
-                                <th onClick={() => handleSort('date')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition">
+                                <th onClick={() => handleSort('date')} className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition sticky top-0 z-20 bg-slate-50">
                                     Created <SortIcon sortConfig={sortConfig} column="date" />
                                 </th>
                                 {(user?.role === 'manager' || user?.role === 'superadmin' || user?.permissions?.assignLeads) && (
-                                    <th className="px-6 py-4">Assigned To</th>
+                                    <th className="px-6 py-4 sticky top-0 z-20 bg-slate-50">Assigned To</th>
                                 )}
-                                <th className="px-6 py-4 text-right">Actions</th>
+                                <th className="px-6 py-4 text-right sticky top-0 z-20 bg-slate-50">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -566,13 +585,15 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                             )}
                         </tbody>
                     </table>
-                </div>
 
-                {/* Infinite-scroll sentinel + progress indicator */}
+                {/* Infinite-scroll sentinel + progress indicator. Inside the scroll
+                    box, because an IntersectionObserver root must be an ancestor of
+                    its target. sticky left-0 keeps the message in view when the
+                    table is scrolled right. */}
                 {visibleCount < sortedLeads.length && (
                     <div
                         ref={sentinelRef}
-                        className="flex items-center justify-center gap-3 py-5 border-t border-slate-100 bg-slate-50/50"
+                        className="sticky left-0 flex items-center justify-center gap-3 py-5 border-t border-slate-100 bg-slate-50/50"
                     >
                         <svg className="animate-spin h-4 w-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
@@ -584,10 +605,11 @@ const LeadsTable = ({ leads, stages = [], userTags = [], searchQuery = "", onEdi
                     </div>
                 )}
                 {visibleCount >= sortedLeads.length && sortedLeads.length > PAGE_SIZE && (
-                    <div className="flex items-center justify-center py-3 border-t border-slate-100 bg-slate-50/50">
+                    <div className="sticky left-0 flex items-center justify-center py-3 border-t border-slate-100 bg-slate-50/50">
                         <span className="text-xs text-slate-400 font-medium">All {sortedLeads.length} leads loaded</span>
                     </div>
                 )}
+                </div>
             </div>
         </div>
     );

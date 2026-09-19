@@ -1018,8 +1018,11 @@ const Leads = () => {
                 </div>
             ) : (
                 // Table View
-                <div className="flex-1 overflow-auto p-6">
-                    <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
+                // The page must NOT be the scroller here: the table box scrolls itself
+                // on both axes, which is what keeps its horizontal scrollbar on screen
+                // instead of parking it below the hundredth row.
+                <div className="flex-1 min-h-0 p-6 flex flex-col">
+                    <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden flex-1 min-h-0 flex flex-col">
                         <LeadsTable
                             leads={filteredLeads}
                             stages={stages}
