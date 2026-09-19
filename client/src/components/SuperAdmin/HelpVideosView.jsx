@@ -271,7 +271,7 @@ const HelpVideosView = () => {
                 </div>
             ) : (
                 <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-                    <div className="overflow-x-auto">
+                    <div className="table-scroll">
                         <table className="w-full text-sm min-w-[860px]">
                             <thead className="bg-slate-50">
                                 <tr className="text-left text-xs uppercase text-slate-500 font-semibold tracking-wider">

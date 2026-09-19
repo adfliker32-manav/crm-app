@@ -912,7 +912,7 @@ const WhatsAppBroadcasts = () => {
                                                 {csvMapping.phone && csvPreview.length > 0 && (
                                                     <div>
                                                         <p className="text-xs font-semibold text-slate-500 uppercase mb-1">Preview (first {csvPreview.length} rows)</p>
-                                                        <div className="overflow-x-auto rounded-lg border border-slate-200">
+                                                        <div className="table-scroll rounded-lg border border-slate-200" style={{ '--table-head-bg': '#f1f5f9' }}>
                                                             <table className="w-full text-xs">
                                                                 <thead className="bg-slate-100">
                                                                     <tr>

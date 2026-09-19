@@ -550,7 +550,7 @@ const OverviewTab = ({ summary, clientBreakdown, recentPayments, trend, period, 
                 <div className="p-5 border-b border-slate-100">
                     <h3 className="text-sm font-black text-slate-700">Client-wise Breakdown — {MONTHS[(period.month || 1) - 1]} {period.year}</h3>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="table-scroll">
                     <table className="w-full text-sm">
                         <thead className="bg-slate-50 border-b border-slate-100">
                             <tr>
@@ -1154,7 +1154,7 @@ const PaymentsTab = ({ payments, clients, loading, onAdd, onAddCustom, onEdit, o
                 </div>
             ) : (
                 <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-                    <div className="overflow-x-auto">
+                    <div className="table-scroll">
                         <table className="w-full text-sm">
                             <thead className="bg-slate-50 border-b border-slate-100">
                                 <tr>

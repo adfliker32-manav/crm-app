@@ -243,7 +243,7 @@ const AgentPerformanceDetail = ({ period, dateRange, preSelectedAgentId }) => {
                             </h3>
                             <p className="text-sm text-slate-500 mt-1">Shows exactly where the agent is losing leads</p>
                         </div>
-                        <div className="overflow-x-auto">
+                        <div className="table-scroll">
                             <table className="w-full">
                                 <thead className="bg-slate-50 text-slate-600 text-sm">
                                     <tr>

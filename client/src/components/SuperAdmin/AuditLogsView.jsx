@@ -128,7 +128,7 @@ const AuditLogsView = () => {
 
             {/* Log Table */}
             <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-                <div className="overflow-x-auto min-h-[400px]">
+                <div className="table-scroll min-h-[400px]" style={{ '--table-head-bg': '#0f172a' }}>
                     <table className="w-full text-left">
                         <thead className="bg-slate-900 text-slate-300">
                             <tr>

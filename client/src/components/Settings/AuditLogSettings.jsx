@@ -125,7 +125,7 @@ const AuditLogSettings = () => {
 
             {/* Table */}
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                <div className="overflow-x-auto">
+                <div className="table-scroll">
                     <table className="w-full text-sm">
                         <thead>
                             <tr className="bg-slate-50 border-b border-slate-200 text-left">

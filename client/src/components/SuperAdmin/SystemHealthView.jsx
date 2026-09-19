@@ -70,7 +70,7 @@ const TabError = ({ msg, onRetry }) => (
 );
 
 const DataTable = ({ headers, rows, emptyMsg = 'No data' }) => (
-    <div className="overflow-x-auto rounded-xl border border-slate-700/50">
+    <div className="table-scroll rounded-xl border border-slate-700/50" style={{ '--table-head-bg': '#1e293b' }}>
         <table className="w-full text-sm">
             <thead>
                 <tr className="bg-slate-800/80">

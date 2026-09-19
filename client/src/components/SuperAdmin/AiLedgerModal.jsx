@@ -105,7 +105,7 @@ const AiLedgerModal = ({ isOpen, onClose, company }) => {
 
                             {/* Ledger table */}
                             <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-                                <div className="overflow-x-auto">
+                                <div className="table-scroll">
                                     <table className="w-full text-xs">
                                         <thead>
                                             <tr className="text-left text-slate-400 bg-slate-50/70">

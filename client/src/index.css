@@ -32,6 +32,33 @@
     animation: fade-in-up 0.35s ease-out;
 }
 
+/* ── Data-table scroll box ─────────────────────────────────────────────────
+   A table that scrolls sideways inside a box with no height limit grows as tall
+   as its rows, which puts its horizontal scrollbar underneath the LAST one —
+   unreachable until you scroll the whole page to the bottom. Capping the height
+   keeps that scrollbar on screen, and lets the header row stay put while the
+   rows move.
+
+   A no-op for short tables: nothing shorter than the cap changes at all.
+
+   The header background has to be OPAQUE and it has to sit on the CELLS.
+   A background on <thead> alone is simply not painted behind sticky cells (the
+   rows scroll straight through the header), and a translucent one like
+   bg-slate-50/50 shows them through even when it is. Tables whose header is not
+   slate-50 set --table-head-bg.
+*/
+.table-scroll {
+    overflow: auto;
+    max-height: 70vh;
+}
+
+.table-scroll thead th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background-color: var(--table-head-bg, #f8fafc); /* slate-50 */
+}
+
 /* Premium Scrollbar */
 ::-webkit-scrollbar {
     width: 6px;

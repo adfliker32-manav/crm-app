@@ -84,7 +84,7 @@ const AgentPerformance = ({ data, onViewDetails }) => {
                         Agent Leaderboard
                     </h3>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="table-scroll">
                     <table className="w-full">
                         <thead className="bg-slate-50 text-slate-600 text-sm">
                             <tr>

@@ -175,7 +175,7 @@ const AgencyClients = () => {
 
             {/* Table */}
             <div className="bg-white border border-slate-200/60 shadow-xl rounded-3xl overflow-hidden">
-                <div className="overflow-x-auto">
+                <div className="table-scroll" style={{ '--table-head-bg': '#ffffff' }}>
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="bg-white text-xs uppercase tracking-widest text-slate-400 border-b border-slate-100">

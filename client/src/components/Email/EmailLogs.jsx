@@ -156,7 +156,7 @@ const EmailLogs = () => {
                 <>
                     <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
                         {/* Wide table must scroll inside its own container */}
-                        <div className="overflow-x-auto">
+                        <div className="table-scroll">
                             <table className="w-full text-sm min-w-[720px]">
                                 <thead>
                                     <tr className="bg-slate-50/70 border-b border-slate-100">

@@ -314,7 +314,7 @@ export default function WebLeadSettings() {
                 <div className="bg-slate-50 px-5 py-4 border-b border-slate-200">
                     <h3 className="font-bold text-slate-700 text-sm">Supported Fields Reference</h3>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="table-scroll">
                     <table className="w-full text-left text-sm">
                         <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
                             <tr>

@@ -370,7 +370,7 @@ const PartnerEarnings = () => {
 
                 {/* Commission History Table */}
                 {tab === 'commissions' && (
-                    <div className="overflow-x-auto">
+                    <div className="table-scroll">
                         {commissionHistory?.length === 0 ? (
                             <div className="text-center py-16 text-slate-400">
                                 <i className="fa-solid fa-receipt text-4xl mb-3 opacity-30" />
@@ -420,7 +420,7 @@ const PartnerEarnings = () => {
 
                 {/* Withdrawals Table */}
                 {tab === 'withdrawals' && (
-                    <div className="overflow-x-auto">
+                    <div className="table-scroll">
                         {withdrawals?.length === 0 ? (
                             <div className="text-center py-16 text-slate-400">
                                 <i className="fa-solid fa-arrow-up-from-bracket text-4xl mb-3 opacity-30" />

@@ -236,7 +236,7 @@ const DirectClientsView = () => {
                     </div>
                 </div>
 
-                <div className="overflow-x-auto">
+                <div className="table-scroll">
                     <table className="w-full border-collapse">
                         <thead>
                             <tr className="bg-slate-50/50">

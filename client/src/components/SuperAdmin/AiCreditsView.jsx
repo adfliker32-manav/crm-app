@@ -222,7 +222,7 @@ const AiCreditsView = () => {
                         <p className="text-sm text-slate-400">No credit top-ups yet. They appear here when clients buy credits.</p>
                     </div>
                 ) : topupTab === 'clients' ? (
-                    <div className="overflow-x-auto mt-3">
+                    <div className="table-scroll mt-3">
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="text-left text-slate-400 bg-slate-50/70 text-[11px] uppercase tracking-wider">
@@ -252,7 +252,7 @@ const AiCreditsView = () => {
                         </table>
                     </div>
                 ) : (
-                    <div className="overflow-x-auto mt-3">
+                    <div className="table-scroll mt-3">
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="text-left text-slate-400 bg-slate-50/70 text-[11px] uppercase tracking-wider">
@@ -302,7 +302,7 @@ const AiCreditsView = () => {
                 </div>
             ) : (
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                    <div className="overflow-x-auto">
+                    <div className="table-scroll">
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="text-left text-slate-400 bg-slate-50/70 text-[11px] uppercase tracking-wider">

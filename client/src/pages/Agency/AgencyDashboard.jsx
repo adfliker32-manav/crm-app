@@ -166,7 +166,7 @@ const AgencyDashboard = () => {
                         View All
                     </button>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="table-scroll" style={{ '--table-head-bg': '#ffffff' }}>
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="bg-white border-b border-slate-100 text-xs uppercase tracking-widest text-slate-400">

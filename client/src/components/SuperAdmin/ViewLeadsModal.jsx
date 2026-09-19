@@ -53,7 +53,7 @@ const ViewLeadsModal = ({ isOpen, onClose, company }) => {
                             <i className="fa-solid fa-spinner fa-spin text-4xl text-slate-400"></i>
                         </div>
                     ) : leads.length > 0 ? (
-                        <div className="overflow-x-auto">
+                        <div className="table-scroll">
                             <table className="w-full">
                                 <thead className="bg-slate-50 border-b border-slate-200">
                                     <tr>

@@ -154,7 +154,7 @@ const Section = ({ title, badge, accent = 'border-slate-200', children }) => (
                 <span className="text-xs font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">{badge}</span>
             )}
         </div>
-        <div className="overflow-x-auto">{children}</div>
+        <div className="table-scroll">{children}</div>
     </div>
 );
 

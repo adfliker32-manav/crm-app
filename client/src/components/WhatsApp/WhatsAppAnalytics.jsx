@@ -484,7 +484,7 @@ const WhatsAppAnalytics = () => {
                                     <p className="text-slate-300 text-xs mt-1">Send a broadcast to see performance data here</p>
                                 </div>
                             ) : (
-                                <div className="overflow-x-auto">
+                                <div className="table-scroll">
                                     <table className="w-full text-left">
                                         <thead>
                                             <tr className="bg-slate-50/60">

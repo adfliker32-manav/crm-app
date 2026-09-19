@@ -321,7 +321,7 @@ const MetaLeadDropLog = () => {
 
             {/* Table */}
             {logs.length > 0 && (
-                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <div className="table-scroll rounded-xl border border-slate-200">
                     <table className="w-full text-sm">
                         <thead>
                             <tr className="bg-slate-50 border-b border-slate-200">

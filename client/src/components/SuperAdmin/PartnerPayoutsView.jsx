@@ -412,7 +412,7 @@ const PartnerPayoutsView = () => {
                             <p className="font-semibold">No {statusFilter} withdrawal requests</p>
                         </div>
                     ) : (
-                        <div className="overflow-x-auto">
+                        <div className="table-scroll">
                             <table className="w-full text-sm">
                                 <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
                                     <tr>

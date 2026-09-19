@@ -242,7 +242,7 @@ const Automations = () => {
                             </button>
                         </div>
 
-                        <div className="overflow-x-auto">
+                        <div className="table-scroll" style={{ '--table-head-bg': '#f9fafb' }}>
                             <table className="w-full text-left">
                                 <thead>
                                     <tr className="bg-gray-50/80 text-gray-400 text-xs uppercase tracking-wider">
